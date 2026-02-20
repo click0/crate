@@ -272,6 +272,107 @@ OVERLAY /usr/local/www
 
 ---
 
+## Файрвол
+
+| Возможность | **Crate** | **BastilleBSD** |
+|---|---|---|
+| **Файрвол** | ipfw (автоматические правила NAT) | **pf** (нативная интеграция) |
+| **Настройка** | Автоматическая через код (net.cpp) | `bastille setup` автоконфигурация pf |
+| **Порт-форвардинг** | В YAML: `inbound-tcp: {3100: 3000}` | `bastille rdr TARGET tcp 80 8080` |
+| **Динамические правила** | Ref-counting для общих правил | pf rdr-anchor с динамическим `<jails>` table |
+| **Управление правилами** | Автоочистка при завершении | `bastille rdr TARGET list/clear` |
+
+**Вывод**: Crate использует ipfw с автоматическим управлением. BastilleBSD ориентирован на pf с полным контролем якорей и таблиц.
+
+---
+
+## Батчевые операции и таргетинг
+
+| Возможность | **Crate** | **BastilleBSD** |
+|---|---|---|
+| **Множественные цели** | Нет (один контейнер) | **Да** — `ALL`, теги, списки через пробел |
+| **Теги** | Нет | Да (`bastille tags TARGET tag1 tag2`) |
+| **Приоритеты загрузки** | Нет | Да (`-p` — порядок старта/остановки) |
+| **Зависимости** | Нет | Да (beta: зависимый jail автостартует) |
+| **JSON вывод** | Нет | Да (`bastille list -j`) |
+
+---
+
+## OCI/Docker совместимость
+
+| | **Crate** | **BastilleBSD** |
+|---|---|---|
+| **OCI образы** | Нет | **Нет** |
+| **Docker Hub** | Нет | Нет |
+| **Dockerfile/Containerfile** | Нет | Нет (Bastillefile — своя система) |
+| **Формат экспорта** | `.crate` (XZ) | `.txz` / ZFS snapshot (проприетарный) |
+
+Обе системы работают исключительно в экосистеме FreeBSD jail. Для OCI-контейнеров на FreeBSD рекомендуется отдельный проект **Podman + ocijail**.
+
+---
+
+## API и веб-интерфейс
+
+| | **Crate** | **BastilleBSD** |
+|---|---|---|
+| **API** | Нет | **Да** (bastille-api — базовый REST API) |
+| **Веб-интерфейс** | Нет | Нет (CLI-only, API как foundation) |
+| **Companion-инструменты** | Нет | **Rocinante** — применяет Bastillefile к хосту (не jail) |
+
+---
+
+## Безопасность (расширенное сравнение)
+
+| Возможность | **Crate** | **BastilleBSD** |
+|---|---|---|
+| **securelevel** | Не задаётся | **securelevel = 2** по умолчанию (Highly secure) |
+| **raw_sockets** | Не ограничены | **Запрещены** по умолчанию (`allow.raw_sockets=0`) |
+| **enforce_statfs** | Не задаётся | **2** (ограничивает видимость монтирований) |
+| **devfs_ruleset** | Кастомный (для /dev/videoN, X11) | Ruleset 4 по умолчанию; 13 для VNET |
+| **Ресурсы (rctl)** | Нет | **Полный набор**: memoryuse, vmemoryuse, pcpu, maxproc, openfiles, cputime, wallclock, readbps, writebps, readiops, writeiops, swapuse, nthr |
+| **CPU pinning** | Нет | Да (через cpuset) |
+| **children.max** | Не задаётся | 0 по умолчанию (запрет вложенных jail) |
+
+---
+
+## Bastillefile — полный справочник хуков
+
+| Хук | Синтаксис | Назначение |
+|------|-----------|-----------|
+| `ARG` | `ARG_NAME=default` | Определение переменной с дефолтом |
+| `ARG+` | `ARG_NAME+=value` | Обязательный аргумент |
+| `CMD` | `/bin/sh command` | Выполнение команд в jail |
+| `CONFIG` | `set property value` | Установка свойств jail.conf |
+| `CP` | `usr etc` | Копирование overlay-директорий |
+| `INCLUDE` | `user/template` или URL | Включение другого шаблона |
+| `LIMITS` | `resource value` | Ресурсные лимиты (rctl) |
+| `LINE_IN_FILE` | `word /path/file` | Условное добавление строк в файл |
+| `MOUNT` | `hostpath jailpath nullfs rw 0 0` | Монтирование томов |
+| `PKG` | `pkg1 pkg2` | Установка пакетов |
+| `RDR` | `tcp 80 8080` | Перенаправление портов |
+| `RENDER` | `/path/to/file` | Подстановка `${ARG}` переменных |
+| `RESTART` | (без аргументов или сервис) | Перезапуск jail/сервиса |
+| `SERVICE` | `servicename start` | Управление сервисами |
+| `SYSRC` | `key=value` | Установка rc.conf значений |
+| `TAGS` | `tag1 tag2` | Присвоение тегов |
+
+Встроенные переменные: `${JAIL_NAME}`, `${JAIL_IP}`, `${JAIL_IP6}`
+
+---
+
+## Управление релизами
+
+| Возможность | **Crate** | **BastilleBSD** |
+|---|---|---|
+| **Загрузка базы** | FTP (base.txz) | `bootstrap` (freebsd-update или pkgbase) |
+| **Обновление патчей** | Пересборка .crate | `bastille update` (freebsd-update) |
+| **Апгрейд релиза** | Пересборка .crate | `bastille upgrade` (thin и thick) |
+| **Обновление /etc** | Пересборка .crate | `bastille etcupdate` |
+| **Верификация** | Нет | `bastille verify` |
+| **pkgbase (FreeBSD 15+)** | Нет | **Да** (`bootstrap --pkgbase`) |
+
+---
+
 ## Когда использовать что?
 
 ### Crate лучше подходит для:
