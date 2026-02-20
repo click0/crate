@@ -12,7 +12,7 @@ const char *jailSubDirectoryIfaces = "/ifaces";
 const char *cacheDirectoryPath = "/var/cache/crate";
 const std::string ctxFwUsersFilePath = std::string(jailDirectoryPath) + "/ctx-firewall-users";
 const std::string baseArchive = std::string(Locations::cacheDirectoryPath) + "/base.txz";
-const std::string baseArchiveUrl = STRg("ftp://ftp1.freebsd.org/pub/FreeBSD/snapshots/"
+const std::string baseArchiveUrl = STRg("https://download.freebsd.org/snapshots/"
                                         << Util::getSysctlString("hw.machine") << "/" << Util::getSysctlString("kern.osrelease")
                                         << "/base.txz");
 

@@ -113,6 +113,18 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     // net.inet.ip.forwarding needs to be 1 for networking to work XXX it is "bad" to alter this value, need to see if this can be replaced with firewall rules
     if (Util::getSysctlInt("net.inet.ip.forwarding") == 0)
       Util::setSysctlInt("net.inet.ip.forwarding", 1);
+    // warn about ipfw binary incompatibility on FreeBSD 15.0+
+    {
+      auto osrelease = Util::getSysctlString("kern.osrelease");
+      int majorVer = 0;
+      try { majorVer = std::stoi(osrelease); } catch (...) {}
+      if (majorVer >= 15)
+        std::cerr << rang::fg::yellow
+                  << "warning: FreeBSD " << osrelease << " detected. "
+                  << "Containers created on FreeBSD <15.0 may have ipfw binary incompatibility. "
+                  << "Rebuild containers with a FreeBSD 15.0+ base if networking fails."
+                  << rang::style::reset << std::endl;
+    }
   }
 
   // helper
@@ -241,6 +253,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       return STR("10." << ip3 << "." << ip2 << "." << ip1);
     };
     auto epipeIpA = numToIp(epairNum, 0), epipeIpB = numToIp(epairNum, 1);
+    // disable checksum offload on epair interfaces to work around FreeBSD 15.0 bug
+    // where packets between jails/host get dropped due to uncomputed checksums
+    Util::runCommand(STR("ifconfig " << epipeIfaceA << " -txcsum -txcsum6"), "disable checksum offload on epair (host side)");
+    Util::runCommand(STR("ifconfig " << epipeIfaceB << " -txcsum -txcsum6"), "disable checksum offload on epair (jail side)");
     // transfer the interface into jail
     Util::runCommand(STR("ifconfig " << epipeIfaceB << " vnet " << jid), "transfer the network interface into jail");
     // set the IP addresses on the jail epipe
