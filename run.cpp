@@ -168,25 +168,61 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   runScript("run:before-create-jail");
   LOG("creating jail " << jailXname)
   const char *optNet = spec.optionExists("net") ? "true" : "false";
-  res = ::jail_setv(JAIL_CREATE,
-    "path", jailPath.c_str(),
-    //"host.hostname", ON_USE_VNET_NOT(Util::gethostname().c_str()) ON_USE_VNET("rsnapshot"),
-    "host.hostname", Util::gethostname().c_str(),
-    "persist", nullptr,
-    "allow.raw_sockets", optNet, // allow ping-pong
-    "allow.socket_af", optNet,
-    "vnet", nullptr/*"new"*/, // possible values are: nullptr, { "disable", "new", "inherit" }, see lib/libjail/jail.c
-    nullptr);
-  if (res == -1)
-    ERR("failed to create jail: " << jail_errmsg)
-  int jid = res;
+  int jid;
+  int jailFd = -1; // jail descriptor for race-free removal (FreeBSD 15.0+)
+#ifdef JAIL_OWN_DESC
+  if (Util::getFreeBSDMajorVersion() >= 15) {
+    // Use owning jail descriptor: eliminates TOCTOU race in jail_remove(),
+    // and auto-removes jail if crate crashes (kernel closes the owning fd)
+    char descBuf[32] = {0};
+    res = ::jail_setv(JAIL_CREATE | JAIL_OWN_DESC,
+      "path", jailPath.c_str(),
+      //"host.hostname", ON_USE_VNET_NOT(Util::gethostname().c_str()) ON_USE_VNET("rsnapshot"),
+      "host.hostname", Util::gethostname().c_str(),
+      "persist", nullptr,
+      "allow.raw_sockets", optNet, // allow ping-pong
+      "allow.socket_af", optNet,
+      "vnet", nullptr/*"new"*/, // possible values are: nullptr, { "disable", "new", "inherit" }, see lib/libjail/jail.c
+      "desc", descBuf,
+      nullptr);
+    if (res == -1)
+      ERR("failed to create jail: " << jail_errmsg)
+    jid = res;
+    jailFd = std::atoi(descBuf);
+    LOG("jail descriptor fd=" << jailFd)
+  } else
+#endif
+  {
+    res = ::jail_setv(JAIL_CREATE,
+      "path", jailPath.c_str(),
+      //"host.hostname", ON_USE_VNET_NOT(Util::gethostname().c_str()) ON_USE_VNET("rsnapshot"),
+      "host.hostname", Util::gethostname().c_str(),
+      "persist", nullptr,
+      "allow.raw_sockets", optNet, // allow ping-pong
+      "allow.socket_af", optNet,
+      "vnet", nullptr/*"new"*/, // possible values are: nullptr, { "disable", "new", "inherit" }, see lib/libjail/jail.c
+      nullptr);
+    if (res == -1)
+      ERR("failed to create jail: " << jail_errmsg)
+    jid = res;
+  }
 
-  RunAtEnd destroyJail([jid,&jailXname,runScript,&args]() {
+  RunAtEnd destroyJail([jid,jailFd,&jailXname,runScript,&args]() {
     // stop and remove jail
     runScript("run:before-remove-jail");
     LOG("removing jail " << jailXname << " jid=" << jid << " ...")
-    if (::jail_remove(jid) == -1)
-      ERR("failed to remove jail: " << strerror(errno))
+#ifdef JAIL_OWN_DESC
+    if (jailFd >= 0) {
+      // Race-free removal via jail descriptor
+      if (::jail_remove_jd(jailFd) == -1)
+        ERR("failed to remove jail: " << strerror(errno))
+      ::close(jailFd);
+    } else
+#endif
+    {
+      if (::jail_remove(jid) == -1)
+        ERR("failed to remove jail: " << strerror(errno))
+    }
     runScript("run:after-remove-jail");
     LOG("removing jail " << jailXname << " jid=" << jid << " done")
   });
