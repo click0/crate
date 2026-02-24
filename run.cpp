@@ -382,6 +382,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     LOG("add user " << user << " in jail")
     runCommandInJail(STR("/usr/sbin/pw useradd " << user << " -u " << myuid << " -g " << mygid << " -s /bin/sh -d " << homeDir), "add the user in jail");
     runCommandInJail(STR("/usr/sbin/pw usermod " << user << " -G wheel"), "add the group to the user");
+    // Verify group membership — setgroups(2)/getgroups(2) behavior changed in FreeBSD 15.0:
+    // effective group ID is no longer included in the supplemental groups array
+    LOG("verify user " << user << " group membership")
+    runCommandInJail(STR("/usr/bin/id " << user), "verify user group membership");
     // "video" option requires the corresponding user/group: create the identical user/group to jail
     if (spec.optionExists("video")) {
       static const char *devName = "/dev/video";
