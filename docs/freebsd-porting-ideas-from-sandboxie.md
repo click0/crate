@@ -7,7 +7,7 @@ This document maps isolation features from SandboxieCrack (Windows) to their Fre
 ## 1. Encrypted Containers — GELI / ZFS Native Encryption
 
 ### Sandboxie approach
-SandboxieCrack provides encrypted sandbox volumes via the `MountManager` service (`core/svc/MountManager.cpp`). The `MountManager` class handles the full lifecycle: `AcquireBoxRoot()` locks and prepares a sandbox root directory, `MountImDisk()` creates ImDisk-backed encrypted virtual disks with password protection, `CreateJunction()` sets up NTFS junction points to redirect the sandbox file path to the encrypted volume, and `ReleaseBoxRoot()` cleans up on exit. Additionally, `GetRamDisk()` supports RAM-backed temporary sandboxes. The cryptographic API hooks in `core/dll/crypt.c` intercept Windows DPAPI calls (`CryptProtectData`/`CryptUnprotectData`) to ensure data protection operations stay within sandbox boundaries.
+SandboxieCrack provides encrypted sandbox volumes via the `MountManager` service (`core/svc/MountManager.cpp`, 1455 lines). The `MountManager` class handles the full lifecycle: `AcquireBoxRoot()` locks and prepares a sandbox root directory, `MountImDisk()` creates ImDisk-backed encrypted virtual disks with AES cipher and password protection, `CreateJunction()` sets up NTFS junction points to redirect the sandbox file path to the encrypted volume, and `ReleaseBoxRoot()` cleans up on exit. The system supports two distinct volume types: **image files** (`ImBox type=img`) — persistent encrypted container files on disk, and **RAM disks** (`ImBox type=ram`) — memory-backed volatile sandboxes that are destroyed on exit. New volumes are automatically formatted with NTFS and assigned drive letters. Passwords are stored in memory-resident structures to prevent key exposure to disk. The cryptographic API hooks in `core/dll/crypt.c` (separate from ImBox encryption) intercept Windows DPAPI calls (`CryptProtectData`/`CryptUnprotectData`/`CertGetCertificateChain`) to ensure credential protection operations stay within sandbox boundaries.
 
 ### FreeBSD equivalent
 - **`geli(8)`** — Full-disk encryption for block devices. Can encrypt a zvol or memory-backed device.
@@ -223,6 +223,8 @@ ipc:
 ```
 
 Implementation: Map these to `jail_setv()` parameters. Currently Crate doesn't expose these knobs — adding them allows fine-tuning for applications that need shared memory (e.g., PostgreSQL requires `sysvipc=true`).
+
+**Note on named pipes:** Sandboxie's IPC layer also includes dedicated named pipe proxying (`core/dll/file_pipe.c`, `core/svc/namedpipeserver.cpp` — 853 lines) for controlled cross-sandbox pipe communication. The FreeBSD equivalent is Unix domain socket proxying — see §15 for a proposed implementation.
 
 ---
 
@@ -440,6 +442,105 @@ Benefits over Sandboxie: D-Bus policy files are declarative and auditable. Per-j
 
 ---
 
+## 14. Service Manager Isolation — Per-Jail rc.d
+
+### Sandboxie approach
+SandboxieCrack hooks the Windows Service Control Manager via multiple components (`core/dll/scm.c`, `scm_create.c`, `scm_notify.c`, `scm_query.c`; `core/svc/serviceserver.cpp`, `serviceserver2.cpp`). Sandboxed applications can enumerate, start, stop, and configure services — but only within the sandbox context. Access to real host services is blocked. The service server maintains a per-sandbox service database, handling service creation, status queries, and change notifications in an isolated namespace.
+
+### FreeBSD equivalent
+- **Per-jail `rc.d`** — Each jail can have its own set of `rc.d` scripts for service management
+- **`daemon(8)`** — FreeBSD's native service supervision utility
+- **`service(8)`** — Service management interface that respects jail boundaries
+
+### Proposed integration
+```yaml
+# In +CRATE.SPEC:
+services:
+  managed:
+    - name: nginx
+      enable: true
+      rcvar: nginx_enable
+    - name: postgresql
+      enable: true
+      rcvar: postgresql_enable
+  auto_start: true  # start services at jail boot via rc.d
+```
+
+Implementation:
+1. Parse `services` section in `spec.cpp`
+2. Generate jail-local `/etc/rc.conf` entries for specified services
+3. At jail start, run `service <name> start` for each enabled service
+4. At jail stop, run `service <name> stop` in reverse order
+5. Service enumeration is naturally isolated — jails only see their own `rc.d` scripts
+
+Benefits over Sandboxie: No API hooking needed — FreeBSD jails natively restrict service visibility to the jail's own service set.
+
+---
+
+## 15. Named Pipe / Unix Socket Proxying
+
+### Sandboxie approach
+SandboxieCrack provides dedicated named pipe proxying (`core/dll/file_pipe.c` for user-mode interception, `core/svc/namedpipeserver.cpp` — 853 lines — for the privileged proxy server). The pipe server creates controlled channels between sandboxed processes and the host, allowing specific named pipes to cross the sandbox boundary while blocking others. Pipe access policies are applied per sandbox based on pipe name patterns.
+
+### FreeBSD equivalent
+- **Unix domain sockets** — The POSIX equivalent of named pipes for local IPC
+- **`AF_UNIX` with `socketpair(2)`** — Creates connected socket pairs for parent-child IPC
+- **`nullfs` socket mounts** — Mount individual socket files into the jail for controlled sharing
+
+### Proposed integration
+```yaml
+# In +CRATE.SPEC:
+options:
+  socket_proxy:
+    # Share specific host sockets with the jail
+    share:
+      - /var/run/dbus/system_bus_socket
+      - /tmp/.X11-unix/X0
+    # Create proxy sockets for controlled cross-jail communication
+    proxy:
+      - host: /var/run/myapp.sock
+        jail: /var/run/myapp.sock
+        direction: bidirectional  # or in, out
+```
+
+Implementation:
+1. For `share`: use `nullfs` to mount specific socket files into the jail (already done for X11)
+2. For `proxy`: create a `socat`-based or custom proxy daemon that relays data between host and jail sockets with optional filtering
+3. Default: no host sockets shared unless explicitly configured
+
+Benefits over Sandboxie: Unix domain sockets with `nullfs` mounts are simpler than API hooking. The proxy approach provides explicit, auditable socket sharing.
+
+---
+
+## 16. Terminal/Console Isolation
+
+### Sandboxie approach
+SandboxieCrack isolates terminal and console sessions per sandbox (`core/dll/terminal.c` for user-mode hooks, `core/svc/terminalserver.cpp` for the privileged terminal server). Console window creation, input/output, and terminal session management are intercepted to prevent cross-sandbox terminal access and ensure each sandbox has an isolated console environment.
+
+### FreeBSD equivalent
+- **Per-jail PTY allocation** — Each jail gets its own pseudo-terminal devices
+- **`devfs` rules** — Control which `/dev/pts/*` devices are visible inside the jail
+- **`jexec(8)` / `jls(8)`** — Already provide per-jail terminal sessions
+
+### Proposed integration
+Terminal/console isolation is largely **automatic** in FreeBSD jails:
+
+1. Each jail gets its own PTY namespace via `devfs` rules — processes inside the jail cannot see or attach to PTYs belonging to other jails or the host
+2. `jexec` creates new terminal sessions when entering a jail
+3. The existing `devfs_ruleset` mechanism (already used by Crate) controls device visibility
+
+```yaml
+# In +CRATE.SPEC (optional fine-tuning):
+options:
+  terminal:
+    devfs_ruleset: 4    # restrict /dev visibility
+    allow_raw_tty: false  # prevent raw TTY access
+```
+
+Benefits over Sandboxie: No hooking needed — jail PTY isolation is kernel-enforced. This is one of the few areas where the jail model provides stronger isolation with zero implementation effort.
+
+---
+
 ## Summary: Priority Roadmap
 
 | Priority | Feature | FreeBSD API | Complexity | Impact |
@@ -457,3 +558,6 @@ Benefits over Sandboxie: D-Bus policy files are declarative and auditable. Per-j
 | **Low** | Encryption | GELI / ZFS encryption | Medium | Data protection |
 | **Low** | IPC controls | Jail params | Low | Fine-grained isolation |
 | **Low** | Capsicum / MAC | `cap_enter()`, `mac(4)` | High | Defense in depth |
+| **Low** | Service manager isolation | Per-jail `rc.d` | Low | Service namespace isolation |
+| **Low** | Unix socket proxying | `nullfs` + `socat` | Medium | Controlled cross-jail IPC |
+| **Low** | Terminal isolation | `devfs` rules | None (automatic) | Already provided by jails |
