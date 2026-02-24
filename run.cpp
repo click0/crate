@@ -19,7 +19,9 @@
 #include <sys/stat.h>
 #include <sys/param.h>
 #include <sys/mount.h>
-extern "C" { // sys/jail.h isn't C++-safe: https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=238928
+// sys/jail.h isn't C++-safe: https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=238928
+// Still unfixed as of FreeBSD 15.0 — uses struct in_addr/in6_addr without includes
+extern "C" {
 #include <sys/jail.h>
 }
 #include <sys/uio.h>
