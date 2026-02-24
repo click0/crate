@@ -17,11 +17,11 @@
 
 SandboxieCrack uses a layered interception approach on Windows:
 
-1. **Kernel driver** (`core/drv/`) — Intercepts NT system calls via minifilter callbacks and direct syscall hooks. Implements file path translation, registry hive isolation, process token manipulation, IPC filtering, and WFP-based network filtering. The driver maintains per-sandbox state and enforces policy at the lowest level.
+1. **Kernel driver** (`core/drv/`) — Intercepts 50+ NT system calls via SSDT hooking and minifilter callbacks. Implements file path translation (`file.c`, `file_xlat.c`), registry hive isolation (`key.c`, `key_flt.c`), process token manipulation via `Token_Filter`/`Token_Restrict`/`Token_ReplacePrimary` (`token.c`), IPC filtering with dynamic port tracking via `IPC_DYNAMIC_PORT` structures (`ipc.c`, `ipc_port.c`), and WFP-based network filtering with per-sandbox sublayer and flow tracking (`wfp.c`). The driver maintains per-sandbox state through the `BOX` structure (`box.h`) which defines four namespace paths: file (`\??\C:\Sandbox\%SID%\BoxName`), registry (`HKCU\Sandbox\BoxName`), IPC (`\Sandbox\%SID%\Session_%SESSION%\BoxName`), and pipe (IPC path with backslashes as underscores).
 
-2. **User-mode DLL** (`core/dll/`) — Injected into every sandboxed process via low-level LdrInitializeThunk hooking. Hooks Win32 API calls (file operations, registry, network, GUI, clipboard, DNS) via IAT patching and inline hooks. Provides the user-visible sandbox behavior (path redirection, copy-on-write semantics).
+2. **User-mode DLL** (`core/dll/`) — Injected into every sandboxed process via low-level `LdrInitializeThunk` hooking. The largest components: `file.c` (258KB — COW file operations with delete tree tracking), `key.c` (144KB — registry hooking with value merging via `key_merge.c`), `com.c` (101KB — COM/DCOM activation hooking with `COM_IUNKNOWN` proxy wrappers), `proc.c` (100KB — `CreateProcessW`/`ShellExecuteEx` hooking for process creation redirection), `gui.c` (87KB — window/desktop/clipboard isolation), `net.c` (72KB — socket and network API hooking), and `dns_filter.c` (25KB — DNS resolution filtering with IP entry caching). Hook management via `MODULE_HOOK` structures in `dllhook.c` with detour-style trampolines.
 
-3. **Service layer** (`core/svc/`) — A privileged Windows service that mediates operations requiring elevated rights: process creation inside sandboxes, named pipe proxying, GUI window management, encrypted volume mounting (ImBox), and COM/RPC object brokering.
+3. **Service layer** (`core/svc/`) — A privileged Windows service with specialized servers: `ProcessServer` (process creation, token DACL management, RunSandboxed requests), `MountManager` (encrypted ImDisk volumes via `MountImDisk`/`UnmountImDisk`, RAM disk support via `GetRamDisk`, NTFS junction management via `CreateJunction`/`RemoveJunction`, box root locking via `AcquireBoxRoot`/`ReleaseBoxRoot`), `GuiServer` (window proxy with slave process architecture for cross-sandbox GUI mediation), and `NamedPipeServer` (pipe proxying). Communication via wire protocol headers (`*Wire.h`).
 
 4. **GUI** (`SandboxiePlus/`) — Qt-based management interface with sandbox configuration, monitoring, and snapshot management.
 
@@ -56,6 +56,10 @@ Crate delegates isolation entirely to the FreeBSD kernel:
 | **Templates/Presets** | Box types: Standard, Enhanced Privacy, Data Protection, Application Compartment | None — manual YAML per container |
 | **Configuration** | INI-based (`Sandboxie.ini`) with GUI editor and validation | YAML-based (`+CRATE.SPEC`) with programmatic parsing |
 | **Package management** | N/A (runs host applications) | FreeBSD `pkg` integration — installs packages into container image |
+| **COM/D-Bus services** | COM/DCOM hooking (`com.c`, 101KB) — `CoCreateInstance` interception, DCOM redirection, `COM_IUNKNOWN` proxying | Not implemented (D-Bus per-jail possible) |
+| **Clipboard isolation** | Clipboard interception via GUI hooks + `GuiServer` cross-sandbox mediation | Not isolated — shared via X11 socket |
+| **Process creation control** | Hooks `CreateProcessW`/`ShellExecuteEx` (`proc.c`, 100KB) — redirects child processes into sandbox | Jail-native — `jexec` for entry, jail boundary enforced by kernel |
+| **Syscall interception** | SSDT hooking of 50+ NT syscalls at kernel level | Not needed — FreeBSD jails enforce isolation at kernel level without syscall interception |
 | **Container portability** | Sandboxes tied to host installation | Compressed tarballs (`.crate` files) — distributable images |
 
 ## Feature Gap Analysis: What Crate Is Missing
@@ -77,6 +81,12 @@ Features present in SandboxieCrack but absent from Crate:
 7. **Configuration validation** — SandboxieCrack validates settings with contextual tooltips; Crate has basic spec validation only.
 
 8. **Copy-on-write filesystem** — SandboxieCrack transparently redirects file writes to sandbox copies; Crate uses full rootfs copies without COW.
+
+9. **GUI/Desktop isolation** — SandboxieCrack filters window operations, isolates desktops, and mediates cross-sandbox GUI access via GuiServer; Crate shares the host X11 socket without any isolation.
+
+10. **Clipboard isolation** — SandboxieCrack provides per-sandbox clipboard buffers with configurable cross-sandbox paste policies; Crate has no clipboard isolation.
+
+11. **COM/D-Bus service isolation** — SandboxieCrack intercepts COM activation and proxies DCOM objects; Crate has no D-Bus or service bus isolation.
 
 ## Strengths of Each Approach
 

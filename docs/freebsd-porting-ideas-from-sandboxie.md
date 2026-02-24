@@ -7,7 +7,7 @@ This document maps isolation features from SandboxieCrack (Windows) to their Fre
 ## 1. Encrypted Containers — GELI / ZFS Native Encryption
 
 ### Sandboxie approach
-SandboxieCrack implements ImBox encrypted sandbox volumes (`core/dll/crypt.c`, `core/svc/MountManager.cpp`). Each sandbox directory can be stored in an AES-encrypted container file, mounted transparently at sandbox start and unmounted at exit. The service layer handles key management and volume mounting with elevated privileges.
+SandboxieCrack provides encrypted sandbox volumes via the `MountManager` service (`core/svc/MountManager.cpp`). The `MountManager` class handles the full lifecycle: `AcquireBoxRoot()` locks and prepares a sandbox root directory, `MountImDisk()` creates ImDisk-backed encrypted virtual disks with password protection, `CreateJunction()` sets up NTFS junction points to redirect the sandbox file path to the encrypted volume, and `ReleaseBoxRoot()` cleans up on exit. Additionally, `GetRamDisk()` supports RAM-backed temporary sandboxes. The cryptographic API hooks in `core/dll/crypt.c` intercept Windows DPAPI calls (`CryptProtectData`/`CryptUnprotectData`) to ensure data protection operations stay within sandbox boundaries.
 
 ### FreeBSD equivalent
 - **`geli(8)`** — Full-disk encryption for block devices. Can encrypt a zvol or memory-backed device.
@@ -35,7 +35,7 @@ Benefits over Sandboxie: ZFS encryption is kernel-native, supports snapshots of 
 ## 2. Snapshot Management — ZFS Snapshots
 
 ### Sandboxie approach
-SandboxieCrack implements file-level snapshots (`core/drv/file_snapshots.c`). Snapshots capture the state of a sandbox's modified files using name scrambling to store multiple versions. Supports parent-child snapshot chains and selective restore. Snapshot metadata is stored in `Snapshot.ini` files within the sandbox directory.
+SandboxieCrack implements file-level snapshots (`core/dll/file_snapshots.c`). Each snapshot is assigned a short ID (max 17 characters) with scramble keys used to obfuscate file names within the snapshot directory for privacy. Snapshots form hierarchical parent-child chains: when resolving a file, the system performs lazy resolution across snapshot layers — walking from the newest snapshot back through parents until the file is found or the base layer is reached. Snapshot metadata is stored in `Snapshot.ini` files within the sandbox directory, tracking snapshot IDs, parent references, and creation timestamps.
 
 ### FreeBSD equivalent
 - **`zfs snapshot`** — Atomic, zero-cost snapshots of entire datasets
@@ -63,7 +63,7 @@ Benefits over Sandboxie: Filesystem-level snapshots are atomic, zero-copy, and c
 ## 3. Per-Container Firewall Rules — pf Anchors + VNET
 
 ### Sandboxie approach
-SandboxieCrack uses the Windows Filtering Platform (`core/drv/wfp.c`) to apply per-sandbox network rules. Each sandbox can have independent allow/block rules for TCP/UDP traffic based on IP ranges, ports, and protocols. Rules are applied at the kernel level using WFP callout filters registered per-sandbox.
+SandboxieCrack uses the Windows Filtering Platform (`core/drv/wfp.c`) to apply per-sandbox network rules. The driver registers a WFP sublayer (GUID `e1d364e9-cd84-4a48-aba4-608ce83e31ee`) and installs callout filters for both send and receive operations across IPv4 and IPv6. Each sandbox can have independent allow/block rules for TCP/UDP traffic based on IP ranges, ports, and protocols. The WFP integration includes flow tracking (associating network connections with specific sandboxed processes) and flow deletion callbacks for cleanup when connections terminate.
 
 ### FreeBSD equivalent
 - **`pf(4)`** — BSD packet filter with anchor support for hierarchical rulesets
@@ -98,7 +98,7 @@ This approach scales better than the current flat ipfw rule numbering (which has
 ## 4. DNS Filtering — Per-Jail DNS Proxy
 
 ### Sandboxie approach
-SandboxieCrack hooks DNS resolution in user mode (`core/dll/dns_filter.c`). Intercepts `WSALookupServiceBeginW` and `getaddrinfo` to apply per-sandbox domain allow/block lists with wildcard pattern matching. Can redirect blocked domains to localhost or return NXDOMAIN.
+SandboxieCrack hooks DNS resolution in user mode (`core/dll/dns_filter.c`). Intercepts `WSALookupServiceBeginW`/`WSALookupServiceNextW` and `getaddrinfo` to apply per-sandbox domain allow/block lists with wildcard pattern matching. The filter maintains an IP entry cache to avoid repeated lookups for the same domains. Filtering can be dynamically enabled/disabled per sandbox, and rules support both domain-based patterns (e.g., `*.ads.example.com`) and IP-based filtering of resolution results. Blocked domains can be redirected to localhost or suppressed entirely.
 
 ### FreeBSD equivalent
 - **Per-jail `resolv.conf`** — Already possible; jail gets its own `/etc/resolv.conf`
@@ -131,7 +131,7 @@ Benefits over Sandboxie: Uses standard DNS infrastructure (unbound + RPZ) instea
 ## 5. Resource Limits — RCTL Framework
 
 ### Sandboxie approach
-SandboxieCrack limits the number of processes per sandbox and can restrict CPU/memory through Windows Job Objects. Process limits are configured in `Sandboxie.ini` and enforced by the kernel driver.
+SandboxieCrack limits the number of processes per sandbox and can restrict CPU/memory through Windows Job Objects. Process limits are configured in `Sandboxie.ini` and enforced by the kernel driver (`core/drv/process.c`). The driver tracks all processes via `PsSetCreateProcessNotifyRoutineEx` callbacks, maintaining a `PROCESS` structure per sandboxed process that includes process ID, starter ID, integrity level, primary token references, and per-process thread maps.
 
 ### FreeBSD equivalent
 - **`rctl(8)`** — Resource limits framework for jails, users, processes
@@ -163,7 +163,7 @@ Benefits over Sandboxie: RCTL provides much richer resource controls (CPU %, mem
 ## 6. Copy-on-Write Filesystem — ZFS Clones / unionfs
 
 ### Sandboxie approach
-SandboxieCrack implements transparent copy-on-write at the file level (`core/drv/file.c`, `core/drv/file_xlat.c`). Files are categorized as TRUE_PATH (host original) or COPY_PATH (sandbox copy). On first write, the file is copied from TRUE_PATH to COPY_PATH, and subsequent accesses use the copy. This avoids duplicating the entire filesystem.
+SandboxieCrack implements transparent copy-on-write at the file level via both kernel driver (`core/drv/file.c`, `core/drv/file_xlat.c`) and user-mode DLL (`core/dll/file.c` — the largest module at 258KB). Files are categorized as TRUE_PATH (host original) or COPY_PATH (sandbox copy). On first write, the file is copied from TRUE_PATH to COPY_PATH, and subsequent accesses use the copy. File deletions are tracked in a delete tree rather than physically removing files, allowing undelete. The implementation spans multiple supporting modules: `file_copy.c` (copy operations), `file_del.c` (deletion tracking), `file_link.c` (hardlink/symlink handling), `file_pipe.c` (named pipe redirection), `file_dir.c` (directory operations), and `file_init.c` (path initialization).
 
 ### FreeBSD equivalent
 - **ZFS clones** — `zfs clone pool/base@snap pool/crate/<name>` creates an instant writable copy sharing all blocks with the original via COW
@@ -205,7 +205,7 @@ Benefits over Sandboxie: Filesystem-level COW (ZFS) is transparent, atomic, and 
 ## 7. IPC Namespace Controls — Jail SysV IPC
 
 ### Sandboxie approach
-SandboxieCrack filters IPC at multiple levels (`core/drv/ipc.c`, `core/drv/ipc_port.c`): named pipes, ALPC ports, RPC endpoints, COM objects, and clipboard operations. The driver intercepts NtCreatePort, NtConnectPort, and related syscalls, applying per-sandbox allow/block policies. Dynamic RPC ports are tracked and filtered.
+SandboxieCrack filters IPC at multiple levels (`core/drv/ipc.c`, `core/drv/ipc_port.c`): LPC/ALPC ports, events, EventPairs, KeyedEvents, mutexes, semaphores, job objects, and named pipes. The driver intercepts `NtCreatePort`, `NtConnectPort`, and related syscalls, applying per-sandbox allow/block policies. Dynamic RPC ports are tracked via `IPC_DYNAMIC_PORT`/`IPC_DYNAMIC_PORTS` structures, which maintain a port registry with locks for thread safety. The driver also handles spooler port forwarding and RPC endpoint mapper filtering to prevent cross-sandbox service access.
 
 ### FreeBSD equivalent
 - **Jail `allow.sysvipc`** — Controls access to System V IPC (shared memory, semaphores, message queues)
@@ -229,7 +229,7 @@ Implementation: Map these to `jail_setv()` parameters. Currently Crate doesn't e
 ## 8. Process Privilege Dropping — Capsicum + MAC
 
 ### Sandboxie approach
-SandboxieCrack manipulates process security tokens (`core/drv/token.c`): drops privileges via `SeFilterToken`, removes SID groups, lowers integrity levels, and applies restricted tokens. This prevents sandboxed processes from accessing high-privilege resources even if they exploit a vulnerability.
+SandboxieCrack manipulates process security tokens (`core/drv/token.c`) through four key kernel functions: `Token_Filter` (drops specified privileges from a token), `Token_Restrict` (applies additional SID restrictions and integrity level lowering), `Token_ReplacePrimary` (swaps a process's primary token for a restricted copy), and `Token_DuplicateToken` (creates restricted token copies for child processes). The driver also modifies DACLs on kernel object handles to prevent sandboxed processes from accessing high-privilege resources even if they exploit a vulnerability.
 
 ### FreeBSD equivalent
 - **Capsicum** — Capability mode: once entered, a process can only use pre-opened file descriptors. Irrevocable.
@@ -351,6 +351,95 @@ limits:
 
 ---
 
+## 11. GUI / Desktop Isolation — Nested X11 / Wayland
+
+### Sandboxie approach
+SandboxieCrack provides extensive GUI isolation (`core/dll/gui.c`, 87KB). The DLL hooks window management functions (`CreateWindowEx`, `SetWindowPos`, `ShowWindow`, `EnumWindows`, etc.) to filter window class enumeration, isolate desktop/window station access, intercept clipboard operations, and filter inter-process window messages. The `GuiServer` service (`core/svc/GuiServer.cpp`) acts as a privileged proxy using a slave process architecture — helper processes mediate GUI operations between sandboxed applications and the host desktop. The `Gui_UseProxyService` flag controls whether the proxy is active.
+
+### FreeBSD equivalent
+- **Xpra** — Persistent remote X11 sessions; can act as a nested X server
+- **Xephyr** — Nested X11 server running inside an existing X session
+- **Wayland** — Protocol-level isolation; each compositor is a security boundary
+- **X11 `SECURITY` extension** — Allows creating untrusted X11 connections with restricted capabilities
+
+### Proposed integration
+```yaml
+# In +CRATE.SPEC:
+options:
+  x11:
+    mode: nested      # nested (Xephyr/Xpra), shared (current nullfs), none
+    resolution: 1280x720
+    clipboard: false  # see §12
+```
+
+Implementation:
+1. **`mode: nested`** — Start Xephyr or Xpra inside the jail, set `DISPLAY` to the nested server. The host X11 socket is NOT shared. Applications see a completely isolated display.
+2. **`mode: shared`** — Current behavior: nullfs mount of `/tmp/.X11-unix`. Fast but no isolation.
+3. **`mode: none`** — No X11 access at all.
+4. For Wayland: mount only the Wayland socket if available; Wayland's protocol design already provides better isolation than X11.
+
+Benefits over Sandboxie: Nested X servers provide stronger isolation than API hooking — the sandboxed application has no access to the host window list, clipboard, or input events at the protocol level.
+
+---
+
+## 12. Clipboard Isolation — X11 Selection Filtering
+
+### Sandboxie approach
+SandboxieCrack intercepts clipboard operations as part of the GUI layer (`core/dll/gui.c`). The `GuiServer` mediates clipboard data between sandboxes — when a sandboxed application copies data, it goes to a per-sandbox clipboard buffer. Cross-sandbox paste operations are filtered and optionally blocked (configurable in Data Protection box types).
+
+### FreeBSD equivalent
+- **X11 selections** — X11 uses three selection buffers (PRIMARY, SECONDARY, CLIPBOARD) mediated by the X server
+- **`xclip`/`xsel`** — Command-line clipboard utilities
+- **Wayland clipboard** — Per-surface clipboard, compositor-controlled
+
+### Proposed integration
+```yaml
+# In +CRATE.SPEC:
+options:
+  clipboard:
+    mode: isolated    # isolated (per-jail), shared (host), none
+    direction: both   # in, out, both, none — for shared mode
+```
+
+Implementation:
+1. **`mode: isolated`** — With nested X11 (§11), clipboard isolation is automatic — each Xephyr instance has its own selection buffers.
+2. **`mode: shared`** with `direction` control — Run an `xsel` proxy that forwards clipboard in the allowed direction(s). Block the reverse direction.
+3. **`mode: none`** — No clipboard access.
+
+---
+
+## 13. COM/D-Bus Service Isolation — Per-Jail D-Bus
+
+### Sandboxie approach
+SandboxieCrack provides extensive COM/DCOM isolation (`core/dll/com.c`, 101KB). The DLL hooks `CoCreateInstance`, `CoGetClassObject`, and related COM activation functions. COM objects requested by sandboxed applications are either instantiated within the sandbox (in-process servers) or proxied through the service layer via `ComWire.h` protocol (out-of-process servers). DCOM server launches are redirected to sandbox-local instances. The `COM_IUNKNOWN` wrapper structure tracks reference counts and object indices for proxied objects. Type library loading is restricted to prevent sandbox escape via COM object registration.
+
+### FreeBSD equivalent
+- **D-Bus** — The UNIX equivalent of COM for inter-process service activation. Used by desktop environments (GNOME, KDE) for service discovery and method calls.
+- **Per-user D-Bus sessions** — Each user gets a `dbus-daemon --session` instance
+- **D-Bus policy files** — XML-based access control for method calls, signals, and name ownership
+
+### Proposed integration
+```yaml
+# In +CRATE.SPEC:
+options:
+  dbus:
+    system: false      # provide system bus inside jail
+    session: true      # start session bus for GUI apps
+    policy:
+      allow_own: ["org.freedesktop.Notifications"]
+      deny_send: ["org.freedesktop.*"]
+```
+
+Implementation:
+1. If `dbus.session: true`, start a `dbus-daemon --session` inside the jail at jail creation time
+2. Generate a jail-local D-Bus policy file restricting name ownership and method calls
+3. If `dbus.system: false` (default), do NOT mount the host's `/var/run/dbus/system_bus_socket` — the jail has no system bus access
+4. Set `DBUS_SESSION_BUS_ADDRESS` environment variable to the jail-local socket
+
+Benefits over Sandboxie: D-Bus policy files are declarative and auditable. Per-jail D-Bus daemon provides true service namespace isolation without API-level hooking.
+
+---
+
 ## Summary: Priority Roadmap
 
 | Priority | Feature | FreeBSD API | Complexity | Impact |
@@ -358,10 +447,13 @@ limits:
 | **High** | Resource limits (RCTL) | `rctl(8)` | Low | Prevents resource abuse |
 | **High** | ZFS snapshots | `zfs snapshot/clone` | Medium | State management, rollback |
 | **High** | DNS filtering | `unbound(8)` | Medium | Privacy, security |
+| **High** | GUI isolation (nested X11) | Xephyr / Xpra | Medium | Prevents X11 escape |
 | **Medium** | pf firewall anchors | `pf(4)` | Medium | Replaces fragile ipfw numbering |
 | **Medium** | Container templates | N/A (YAML) | Low | Usability |
 | **Medium** | Config validation | N/A (code) | Low | Developer experience |
 | **Medium** | COW filesystem | ZFS clones | Medium | Disk efficiency |
+| **Medium** | Clipboard isolation | X11 selections / Xephyr | Low | Prevents data leakage |
+| **Medium** | D-Bus isolation | `dbus-daemon` per jail | Medium | Service namespace isolation |
 | **Low** | Encryption | GELI / ZFS encryption | Medium | Data protection |
 | **Low** | IPC controls | Jail params | Low | Fine-grained isolation |
 | **Low** | Capsicum / MAC | `cap_enter()`, `mac(4)` | High | Defense in depth |
