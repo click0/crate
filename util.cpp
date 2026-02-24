@@ -172,6 +172,11 @@ void ensureKernelModuleIsLoaded(const char *name) {
   SYSCALL(::kldload(name), "kldload", name, [](int err) {return err == EEXIST;});
 }
 
+int getFreeBSDMajorVersion() {
+  auto osrelease = getSysctlString("kern.osrelease");
+  try { return std::stoi(osrelease); } catch (...) { return 0; }
+}
+
 std::string gethostname() {
   char name[256];
   SYSCALL(::gethostname(name, sizeof(name)), "gethostname", "");

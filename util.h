@@ -92,6 +92,7 @@ int getSysctlInt(const char *name);
 void setSysctlInt(const char *name, int value);
 std::string getSysctlString(const char *name);
 void ensureKernelModuleIsLoaded(const char *name);
+int getFreeBSDMajorVersion();
 std::string gethostname();
 std::vector<std::string> splitString(const std::string &str, const std::string &delimiter);
 std::string stripTrailingSpace(const std::string &str);

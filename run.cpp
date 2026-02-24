@@ -118,17 +118,12 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     if (Util::getSysctlInt("net.inet.ip.forwarding") == 0)
       Util::setSysctlInt("net.inet.ip.forwarding", 1);
     // warn about ipfw binary incompatibility on FreeBSD 15.0+
-    {
-      auto osrelease = Util::getSysctlString("kern.osrelease");
-      int majorVer = 0;
-      try { majorVer = std::stoi(osrelease); } catch (...) {}
-      if (majorVer >= 15)
-        std::cerr << rang::fg::yellow
-                  << "warning: FreeBSD " << osrelease << " detected. "
-                  << "Containers created on FreeBSD <15.0 may have ipfw binary incompatibility. "
-                  << "Rebuild containers with a FreeBSD 15.0+ base if networking fails."
-                  << rang::style::reset << std::endl;
-    }
+    if (Util::getFreeBSDMajorVersion() >= 15)
+      std::cerr << rang::fg::yellow
+                << "warning: FreeBSD " << Util::getSysctlString("kern.osrelease") << " detected. "
+                << "Containers created on FreeBSD <15.0 may have ipfw binary incompatibility. "
+                << "Rebuild containers with a FreeBSD 15.0+ base if networking fails."
+                << rang::style::reset << std::endl;
   }
 
   // helper
