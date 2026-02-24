@@ -169,7 +169,7 @@ std::string getSysctlString(const char *name) {
 }
 
 void ensureKernelModuleIsLoaded(const char *name) {
-  SYSCALL(::kldload("ipfw_nat"), "kldload", name, [](int err) {return err == EEXIST;});
+  SYSCALL(::kldload(name), "kldload", name, [](int err) {return err == EEXIST;});
 }
 
 std::string gethostname() {
