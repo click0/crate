@@ -13,9 +13,10 @@ class Mount {
   const char *fstype;
   std::string fspath;
   std::string target;
+  int flags;
 
 public:
-  Mount(const char *newFstype, const std::string &newFspath, const std::string &newTarget);
+  Mount(const char *newFstype, const std::string &newFspath, const std::string &newTarget, int newFlags = 0);
   ~Mount();
 
   void mount();

@@ -13,6 +13,7 @@
 #include <rang.hpp>
 
 #include <sys/stat.h>
+#include <sys/mount.h>
 #include <unistd.h>
 #include <errno.h>
 #include <assert.h>
@@ -312,15 +313,15 @@ bool createCrate(const Args &args, const Spec &spec) {
   // copy /etc/resolv.conf into the jail directory such that pkg would be able to resolve addresses
   Util::Fs::copyFile("/etc/resolv.conf", STR(jailPath << "/etc/resolv.conf"));
 
-  // mount devfs
+  // mount devfs (MNT_IGNORE hides it from df/mount output)
   LOG("mounting devfs in jail")
-  Mount mountDevfs("devfs", STR(jailPath << "/dev"), "");
+  Mount mountDevfs("devfs", STR(jailPath << "/dev"), "", MNT_IGNORE);
   mountDevfs.mount();
 
   // mount the pkg cache
   LOG("mounting pkg cache and as nullfs in jail")
   Util::Fs::mkdir(STR(jailPath << "/var/cache/pkg"), 0755);
-  Mount mountPkgCache("nullfs", STR(jailPath << "/var/cache/pkg"), "/var/cache/pkg");
+  Mount mountPkgCache("nullfs", STR(jailPath << "/var/cache/pkg"), "/var/cache/pkg", MNT_IGNORE);
   mountPkgCache.mount();
 
   // install packages into the jail, if needed

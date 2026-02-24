@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/param.h>
+#include <sys/mount.h>
 extern "C" { // sys/jail.h isn't C++-safe: https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=238928
 #include <sys/jail.h>
 }
@@ -135,8 +136,8 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   };
   runScript("run:begin");
 
-  // mount devfs
-  mount(new Mount("devfs", J("/dev"), ""));
+  // mount devfs (MNT_IGNORE hides it from df/mount output)
+  mount(new Mount("devfs", J("/dev"), "", MNT_IGNORE));
 
   auto jailXname = STR(Util::filePathToBareName(args.runCrateFile) << "_pid" << ::getpid());
 
@@ -155,7 +156,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     // create the X11 socket directory
     Util::Fs::mkdir(J("/tmp/.X11-unix"), 0777);
     // mount the X11 socket directory in jail
-    mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix"));
+    mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix", MNT_IGNORE));
     // DISPLAY variable copied to jail
     auto *display = ::getenv("DISPLAY");
     if (display == nullptr)
@@ -425,7 +426,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     // create the directory in jail
     Util::runCommand(STR("mkdir -p " << J(dirJail)), "create the shared directory in jail"); // TODO replace with API-based calls
     // mount it as nullfs
-    mount(new Mount("nullfs", J(dirJail), dirHost));
+    mount(new Mount("nullfs", J(dirJail), dirHost, MNT_IGNORE));
   }
 
   // share files if requested
