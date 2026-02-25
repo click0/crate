@@ -9,21 +9,42 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         freebsd-version: ['14.2', '15.0']
-    name: FreeBSD ${{ matrix.freebsd-version }} build
+    name: FreeBSD ${{ matrix.freebsd-version }} build+test
     steps:
     - uses: actions/checkout@v4
 
-    - name: Build on FreeBSD
+    - name: Build and test on FreeBSD
       uses: cross-platform-actions/action@v0.32.0
+      timeout-minutes: 25
       with:
         operating_system: freebsd
         version: ${{ matrix.freebsd-version }}
         run: |
+          set -ex
+
+          echo "::group::Install dependencies"
           sudo pkg install -y pkgconf yaml-cpp rang
+          echo "::endgroup::"
+
+          echo "::group::System info"
           uname -a
           c++ --version
-          make clean all
+          sysctl hw.ncpu
+          echo "::endgroup::"
+
+          echo "::group::Compile changed components"
+          CXXFLAGS="-Wall -std=c++17 $(pkg-config --cflags yaml-cpp)"
+          for f in run.cpp util.cpp create.cpp locs.cpp mount.cpp; do
+            echo "  Compiling $f ..."
+            c++ $CXXFLAGS -c "$f" -o "${f%.cpp}.o"
+          done
+          echo "::endgroup::"
+
+          echo "::group::CI verification tests"
+          sudo sh tests/ci-verify.sh .
+          echo "::endgroup::"
