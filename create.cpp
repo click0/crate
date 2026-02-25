@@ -290,6 +290,13 @@ bool createCrate(const Args &args, const Spec &spec) {
   if (res == -1)
     ERR("failed to create the jail directory '" << jailPath << "': " << strerror(errno))
 
+  // log if jail directory is on encrypted ZFS
+  if (Util::Fs::isOnZfs(jailPath)) {
+    auto dataset = Util::Fs::getZfsDataset(jailPath);
+    if (!dataset.empty() && Util::Fs::isZfsEncrypted(dataset))
+      LOG("create directory on encrypted ZFS dataset '" << dataset << "'")
+  }
+
   // helper
   auto runScript = [&jailPath,&spec](const char *section) {
     Scripts::section(section, spec.scripts, [&jailPath,section](const std::string &cmd) {

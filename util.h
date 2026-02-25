@@ -127,6 +127,10 @@ std::set<std::string> findElfFiles(const std::string &dir);
 bool hasExtension(const char *file, const char *extension);
 void copyFile(const std::string &srcFile, const std::string &dstFile);
 std::vector<std::string> expandWildcards(const std::string &wildcardPath, const std::string &cmdPrefix = "");
+bool isOnZfs(const std::string &path);
+std::string getZfsDataset(const std::string &path);
+bool isZfsEncrypted(const std::string &dataset);
+bool isZfsKeyLoaded(const std::string &dataset);
 
 }
 

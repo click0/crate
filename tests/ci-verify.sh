@@ -55,6 +55,13 @@ if [ "$VIMAGE" = "1" ]; then
 fi
 printf "  Can create epair: %s\n" "$CAN_EPAIR"
 
+# ZFS available?
+HAS_ZFS=0
+if kldstat -q -m zfs 2>/dev/null || sysctl -n vfs.zfs.version.spa >/dev/null 2>/dev/null; then
+  HAS_ZFS=1
+fi
+printf "  ZFS available: %s\n" "$HAS_ZFS"
+
 # Binary exists?
 HAS_BINARY=0
 if [ -x "$CRATE_BIN" ]; then HAS_BINARY=1; fi
@@ -428,6 +435,23 @@ else
   skip "kldload runtime test (compile-only CI)"
   section "T11: MNT_IGNORE runtime (devfs mount hidden from df)"
   skip "compile-only CI (no full build)"
+  section "T13: ZFS support"
+  if grep -q 'isOnZfs\|getZfsDataset\|isZfsEncrypted' "$BUILDDIR/util.cpp"; then
+    pass "util.cpp has ZFS detection functions"
+  else
+    fail "util.cpp missing ZFS detection functions"
+  fi
+  if grep -q 'zfsDatasets' "$BUILDDIR/spec.cpp"; then
+    pass "spec.cpp supports zfs/datasets parsing"
+  else
+    fail "spec.cpp missing zfs/datasets support"
+  fi
+  if grep -q 'zfs jail\|zfs unjail' "$BUILDDIR/run.cpp"; then
+    pass "run.cpp has ZFS dataset attach/detach"
+  else
+    fail "run.cpp missing ZFS dataset attach/detach"
+  fi
+  skip "ZFS runtime tests (compile-only CI)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -467,6 +491,109 @@ if grep -q '238928' "$BUILDDIR/run.cpp"; then
   pass "run.cpp documents sys/jail.h C++ bug #238928"
 else
   fail "run.cpp missing sys/jail.h C++ safety comment"
+fi
+
+# ---------------------------------------------------------------------------
+section "T13: ZFS support"
+
+# Source-level: ZFS detection functions in util.cpp
+if grep -q 'isOnZfs\|getZfsDataset\|isZfsEncrypted' "$BUILDDIR/util.cpp"; then
+  pass "util.cpp has ZFS detection functions"
+else
+  fail "util.cpp missing ZFS detection functions"
+fi
+
+# Source-level: spec parser supports zfs/datasets
+if grep -q 'zfsDatasets' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp supports zfs/datasets parsing"
+else
+  fail "spec.cpp missing zfs/datasets support"
+fi
+
+# Source-level: run.cpp has ZFS dataset attach/detach
+if grep -q 'zfs jail\|zfs unjail' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp has ZFS dataset attach/detach"
+else
+  fail "run.cpp missing ZFS dataset attach/detach"
+fi
+
+# Runtime: test statfs-based ZFS detection
+if [ "$HAS_ZFS" = "1" ]; then
+  cat > /tmp/_ci_test_zfs.c << 'ZEOF'
+#include <sys/param.h>
+#include <sys/mount.h>
+#include <stdio.h>
+#include <string.h>
+int main() {
+    struct statfs sfs;
+    if (statfs("/", &sfs) == 0) {
+        printf("fstype=%s\n", sfs.f_fstypename);
+        if (strcmp(sfs.f_fstypename, "zfs") == 0) {
+            printf("dataset=%s\n", sfs.f_mntfromname);
+            return 0;
+        }
+    }
+    return 1;
+}
+ZEOF
+  if cc -o /tmp/_ci_test_zfs /tmp/_ci_test_zfs.c 2>/dev/null; then
+    if /tmp/_ci_test_zfs >/dev/null 2>&1; then
+      pass "ZFS detected on root filesystem via statfs()"
+    else
+      skip "root filesystem is not ZFS (statfs check works but fs is not ZFS)"
+    fi
+  else
+    fail "could not compile ZFS statfs test"
+  fi
+  rm -f /tmp/_ci_test_zfs /tmp/_ci_test_zfs.c
+else
+  skip "ZFS not available on this system"
+fi
+
+# Runtime: ZFS jail dataset attach test
+if [ "$HAS_ZFS" = "1" ] && [ "$CAN_JAIL" = "1" ]; then
+  TESTPOOL=$(zpool list -H -o name 2>/dev/null | head -1)
+  if [ -n "$TESTPOOL" ]; then
+    TESTDS="${TESTPOOL}/ci-crate-test-$$"
+    if zfs create "$TESTDS" 2>/dev/null; then
+      JDIR3=$(mktemp -d /tmp/_ci_zfs_jail.XXXXXX)
+      mkdir -p "$JDIR3/dev"
+      JID3=$(jail -ci path="$JDIR3" persist host.hostname=ci-zfs-test \
+             allow.mount allow.mount.zfs enforce_statfs=1 2>&1)
+      RC=$?
+      if [ "$RC" = "0" ] && [ -n "$JID3" ]; then
+        if zfs jail "$JID3" "$TESTDS" 2>/dev/null; then
+          pass "zfs jail: attached dataset ${TESTDS} to jail ${JID3}"
+          zfs unjail "$JID3" "$TESTDS" 2>/dev/null
+        else
+          skip "zfs jail attach failed (may need elevated privileges)"
+        fi
+        jail -r "$JID3" 2>/dev/null
+      else
+        skip "could not create jail for ZFS test"
+      fi
+      zfs destroy "$TESTDS" 2>/dev/null
+      rm -rf "$JDIR3"
+    else
+      skip "could not create test ZFS dataset on pool ${TESTPOOL}"
+    fi
+  else
+    skip "no ZFS pool found for jail dataset test"
+  fi
+else
+  skip "ZFS jail dataset test (HAS_ZFS=${HAS_ZFS}, CAN_JAIL=${CAN_JAIL})"
+fi
+
+# Runtime: ZFS encryption property query
+if [ "$HAS_ZFS" = "1" ]; then
+  ENC_OUTPUT=$(zfs get -H -o value encryption / 2>/dev/null || echo "unavailable")
+  if [ "$ENC_OUTPUT" != "unavailable" ]; then
+    pass "ZFS encryption property queryable (root fs encryption=${ENC_OUTPUT})"
+  else
+    skip "ZFS encryption property not available"
+  fi
+else
+  skip "ZFS encryption test (ZFS not available)"
 fi
 
 # ===========================================================================

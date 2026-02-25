@@ -304,6 +304,11 @@ void Spec::validate() const {
             << rangePair.first.first << "-" << rangePair.first.second
             << " and "
             << rangePair.second.first << "-" << rangePair.second.second)
+
+  // ZFS dataset names must be valid
+  for (auto &ds : zfsDatasets)
+    if (ds.empty() || ds[0] == '/' || ds.find("..") != std::string::npos)
+      ERR("invalid ZFS dataset name: " << ds)
 }
 
 //
@@ -532,6 +537,14 @@ Spec parseSpec(const std::string &fname) {
         }
       } else {
         ERR("options are not scalar, list or map")
+      }
+    } else if (isKey(k, "zfs")) {
+      for (auto b : k.second) {
+        if (isKey(b, "datasets")) {
+          listOrScalarOnly(b.second, spec.zfsDatasets, "zfs/datasets");
+        } else {
+          ERR("unknown element zfs/" << b.first << " in spec")
+        }
       }
     } else if (isKey(k, "scripts")) {
       if (!k.second.IsMap())

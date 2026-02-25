@@ -52,6 +52,8 @@ public:
 
   std::map<std::string, std::shared_ptr<OptDetails>> options;                 // various options that this spec uses
 
+  std::vector<std::string>                           zfsDatasets;             // 0..oo ZFS datasets to attach to jail
+
   std::map<std::string, std::map<std::string, std::string>> scripts;          // by section, by script name
 
   Spec preprocess() const;

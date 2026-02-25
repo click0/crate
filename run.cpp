@@ -101,6 +101,18 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // create the jail directory
   auto jailPath = STR(Locations::jailDirectoryPath << "/jail-" << Util::filePathToBareName(args.runCrateFile) << "-pid" << ::getpid());
   Util::Fs::mkdir(jailPath, S_IRUSR|S_IWUSR|S_IXUSR);
+
+  // check if jail directory is on encrypted ZFS
+  if (Util::Fs::isOnZfs(jailPath)) {
+    auto dataset = Util::Fs::getZfsDataset(jailPath);
+    if (!dataset.empty() && Util::Fs::isZfsEncrypted(dataset)) {
+      if (!Util::Fs::isZfsKeyLoaded(dataset))
+        ERR("ZFS dataset '" << dataset << "' is encrypted but key is not loaded; "
+            "run 'zfs load-key " << dataset << "' first")
+      LOG("jail directory on encrypted ZFS dataset '" << dataset << "'")
+    }
+  }
+
   auto J = [&jailPath](auto subdir) {
     return STR(jailPath << subdir);
   };
@@ -188,6 +200,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   runScript("run:before-create-jail");
   LOG("creating jail " << jailXname)
   const char *optNet = spec.optionExists("net") ? "true" : "false";
+  const bool hasZfsDatasets = !spec.zfsDatasets.empty();
+  const char *optZfsMount = hasZfsDatasets ? "true" : "false";
+  const char *optEnforceStatfs = hasZfsDatasets ? "1" : "2";
   int jid;
   int jailFd = -1; // jail descriptor for race-free removal (FreeBSD 15.0+)
 #ifdef JAIL_OWN_DESC
@@ -197,11 +212,13 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     char descBuf[32] = {0};
     res = ::jail_setv(JAIL_CREATE | JAIL_OWN_DESC,
       "path", jailPath.c_str(),
-      //"host.hostname", ON_USE_VNET_NOT(Util::gethostname().c_str()) ON_USE_VNET("rsnapshot"),
       "host.hostname", Util::gethostname().c_str(),
       "persist", nullptr,
       "allow.raw_sockets", optNet, // allow ping-pong
       "allow.socket_af", optNet,
+      "allow.mount", optZfsMount,
+      "allow.mount.zfs", optZfsMount,
+      "enforce_statfs", optEnforceStatfs,
       "vnet", nullptr/*"new"*/, // possible values are: nullptr, { "disable", "new", "inherit" }, see lib/libjail/jail.c
       "desc", descBuf,
       nullptr);
@@ -215,11 +232,13 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   {
     res = ::jail_setv(JAIL_CREATE,
       "path", jailPath.c_str(),
-      //"host.hostname", ON_USE_VNET_NOT(Util::gethostname().c_str()) ON_USE_VNET("rsnapshot"),
       "host.hostname", Util::gethostname().c_str(),
       "persist", nullptr,
       "allow.raw_sockets", optNet, // allow ping-pong
       "allow.socket_af", optNet,
+      "allow.mount", optZfsMount,
+      "allow.mount.zfs", optZfsMount,
+      "enforce_statfs", optEnforceStatfs,
       "vnet", nullptr/*"new"*/, // possible values are: nullptr, { "disable", "new", "inherit" }, see lib/libjail/jail.c
       nullptr);
     if (res == -1)
@@ -249,6 +268,23 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   runScript("run:after-create-jail");
   LOG("jail " << jailXname << " has been created, jid=" << jid)
+
+  // attach ZFS datasets to jail
+  RunAtEnd detachZfsDatasets;
+  if (hasZfsDatasets) {
+    for (auto &dataset : spec.zfsDatasets) {
+      LOG("attaching ZFS dataset " << dataset << " to jail " << jid)
+      Util::runCommand(STR("zfs jail " << jid << " " << Util::shellQuote(dataset)),
+        CSTR("attach ZFS dataset " << dataset));
+    }
+    detachZfsDatasets.reset([&spec, jid, &args]() {
+      for (auto &dataset : Util::reverseVector(spec.zfsDatasets)) {
+        LOG("detaching ZFS dataset " << dataset << " from jail " << jid)
+        Util::runCommand(STR("zfs unjail " << jid << " " << Util::shellQuote(dataset)),
+          CSTR("detach ZFS dataset " << dataset));
+      }
+    });
+  }
 
   // helpers for jail access
   auto runCommandInJail = [jid](auto cmd, auto descr) {
@@ -585,6 +621,8 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   runScript("run:end");
 
   // release resources
+  if (hasZfsDatasets)
+    detachZfsDatasets.doNow();
   destroyJail.doNow();
   for (auto &m : mounts)
     m->unmount();
