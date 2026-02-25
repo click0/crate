@@ -17,21 +17,16 @@ namespace Scripts {
 //
 
 static std::string escape(const std::string &script) {
-  // escape in order to be single-quoted, and run by /bin/sh via system(3)
-  // XXX not sure if this is a correct escaping procedure, because it isn't clear how system(3) interprets the string
+  // Escape for embedding inside single quotes passed to /bin/sh -c '...'
+  // Inside single quotes, only the single quote itself needs escaping.
+  // We end the current single-quoted string, add an escaped literal quote,
+  // and reopen the single-quoted string: ' → '\''
   std::ostringstream ss;
   for (auto chr : script)
-    switch (chr) {
-    case '\'':
+    if (chr == '\'')
       ss << "'\\''";
-      break;
-    case '$':
-    case '#':
-    case '"':
-      ss << "\\";
-    default:
+    else
       ss << chr;
-    }
   return ss.str();
 }
 

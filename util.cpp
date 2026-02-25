@@ -103,8 +103,8 @@ std::string runCommandGetOutput(const std::string &cmd, const std::string &what)
       ss << buf;
     }
   } while (nbytes == sizeof(buf)-1);
-  // cleanup
-  ::fclose(f);
+  // cleanup: pclose() waits for the child process (fclose would leak zombies)
+  ::pclose(f);
   //
   return ss.str();
 }
@@ -215,8 +215,12 @@ unsigned toUInt(const std::string &str) {
 }
 
 std::string pathSubstituteVarsInPath(const std::string &path) {
-  if (path.size() > 5 && path.substr(0, 5) == "$HOME")
-    return STR(::getpwuid(myuid)->pw_dir << path.substr(5));
+  if (path.size() > 5 && path.substr(0, 5) == "$HOME") {
+    auto *pw = ::getpwuid(myuid);
+    if (pw == nullptr)
+      ERR2("path substitution", "getpwuid failed for uid " << myuid << ": " << strerror(errno))
+    return STR(pw->pw_dir << path.substr(5));
+  }
 
   return path;
 }
@@ -234,7 +238,9 @@ std::string pathSubstituteVarsInString(const std::string &str) {
     return s;
   };
 
-  auto uidInfo = ::getpwuid(myuid);
+  auto *uidInfo = ::getpwuid(myuid);
+  if (uidInfo == nullptr)
+    ERR2("string substitution", "getpwuid failed for uid " << myuid << ": " << strerror(errno))
   std::string s = str;
   for (auto kv : std::map<std::string, std::string>({{"$HOME", uidInfo->pw_dir}, {"$USER", uidInfo->pw_name}}))
     s = substOne(s, kv.first, kv.second);
@@ -246,6 +252,20 @@ std::vector<std::string> reverseVector(const std::vector<std::string> &v) {
   auto vc = v;
   std::reverse(vc.begin(), vc.end());
   return vc;
+}
+
+std::string shellQuote(const std::string &arg) {
+  // Wrap argument in single quotes for safe use in shell commands.
+  // Inside single quotes, only ' needs escaping: replace ' with '\''
+  std::ostringstream ss;
+  ss << '\'';
+  for (auto chr : arg)
+    if (chr == '\'')
+      ss << "'\\''";
+    else
+      ss << chr;
+  ss << '\'';
+  return ss.str();
 }
 
 namespace Fs {
@@ -265,20 +285,36 @@ bool dirExists(const std::string &path) {
 std::vector<std::string> readFileLines(int fd) {
   std::vector<std::string> lines;
 
-  FILE *file = ::fdopen(fd, "r");
+  // dup() the fd because fdopen()/fclose() takes ownership and closes it,
+  // but the caller (e.g. FwUsers) still needs the original fd afterwards
+  int dupfd = ::dup(fd);
+  if (dupfd == -1)
+    ERR2("read file", "dup failed: " << strerror(errno))
+  // seek to start so we read from the beginning
+  if (::lseek(dupfd, 0, SEEK_SET) == -1) {
+    ::close(dupfd);
+    ERR2("read file", "lseek failed: " << strerror(errno))
+  }
+  FILE *file = ::fdopen(dupfd, "r");
+  if (file == nullptr) {
+    ::close(dupfd);
+    ERR2("read file", "fdopen failed: " << strerror(errno))
+  }
   char *line = nullptr;
   size_t len = 0;
-  ssize_t read;
+  ssize_t nread;
   // read lines
-  while ((read = ::getline(&line, &len, file)) != -1)
+  while ((nread = ::getline(&line, &len, file)) != -1)
     lines.push_back(line);
   // error?
-  if (::ferror(file))
+  if (::ferror(file)) {
+    ::free(line);
+    ::fclose(file);
     ERR2("read file", "reading file failed")
+  }
   // clean up
   ::free(line);
-  if (::fdclose(file, nullptr) != 0)
-    std::cerr << "reading file failed: " << strerror(errno) << std::endl;
+  ::fclose(file); // closes dupfd, original fd is unaffected
 
   return lines;
 }
@@ -304,7 +340,7 @@ void writeFile(const std::string &data, int fd) {
 
 void writeFile(const std::string &data, const std::string &file) {
   int fd;
-  SYSCALL(fd = ::open(file.c_str(), O_WRONLY|O_CREAT), "open", file.c_str());
+  SYSCALL(fd = ::open(file.c_str(), O_WRONLY|O_CREAT|O_TRUNC, 0644), "open", file.c_str());
 
   writeFile(data, fd);
 
