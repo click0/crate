@@ -17,7 +17,6 @@
 
 #include <rang.hpp>
 
-#define _WITH_GETLINE // it breaks on 11.3 w/out this, but the manpage getline(3) doesn't mention _WITH_GETLINE
 #include <stdlib.h>
 #include <stdio.h>
 #include <fcntl.h>
@@ -170,7 +169,12 @@ std::string getSysctlString(const char *name) {
 }
 
 void ensureKernelModuleIsLoaded(const char *name) {
-  SYSCALL(::kldload("ipfw_nat"), "kldload", name, [](int err) {return err == EEXIST;});
+  SYSCALL(::kldload(name), "kldload", name, [](int err) {return err == EEXIST;});
+}
+
+int getFreeBSDMajorVersion() {
+  auto osrelease = getSysctlString("kern.osrelease");
+  try { return std::stoi(osrelease); } catch (...) { return 0; }
 }
 
 std::string gethostname() {

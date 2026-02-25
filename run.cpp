@@ -18,7 +18,10 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/param.h>
-extern "C" { // sys/jail.h isn't C++-safe: https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=238928
+#include <sys/mount.h>
+// sys/jail.h isn't C++-safe: https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=238928
+// Still unfixed as of FreeBSD 15.0 — uses struct in_addr/in6_addr without includes
+extern "C" {
 #include <sys/jail.h>
 }
 #include <sys/uio.h>
@@ -110,9 +113,19 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       ERR("the crate needs network access, but the VIMAGE feature isn't available in the kernel (kern.features.vimage==0)")
     // ipfw needs the ipfw_nat kernel module in order to function
     Util::ensureKernelModuleIsLoaded("ipfw_nat");
-    // net.inet.ip.forwarding needs to be 1 for networking to work XXX it is "bad" to alter this value, need to see if this can be replaced with firewall rules
+    // net.inet.ip.forwarding needs to be 1 for networking to work
+    // XXX it is "bad" to alter this value, need to see if this can be replaced with firewall rules
+    // NOTE: on FreeBSD 15.0+ VNET sysctl variables are also loader tunables (CTLFLAG_TUN),
+    // so this can be pre-set in /boot/loader.conf: net.inet.ip.forwarding=1
     if (Util::getSysctlInt("net.inet.ip.forwarding") == 0)
       Util::setSysctlInt("net.inet.ip.forwarding", 1);
+    // warn about ipfw binary incompatibility on FreeBSD 15.0+
+    if (Util::getFreeBSDMajorVersion() >= 15)
+      std::cerr << rang::fg::yellow
+                << "warning: FreeBSD " << Util::getSysctlString("kern.osrelease") << " detected. "
+                << "Containers created on FreeBSD <15.0 may have ipfw binary incompatibility. "
+                << "Rebuild containers with a FreeBSD 15.0+ base if networking fails."
+                << rang::style::reset << std::endl;
   }
 
   // helper
@@ -123,8 +136,8 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   };
   runScript("run:begin");
 
-  // mount devfs
-  mount(new Mount("devfs", J("/dev"), ""));
+  // mount devfs (MNT_IGNORE hides it from df/mount output)
+  mount(new Mount("devfs", J("/dev"), "", MNT_IGNORE));
 
   auto jailXname = STR(Util::filePathToBareName(args.runCrateFile) << "_pid" << ::getpid());
 
@@ -143,7 +156,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     // create the X11 socket directory
     Util::Fs::mkdir(J("/tmp/.X11-unix"), 0777);
     // mount the X11 socket directory in jail
-    mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix"));
+    mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix", MNT_IGNORE));
     // DISPLAY variable copied to jail
     auto *display = ::getenv("DISPLAY");
     if (display == nullptr)
@@ -155,25 +168,61 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   runScript("run:before-create-jail");
   LOG("creating jail " << jailXname)
   const char *optNet = spec.optionExists("net") ? "true" : "false";
-  res = ::jail_setv(JAIL_CREATE,
-    "path", jailPath.c_str(),
-    //"host.hostname", ON_USE_VNET_NOT(Util::gethostname().c_str()) ON_USE_VNET("rsnapshot"),
-    "host.hostname", Util::gethostname().c_str(),
-    "persist", nullptr,
-    "allow.raw_sockets", optNet, // allow ping-pong
-    "allow.socket_af", optNet,
-    "vnet", nullptr/*"new"*/, // possible values are: nullptr, { "disable", "new", "inherit" }, see lib/libjail/jail.c
-    nullptr);
-  if (res == -1)
-    ERR("failed to create jail: " << jail_errmsg)
-  int jid = res;
+  int jid;
+  int jailFd = -1; // jail descriptor for race-free removal (FreeBSD 15.0+)
+#ifdef JAIL_OWN_DESC
+  if (Util::getFreeBSDMajorVersion() >= 15) {
+    // Use owning jail descriptor: eliminates TOCTOU race in jail_remove(),
+    // and auto-removes jail if crate crashes (kernel closes the owning fd)
+    char descBuf[32] = {0};
+    res = ::jail_setv(JAIL_CREATE | JAIL_OWN_DESC,
+      "path", jailPath.c_str(),
+      //"host.hostname", ON_USE_VNET_NOT(Util::gethostname().c_str()) ON_USE_VNET("rsnapshot"),
+      "host.hostname", Util::gethostname().c_str(),
+      "persist", nullptr,
+      "allow.raw_sockets", optNet, // allow ping-pong
+      "allow.socket_af", optNet,
+      "vnet", nullptr/*"new"*/, // possible values are: nullptr, { "disable", "new", "inherit" }, see lib/libjail/jail.c
+      "desc", descBuf,
+      nullptr);
+    if (res == -1)
+      ERR("failed to create jail: " << jail_errmsg)
+    jid = res;
+    jailFd = std::atoi(descBuf);
+    LOG("jail descriptor fd=" << jailFd)
+  } else
+#endif
+  {
+    res = ::jail_setv(JAIL_CREATE,
+      "path", jailPath.c_str(),
+      //"host.hostname", ON_USE_VNET_NOT(Util::gethostname().c_str()) ON_USE_VNET("rsnapshot"),
+      "host.hostname", Util::gethostname().c_str(),
+      "persist", nullptr,
+      "allow.raw_sockets", optNet, // allow ping-pong
+      "allow.socket_af", optNet,
+      "vnet", nullptr/*"new"*/, // possible values are: nullptr, { "disable", "new", "inherit" }, see lib/libjail/jail.c
+      nullptr);
+    if (res == -1)
+      ERR("failed to create jail: " << jail_errmsg)
+    jid = res;
+  }
 
-  RunAtEnd destroyJail([jid,&jailXname,runScript,&args]() {
+  RunAtEnd destroyJail([jid,jailFd,&jailXname,runScript,&args]() {
     // stop and remove jail
     runScript("run:before-remove-jail");
     LOG("removing jail " << jailXname << " jid=" << jid << " ...")
-    if (::jail_remove(jid) == -1)
-      ERR("failed to remove jail: " << strerror(errno))
+#ifdef JAIL_OWN_DESC
+    if (jailFd >= 0) {
+      // Race-free removal via jail descriptor
+      if (::jail_remove_jd(jailFd) == -1)
+        ERR("failed to remove jail: " << strerror(errno))
+      ::close(jailFd);
+    } else
+#endif
+    {
+      if (::jail_remove(jid) == -1)
+        ERR("failed to remove jail: " << strerror(errno))
+    }
     runScript("run:after-remove-jail");
     LOG("removing jail " << jailXname << " jid=" << jid << " done")
   });
@@ -241,6 +290,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       return STR("10." << ip3 << "." << ip2 << "." << ip1);
     };
     auto epipeIpA = numToIp(epairNum, 0), epipeIpB = numToIp(epairNum, 1);
+    // disable checksum offload on epair interfaces to work around FreeBSD 15.0 bug
+    // where packets between jails/host get dropped due to uncomputed checksums
+    Util::runCommand(STR("ifconfig " << epipeIfaceA << " -txcsum -txcsum6"), "disable checksum offload on epair (host side)");
+    Util::runCommand(STR("ifconfig " << epipeIfaceB << " -txcsum -txcsum6"), "disable checksum offload on epair (jail side)");
     // transfer the interface into jail
     Util::runCommand(STR("ifconfig " << epipeIfaceB << " vnet " << jid), "transfer the network interface into jail");
     // set the IP addresses on the jail epipe
@@ -365,6 +418,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     LOG("add user " << user << " in jail")
     runCommandInJail(STR("/usr/sbin/pw useradd " << user << " -u " << myuid << " -g " << mygid << " -s /bin/sh -d " << homeDir), "add the user in jail");
     runCommandInJail(STR("/usr/sbin/pw usermod " << user << " -G wheel"), "add the group to the user");
+    // Verify group membership — setgroups(2)/getgroups(2) behavior changed in FreeBSD 15.0:
+    // effective group ID is no longer included in the supplemental groups array
+    LOG("verify user " << user << " group membership")
+    runCommandInJail(STR("/usr/bin/id " << user), "verify user group membership");
     // "video" option requires the corresponding user/group: create the identical user/group to jail
     if (spec.optionExists("video")) {
       static const char *devName = "/dev/video";
@@ -409,7 +466,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     // create the directory in jail
     Util::runCommand(STR("mkdir -p " << J(dirJail)), "create the shared directory in jail"); // TODO replace with API-based calls
     // mount it as nullfs
-    mount(new Mount("nullfs", J(dirJail), dirHost));
+    mount(new Mount("nullfs", J(dirJail), dirHost, MNT_IGNORE));
   }
 
   // share files if requested

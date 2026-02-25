@@ -1,0 +1,29 @@
+name: FreeBSD Build
+
+on:
+  push:
+    branches: ['*']
+  pull_request:
+    branches: [master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        freebsd-version: ['14.2', '15.0']
+    name: FreeBSD ${{ matrix.freebsd-version }} build
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Build on FreeBSD
+      uses: cross-platform-actions/action@v0.32.0
+      with:
+        operating_system: freebsd
+        version: ${{ matrix.freebsd-version }}
+        run: |
+          sudo pkg install -y pkgconf yaml-cpp rang
+          uname -a
+          c++ --version
+          make clean all

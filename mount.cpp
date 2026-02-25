@@ -16,8 +16,8 @@
 
 #define ERR(msg...) ERR2("mount/unmount directories", msg)
 
-Mount::Mount(const char *newFstype, const std::string &newFspath, const std::string &newTarget)
-: fstype(newFstype), fspath(newFspath), target(newTarget)
+Mount::Mount(const char *newFstype, const std::string &newFspath, const std::string &newTarget, int newFlags)
+: fstype(newFstype), fspath(newFspath), target(newTarget), flags(newFlags)
 { }
 
 Mount::~Mount() {
@@ -49,7 +49,7 @@ void Mount::mount() {
   if (!target.empty())
     param("target", (void*)target.c_str(), (size_t)-1);
   param("errmsg", errmsg,                sizeof(errmsg));
-  int res = ::nmount(&iov[0], iov.size(), 0/*flags*/);
+  int res = ::nmount(&iov[0], iov.size(), flags);
   if (res != 0)
     ERR("nmount of '" << target << "' on '" << fspath << "' failed: " << strerror(errno) << (errmsg[0] ? STR(" (" << errmsg << ")") : ""))
   mounted = true;
