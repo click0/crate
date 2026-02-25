@@ -144,7 +144,9 @@ if [ "$OSMAJOR" -ge 15 ]; then
   # Verify it compiles
   cat > /tmp/_ci_test_jd.cpp << 'CPPEOF'
 #include <sys/param.h>
-extern "C" { #include <sys/jail.h> }
+extern "C" {
+#include <sys/jail.h>
+}
 #include <jail.h>
 int main() {
     int flags = JAIL_CREATE | JAIL_OWN_DESC;
