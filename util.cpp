@@ -27,6 +27,7 @@
 #include <sys/types.h>
 #include <sys/sysctl.h>
 #include <sys/param.h>
+#include <sys/mount.h>
 #include <sys/linker.h>
 #include <pwd.h>
 

@@ -265,6 +265,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   }
 
   RunAtEnd destroyJail([jid,jailFd,&jailXname,runScript,&args]() {
+    (void)jailFd; // used only when JAIL_OWN_DESC is defined
     // stop and remove jail
     runScript("run:before-remove-jail");
     LOG("removing jail " << jailXname << " jid=" << jid << " ...")
