@@ -28,6 +28,7 @@ extern "C" {
 #include <sys/uio.h>
 #include <jail.h>
 #include <pwd.h>
+#include <signal.h>
 
 #include <string>
 #include <list>
@@ -73,6 +74,10 @@ static std::string gwIface;
 static std::string hostIP;
 static std::string hostLAN;
 
+// Signal handling: catch SIGINT/SIGTERM so RunAtEnd destructors fire for clean shutdown
+static volatile sig_atomic_t g_signalReceived = 0;
+static void signalHandler(int sig) { g_signalReceived = sig; }
+
 //
 // helpers
 //
@@ -88,6 +93,20 @@ static std::string argsToString(int argc, char** argv) {
 //
 bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   LOG("'run' command is invoked, " << argc << " arguments are provided")
+
+  // Install signal handlers so SIGINT/SIGTERM don't kill the process immediately.
+  // Instead, set a flag and let RunAtEnd destructors clean up jail/mount/firewall/epair.
+  g_signalReceived = 0;
+  struct sigaction sa = {};
+  sa.sa_handler = signalHandler;
+  sigemptyset(&sa.sa_mask);
+  struct sigaction oldSigint, oldSigterm;
+  ::sigaction(SIGINT, &sa, &oldSigint);
+  ::sigaction(SIGTERM, &sa, &oldSigterm);
+  RunAtEnd restoreSignals([&oldSigint, &oldSigterm]() {
+    ::sigaction(SIGINT, &oldSigint, nullptr);
+    ::sigaction(SIGTERM, &oldSigterm, nullptr);
+  });
 
   // validate user identity from passwd database (not from env)
   if (!userInfo.valid)
@@ -660,21 +679,27 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     }
   }
-  runScript("run:after-execute");
+  // Check if interrupted by signal — skip post-exec scripts, go straight to cleanup
+  if (g_signalReceived != 0) {
+    LOG("interrupted by signal " << g_signalReceived << ", skipping post-exec, cleaning up")
+    returnCode = 128 + g_signalReceived;
+  } else {
+    runScript("run:after-execute");
 
-  // stop services, if any
-  if (!spec.runServices.empty())
-    for (auto &service : Util::reverseVector(spec.runServices))
-      execInJail({"/usr/sbin/service", service, "onestop"}, "stop the service in jail");
+    // stop services, if any
+    if (!spec.runServices.empty())
+      for (auto &service : Util::reverseVector(spec.runServices))
+        execInJail({"/usr/sbin/service", service, "onestop"}, "stop the service in jail");
 
-  if (spec.optionExists("dbg-ktrace"))
-    Util::Fs::copyFile(J(STR(homeDir << "/ktrace.out")), "ktrace.out");
+    if (spec.optionExists("dbg-ktrace"))
+      Util::Fs::copyFile(J(STR(homeDir << "/ktrace.out")), "ktrace.out");
 
-  // rc-uninitializion (is this really needed?)
-  if (optionInitializeRc)
-    runCommandInJail("/bin/sh /etc/rc.shutdown", "exec.stop");
+    // rc-uninitializion (is this really needed?)
+    if (optionInitializeRc)
+      runCommandInJail("/bin/sh /etc/rc.shutdown", "exec.stop");
 
-  runScript("run:end");
+    runScript("run:end");
+  }
 
   // release resources
   if (hasZfsDatasets)
