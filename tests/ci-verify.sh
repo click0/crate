@@ -483,6 +483,47 @@ else
   else
     fail "cmd.cpp missing shellQuote on chroot path"
   fi
+  section "T15: architectural security hardening"
+  if grep -q 'execCommand' "$BUILDDIR/util.cpp" && grep -q 'execCommand' "$BUILDDIR/run.cpp"; then
+    pass "execCommand() present in util.cpp and run.cpp"
+  else
+    fail "execCommand() missing"
+  fi
+  if grep -q 'execPipeline' "$BUILDDIR/util.cpp"; then
+    pass "execPipeline() present in util.cpp"
+  else
+    fail "execPipeline() missing"
+  fi
+  if grep -q 'sigaction' "$BUILDDIR/run.cpp"; then
+    pass "run.cpp has signal handling"
+  else
+    fail "run.cpp missing signal handling"
+  fi
+  if grep -q 'unique_ptr<FILE' "$BUILDDIR/util.cpp"; then
+    pass "util.cpp uses RAII popen"
+  else
+    fail "util.cpp missing RAII popen"
+  fi
+  if grep -q 'safePath' "$BUILDDIR/util.cpp"; then
+    pass "safePath() in util.cpp"
+  else
+    fail "safePath() missing"
+  fi
+  if grep -q 'make_unique<FwUsers>' "$BUILDDIR/ctx.cpp"; then
+    pass "ctx.cpp uses make_unique"
+  else
+    fail "ctx.cpp missing make_unique"
+  fi
+  if grep -q 'ifstream.*resolv' "$BUILDDIR/net.cpp"; then
+    pass "net.cpp parses resolv.conf directly"
+  else
+    fail "net.cpp missing direct resolv.conf parsing"
+  fi
+  if grep -q 'xzThreadsArg' "$BUILDDIR/cmd.cpp"; then
+    pass "xzThreadsArg in cmd.cpp"
+  else
+    fail "xzThreadsArg missing"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -719,6 +760,79 @@ if grep -q '01777' "$BUILDDIR/run.cpp"; then
   pass "run.cpp uses sticky bit (01777) for X11 socket dir"
 else
   fail "run.cpp missing sticky bit on X11 socket directory"
+fi
+
+# ---------------------------------------------------------------------------
+section "T15: architectural security hardening"
+
+# exec-based execution in source files
+if grep -q 'execCommand' "$BUILDDIR/util.cpp" && grep -q 'execCommand' "$BUILDDIR/run.cpp"; then
+  pass "execCommand() present in util.cpp and run.cpp"
+else
+  fail "execCommand() missing from util.cpp or run.cpp"
+fi
+
+if grep -q 'execPipeline' "$BUILDDIR/util.cpp" && grep -q 'execPipeline' "$BUILDDIR/run.cpp"; then
+  pass "execPipeline() present in util.cpp and run.cpp"
+else
+  fail "execPipeline() missing from util.cpp or run.cpp"
+fi
+
+if grep -q 'execPipeline' "$BUILDDIR/create.cpp"; then
+  pass "create.cpp uses execPipeline (no shell for tar/xz)"
+else
+  fail "create.cpp missing execPipeline"
+fi
+
+# Signal handling
+if grep -q 'sigaction' "$BUILDDIR/run.cpp" && grep -q 'g_signalReceived' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp has SIGINT/SIGTERM signal handling"
+else
+  fail "run.cpp missing signal handling (sigaction/g_signalReceived)"
+fi
+
+# RAII popen
+if grep -q 'unique_ptr<FILE' "$BUILDDIR/util.cpp"; then
+  pass "util.cpp uses RAII unique_ptr<FILE> for popen"
+else
+  fail "util.cpp missing RAII popen wrapper"
+fi
+
+# Path safety validation
+if grep -q 'safePath' "$BUILDDIR/util.cpp" && grep -q 'safePath' "$BUILDDIR/run.cpp"; then
+  pass "safePath() present in util.cpp and run.cpp"
+else
+  fail "safePath() missing from util.cpp or run.cpp"
+fi
+
+# Resource leak fixes
+if grep -q 'make_unique<FwUsers>' "$BUILDDIR/ctx.cpp"; then
+  pass "ctx.cpp uses make_unique (prevents pointer leak)"
+else
+  fail "ctx.cpp missing make_unique in FwUsers::lock()"
+fi
+
+# mount.cpp: free before error check
+MOUNT_FREE_LINE=$(grep -n '::free(iov' "$BUILDDIR/mount.cpp" | head -1 | cut -d: -f1)
+MOUNT_ERR_LINE=$(grep -n '    ERR("nmount' "$BUILDDIR/mount.cpp" | head -1 | cut -d: -f1)
+if [ -n "$MOUNT_FREE_LINE" ] && [ -n "$MOUNT_ERR_LINE" ] && [ "$MOUNT_FREE_LINE" -lt "$MOUNT_ERR_LINE" ]; then
+  pass "mount.cpp frees strdup'd names before ERR check"
+else
+  fail "mount.cpp may leak strdup'd names on nmount error"
+fi
+
+# resolv.conf parsed directly (no grep pipeline)
+if grep -q 'ifstream.*resolv' "$BUILDDIR/net.cpp"; then
+  pass "net.cpp parses /etc/resolv.conf directly (no shell pipeline)"
+else
+  fail "net.cpp missing direct resolv.conf parsing"
+fi
+
+# xzThreadsArg for exec-based pipelines
+if grep -q 'xzThreadsArg' "$BUILDDIR/cmd.cpp" && grep -q 'xzThreadsArg' "$BUILDDIR/run.cpp"; then
+  pass "xzThreadsArg used for exec-based xz calls"
+else
+  fail "xzThreadsArg missing from cmd.cpp or run.cpp"
 fi
 
 # ===========================================================================
