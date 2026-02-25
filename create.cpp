@@ -265,7 +265,9 @@ static void removeRedundantJailParts(const std::string &jailPath, const Spec &sp
 
   // remove static libs if not requested to keep them
   if (!spec.optionExists("no-rm-static-libs"))
-    Util::runCommand(STR("find " << Util::shellQuote(jailPath) << " -name '*.a' -delete"), "remove static libs");
+    for (auto &entry : std::filesystem::recursive_directory_iterator(jailPath))
+      if (entry.is_regular_file() && entry.path().extension() == ".a")
+        Fs::unlink(entry.path());
 }
 
 //
@@ -283,7 +285,7 @@ bool createCrate(const Args &args, const Spec &spec) {
   // download the base archive if not yet
   if (!Util::Fs::fileExists(Locations::baseArchive)) {
     std::cout << "downloading base.txz from " << Locations::baseArchiveUrl << " ..." << std::endl;
-    Util::runCommand(STR("fetch -o " << Util::shellQuote(Locations::baseArchive) << " " << Util::shellQuote(Locations::baseArchiveUrl)), "download base.txz");
+    Util::execCommand({"fetch", "-o", Locations::baseArchive, Locations::baseArchiveUrl}, "download base.txz");
     std::cout << "base.txz has finished downloading" << std::endl;
   }
 

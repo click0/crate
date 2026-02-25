@@ -291,21 +291,30 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // attach ZFS datasets to jail
   RunAtEnd detachZfsDatasets;
   if (hasZfsDatasets) {
+    auto jidStr = std::to_string(jid);
     for (auto &dataset : spec.zfsDatasets) {
       LOG("attaching ZFS dataset " << dataset << " to jail " << jid)
-      Util::runCommand(STR("zfs jail " << jid << " " << Util::shellQuote(dataset)),
+      Util::execCommand({"zfs", "jail", jidStr, dataset},
         CSTR("attach ZFS dataset " << dataset));
     }
     detachZfsDatasets.reset([&spec, jid, &args]() {
+      auto jidStr = std::to_string(jid);
       for (auto &dataset : Util::reverseVector(spec.zfsDatasets)) {
         LOG("detaching ZFS dataset " << dataset << " from jail " << jid)
-        Util::runCommand(STR("zfs unjail " << jid << " " << Util::shellQuote(dataset)),
+        Util::execCommand({"zfs", "unjail", jidStr, dataset},
           CSTR("detach ZFS dataset " << dataset));
       }
     });
   }
 
-  // helpers for jail access
+  // helpers for jail access (exec-based: no shell)
+  auto jidStr = std::to_string(jid);
+  auto execInJail = [&jidStr](const std::vector<std::string> &argv, const std::string &descr) {
+    auto fullArgv = std::vector<std::string>{"jexec", jidStr};
+    fullArgv.insert(fullArgv.end(), argv.begin(), argv.end());
+    Util::execCommand(fullArgv, descr);
+  };
+  // legacy shell-based helper (for commands that need shell features)
   auto runCommandInJail = [jid](auto cmd, auto descr) {
     Util::runCommand(STR("jexec " << jid << " " << cmd), descr);
   };
@@ -348,10 +357,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
     // create the epipe
     // set the lo0 IP address (lo0 is always automatically present in vnet jails)
-    runCommandInJail(STR("ifconfig lo0 inet 127.0.0.1"), "set up the lo0 interface in jail");
+    execInJail({"ifconfig", "lo0", "inet", "127.0.0.1"}, "set up the lo0 interface in jail");
     // create networking interface
-    //auto epipeIface = Net::createJailInterface(jailPath);
-    std::string epipeIfaceA = Util::stripTrailingSpace(Util::runCommandGetOutput("ifconfig epair create", "create the jail epipe"));
+    std::string epipeIfaceA = Util::stripTrailingSpace(Util::execCommandGetOutput({"ifconfig", "epair", "create"}, "create the jail epipe"));
     std::string epipeIfaceB = STR(epipeIfaceA.substr(0, epipeIfaceA.size()-1) << "b"); // jail side
     unsigned epairNum = std::stoul(epipeIfaceA.substr(5/*skip epair*/, epipeIfaceA.size()-5-1));
     auto numToIp = [](unsigned epairNum, unsigned ipIdx2) {
@@ -367,13 +375,13 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     auto epipeIpA = numToIp(epairNum, 0), epipeIpB = numToIp(epairNum, 1);
     // disable checksum offload on epair interfaces to work around FreeBSD 15.0 bug
     // where packets between jails/host get dropped due to uncomputed checksums
-    Util::runCommand(STR("ifconfig " << epipeIfaceA << " -txcsum -txcsum6"), "disable checksum offload on epair (host side)");
-    Util::runCommand(STR("ifconfig " << epipeIfaceB << " -txcsum -txcsum6"), "disable checksum offload on epair (jail side)");
+    Util::execCommand({"ifconfig", epipeIfaceA, "-txcsum", "-txcsum6"}, "disable checksum offload on epair (host side)");
+    Util::execCommand({"ifconfig", epipeIfaceB, "-txcsum", "-txcsum6"}, "disable checksum offload on epair (jail side)");
     // transfer the interface into jail
-    Util::runCommand(STR("ifconfig " << epipeIfaceB << " vnet " << jid), "transfer the network interface into jail");
+    Util::execCommand({"ifconfig", epipeIfaceB, "vnet", jidStr}, "transfer the network interface into jail");
     // set the IP addresses on the jail epipe
-    runCommandInJail(STR("ifconfig " << epipeIfaceB << " inet " << epipeIpB << " netmask 0xfffffffe"), "set up IP jail epipe addresses");
-    Util::runCommand(STR("ifconfig " << epipeIfaceA << " inet " << epipeIpA << " netmask 0xfffffffe"), "set up IP jail epipe addresses");
+    execInJail({"ifconfig", epipeIfaceB, "inet", epipeIpB, "netmask", "0xfffffffe"}, "set up IP jail epipe addresses");
+    Util::execCommand({"ifconfig", epipeIfaceA, "inet", epipeIpA, "netmask", "0xfffffffe"}, "set up IP jail epipe addresses");
     // enable firewall in jail
     //if (optionInitializeRc)
       appendFileInJail(STR(
@@ -382,15 +390,18 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         ),
         "/etc/rc.conf");
     // set default route in jail
-    runCommandInJailSilently(STR("route add default " << epipeIpA), "set default route in jail");
+    execInJail({"route", "add", "default", epipeIpA}, "set default route in jail");
     // destroy the epipe when finished
     destroyEpipeAtEnd.reset([epipeIfaceA]() {
-      Util::runCommand(STR("ifconfig " << epipeIfaceA << " destroy"), CSTR("destroy the jail epipe (" << epipeIfaceA << ")"));
+      Util::execCommand({"ifconfig", epipeIfaceA, "destroy"}, CSTR("destroy the jail epipe (" << epipeIfaceA << ")"));
     });
     // add firewall rules to NAT and route packets from jails to host's default GW
     {
-      auto cmdFW = [](const std::string &cmd) {
-        Util::runCommand(STR("ipfw -q " << cmd), "add firewall rule");
+      // exec-based ipfw wrapper: no shell, argv array passed directly
+      auto execFW = [](const std::vector<std::string> &fwargs) {
+        auto argv = std::vector<std::string>{"ipfw", "-q"};
+        argv.insert(argv.end(), fwargs.begin(), fwargs.end());
+        Util::execCommand(argv, "firewall rule");
       };
       auto fwRuleInNo  = fwRuleBaseIn + 1/*common rules*/ + epairNum/*per-crate rules*/;
       auto fwNatInNo = fwRuleInNo;
@@ -398,26 +409,39 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       auto fwRuleOutCommonNo = fwRuleBaseOut;
       auto fwRuleOutNo = fwRuleBaseOut + 1/*common rules*/ + epairNum/*per-crate rules*/;
 
+      auto ruleInS  = std::to_string(fwRuleInNo);
+      auto natInS   = std::to_string(fwNatInNo);
+      auto ruleOutS = std::to_string(fwRuleOutNo);
+      auto ruleOutCommonS = std::to_string(fwRuleOutCommonNo);
+      auto natOutCommonS  = std::to_string(fwNatOutCommonNo);
+
       // IN rules for this epipe
       if (optionNet->allowInbound()) {
         // create the NAT instance
         auto rangeToStr = [](const Spec::NetOptDetails::PortRange &range) {
           return range.first == range.second ? STR(range.first) : STR(range.first << "-" << range.second);
         };
-        std::ostringstream strConfig;
-        for (auto &rangePair : optionNet->inboundPortsTcp)
-          strConfig << " redirect_port tcp " << epipeIpB << ":" << rangeToStr(rangePair.second) << " " << hostIP << ":" << rangeToStr(rangePair.first);
-        for (auto &rangePair : optionNet->inboundPortsUdp)
-          strConfig << " redirect_port udp " << epipeIpB << ":" << rangeToStr(rangePair.second) << " " << hostIP << ":" << rangeToStr(rangePair.first);
-        cmdFW(STR("nat " << fwNatInNo << " config" << strConfig.str()));
-        // create firewall rules: one per port range
+        // build nat config argv incrementally
+        std::vector<std::string> natConfig = {"nat", natInS, "config"};
         for (auto &rangePair : optionNet->inboundPortsTcp) {
-          cmdFW(STR("add " << fwRuleInNo << " nat " << fwNatInNo << " tcp from any to " << hostIP  << " " << rangeToStr(rangePair.first) << " in recv " << gwIface));
-          cmdFW(STR("add " << fwRuleInNo << " nat " << fwNatInNo << " tcp from " << epipeIpB << " " << rangeToStr(rangePair.second) << " to any out xmit " << gwIface));
+          natConfig.insert(natConfig.end(), {"redirect_port", "tcp",
+            epipeIpB + ":" + rangeToStr(rangePair.second),
+            hostIP + ":" + rangeToStr(rangePair.first)});
         }
         for (auto &rangePair : optionNet->inboundPortsUdp) {
-          cmdFW(STR("add " << fwRuleInNo << " nat " << fwNatInNo << " udp from any to " << hostIP  << " " << rangeToStr(rangePair.first) << " in recv " << gwIface));
-          cmdFW(STR("add " << fwRuleInNo << " nat " << fwNatInNo << " udp from " << epipeIpB << " " << rangeToStr(rangePair.second) << " to any out xmit " << gwIface));
+          natConfig.insert(natConfig.end(), {"redirect_port", "udp",
+            epipeIpB + ":" + rangeToStr(rangePair.second),
+            hostIP + ":" + rangeToStr(rangePair.first)});
+        }
+        execFW(natConfig);
+        // create firewall rules: one per port range
+        for (auto &rangePair : optionNet->inboundPortsTcp) {
+          execFW({"add", ruleInS, "nat", natInS, "tcp", "from", "any", "to", hostIP, rangeToStr(rangePair.first), "in", "recv", gwIface});
+          execFW({"add", ruleInS, "nat", natInS, "tcp", "from", epipeIpB, rangeToStr(rangePair.second), "to", "any", "out", "xmit", gwIface});
+        }
+        for (auto &rangePair : optionNet->inboundPortsUdp) {
+          execFW({"add", ruleInS, "nat", natInS, "udp", "from", "any", "to", hostIP, rangeToStr(rangePair.first), "in", "recv", gwIface});
+          execFW({"add", ruleInS, "nat", natInS, "udp", "from", epipeIpB, rangeToStr(rangePair.second), "to", "any", "out", "xmit", gwIface});
         }
       }
 
@@ -425,8 +449,8 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       if (optionNet->allowOutbound()) {
         std::unique_ptr<Ctx::FwUsers> fwUsers(Ctx::FwUsers::lock());
         if (fwUsers->isEmpty()) {
-          cmdFW(STR("nat " << fwNatOutCommonNo << " config ip " << hostIP));
-          cmdFW(STR("add " << fwRuleOutCommonNo << " nat " << fwNatOutCommonNo << " all from any to " << hostIP << " in recv " << gwIface));
+          execFW({"nat", natOutCommonS, "config", "ip", hostIP});
+          execFW({"add", ruleOutCommonS, "nat", natOutCommonS, "all", "from", "any", "to", hostIP, "in", "recv", gwIface});
         }
         fwUsers->add(::getpid());
         fwUsers->unlock();
@@ -436,30 +460,33 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       if (optionNet->allowOutbound()) {
         // allow DNS requests if required
         if (optionNet->outboundDns) {
-          cmdFW(STR("add " << fwRuleOutNo << " nat " << fwNatOutCommonNo << " udp from " << epipeIpB << " to " << nameserverIp << " 53 out xmit " << gwIface));
-          cmdFW(STR("add " << fwRuleOutNo << " allow udp from " << epipeIpB << " to " << nameserverIp << " 53"));
+          execFW({"add", ruleOutS, "nat", natOutCommonS, "udp", "from", epipeIpB, "to", nameserverIp, "53", "out", "xmit", gwIface});
+          execFW({"add", ruleOutS, "allow", "udp", "from", epipeIpB, "to", nameserverIp, "53"});
         }
-        cmdFW(STR("add " << fwRuleOutNo << " deny udp from " << epipeIpB << " to any 53"));
+        execFW({"add", ruleOutS, "deny", "udp", "from", epipeIpB, "to", "any", "53"});
         // bans
         if (!optionNet->outboundHost)
-          cmdFW(STR("add " << fwRuleOutNo << " deny ip from " << epipeIpB << " to me"));
+          execFW({"add", ruleOutS, "deny", "ip", "from", epipeIpB, "to", "me"});
         if (!optionNet->outboundLan)
-          cmdFW(STR("add " << fwRuleOutNo << " deny ip from " << epipeIpB << " to " << hostLAN));
+          execFW({"add", ruleOutS, "deny", "ip", "from", epipeIpB, "to", hostLAN});
         // nat the rest of the traffic
-        cmdFW(STR("add " << fwRuleOutNo << " nat " << fwNatOutCommonNo << " all from " << epipeIpB << " to any out xmit " << gwIface));
+        execFW({"add", ruleOutS, "nat", natOutCommonS, "all", "from", epipeIpB, "to", "any", "out", "xmit", gwIface});
       }
       // destroy rules
       destroyFirewallRulesAtEnd.reset([fwRuleInNo, fwRuleOutNo, fwRuleOutCommonNo, optionNet, origIpForwarding, &args]() {
+        auto ruleInS  = std::to_string(fwRuleInNo);
+        auto ruleOutS = std::to_string(fwRuleOutNo);
+        auto ruleOutCommonS = std::to_string(fwRuleOutCommonNo);
         // delete the rule(s) for this epipe
         if (optionNet->allowInbound())
-          Util::runCommand(STR("ipfw delete " << fwRuleInNo), "destroy firewall rule");
+          Util::execCommand({"ipfw", "delete", ruleInS}, "destroy firewall rule");
         if (optionNet->allowOutbound()) {
-          Util::runCommand(STR("ipfw delete " << fwRuleOutNo), "destroy firewall rule");
+          Util::execCommand({"ipfw", "delete", ruleOutS}, "destroy firewall rule");
           { // possibly delete the common rules if this is the last firewall
             std::unique_ptr<Ctx::FwUsers> fwUsers(Ctx::FwUsers::lock());
             fwUsers->del(::getpid());
             if (fwUsers->isEmpty()) {
-              Util::runCommand(STR("ipfw delete " << fwRuleOutCommonNo), "destroy firewall rule");
+              Util::execCommand({"ipfw", "delete", ruleOutCommonS}, "destroy firewall rule");
               // restore ip.forwarding to its original value if we changed it
               if (origIpForwarding == 0) {
                 LOG("restoring net.inet.ip.forwarding to 0")
@@ -495,14 +522,14 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     Util::Fs::chown(J(homeDir), myuid, mygid);
     runScript("run:before-create-users");
     LOG("add group " << user << " in jail")
-    runCommandInJail(STR("/usr/sbin/pw groupadd " << Util::shellQuote(user) << " -g " << mygid), "add the group in jail");
+    execInJail({"/usr/sbin/pw", "groupadd", user, "-g", std::to_string(mygid)}, "add the group in jail");
     LOG("add user " << user << " in jail")
-    runCommandInJail(STR("/usr/sbin/pw useradd " << Util::shellQuote(user) << " -u " << myuid << " -g " << mygid << " -s /bin/sh -d " << Util::shellQuote(homeDir)), "add the user in jail");
-    runCommandInJail(STR("/usr/sbin/pw usermod " << Util::shellQuote(user) << " -G wheel"), "add the group to the user");
+    execInJail({"/usr/sbin/pw", "useradd", user, "-u", std::to_string(myuid), "-g", std::to_string(mygid), "-s", "/bin/sh", "-d", homeDir}, "add the user in jail");
+    execInJail({"/usr/sbin/pw", "usermod", user, "-G", "wheel"}, "add the group to the user");
     // Verify group membership — setgroups(2)/getgroups(2) behavior changed in FreeBSD 15.0:
     // effective group ID is no longer included in the supplemental groups array
     LOG("verify user " << user << " group membership")
-    runCommandInJail(STR("/usr/bin/id " << Util::shellQuote(user)), "verify user group membership");
+    execInJail({"/usr/bin/id", user}, "verify user group membership");
     // "video" option requires the corresponding user/group: create the identical user/group to jail
     if (spec.optionExists("video")) {
       static const char *devName = "/dev/video";
@@ -527,9 +554,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       // add video users and group, and add our user to this group
       if (videoUid != std::numeric_limits<uid_t>::max()) {
         // CAVEAT we assume that videoUid/videoGid aren't the same UID/GID that the user has
-        runCommandInJail(STR("/usr/sbin/pw groupadd videoops -g " << videoGid), "add the videoops group");
-        runCommandInJail(STR("/usr/sbin/pw groupmod videoops -m " << Util::shellQuote(user)), "add the main user to the videoops group");
-        runCommandInJail(STR("/usr/sbin/pw useradd video -u " << videoUid << " -g " << videoGid), "add the video user in jail");
+        execInJail({"/usr/sbin/pw", "groupadd", "videoops", "-g", std::to_string(videoGid)}, "add the videoops group");
+        execInJail({"/usr/sbin/pw", "groupmod", "videoops", "-m", user}, "add the main user to the videoops group");
+        execInJail({"/usr/sbin/pw", "useradd", "video", "-u", std::to_string(videoUid), "-g", std::to_string(videoGid)}, "add the video user in jail");
       } else {
         WARN("the app expects video, but no video devices are present")
       }
@@ -573,7 +600,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   runScript("run:before-start-services");
   if (!spec.runServices.empty())
     for (auto &service : spec.runServices)
-      runCommandInJail(STR("/usr/sbin/service " << Util::shellQuote(service) << " onestart"), "start the service in jail");
+      execInJail({"/usr/sbin/service", service, "onestart"}, "start the service in jail");
   runScript("run:after-start-services");
 
   // copy X11 authentication files into the user's home directory in jail
@@ -634,7 +661,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // stop services, if any
   if (!spec.runServices.empty())
     for (auto &service : Util::reverseVector(spec.runServices))
-      runCommandInJail(STR("/usr/sbin/service " << Util::shellQuote(service) << " onestop"), "stop the service in jail");
+      execInJail({"/usr/sbin/service", service, "onestop"}, "stop the service in jail");
 
   if (spec.optionExists("dbg-ktrace"))
     Util::Fs::copyFile(J(STR(homeDir << "/ktrace.out")), "ktrace.out");
