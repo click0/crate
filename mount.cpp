@@ -13,6 +13,7 @@
 #include <errno.h>
 
 #include <vector>
+#include <iostream>
 
 #define ERR(msg...) ERR2("mount/unmount directories", msg)
 
@@ -60,7 +61,11 @@ void Mount::mount() {
 
 void Mount::unmount(bool doThrow) {
   int res = ::unmount(fspath.c_str(), 0/*flags*/);
-  if (res == -1)
-    ERR("unmount of '" << fspath << "' failed: " << strerror(errno));
+  if (res == -1) {
+    if (doThrow)
+      ERR("unmount of '" << fspath << "' failed: " << strerror(errno))
+    else
+      WARN("unmount of '" << fspath << "' failed: " << strerror(errno))
+  }
   mounted = false;
 }

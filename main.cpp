@@ -76,7 +76,7 @@ static int mainGuarded(int argc, char** argv) {
     break; // impossible
   }}
 
-  return succ ? (returnCode <= 255 ? returnCode : 255) : 1; // not sure why sometimes returnCode=255
+  return succ ? returnCode : 1;
 }
 
 int main(int argc, char** argv) {

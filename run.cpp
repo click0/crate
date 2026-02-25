@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #include <sys/param.h>
 #include <sys/mount.h>
+#include <sys/wait.h>
 // sys/jail.h isn't C++-safe: https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=238928
 // Still unfixed as of FreeBSD 15.0 — uses struct in_addr/in6_addr without includes
 extern "C" {
@@ -46,7 +47,22 @@ extern "C" {
 
 static uid_t myuid = ::getuid();
 static gid_t mygid = ::getgid();
-static const char* user = ::getenv("USER");
+
+static const char* getValidatedUser() {
+  const char *u = ::getenv("USER");
+  if (u == nullptr || u[0] == '\0')
+    return nullptr;
+  // Validate: only alphanumeric, underscore, hyphen; max 32 chars
+  for (const char *p = u; *p; p++) {
+    if (p - u >= 32)
+      return nullptr;
+    if (!::isalnum(*p) && *p != '_' && *p != '-')
+      return nullptr;
+  }
+  return u;
+}
+
+static const char* user = getValidatedUser();
 
 // options
 static bool optionInitializeRc = false; // this pulls a lot of dependencies, and starts a lot of things that we don't need in crate
@@ -73,6 +89,10 @@ static std::string argsToString(int argc, char** argv) {
 //
 bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   LOG("'run' command is invoked, " << argc << " arguments are provided")
+
+  // validate that USER is set and safe
+  if (user == nullptr)
+    ERR("USER environment variable is not set or contains invalid characters")
 
   // variables
   int res;
@@ -464,7 +484,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     if (!Util::Fs::dirExists(dirHost))
       ERR("shared directory '" << dirHost << "' doesn't exist on the host, can't run the app")
     // create the directory in jail
-    Util::runCommand(STR("mkdir -p " << J(dirJail)), "create the shared directory in jail"); // TODO replace with API-based calls
+    std::filesystem::create_directories(J(dirJail));
     // mount it as nullfs
     mount(new Mount("nullfs", J(dirJail), dirHost, MNT_IGNORE));
   }
@@ -510,11 +530,12 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   int returnCode = 0;
   if (!spec.runCmdExecutable.empty()) {
     LOG("running the command in jail: env=" << jailEnv)
-    returnCode = ::system(CSTR("jexec -l -U " << user << " " << jid
+    int status = ::system(CSTR("jexec -l -U " << user << " " << jid
                                << " /usr/bin/env " << jailEnv
                                << (spec.optionExists("dbg-ktrace") ? " /usr/bin/ktrace" : "")
                                << " " << spec.runCmdExecutable << spec.runCmdArgs << argsToString(argc, argv)));
-    // XXX 256 gets returned, what does this mean?
+    // system() returns the full wait status; extract the actual exit code
+    returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     LOG("command has finished in jail: returnCode=" << returnCode)
   } else {
     // No command is specified to be run.
@@ -542,7 +563,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     Util::Fs::chown(J(cmdFile), myuid, mygid);
     Util::Fs::chmod(J(cmdFile), 0500); // User-RX
     // run it the same way as we would any other command
-    returnCode = ::system(CSTR("jexec -l -U " << user << " " << jid << " " << cmdFile));
+    {
+      int status = ::system(CSTR("jexec -l -U " << user << " " << jid << " " << cmdFile));
+      returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+    }
   }
   runScript("run:after-execute");
 
