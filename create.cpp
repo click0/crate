@@ -24,6 +24,7 @@
 #include <vector>
 #include <set>
 #include <functional>
+#include <filesystem>
 
 #define ERR(msg...) ERR2("creating a crate", msg)
 
@@ -109,7 +110,9 @@ static void installAndAddPackagesInJail(const std::string &jailPath,
   // cleanup: delete the pkg package: it will not be needed any more, and delete the added package files
   runChrootCommand(jailPath, "pkg delete -f pkg", "remove the 'pkg' package from jail");
   if (!pkgsAdd.empty())
-    Util::runCommand(STR("rm " << jailPath << "/tmp/*"), "remove the added package files from jail");
+    for (const auto &entry : std::filesystem::directory_iterator(STR(jailPath << "/tmp")))
+      if (!entry.is_directory())
+        Util::Fs::unlink(entry.path());
   // notify
   notifyUserOfLongProcess(false, "pkg", STR("install the required packages: " << (pkgsInstall+pkgsAdd)));
 }
@@ -262,7 +265,7 @@ static void removeRedundantJailParts(const std::string &jailPath, const Spec &sp
 
   // remove static libs if not requested to keep them
   if (!spec.optionExists("no-rm-static-libs"))
-    Util::runCommand(STR("find " << jailPath << " -name '*.a' | xargs rm"), "remove static libs");
+    Util::runCommand(STR("find " << Util::shellQuote(jailPath) << " -name '*.a' -delete"), "remove static libs");
 }
 
 //
@@ -280,7 +283,7 @@ bool createCrate(const Args &args, const Spec &spec) {
   // download the base archive if not yet
   if (!Util::Fs::fileExists(Locations::baseArchive)) {
     std::cout << "downloading base.txz from " << Locations::baseArchiveUrl << " ..." << std::endl;
-    Util::runCommand(STR("fetch -o " << Locations::baseArchive << " " << Locations::baseArchiveUrl), "download base.txz");
+    Util::runCommand(STR("fetch -o " << Util::shellQuote(Locations::baseArchive) << " " << Util::shellQuote(Locations::baseArchiveUrl)), "download base.txz");
     std::cout << "base.txz has finished downloading" << std::endl;
   }
 
@@ -289,6 +292,13 @@ bool createCrate(const Args &args, const Spec &spec) {
   res = mkdir(jailPath.c_str(), S_IRUSR|S_IWUSR|S_IXUSR);
   if (res == -1)
     ERR("failed to create the jail directory '" << jailPath << "': " << strerror(errno))
+
+  // log if jail directory is on encrypted ZFS
+  if (Util::Fs::isOnZfs(jailPath)) {
+    auto dataset = Util::Fs::getZfsDataset(jailPath);
+    if (!dataset.empty() && Util::Fs::isZfsEncrypted(dataset))
+      LOG("create directory on encrypted ZFS dataset '" << dataset << "'")
+  }
 
   // helper
   auto runScript = [&jailPath,&spec](const char *section) {
@@ -305,8 +315,8 @@ bool createCrate(const Args &args, const Spec &spec) {
 
   // unpack the base archive
   LOG("unpacking the base archive")
-  Util::runCommand(STR("cat " << Locations::baseArchive
-                       << " | " << Cmd::xz << " --decompress | tar -xf - --uname \"\" --gname \"\" -C " << jailPath),
+  Util::runCommand(STR(Cmd::xz << " --decompress < " << Util::shellQuote(Locations::baseArchive)
+                       << " | tar -xf - --uname \"\" --gname \"\" -C " << Util::shellQuote(jailPath)),
                    "unpack the system base into the jail directory");
   runScript("create:start");
 
@@ -353,7 +363,7 @@ bool createCrate(const Args &args, const Spec &spec) {
 
   // pack the jail into a .crate file
   LOG("creating the crate file " << crateFileName)
-  Util::runCommand(STR("tar cf - -C " << jailPath << " . | " << Cmd::xz << " --extreme > " << crateFileName), "compress the jail directory into the crate file");
+  Util::runCommand(STR("tar cf - -C " << Util::shellQuote(jailPath) << " . | " << Cmd::xz << " --extreme > " << Util::shellQuote(crateFileName)), "compress the jail directory into the crate file");
   Util::Fs::chown(crateFileName, myuid, mygid);
 
   // remove the create directory

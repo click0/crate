@@ -27,6 +27,7 @@
 #include <sys/types.h>
 #include <sys/sysctl.h>
 #include <sys/param.h>
+#include <sys/mount.h>
 #include <sys/linker.h>
 #include <pwd.h>
 
@@ -340,7 +341,7 @@ void writeFile(const std::string &data, int fd) {
 
 void writeFile(const std::string &data, const std::string &file) {
   int fd;
-  SYSCALL(fd = ::open(file.c_str(), O_WRONLY|O_CREAT|O_TRUNC, 0644), "open", file.c_str());
+  SYSCALL(fd = ::open(file.c_str(), O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW, 0644), "open", file.c_str());
 
   writeFile(data, fd);
 
@@ -349,7 +350,7 @@ void writeFile(const std::string &data, const std::string &file) {
 
 void appendFile(const std::string &data, const std::string &file) {
   int fd;
-  SYSCALL(fd = ::open(file.c_str(), O_WRONLY|O_CREAT|O_APPEND), "open", file.c_str());
+  SYSCALL(fd = ::open(file.c_str(), O_WRONLY|O_CREAT|O_APPEND|O_NOFOLLOW, 0644), "open", file.c_str());
 
   writeFile(data, fd);
 
@@ -543,6 +544,37 @@ void copyFile(const std::string &srcFile, const std::string &dstFile) {
 
 std::vector<std::string> expandWildcards(const std::string &wildcardPath, const std::string &cmdPrefix) {
   return splitString(runCommandGetOutput(STR(cmdPrefix << "/bin/ls " << wildcardPath), "wildcard expansion"), "\n"); // XXX the 'wildcard' library might help (?)
+}
+
+bool isOnZfs(const std::string &path) {
+  struct statfs sfs;
+  if (::statfs(path.c_str(), &sfs) == -1)
+    return false;
+  return std::string(sfs.f_fstypename) == "zfs";
+}
+
+std::string getZfsDataset(const std::string &path) {
+  struct statfs sfs;
+  if (::statfs(path.c_str(), &sfs) == -1)
+    return "";
+  if (std::string(sfs.f_fstypename) != "zfs")
+    return "";
+  return sfs.f_mntfromname;
+}
+
+bool isZfsEncrypted(const std::string &dataset) {
+  auto output = runCommandGetOutput(
+    STR("zfs get -H -o value encryption " << shellQuote(dataset)),
+    "check ZFS encryption");
+  auto val = stripTrailingSpace(output);
+  return !val.empty() && val != "off" && val != "-";
+}
+
+bool isZfsKeyLoaded(const std::string &dataset) {
+  auto output = runCommandGetOutput(
+    STR("zfs get -H -o value keystatus " << shellQuote(dataset)),
+    "check ZFS key status");
+  return stripTrailingSpace(output) == "available";
 }
 
 }

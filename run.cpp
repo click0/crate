@@ -27,7 +27,7 @@ extern "C" {
 }
 #include <sys/uio.h>
 #include <jail.h>
-#include <ctype.h>
+#include <pwd.h>
 
 #include <string>
 #include <list>
@@ -48,21 +48,20 @@ extern "C" {
 static uid_t myuid = ::getuid();
 static gid_t mygid = ::getgid();
 
-static const char* getValidatedUser() {
-  const char *u = ::getenv("USER");
-  if (u == nullptr || u[0] == '\0')
-    return nullptr;
-  // Validate: only alphanumeric, underscore, hyphen; max 32 chars
-  for (const char *p = u; *p; p++) {
-    if (p - u >= 32)
-      return nullptr;
-    if (!::isalnum(*p) && *p != '_' && *p != '-')
-      return nullptr;
-  }
-  return u;
-}
+// Use getpwuid(getuid()) for authoritative identity — immune to USER env spoofing.
+// This is critical because crate is a setuid binary.
+struct UserInfo {
+  std::string name;
+  std::string homeDir;
+  bool valid;
+};
 
-static const char* user = getValidatedUser();
+static UserInfo userInfo = []() -> UserInfo {
+  struct passwd *pw = ::getpwuid(::getuid());
+  if (pw == nullptr || pw->pw_name == nullptr || pw->pw_name[0] == '\0')
+    return {"", "", false};
+  return {pw->pw_name, pw->pw_dir, true};
+}();
 
 // options
 static bool optionInitializeRc = false; // this pulls a lot of dependencies, and starts a lot of things that we don't need in crate
@@ -80,7 +79,7 @@ static std::string hostLAN;
 static std::string argsToString(int argc, char** argv) {
   std::ostringstream ss;
   for (int i = 0; i < argc; i++)
-    ss << " " << argv[i];
+    ss << " " << Util::shellQuote(argv[i]);
   return ss.str();
 }
 
@@ -90,17 +89,31 @@ static std::string argsToString(int argc, char** argv) {
 bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   LOG("'run' command is invoked, " << argc << " arguments are provided")
 
-  // validate that USER is set and safe
-  if (user == nullptr)
-    ERR("USER environment variable is not set or contains invalid characters")
+  // validate user identity from passwd database (not from env)
+  if (!userInfo.valid)
+    ERR("failed to determine user identity from getpwuid(getuid())")
+
+  auto &user = userInfo.name;
+  auto &homeDir = userInfo.homeDir;
 
   // variables
   int res;
-  auto homeDir = STR("/home/" << user);
 
   // create the jail directory
   auto jailPath = STR(Locations::jailDirectoryPath << "/jail-" << Util::filePathToBareName(args.runCrateFile) << "-pid" << ::getpid());
   Util::Fs::mkdir(jailPath, S_IRUSR|S_IWUSR|S_IXUSR);
+
+  // check if jail directory is on encrypted ZFS
+  if (Util::Fs::isOnZfs(jailPath)) {
+    auto dataset = Util::Fs::getZfsDataset(jailPath);
+    if (!dataset.empty() && Util::Fs::isZfsEncrypted(dataset)) {
+      if (!Util::Fs::isZfsKeyLoaded(dataset))
+        ERR("ZFS dataset '" << dataset << "' is encrypted but key is not loaded; "
+            "run 'zfs load-key " << dataset << "' first")
+      LOG("jail directory on encrypted ZFS dataset '" << dataset << "'")
+    }
+  }
+
   auto J = [&jailPath](auto subdir) {
     return STR(jailPath << subdir);
   };
@@ -119,14 +132,29 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     m->mount();
   };
 
+  // validate the crate archive: reject archives with '..' path components (directory traversal)
+  LOG("validating the crate file " << args.runCrateFile)
+  {
+    auto listing = Util::runCommandGetOutput(
+      STR(Cmd::xz << " < " << Util::shellQuote(args.runCrateFile) << " | tar tf -"),
+      "list crate archive contents");
+    std::istringstream is(listing);
+    std::string entry;
+    while (std::getline(is, entry)) {
+      if (entry.find("..") != std::string::npos)
+        ERR("crate archive contains path with '..' component: " << entry << " — refusing to extract (directory traversal)")
+    }
+  }
+
   // extract the crate archive into the jail directory
   LOG("extracting the crate file " << args.runCrateFile << " into " << jailPath)
-  Util::runCommand(STR(Cmd::xz << " < " << args.runCrateFile << " | tar xf - -C " << jailPath), "extract the crate file into the jail directory");
+  Util::runCommand(STR(Cmd::xz << " < " << Util::shellQuote(args.runCrateFile) << " | tar xf - -C " << Util::shellQuote(jailPath)), "extract the crate file into the jail directory");
 
   // parse +CRATE.SPEC
   auto spec = parseSpec(J("/+CRATE.SPEC")).preprocess();
 
   // check the pre-conditions
+  int origIpForwarding = -1; // -1 = not modified; 0 = was off and we turned it on
   if (spec.optionExists("net")) {
     // we need to create vnet jails
     if (Util::getSysctlInt("kern.features.vimage") == 0)
@@ -134,11 +162,13 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     // ipfw needs the ipfw_nat kernel module in order to function
     Util::ensureKernelModuleIsLoaded("ipfw_nat");
     // net.inet.ip.forwarding needs to be 1 for networking to work
-    // XXX it is "bad" to alter this value, need to see if this can be replaced with firewall rules
-    // NOTE: on FreeBSD 15.0+ VNET sysctl variables are also loader tunables (CTLFLAG_TUN),
-    // so this can be pre-set in /boot/loader.conf: net.inet.ip.forwarding=1
-    if (Util::getSysctlInt("net.inet.ip.forwarding") == 0)
+    // Save original value so we can restore it when the last crate exits.
+    // NOTE: on FreeBSD 15.0+ this can be pre-set in /boot/loader.conf: net.inet.ip.forwarding=1
+    origIpForwarding = Util::getSysctlInt("net.inet.ip.forwarding");
+    if (origIpForwarding == 0) {
+      LOG("enabling net.inet.ip.forwarding (was 0, will restore on exit)")
       Util::setSysctlInt("net.inet.ip.forwarding", 1);
+    }
     // warn about ipfw binary incompatibility on FreeBSD 15.0+
     if (Util::getFreeBSDMajorVersion() >= 15)
       std::cerr << rang::fg::yellow
@@ -151,7 +181,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // helper
   auto runScript = [&jailPath,&spec](const char *section) {
     Scripts::section(section, spec.scripts, [&jailPath,section](const std::string &cmd) {
-      Util::runCommand(STR("ASSUME_ALWAYS_YES=yes /usr/sbin/chroot " << jailPath << " " << cmd), CSTR("run script#" << section));
+      Util::runCommand(STR("ASSUME_ALWAYS_YES=yes /usr/sbin/chroot " << Util::shellQuote(jailPath) << " " << cmd), CSTR("run script#" << section));
     });
   };
   runScript("run:begin");
@@ -173,8 +203,8 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // turn options on
   if (spec.optionExists("x11")) {
     LOG("x11 option is requested: mount the X11 socket in jail")
-    // create the X11 socket directory
-    Util::Fs::mkdir(J("/tmp/.X11-unix"), 0777);
+    // create the X11 socket directory (sticky bit like standard /tmp/.X11-unix)
+    Util::Fs::mkdir(J("/tmp/.X11-unix"), 01777);
     // mount the X11 socket directory in jail
     mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix", MNT_IGNORE));
     // DISPLAY variable copied to jail
@@ -188,6 +218,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   runScript("run:before-create-jail");
   LOG("creating jail " << jailXname)
   const char *optNet = spec.optionExists("net") ? "true" : "false";
+  const bool hasZfsDatasets = !spec.zfsDatasets.empty();
+  const char *optZfsMount = hasZfsDatasets ? "true" : "false";
+  const char *optEnforceStatfs = hasZfsDatasets ? "1" : "2";
   int jid;
   int jailFd = -1; // jail descriptor for race-free removal (FreeBSD 15.0+)
 #ifdef JAIL_OWN_DESC
@@ -197,11 +230,13 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     char descBuf[32] = {0};
     res = ::jail_setv(JAIL_CREATE | JAIL_OWN_DESC,
       "path", jailPath.c_str(),
-      //"host.hostname", ON_USE_VNET_NOT(Util::gethostname().c_str()) ON_USE_VNET("rsnapshot"),
       "host.hostname", Util::gethostname().c_str(),
       "persist", nullptr,
       "allow.raw_sockets", optNet, // allow ping-pong
       "allow.socket_af", optNet,
+      "allow.mount", optZfsMount,
+      "allow.mount.zfs", optZfsMount,
+      "enforce_statfs", optEnforceStatfs,
       "vnet", nullptr/*"new"*/, // possible values are: nullptr, { "disable", "new", "inherit" }, see lib/libjail/jail.c
       "desc", descBuf,
       nullptr);
@@ -215,11 +250,13 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   {
     res = ::jail_setv(JAIL_CREATE,
       "path", jailPath.c_str(),
-      //"host.hostname", ON_USE_VNET_NOT(Util::gethostname().c_str()) ON_USE_VNET("rsnapshot"),
       "host.hostname", Util::gethostname().c_str(),
       "persist", nullptr,
       "allow.raw_sockets", optNet, // allow ping-pong
       "allow.socket_af", optNet,
+      "allow.mount", optZfsMount,
+      "allow.mount.zfs", optZfsMount,
+      "enforce_statfs", optEnforceStatfs,
       "vnet", nullptr/*"new"*/, // possible values are: nullptr, { "disable", "new", "inherit" }, see lib/libjail/jail.c
       nullptr);
     if (res == -1)
@@ -228,6 +265,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   }
 
   RunAtEnd destroyJail([jid,jailFd,&jailXname,runScript,&args]() {
+    (void)jailFd; // used only when JAIL_OWN_DESC is defined
     // stop and remove jail
     runScript("run:before-remove-jail");
     LOG("removing jail " << jailXname << " jid=" << jid << " ...")
@@ -249,6 +287,23 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   runScript("run:after-create-jail");
   LOG("jail " << jailXname << " has been created, jid=" << jid)
+
+  // attach ZFS datasets to jail
+  RunAtEnd detachZfsDatasets;
+  if (hasZfsDatasets) {
+    for (auto &dataset : spec.zfsDatasets) {
+      LOG("attaching ZFS dataset " << dataset << " to jail " << jid)
+      Util::runCommand(STR("zfs jail " << jid << " " << Util::shellQuote(dataset)),
+        CSTR("attach ZFS dataset " << dataset));
+    }
+    detachZfsDatasets.reset([&spec, jid, &args]() {
+      for (auto &dataset : Util::reverseVector(spec.zfsDatasets)) {
+        LOG("detaching ZFS dataset " << dataset << " from jail " << jid)
+        Util::runCommand(STR("zfs unjail " << jid << " " << Util::shellQuote(dataset)),
+          CSTR("detach ZFS dataset " << dataset));
+      }
+    });
+  }
 
   // helpers for jail access
   auto runCommandInJail = [jid](auto cmd, auto descr) {
@@ -394,7 +449,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         cmdFW(STR("add " << fwRuleOutNo << " nat " << fwNatOutCommonNo << " all from " << epipeIpB << " to any out xmit " << gwIface));
       }
       // destroy rules
-      destroyFirewallRulesAtEnd.reset([fwRuleInNo, fwRuleOutNo, fwRuleOutCommonNo, optionNet]() {
+      destroyFirewallRulesAtEnd.reset([fwRuleInNo, fwRuleOutNo, fwRuleOutCommonNo, optionNet, origIpForwarding, &args]() {
         // delete the rule(s) for this epipe
         if (optionNet->allowInbound())
           Util::runCommand(STR("ipfw delete " << fwRuleInNo), "destroy firewall rule");
@@ -403,8 +458,14 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
           { // possibly delete the common rules if this is the last firewall
             std::unique_ptr<Ctx::FwUsers> fwUsers(Ctx::FwUsers::lock());
             fwUsers->del(::getpid());
-            if (fwUsers->isEmpty())
+            if (fwUsers->isEmpty()) {
               Util::runCommand(STR("ipfw delete " << fwRuleOutCommonNo), "destroy firewall rule");
+              // restore ip.forwarding to its original value if we changed it
+              if (origIpForwarding == 0) {
+                LOG("restoring net.inet.ip.forwarding to 0")
+                Util::setSysctlInt("net.inet.ip.forwarding", 0);
+              }
+            }
             fwUsers->unlock();
           }
         }
@@ -434,14 +495,14 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     Util::Fs::chown(J(homeDir), myuid, mygid);
     runScript("run:before-create-users");
     LOG("add group " << user << " in jail")
-    runCommandInJail(STR("/usr/sbin/pw groupadd " << user << " -g " << mygid), "add the group in jail");
+    runCommandInJail(STR("/usr/sbin/pw groupadd " << Util::shellQuote(user) << " -g " << mygid), "add the group in jail");
     LOG("add user " << user << " in jail")
-    runCommandInJail(STR("/usr/sbin/pw useradd " << user << " -u " << myuid << " -g " << mygid << " -s /bin/sh -d " << homeDir), "add the user in jail");
-    runCommandInJail(STR("/usr/sbin/pw usermod " << user << " -G wheel"), "add the group to the user");
+    runCommandInJail(STR("/usr/sbin/pw useradd " << Util::shellQuote(user) << " -u " << myuid << " -g " << mygid << " -s /bin/sh -d " << Util::shellQuote(homeDir)), "add the user in jail");
+    runCommandInJail(STR("/usr/sbin/pw usermod " << Util::shellQuote(user) << " -G wheel"), "add the group to the user");
     // Verify group membership — setgroups(2)/getgroups(2) behavior changed in FreeBSD 15.0:
     // effective group ID is no longer included in the supplemental groups array
     LOG("verify user " << user << " group membership")
-    runCommandInJail(STR("/usr/bin/id " << user), "verify user group membership");
+    runCommandInJail(STR("/usr/bin/id " << Util::shellQuote(user)), "verify user group membership");
     // "video" option requires the corresponding user/group: create the identical user/group to jail
     if (spec.optionExists("video")) {
       static const char *devName = "/dev/video";
@@ -467,7 +528,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       if (videoUid != std::numeric_limits<uid_t>::max()) {
         // CAVEAT we assume that videoUid/videoGid aren't the same UID/GID that the user has
         runCommandInJail(STR("/usr/sbin/pw groupadd videoops -g " << videoGid), "add the videoops group");
-        runCommandInJail(STR("/usr/sbin/pw groupmod videoops -m " << user), "add the main user to the videoops group");
+        runCommandInJail(STR("/usr/sbin/pw groupmod videoops -m " << Util::shellQuote(user)), "add the main user to the videoops group");
         runCommandInJail(STR("/usr/sbin/pw useradd video -u " << videoUid << " -g " << videoGid), "add the video user in jail");
       } else {
         WARN("the app expects video, but no video devices are present")
@@ -512,7 +573,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   runScript("run:before-start-services");
   if (!spec.runServices.empty())
     for (auto &service : spec.runServices)
-      runCommandInJail(STR("/usr/sbin/service " << service << " onestart"), "start the service in jail");
+      runCommandInJail(STR("/usr/sbin/service " << Util::shellQuote(service) << " onestart"), "start the service in jail");
   runScript("run:after-start-services");
 
   // copy X11 authentication files into the user's home directory in jail
@@ -530,10 +591,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   int returnCode = 0;
   if (!spec.runCmdExecutable.empty()) {
     LOG("running the command in jail: env=" << jailEnv)
-    int status = ::system(CSTR("jexec -l -U " << user << " " << jid
+    int status = ::system(CSTR("jexec -l -U " << Util::shellQuote(user) << " " << jid
                                << " /usr/bin/env " << jailEnv
                                << (spec.optionExists("dbg-ktrace") ? " /usr/bin/ktrace" : "")
-                               << " " << spec.runCmdExecutable << spec.runCmdArgs << argsToString(argc, argv)));
+                               << " " << Util::shellQuote(spec.runCmdExecutable) << spec.runCmdArgs << argsToString(argc, argv)));
     // system() returns the full wait status; extract the actual exit code
     returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     LOG("command has finished in jail: returnCode=" << returnCode)
@@ -564,7 +625,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     Util::Fs::chmod(J(cmdFile), 0500); // User-RX
     // run it the same way as we would any other command
     {
-      int status = ::system(CSTR("jexec -l -U " << user << " " << jid << " " << cmdFile));
+      int status = ::system(CSTR("jexec -l -U " << Util::shellQuote(user) << " " << jid << " " << cmdFile));
       returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     }
   }
@@ -573,7 +634,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // stop services, if any
   if (!spec.runServices.empty())
     for (auto &service : Util::reverseVector(spec.runServices))
-      runCommandInJail(STR("/usr/sbin/service " << service << " onestop"), "stop the service in jail");
+      runCommandInJail(STR("/usr/sbin/service " << Util::shellQuote(service) << " onestop"), "stop the service in jail");
 
   if (spec.optionExists("dbg-ktrace"))
     Util::Fs::copyFile(J(STR(homeDir << "/ktrace.out")), "ktrace.out");
@@ -585,6 +646,8 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   runScript("run:end");
 
   // release resources
+  if (hasZfsDatasets)
+    detachZfsDatasets.doNow();
   destroyJail.doNow();
   for (auto &m : mounts)
     m->unmount();
