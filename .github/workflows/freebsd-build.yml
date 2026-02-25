@@ -23,7 +23,7 @@ jobs:
         operating_system: freebsd
         version: ${{ matrix.freebsd-version }}
         run: |
-          sudo pkg install -y pkgconf yaml-cpp
+          sudo pkg install -y pkgconf yaml-cpp rang
           uname -a
           c++ --version
           make clean all
