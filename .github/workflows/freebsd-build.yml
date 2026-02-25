@@ -9,6 +9,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -19,14 +20,28 @@ jobs:
 
     - name: Build and test on FreeBSD
       uses: cross-platform-actions/action@v0.32.0
+      timeout-minutes: 25
       with:
         operating_system: freebsd
         version: ${{ matrix.freebsd-version }}
         run: |
+          set -ex
+
+          echo "::group::Install dependencies"
           sudo pkg install -y pkgconf yaml-cpp rang
+          echo "::endgroup::"
+
+          echo "::group::System info"
           uname -a
           c++ --version
-          make clean all
-          echo ""
-          echo "=== Running CI verification tests ==="
+          sysctl hw.ncpu
+          echo "::endgroup::"
+
+          echo "::group::Build"
+          NPROC=$(sysctl -n hw.ncpu 2>/dev/null || echo 2)
+          make -j"$NPROC" all
+          echo "::endgroup::"
+
+          echo "::group::CI verification tests"
           sudo sh tests/ci-verify.sh .
+          echo "::endgroup::"
