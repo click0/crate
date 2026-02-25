@@ -87,6 +87,11 @@ std::string runCommandGetOutput(const std::string &cmd, const std::string &what)
 // exec-based execution: no shell involved, immune to command injection
 void execCommand(const std::vector<std::string> &argv, const std::string &what);
 std::string execCommandGetOutput(const std::vector<std::string> &argv, const std::string &what);
+// exec-based pipeline: chain of commands connected by pipes
+void execPipeline(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
+                  const std::string &stdinFile = "", const std::string &stdoutFile = "");
+std::string execPipelineGetOutput(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
+                                  const std::string &stdinFile = "");
 void ckSyscallError(int res, const char *syscall, const char *arg, const std::function<bool(int)> whiteWash = [](int err) {return false;});
 std::string tmSecMs();
 std::string filePathToBareName(const std::string &path);

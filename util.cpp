@@ -187,6 +187,109 @@ std::string execCommandGetOutput(const std::vector<std::string> &argv, const std
   return ss.str();
 }
 
+// Internal: run a pipeline of commands, optionally capturing last stdout into a string
+static std::string execPipelineImpl(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
+                                    const std::string &stdinFile, const std::string &stdoutFile, bool capture) {
+  if (cmds.empty())
+    ERR2("exec pipeline", "empty pipeline for: " << what)
+
+  int n = cmds.size();
+  // Create n-1 pipes
+  std::vector<int> pipefds(2 * (n - 1));
+  for (int i = 0; i < n - 1; i++) {
+    if (::pipe(&pipefds[2*i]) == -1)
+      ERR2("exec pipeline", "pipe() failed for '" << what << "': " << strerror(errno))
+  }
+
+  // Capture pipe for last process stdout (when capture=true)
+  int capturePipe[2] = {-1, -1};
+  if (capture) {
+    if (::pipe(capturePipe) == -1)
+      ERR2("exec pipeline", "pipe() failed for capture: " << strerror(errno))
+  }
+
+  // Fork children
+  std::vector<pid_t> pids(n);
+  for (int i = 0; i < n; i++) {
+    auto cargv = toExecArgv(cmds[i]);
+    pid_t pid = ::fork();
+    if (pid == -1)
+      ERR2("exec pipeline", "fork() failed for '" << what << "': " << strerror(errno))
+    if (pid == 0) {
+      // child i
+      // stdin: from previous pipe or stdinFile (for first)
+      if (i == 0 && !stdinFile.empty()) {
+        int fd = ::open(stdinFile.c_str(), O_RDONLY);
+        if (fd == -1) ::_exit(127);
+        ::dup2(fd, STDIN_FILENO);
+        ::close(fd);
+      } else if (i > 0) {
+        ::dup2(pipefds[2*(i-1)], STDIN_FILENO);
+      }
+      // stdout: to next pipe, or stdoutFile/capture (for last)
+      if (i < n - 1) {
+        ::dup2(pipefds[2*i+1], STDOUT_FILENO);
+      } else {
+        if (!stdoutFile.empty()) {
+          int fd = ::open(stdoutFile.c_str(), O_WRONLY|O_CREAT|O_TRUNC, 0644);
+          if (fd == -1) ::_exit(127);
+          ::dup2(fd, STDOUT_FILENO);
+          ::close(fd);
+        } else if (capture) {
+          ::dup2(capturePipe[1], STDOUT_FILENO);
+        }
+      }
+      // close all pipe fds in child
+      for (auto fd : pipefds) ::close(fd);
+      if (capturePipe[0] >= 0) ::close(capturePipe[0]);
+      if (capturePipe[1] >= 0) ::close(capturePipe[1]);
+      ::execvp(cargv[0], cargv.data());
+      ::_exit(127);
+    }
+    pids[i] = pid;
+  }
+
+  // Parent: close all pipe fds
+  for (auto fd : pipefds) ::close(fd);
+  if (capturePipe[1] >= 0) ::close(capturePipe[1]);
+
+  // Read captured output if needed
+  std::ostringstream ss;
+  if (capture) {
+    char buf[4096];
+    ssize_t nbytes;
+    while ((nbytes = ::read(capturePipe[0], buf, sizeof(buf))) > 0)
+      ss.write(buf, nbytes);
+    ::close(capturePipe[0]);
+  }
+
+  // Wait for all children
+  bool failed = false;
+  for (int i = 0; i < n; i++) {
+    int status;
+    while (::waitpid(pids[i], &status, 0) == -1) {
+      if (errno != EINTR)
+        ERR2("exec pipeline", "waitpid failed for '" << what << "': " << strerror(errno))
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+      failed = true;
+  }
+  if (failed)
+    ERR2("exec pipeline", "'" << what << "' pipeline failed")
+
+  return ss.str();
+}
+
+void execPipeline(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
+                  const std::string &stdinFile, const std::string &stdoutFile) {
+  execPipelineImpl(cmds, what, stdinFile, stdoutFile, false);
+}
+
+std::string execPipelineGetOutput(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
+                                  const std::string &stdinFile) {
+  return execPipelineImpl(cmds, what, stdinFile, "", true);
+}
+
 void ckSyscallError(int res, const char *syscall, const char *arg, const std::function<bool(int)> whiteWash) {
   if (res == -1 && !whiteWash(errno))
     ERR2("system call", "'" << syscall << "' failed, arg=" << arg << ": " << strerror(errno))

@@ -317,9 +317,9 @@ bool createCrate(const Args &args, const Spec &spec) {
 
   // unpack the base archive
   LOG("unpacking the base archive")
-  Util::runCommand(STR(Cmd::xz << " --decompress < " << Util::shellQuote(Locations::baseArchive)
-                       << " | tar -xf - --uname \"\" --gname \"\" -C " << Util::shellQuote(jailPath)),
-                   "unpack the system base into the jail directory");
+  Util::execPipeline(
+    {{"xz", Cmd::xzThreadsArg, "--decompress"}, {"tar", "-xf", "-", "--uname", "", "--gname", "", "-C", jailPath}},
+    "unpack the system base into the jail directory", Locations::baseArchive);
   runScript("create:start");
 
   // copy /etc/resolv.conf into the jail directory such that pkg would be able to resolve addresses
@@ -365,7 +365,9 @@ bool createCrate(const Args &args, const Spec &spec) {
 
   // pack the jail into a .crate file
   LOG("creating the crate file " << crateFileName)
-  Util::runCommand(STR("tar cf - -C " << Util::shellQuote(jailPath) << " . | " << Cmd::xz << " --extreme > " << Util::shellQuote(crateFileName)), "compress the jail directory into the crate file");
+  Util::execPipeline(
+    {{"tar", "cf", "-", "-C", jailPath, "."}, {"xz", Cmd::xzThreadsArg, "--extreme"}},
+    "compress the jail directory into the crate file", "", crateFileName);
   Util::Fs::chown(crateFileName, myuid, mygid);
 
   // remove the create directory

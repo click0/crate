@@ -135,9 +135,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // validate the crate archive: reject archives with '..' path components (directory traversal)
   LOG("validating the crate file " << args.runCrateFile)
   {
-    auto listing = Util::runCommandGetOutput(
-      STR(Cmd::xz << " < " << Util::shellQuote(args.runCrateFile) << " | tar tf -"),
-      "list crate archive contents");
+    auto listing = Util::execPipelineGetOutput(
+      {{"xz", Cmd::xzThreadsArg, "--decompress"}, {"tar", "tf", "-"}},
+      "list crate archive contents", args.runCrateFile);
     std::istringstream is(listing);
     std::string entry;
     while (std::getline(is, entry)) {
@@ -148,7 +148,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // extract the crate archive into the jail directory
   LOG("extracting the crate file " << args.runCrateFile << " into " << jailPath)
-  Util::runCommand(STR(Cmd::xz << " < " << Util::shellQuote(args.runCrateFile) << " | tar xf - -C " << Util::shellQuote(jailPath)), "extract the crate file into the jail directory");
+  Util::execPipeline(
+    {{"xz", Cmd::xzThreadsArg, "--decompress"}, {"tar", "xf", "-", "-C", jailPath}},
+    "extract the crate file into the jail directory", args.runCrateFile);
 
   // parse +CRATE.SPEC
   auto spec = parseSpec(J("/+CRATE.SPEC")).preprocess();
@@ -335,7 +337,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   if (optionNet && (optionNet->allowOutbound() || optionNet->allowInbound())) {
     { // determine host's gateway interface
       auto elts = Util::splitString(
-                    Util::runCommandGetOutput("netstat -rn | grep ^default | sed 's| *| |'", "determine host's gateway interface"),
+                    Util::execPipelineGetOutput(
+                      {{"netstat", "-rn"}, {"grep", "^default"}, {"sed", "s| *| |"}},
+                      "determine host's gateway interface"),
                     " "
                   );
       if (elts.size() != 4)
