@@ -8,7 +8,7 @@ namespace Cmd {
 
 const std::string xz = STRg("xz --threads=" << Util::getSysctlInt("hw.ncpu"));
 std::string chroot(const std::string &path) {
-  return STR("ASSUME_ALWAYS_YES=yes /usr/sbin/chroot " << path << " ");
+  return STR("ASSUME_ALWAYS_YES=yes /usr/sbin/chroot " << Util::shellQuote(path) << " ");
 }
 
 }

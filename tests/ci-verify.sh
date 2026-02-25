@@ -452,6 +452,37 @@ else
     fail "run.cpp missing ZFS dataset attach/detach"
   fi
   skip "ZFS runtime tests (compile-only CI)"
+  section "T14: security hardening"
+  if grep -q 'shellQuote(args.runCrateFile)' "$BUILDDIR/run.cpp"; then
+    pass "run.cpp quotes args.runCrateFile in shell commands"
+  else
+    fail "run.cpp missing shellQuote on args.runCrateFile"
+  fi
+  if grep -q 'getpwuid' "$BUILDDIR/run.cpp" && ! grep -q 'getenv.*USER' "$BUILDDIR/run.cpp"; then
+    pass "run.cpp uses getpwuid instead of getenv(USER)"
+  else
+    fail "run.cpp user identity not hardened"
+  fi
+  if grep -q '\.\..*directory traversal' "$BUILDDIR/run.cpp"; then
+    pass "run.cpp validates crate archive for directory traversal"
+  else
+    fail "run.cpp missing tar traversal protection"
+  fi
+  if grep -q 'O_NOFOLLOW' "$BUILDDIR/util.cpp"; then
+    pass "util.cpp uses O_NOFOLLOW on file writes"
+  else
+    fail "util.cpp missing O_NOFOLLOW protection"
+  fi
+  if grep -q 'origIpForwarding' "$BUILDDIR/run.cpp"; then
+    pass "run.cpp saves/restores ip.forwarding sysctl"
+  else
+    fail "run.cpp missing ip.forwarding save/restore"
+  fi
+  if grep -q 'shellQuote(path)' "$BUILDDIR/cmd.cpp"; then
+    pass "cmd.cpp quotes path in chroot command"
+  else
+    fail "cmd.cpp missing shellQuote on chroot path"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -594,6 +625,100 @@ if [ "$HAS_ZFS" = "1" ]; then
   fi
 else
   skip "ZFS encryption test (ZFS not available)"
+fi
+
+# ---------------------------------------------------------------------------
+section "T14: security hardening"
+
+# shellQuote applied to user-controlled values
+if grep -q 'shellQuote(args.runCrateFile)' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp quotes args.runCrateFile in shell commands"
+else
+  fail "run.cpp missing shellQuote on args.runCrateFile"
+fi
+
+if grep -q 'shellQuote(spec.runCmdExecutable)' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp quotes spec.runCmdExecutable in shell commands"
+else
+  fail "run.cpp missing shellQuote on spec.runCmdExecutable"
+fi
+
+if grep -q 'shellQuote(argv\[i\])' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp quotes argv elements in argsToString"
+else
+  fail "run.cpp missing shellQuote on argv in argsToString"
+fi
+
+if grep -q 'shellQuote(user)' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp quotes user in jexec/pw commands"
+else
+  fail "run.cpp missing shellQuote on user variable"
+fi
+
+if grep -q 'shellQuote(path)' "$BUILDDIR/cmd.cpp"; then
+  pass "cmd.cpp quotes path in chroot command"
+else
+  fail "cmd.cpp missing shellQuote on chroot path"
+fi
+
+if grep -q 'shellQuote(service)' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp quotes service names in start/stop commands"
+else
+  fail "run.cpp missing shellQuote on service names"
+fi
+
+# getpwuid instead of getenv("USER")
+if grep -q 'getpwuid' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp uses getpwuid for user identity"
+else
+  fail "run.cpp still uses getenv(USER) instead of getpwuid"
+fi
+
+if ! grep -q 'getenv.*USER' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp does not use getenv(USER)"
+else
+  fail "run.cpp still references getenv(USER)"
+fi
+
+# tar traversal protection
+if grep -q '\.\..*directory traversal' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp validates crate archive for directory traversal"
+else
+  fail "run.cpp missing tar directory traversal validation"
+fi
+
+# O_NOFOLLOW on file writes
+if grep -q 'O_NOFOLLOW' "$BUILDDIR/util.cpp"; then
+  pass "util.cpp uses O_NOFOLLOW on file writes"
+else
+  fail "util.cpp missing O_NOFOLLOW protection"
+fi
+
+# ip.forwarding save/restore
+if grep -q 'origIpForwarding' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp saves/restores ip.forwarding sysctl"
+else
+  fail "run.cpp missing ip.forwarding save/restore"
+fi
+
+# shellQuote in create.cpp
+if grep -q 'shellQuote(jailPath)' "$BUILDDIR/create.cpp"; then
+  pass "create.cpp quotes jailPath in shell commands"
+else
+  fail "create.cpp missing shellQuote on jailPath"
+fi
+
+if grep -q 'shellQuote(crateFileName)' "$BUILDDIR/create.cpp"; then
+  pass "create.cpp quotes crateFileName in shell commands"
+else
+  fail "create.cpp missing shellQuote on crateFileName"
+fi
+
+# X11 socket directory permissions (01777, not 0777)
+if grep -q '01777' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp uses sticky bit (01777) for X11 socket dir"
+else
+  fail "run.cpp missing sticky bit on X11 socket directory"
 fi
 
 # ===========================================================================

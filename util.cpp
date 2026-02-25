@@ -340,7 +340,7 @@ void writeFile(const std::string &data, int fd) {
 
 void writeFile(const std::string &data, const std::string &file) {
   int fd;
-  SYSCALL(fd = ::open(file.c_str(), O_WRONLY|O_CREAT|O_TRUNC, 0644), "open", file.c_str());
+  SYSCALL(fd = ::open(file.c_str(), O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW, 0644), "open", file.c_str());
 
   writeFile(data, fd);
 
@@ -349,7 +349,7 @@ void writeFile(const std::string &data, const std::string &file) {
 
 void appendFile(const std::string &data, const std::string &file) {
   int fd;
-  SYSCALL(fd = ::open(file.c_str(), O_WRONLY|O_CREAT|O_APPEND), "open", file.c_str());
+  SYSCALL(fd = ::open(file.c_str(), O_WRONLY|O_CREAT|O_APPEND|O_NOFOLLOW, 0644), "open", file.c_str());
 
   writeFile(data, fd);
 
