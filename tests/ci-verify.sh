@@ -217,8 +217,11 @@ else
 fi
 
 # ===========================================================================
-#  Layer 4: Integration Tests
+#  Layer 4: Integration Tests (skipped in compile-only CI)
 # ===========================================================================
+
+if [ "$HAS_BINARY" = "1" ]; then
+
 section "T07: basic jail create/destroy"
 
 if [ "$CAN_JAIL" = "1" ]; then
@@ -230,7 +233,7 @@ if [ "$CAN_JAIL" = "1" ]; then
     cp "$lib" "$JDIR/lib/" 2>/dev/null || true
   done
 
-  JID=$(jail -c path="$JDIR" persist host.hostname=ci-test 2>&1)
+  JID=$(jail -ci path="$JDIR" persist host.hostname=ci-test 2>&1)
   RC=$?
   if [ "$RC" = "0" ] && [ -n "$JID" ]; then
     pass "jail created: jid=${JID}"
@@ -398,6 +401,31 @@ MEOF
   rm -f /tmp/_ci_test_mntign /tmp/_ci_test_mntign.c
 else
   skip "MNT_IGNORE runtime test (cannot mount in this environment)"
+fi
+
+else
+  # Compile-only CI: skip all integration tests
+  section "T07: basic jail create/destroy"
+  skip "compile-only CI (no full build)"
+  section "T08: jail descriptor API (FreeBSD 15.0+)"
+  skip "compile-only CI (no full build)"
+  section "T09: epair checksum offload fix"
+  # Source-level checks still run
+  if grep -q '\-txcsum' "$BUILDDIR/run.cpp" && grep -q '\-txcsum6' "$BUILDDIR/run.cpp"; then
+    pass "run.cpp disables txcsum/txcsum6 on epair interfaces"
+  else
+    fail "run.cpp missing -txcsum/-txcsum6 on epair"
+  fi
+  skip "epair runtime test (compile-only CI)"
+  section "T10: kldload fix"
+  if grep -q 'kldload(name)' "$BUILDDIR/util.cpp"; then
+    pass "util.cpp kldload() uses 'name' parameter (not hardcoded)"
+  else
+    fail "util.cpp kldload() may still have hardcoded module name"
+  fi
+  skip "kldload runtime test (compile-only CI)"
+  section "T11: MNT_IGNORE runtime (devfs mount hidden from df)"
+  skip "compile-only CI (no full build)"
 fi
 
 # ---------------------------------------------------------------------------
