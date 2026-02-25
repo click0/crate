@@ -109,6 +109,7 @@ std::string pathSubstituteVarsInPath(const std::string &path);
 std::string pathSubstituteVarsInString(const std::string &str);
 std::vector<std::string> reverseVector(const std::vector<std::string> &v);
 std::string shellQuote(const std::string &arg);
+std::string safePath(const std::string &path, const std::string &requiredPrefix, const std::string &what);
 
 namespace Fs {
 

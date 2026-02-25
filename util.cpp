@@ -448,6 +448,16 @@ std::string shellQuote(const std::string &arg) {
   return ss.str();
 }
 
+std::string safePath(const std::string &path, const std::string &requiredPrefix, const std::string &what) {
+  namespace fs = std::filesystem;
+  auto canonical = fs::weakly_canonical(path).string();
+  if (canonical.size() < requiredPrefix.size() ||
+      canonical.compare(0, requiredPrefix.size(), requiredPrefix) != 0)
+    ERR2("path validation", "'" << what << "' path '" << path << "' resolves to '"
+         << canonical << "' which is outside required prefix '" << requiredPrefix << "'")
+  return canonical;
+}
+
 namespace Fs {
 
 namespace fs = std::filesystem;
