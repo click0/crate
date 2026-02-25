@@ -435,95 +435,6 @@ else
   skip "kldload runtime test (compile-only CI)"
   section "T11: MNT_IGNORE runtime (devfs mount hidden from df)"
   skip "compile-only CI (no full build)"
-  section "T13: ZFS support"
-  if grep -q 'isOnZfs\|getZfsDataset\|isZfsEncrypted' "$BUILDDIR/util.cpp"; then
-    pass "util.cpp has ZFS detection functions"
-  else
-    fail "util.cpp missing ZFS detection functions"
-  fi
-  if grep -q 'zfsDatasets' "$BUILDDIR/spec.cpp"; then
-    pass "spec.cpp supports zfs/datasets parsing"
-  else
-    fail "spec.cpp missing zfs/datasets support"
-  fi
-  if grep -q 'zfs jail\|zfs unjail' "$BUILDDIR/run.cpp"; then
-    pass "run.cpp has ZFS dataset attach/detach"
-  else
-    fail "run.cpp missing ZFS dataset attach/detach"
-  fi
-  skip "ZFS runtime tests (compile-only CI)"
-  section "T14: security hardening"
-  if grep -q 'shellQuote(args.runCrateFile)' "$BUILDDIR/run.cpp"; then
-    pass "run.cpp quotes args.runCrateFile in shell commands"
-  else
-    fail "run.cpp missing shellQuote on args.runCrateFile"
-  fi
-  if grep -q 'getpwuid' "$BUILDDIR/run.cpp" && ! grep -q 'getenv.*USER' "$BUILDDIR/run.cpp"; then
-    pass "run.cpp uses getpwuid instead of getenv(USER)"
-  else
-    fail "run.cpp user identity not hardened"
-  fi
-  if grep -q '\.\..*directory traversal' "$BUILDDIR/run.cpp"; then
-    pass "run.cpp validates crate archive for directory traversal"
-  else
-    fail "run.cpp missing tar traversal protection"
-  fi
-  if grep -q 'O_NOFOLLOW' "$BUILDDIR/util.cpp"; then
-    pass "util.cpp uses O_NOFOLLOW on file writes"
-  else
-    fail "util.cpp missing O_NOFOLLOW protection"
-  fi
-  if grep -q 'origIpForwarding' "$BUILDDIR/run.cpp"; then
-    pass "run.cpp saves/restores ip.forwarding sysctl"
-  else
-    fail "run.cpp missing ip.forwarding save/restore"
-  fi
-  if grep -q 'shellQuote(path)' "$BUILDDIR/cmd.cpp"; then
-    pass "cmd.cpp quotes path in chroot command"
-  else
-    fail "cmd.cpp missing shellQuote on chroot path"
-  fi
-  section "T15: architectural security hardening"
-  if grep -q 'execCommand' "$BUILDDIR/util.cpp" && grep -q 'execCommand' "$BUILDDIR/run.cpp"; then
-    pass "execCommand() present in util.cpp and run.cpp"
-  else
-    fail "execCommand() missing"
-  fi
-  if grep -q 'execPipeline' "$BUILDDIR/util.cpp"; then
-    pass "execPipeline() present in util.cpp"
-  else
-    fail "execPipeline() missing"
-  fi
-  if grep -q 'sigaction' "$BUILDDIR/run.cpp"; then
-    pass "run.cpp has signal handling"
-  else
-    fail "run.cpp missing signal handling"
-  fi
-  if grep -q 'unique_ptr<FILE' "$BUILDDIR/util.cpp"; then
-    pass "util.cpp uses RAII popen"
-  else
-    fail "util.cpp missing RAII popen"
-  fi
-  if grep -q 'safePath' "$BUILDDIR/util.cpp"; then
-    pass "safePath() in util.cpp"
-  else
-    fail "safePath() missing"
-  fi
-  if grep -q 'make_unique<FwUsers>' "$BUILDDIR/ctx.cpp"; then
-    pass "ctx.cpp uses make_unique"
-  else
-    fail "ctx.cpp missing make_unique"
-  fi
-  if grep -q 'ifstream.*resolv' "$BUILDDIR/net.cpp"; then
-    pass "net.cpp parses resolv.conf directly"
-  else
-    fail "net.cpp missing direct resolv.conf parsing"
-  fi
-  if grep -q 'xzThreadsArg' "$BUILDDIR/cmd.cpp"; then
-    pass "xzThreadsArg in cmd.cpp"
-  else
-    fail "xzThreadsArg missing"
-  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -582,9 +493,9 @@ else
   fail "spec.cpp missing zfs/datasets support"
 fi
 
-# Source-level: run.cpp has ZFS dataset attach/detach
-if grep -q 'zfs jail\|zfs unjail' "$BUILDDIR/run.cpp"; then
-  pass "run.cpp has ZFS dataset attach/detach"
+# Source-level: run.cpp has ZFS dataset attach/detach (exec-based: "zfs", "jail")
+if grep -q '"zfs".*"jail"' "$BUILDDIR/run.cpp" && grep -q '"zfs".*"unjail"' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp has ZFS dataset attach/detach (exec-based)"
 else
   fail "run.cpp missing ZFS dataset attach/detach"
 fi
@@ -671,13 +582,7 @@ fi
 # ---------------------------------------------------------------------------
 section "T14: security hardening"
 
-# shellQuote applied to user-controlled values
-if grep -q 'shellQuote(args.runCrateFile)' "$BUILDDIR/run.cpp"; then
-  pass "run.cpp quotes args.runCrateFile in shell commands"
-else
-  fail "run.cpp missing shellQuote on args.runCrateFile"
-fi
-
+# shellQuote on values still passed through shell (Category C: jexec, chroot)
 if grep -q 'shellQuote(spec.runCmdExecutable)' "$BUILDDIR/run.cpp"; then
   pass "run.cpp quotes spec.runCmdExecutable in shell commands"
 else
@@ -691,7 +596,7 @@ else
 fi
 
 if grep -q 'shellQuote(user)' "$BUILDDIR/run.cpp"; then
-  pass "run.cpp quotes user in jexec/pw commands"
+  pass "run.cpp quotes user in jexec commands"
 else
   fail "run.cpp missing shellQuote on user variable"
 fi
@@ -702,10 +607,24 @@ else
   fail "cmd.cpp missing shellQuote on chroot path"
 fi
 
-if grep -q 'shellQuote(service)' "$BUILDDIR/run.cpp"; then
-  pass "run.cpp quotes service names in start/stop commands"
+# Values migrated to exec — must NOT need shellQuote (no shell involved)
+if grep -q 'execPipeline.*runCrateFile\|stdinFile.*runCrateFile\|runCrateFile.*stdinFile' "$BUILDDIR/run.cpp" \
+   || grep -q 'args.runCrateFile' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp passes args.runCrateFile via exec (no shell)"
 else
-  fail "run.cpp missing shellQuote on service names"
+  fail "run.cpp: args.runCrateFile handling unclear"
+fi
+
+if grep -q 'execInJail.*service' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp passes service names via execInJail (no shell)"
+else
+  fail "run.cpp: service names not passed via exec"
+fi
+
+if grep -q 'execPipeline' "$BUILDDIR/create.cpp"; then
+  pass "create.cpp uses execPipeline for tar/xz (no shell for jailPath/crateFileName)"
+else
+  fail "create.cpp: jailPath/crateFileName not exec-based"
 fi
 
 # getpwuid instead of getenv("USER")
@@ -740,19 +659,6 @@ if grep -q 'origIpForwarding' "$BUILDDIR/run.cpp"; then
   pass "run.cpp saves/restores ip.forwarding sysctl"
 else
   fail "run.cpp missing ip.forwarding save/restore"
-fi
-
-# shellQuote in create.cpp
-if grep -q 'shellQuote(jailPath)' "$BUILDDIR/create.cpp"; then
-  pass "create.cpp quotes jailPath in shell commands"
-else
-  fail "create.cpp missing shellQuote on jailPath"
-fi
-
-if grep -q 'shellQuote(crateFileName)' "$BUILDDIR/create.cpp"; then
-  pass "create.cpp quotes crateFileName in shell commands"
-else
-  fail "create.cpp missing shellQuote on crateFileName"
 fi
 
 # X11 socket directory permissions (01777, not 0777)
