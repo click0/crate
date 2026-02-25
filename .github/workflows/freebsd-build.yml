@@ -13,11 +13,11 @@ jobs:
       fail-fast: false
       matrix:
         freebsd-version: ['14.2', '15.0']
-    name: FreeBSD ${{ matrix.freebsd-version }} build
+    name: FreeBSD ${{ matrix.freebsd-version }} build+test
     steps:
     - uses: actions/checkout@v4
 
-    - name: Build on FreeBSD
+    - name: Build and test on FreeBSD
       uses: cross-platform-actions/action@v0.32.0
       with:
         operating_system: freebsd
@@ -27,3 +27,6 @@ jobs:
           uname -a
           c++ --version
           make clean all
+          echo ""
+          echo "=== Running CI verification tests ==="
+          sudo sh tests/ci-verify.sh .
