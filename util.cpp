@@ -94,6 +94,8 @@ std::string runCommandGetOutput(const std::string &cmd, const std::string &what)
   FILE *f = ::popen(cmd.c_str(), "r");
   if (f == nullptr)
     ERR2("run external command", "popen failed for (" << cmd << ")")
+  // RAII wrapper ensures pclose() is called even if an exception occurs during read
+  std::unique_ptr<FILE, decltype(&::pclose)> fp(f, ::pclose);
   // read command's output
   std::ostringstream ss;
   char buf[1025];
@@ -105,9 +107,6 @@ std::string runCommandGetOutput(const std::string &cmd, const std::string &what)
       ss << buf;
     }
   } while (nbytes == sizeof(buf)-1);
-  // cleanup: pclose() waits for the child process (fclose would leak zombies)
-  ::pclose(f);
-  //
   return ss.str();
 }
 

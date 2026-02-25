@@ -8,6 +8,7 @@
 #include <stdio.h>
 
 #include <iostream>
+#include <memory>
 
 #include "util.h"
 #include "err.h"
@@ -29,12 +30,12 @@ FwUsers::~FwUsers() {
 }
 
 FwUsers* FwUsers::lock() {
-  FwUsers *ctx = new FwUsers;
+  auto ctx = std::make_unique<FwUsers>();
   // open and lock the file
   ctx->fd = ::open(file().c_str(), O_RDWR|O_CREAT|O_EXLOCK, 0600);
   if (ctx->fd == -1)
     ERR("failed to open file " << file() << ": " << strerror(errno))
-  return ctx;
+  return ctx.release(); // transfer ownership only after success
 }
 
 void FwUsers::unlock() {
