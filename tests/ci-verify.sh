@@ -782,6 +782,49 @@ else
   fail "util.cpp missing execCommandGetStatus implementation"
 fi
 
+# ---------------------------------------------------------------------------
+section "T16: V4 — unpredictable jail directory names"
+
+# randomHex() in util.cpp and used in run.cpp/create.cpp
+if grep -q 'randomHex' "$BUILDDIR/util.cpp" && grep -q 'randomHex' "$BUILDDIR/run.cpp"; then
+  pass "randomHex() present in util.cpp and used in run.cpp"
+else
+  fail "randomHex() missing from util.cpp or run.cpp"
+fi
+
+if grep -q 'randomHex' "$BUILDDIR/create.cpp"; then
+  pass "create.cpp uses randomHex for jail directory names"
+else
+  fail "create.cpp missing randomHex for jail directory names"
+fi
+
+# arc4random_buf for cryptographic randomness
+if grep -q 'arc4random_buf' "$BUILDDIR/util.cpp"; then
+  pass "util.cpp uses arc4random_buf for cryptographic randomness"
+else
+  fail "util.cpp missing arc4random_buf"
+fi
+
+# jail path construction must NOT use getpid
+if ! grep -q 'jailDirectoryPath.*getpid\|jailPath.*getpid' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp jail path does not use predictable PID"
+else
+  fail "run.cpp jail path still uses getpid()"
+fi
+
+if ! grep -q 'jailDirectoryPath.*getpid\|jailPath.*getpid' "$BUILDDIR/create.cpp"; then
+  pass "create.cpp jail path does not use predictable PID"
+else
+  fail "create.cpp jail path still uses getpid()"
+fi
+
+# copyFile error message should reference actual filenames
+if ! grep -q 'file1\.txt' "$BUILDDIR/util.cpp"; then
+  pass "util.cpp copyFile has proper error message (no hardcoded filename)"
+else
+  fail "util.cpp copyFile still has hardcoded 'file1.txt' in error message"
+fi
+
 # ===========================================================================
 #  Summary
 # ===========================================================================
