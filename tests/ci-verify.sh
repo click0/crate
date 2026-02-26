@@ -825,6 +825,118 @@ else
   fail "util.cpp copyFile still has hardcoded 'file1.txt' in error message"
 fi
 
+# ---------------------------------------------------------------------------
+section "T17: Phase 1 features (RCTL, IPC, validate)"
+
+# IPC controls in spec parser
+if grep -q 'allowSysvipc' "$BUILDDIR/spec.h"; then
+  pass "spec.h has IPC control fields"
+else
+  fail "spec.h missing IPC control fields"
+fi
+
+if grep -q '"allow.sysvipc"' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp passes allow.sysvipc to jail_setv"
+else
+  fail "run.cpp missing allow.sysvipc in jail_setv"
+fi
+
+# IPC raw_sockets override
+if grep -q 'ipcRawSocketsOverride' "$BUILDDIR/spec.h"; then
+  pass "spec.h has ipcRawSocketsOverride field"
+else
+  fail "spec.h missing ipcRawSocketsOverride"
+fi
+
+if grep -q 'optRawSockets' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp uses optRawSockets (overridable via ipc section)"
+else
+  fail "run.cpp missing optRawSockets"
+fi
+
+# IPC parsing in spec.cpp
+if grep -q '"ipc"' "$BUILDDIR/spec.cpp" && grep -q '"sysvipc"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses ipc/sysvipc section"
+else
+  fail "spec.cpp missing ipc/sysvipc parsing"
+fi
+
+if grep -q '"mqueue"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses ipc/mqueue"
+else
+  fail "spec.cpp missing ipc/mqueue parsing"
+fi
+
+# RCTL resource limits
+if grep -q 'limits' "$BUILDDIR/spec.h"; then
+  pass "spec.h has limits field"
+else
+  fail "spec.h missing limits field"
+fi
+
+if grep -q 'rctl' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp has RCTL support"
+else
+  fail "run.cpp missing RCTL support"
+fi
+
+if grep -q '"limits"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses limits section"
+else
+  fail "spec.cpp missing limits parsing"
+fi
+
+# RCTL limit name validation
+if grep -q 'validLimits' "$BUILDDIR/spec.cpp" && grep -q '"maxproc"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp validates RCTL limit names"
+else
+  fail "spec.cpp missing RCTL limit name validation"
+fi
+
+# RCTL cleanup
+if grep -q 'removeRctlRules' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp has RCTL cleanup (removeRctlRules)"
+else
+  fail "run.cpp missing RCTL cleanup"
+fi
+
+# Validate command
+if grep -q 'CmdValidate' "$BUILDDIR/args.h"; then
+  pass "args.h has CmdValidate command"
+else
+  fail "args.h missing CmdValidate"
+fi
+
+if grep -q 'validate' "$BUILDDIR/args.cpp"; then
+  pass "args.cpp handles validate command"
+else
+  fail "args.cpp missing validate command handling"
+fi
+
+if [ -f "$BUILDDIR/validate.cpp" ]; then
+  pass "validate.cpp exists"
+else
+  fail "validate.cpp not found"
+fi
+
+if grep -q 'validateCrateSpec' "$BUILDDIR/commands.h"; then
+  pass "commands.h declares validateCrateSpec"
+else
+  fail "commands.h missing validateCrateSpec declaration"
+fi
+
+if grep -q 'validateCrateSpec' "$BUILDDIR/main.cpp"; then
+  pass "main.cpp dispatches CmdValidate to validateCrateSpec"
+else
+  fail "main.cpp missing CmdValidate dispatch"
+fi
+
+if grep -q 'validate' "$BUILDDIR/Makefile"; then
+  pass "Makefile includes validate.cpp"
+else
+  fail "Makefile missing validate.cpp"
+fi
+
 # ===========================================================================
 #  Summary
 # ===========================================================================

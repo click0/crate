@@ -240,6 +240,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   runScript("run:before-create-jail");
   LOG("creating jail " << jailXname)
   const char *optNet = spec.optionExists("net") ? "true" : "false";
+  const char *optRawSockets = spec.ipcRawSocketsOverride
+    ? (spec.ipcRawSocketsValue ? "true" : "false")
+    : optNet; // fallback: allow raw sockets if net is enabled
+  const char *optSysvipc = spec.allowSysvipc ? "true" : "false";
   const bool hasZfsDatasets = !spec.zfsDatasets.empty();
   const char *optZfsMount = hasZfsDatasets ? "true" : "false";
   const char *optEnforceStatfs = hasZfsDatasets ? "1" : "2";
@@ -254,8 +258,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       "path", jailPath.c_str(),
       "host.hostname", Util::gethostname().c_str(),
       "persist", nullptr,
-      "allow.raw_sockets", optNet, // allow ping-pong
+      "allow.raw_sockets", optRawSockets, // allow ping-pong, overridable via ipc section
       "allow.socket_af", optNet,
+      "allow.sysvipc", optSysvipc,
       "allow.mount", optZfsMount,
       "allow.mount.zfs", optZfsMount,
       "enforce_statfs", optEnforceStatfs,
@@ -274,8 +279,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       "path", jailPath.c_str(),
       "host.hostname", Util::gethostname().c_str(),
       "persist", nullptr,
-      "allow.raw_sockets", optNet, // allow ping-pong
+      "allow.raw_sockets", optRawSockets, // allow ping-pong, overridable via ipc section
       "allow.socket_af", optNet,
+      "allow.sysvipc", optSysvipc,
       "allow.mount", optZfsMount,
       "allow.mount.zfs", optZfsMount,
       "enforce_statfs", optEnforceStatfs,
@@ -309,6 +315,22 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   runScript("run:after-create-jail");
   LOG("jail " << jailXname << " has been created, jid=" << jid)
+
+  // apply RCTL resource limits (§5)
+  RunAtEnd removeRctlRules;
+  if (!spec.limits.empty()) {
+    auto jidStr = std::to_string(jid);
+    for (auto &lim : spec.limits) {
+      auto rule = STR("jail:" << jidStr << ":" << lim.first << ":deny=" << lim.second);
+      LOG("applying RCTL rule: " << rule)
+      Util::execCommand({"rctl", "-a", rule}, CSTR("apply RCTL rule " << lim.first));
+    }
+    removeRctlRules.reset([jid, &args]() {
+      auto jidStr = std::to_string(jid);
+      LOG("removing RCTL rules for jail " << jidStr)
+      Util::execCommand({"rctl", "-r", STR("jail:" << jidStr)}, "remove RCTL rules");
+    });
+  }
 
   // attach ZFS datasets to jail
   RunAtEnd detachZfsDatasets;
@@ -700,6 +722,8 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   }
 
   // release resources
+  if (!spec.limits.empty())
+    removeRctlRules.doNow();
   if (hasZfsDatasets)
     detachZfsDatasets.doNow();
   destroyJail.doNow();

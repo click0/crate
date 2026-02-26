@@ -54,6 +54,15 @@ public:
 
   std::vector<std::string>                           zfsDatasets;             // 0..oo ZFS datasets to attach to jail
 
+  // IPC controls (§7)
+  bool                                               allowSysvipc = false;    // allow System V IPC (shared memory, semaphores, message queues)
+  bool                                               allowMqueue = false;     // allow POSIX message queues
+  bool                                               ipcRawSocketsOverride = false; // if true, override net-based raw_sockets default
+  bool                                               ipcRawSocketsValue = false;
+
+  // Resource limits via RCTL (§5)
+  std::map<std::string, std::string>                 limits;                  // RCTL resource limits: name -> value
+
   std::map<std::string, std::map<std::string, std::string>> scripts;          // by section, by script name
 
   Spec preprocess() const;

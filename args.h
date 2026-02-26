@@ -4,7 +4,7 @@
 
 #include <string>
 
-enum Command {CmdNone, CmdCreate, CmdRun};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate};
 
 class Args {
 public:
@@ -21,6 +21,9 @@ public:
 
   // run parameters
   std::string runCrateFile;
+
+  // validate parameters
+  std::string validateSpec;
 
   void validate();
 };
