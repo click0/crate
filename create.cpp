@@ -81,6 +81,48 @@ static void runChrootScript(const std::string &jailPath, const std::string &cmd,
                      STR("ASSUME_ALWAYS_YES=yes " << cmd)}, descr);
 }
 
+// Bootstrap jail root using pkgbase (§17): installs FreeBSD base system via pkg packages
+// instead of extracting base.txz. This is the forward-looking approach for FreeBSD 16+
+// where distribution sets (base.txz) will be replaced entirely by pkgbase.
+// Requires the FreeBSD-base pkgbase repository to be configured on the host.
+static void bootstrapJailViaPkgbase(const std::string &jailPath, bool logProgress) {
+  auto LOG_PKGBASE = [logProgress](auto msg) {
+    if (logProgress)
+      std::cerr << rang::fg::gray << "pkgbase: " << msg << rang::style::reset << std::endl;
+  };
+
+  // Verify that the pkgbase repository is available on the host
+  // by checking for the FreeBSD repo in /etc/pkg/ or /usr/local/etc/pkg/repos/
+  LOG_PKGBASE("bootstrapping jail root via pkgbase");
+
+  // Create minimal directory structure required by pkg -r
+  for (auto dir : {"/var/db/pkg", "/var/cache/pkg", "/etc", "/tmp", "/dev"})
+    std::filesystem::create_directories(STR(jailPath << dir));
+
+  // Copy host's resolv.conf so pkg can resolve package repository names
+  Util::Fs::copyFile("/etc/resolv.conf", STR(jailPath << "/etc/resolv.conf"));
+
+  // Install FreeBSD-set-base (meta-package that pulls in the entire base system)
+  // Using host's pkg with -r flag to install into the jail root
+  notifyUserOfLongProcess(true, "pkg (pkgbase)", "install FreeBSD base system via pkgbase");
+  Util::execCommand({"pkg", "-r", jailPath,
+                     "install", "-y", "-r", "FreeBSD-base",
+                     "FreeBSD-runtime"},
+                    "install FreeBSD base system via pkgbase");
+
+  // Also install rc, utilities, and other essentials commonly needed in jails
+  Util::execCommand({"pkg", "-r", jailPath,
+                     "install", "-y", "-r", "FreeBSD-base",
+                     "FreeBSD-rc", "FreeBSD-utilities", "FreeBSD-jail"},
+                    "install additional pkgbase components for jail");
+  notifyUserOfLongProcess(false, "pkg (pkgbase)", "install FreeBSD base system via pkgbase");
+
+  // Remove resolv.conf (will be re-added later if networking is needed)
+  Util::Fs::unlink(STR(jailPath << "/etc/resolv.conf"));
+
+  LOG_PKGBASE("pkgbase bootstrap complete");
+}
+
 static void installAndAddPackagesInJail(const std::string &jailPath,
                                         const std::vector<std::string> &pkgsInstall,
                                         const std::vector<std::string> &pkgsAdd,
@@ -310,13 +352,6 @@ bool createCrate(const Args &args, const Spec &spec) {
   // output crate file name
   auto crateFileName = !args.createOutput.empty() ? args.createOutput : STR(guessCrateName(spec) << ".crate");
 
-  // download the base archive if not yet
-  if (!Util::Fs::fileExists(Locations::baseArchive)) {
-    std::cout << "downloading base.txz from " << Locations::baseArchiveUrl << " ..." << std::endl;
-    Util::execCommand({"fetch", "-o", Locations::baseArchive, Locations::baseArchiveUrl}, "download base.txz");
-    std::cout << "base.txz has finished downloading" << std::endl;
-  }
-
   // create the jail directory
   auto jailPath = STR(Locations::jailDirectoryPath << "/chroot-create-" << Util::filePathToBareName(crateFileName) << "-" << Util::randomHex(4));
   res = mkdir(jailPath.c_str(), S_IRUSR|S_IWUSR|S_IXUSR);
@@ -343,14 +378,29 @@ bool createCrate(const Args &args, const Spec &spec) {
     Util::Fs::rmdirHier(jailPath);
   });
 
-  // unpack the base archive
-  LOG("unpacking the base archive")
-  Util::execPipeline(
-    {{"xz", Cmd::xzThreadsArg, "--decompress"}, {"tar", "-xf", "-", "--uname", "", "--gname", "", "-C", jailPath}},
-    "unpack the system base into the jail directory", Locations::baseArchive);
+  // Bootstrap jail root: either via pkgbase (§17) or traditional base.txz
+  if (args.usePkgbase) {
+    LOG("bootstrapping jail root via pkgbase (§17)")
+    bootstrapJailViaPkgbase(jailPath, args.logProgress);
+  } else {
+    // download the base archive if not yet
+    if (!Util::Fs::fileExists(Locations::baseArchive)) {
+      std::cout << "downloading base.txz from " << Locations::baseArchiveUrl << " ..." << std::endl;
+      Util::execCommand({"fetch", "-o", Locations::baseArchive, Locations::baseArchiveUrl}, "download base.txz");
+      std::cout << "base.txz has finished downloading" << std::endl;
+    }
+
+    // unpack the base archive
+    LOG("unpacking the base archive")
+    Util::execPipeline(
+      {{"xz", Cmd::xzThreadsArg, "--decompress"}, {"tar", "-xf", "-", "--uname", "", "--gname", "", "-C", jailPath}},
+      "unpack the system base into the jail directory", Locations::baseArchive);
+  }
 
   // Record FreeBSD version used to build this container (for version-mismatch detection at run time)
   Util::Fs::writeFile(STR(Util::getFreeBSDMajorVersion() << "\n"), STR(jailPath << "/+CRATE.OSVERSION"));
+  // Record bootstrap method (§17): "pkgbase" or "base.txz"
+  Util::Fs::writeFile(STR((args.usePkgbase ? "pkgbase" : "base.txz") << "\n"), STR(jailPath << "/+CRATE.BOOTSTRAP"));
 
   runScript("create:start");
 

@@ -97,10 +97,10 @@ int main(int argc, char** argv) {
     std::cerr << rang::fg::red << e.what() << rang::style::reset << std::endl;
     return 1;
   } catch (const std::exception& e) {
-    std::cerr << "FIXME(EXCEPTION std::exception): " << rang::fg::red << e.what() << rang::style::reset << std::endl;
+    std::cerr << rang::fg::red << "internal error (std::exception): " << e.what() << rang::style::reset << std::endl;
     return 1;
   } catch (...) {
-    std::cerr << rang::fg::red << "XXX UNKNOWN EXCEPTION IS CAUGHT" << rang::style::reset << std::endl;
+    std::cerr << rang::fg::red << "internal error: unexpected exception caught" << rang::style::reset << std::endl;
     return 1;
   }
 }

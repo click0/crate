@@ -4,6 +4,7 @@
 
 #include <unistd.h>
 
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -27,6 +28,28 @@ private:
   static std::string file();
   void readIntoMemory();
   void writeToFile() const;
+};
+
+// Dynamic ipfw rule slot allocator (§18):
+// Eliminates rule conflicts by assigning unique rule number slots to each
+// running crate instance, tracked in /var/run/crate/ctx-fw-slots.
+class FwSlots {
+  int fd;
+  std::map<pid_t, unsigned> slots; // pid -> slot number
+  bool inMemory;
+  bool changed;
+  FwSlots();
+public:
+  ~FwSlots();
+  static std::unique_ptr<FwSlots> lock();
+  void unlock();
+  unsigned allocate(pid_t pid);  // returns a unique slot number (0-based)
+  void release(pid_t pid);
+private:
+  static std::string file();
+  void readIntoMemory();
+  void writeToFile() const;
+  void garbageCollect();         // remove dead PIDs
 };
 
 }

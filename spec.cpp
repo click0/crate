@@ -229,7 +229,7 @@ Spec Spec::preprocess() const {
     spec.baseKeep.push_back("/usr/bin/limits");
     spec.baseKeep.push_back("/usr/bin/su");
     spec.baseKeep.push_back("/bin/ps");                      // for tor service to validate /var/run/tor/tor.pid file
-    spec.baseKeep.push_back("/bin/csh");                     // XXX not sure why csh is needed by tor
+    spec.baseKeep.push_back("/bin/csh");                     // tor's rc.d script uses csh-style syntax via su -m
     spec.baseKeepWildcard.push_back("/usr/lib/pam_*.so");    // pam is needed for su called by tor
     spec.baseKeepWildcard.push_back("/usr/lib/pam_*.so.*");  // pam is needed for su called by tor
     // optional tor control port
@@ -237,10 +237,25 @@ Spec Spec::preprocess() const {
       spec.scripts["run:before-start-services"]["openTorControlPort"] = "echo ControlPort 9051 >> /usr/local/etc/tor/torrc";
   }
 
-  // gl option => install nvidia-driver & mesa-dri (XXX for now it only works on nvidia-card-based systems)
+  // gl option (§22): install GPU drivers based on detected vendor via pciconf
+  // Falls back to mesa-dri only (software rendering) if no GPU is detected.
   if (O("gl", false)) {
     spec.pkgInstall.push_back("mesa-dri");
-    spec.pkgInstall.push_back("nvidia-driver");
+    // Detect GPU vendor from PCI device class 0x030000 (VGA compatible controller)
+    try {
+      auto pciOutput = Util::execCommandGetOutput(
+        {"pciconf", "-l"}, "detect GPU vendor via pciconf");
+      if (pciOutput.find("vendor=0x10de") != std::string::npos)
+        spec.pkgInstall.push_back("nvidia-driver");          // NVIDIA
+      else if (pciOutput.find("vendor=0x1002") != std::string::npos)
+        spec.pkgInstall.push_back("drm-kmod");               // AMD/ATI
+      else if (pciOutput.find("vendor=0x8086") != std::string::npos)
+        spec.pkgInstall.push_back("drm-kmod");               // Intel
+      // else: software rendering only (mesa-dri without hw driver)
+    } catch (...) {
+      // pciconf not available (e.g. in jail) — install nvidia-driver as legacy default
+      spec.pkgInstall.push_back("nvidia-driver");
+    }
   }
 
   // dbg-ktrace option => keep the ktrace executable

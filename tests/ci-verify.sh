@@ -1611,15 +1611,168 @@ else
   fail "run.cpp missing JAIL_OWN_DESC"
 fi
 
-# sys/jail.h C++ safety fix in freebsd-src
-if [ -f "$BUILDDIR/../freebsd-src/sys/sys/jail.h" ]; then
-  if grep -q 'netinet/in.h' "$BUILDDIR/../freebsd-src/sys/sys/jail.h"; then
-    pass "freebsd-src: sys/jail.h includes netinet/in.h for C++ safety"
-  else
-    fail "freebsd-src: sys/jail.h missing netinet/in.h include"
-  fi
+# sys/jail.h C++ safety workaround (bug #238928) in run.cpp
+if grep -q 'extern "C"' "$BUILDDIR/run.cpp" && grep -q 'sys/jail.h' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp wraps sys/jail.h in extern C for C++ safety (bug #238928)"
 else
-  skip "freebsd-src not found (standalone crate build)"
+  fail "run.cpp missing extern C workaround for sys/jail.h"
+fi
+
+# ===========================================================================
+#  Layer 7: Phase 6 — Code Cleanup & New Features
+# ===========================================================================
+
+section "T20: pkgbase support (§17)"
+
+# --use-pkgbase flag recognized by args parser
+if grep -q 'use-pkgbase\|usePkgbase' "$BUILDDIR/args.h"; then
+  pass "args.h declares usePkgbase field"
+else
+  fail "args.h missing usePkgbase field"
+fi
+
+if grep -q 'use-pkgbase' "$BUILDDIR/args.cpp"; then
+  pass "args.cpp handles --use-pkgbase flag"
+else
+  fail "args.cpp missing --use-pkgbase handling"
+fi
+
+if grep -q 'bootstrapJailViaPkgbase\|pkgbase' "$BUILDDIR/create.cpp"; then
+  pass "create.cpp has pkgbase bootstrap path"
+else
+  fail "create.cpp missing pkgbase bootstrap"
+fi
+
+if grep -q 'CRATE.BOOTSTRAP' "$BUILDDIR/create.cpp"; then
+  pass "create.cpp records bootstrap method in +CRATE.BOOTSTRAP"
+else
+  fail "create.cpp missing +CRATE.BOOTSTRAP metadata"
+fi
+
+# ---------------------------------------------------------------------------
+section "T21: dynamic ipfw rule allocation (§18)"
+
+if grep -q 'FwSlots' "$BUILDDIR/ctx.h"; then
+  pass "ctx.h declares FwSlots class"
+else
+  fail "ctx.h missing FwSlots class"
+fi
+
+if grep -q 'FwSlots' "$BUILDDIR/ctx.cpp"; then
+  pass "ctx.cpp implements FwSlots"
+else
+  fail "ctx.cpp missing FwSlots implementation"
+fi
+
+if grep -q 'garbageCollect' "$BUILDDIR/ctx.cpp"; then
+  pass "FwSlots has garbage collection for dead PIDs"
+else
+  fail "FwSlots missing garbage collection"
+fi
+
+if grep -q 'fwRuleRangeInBase\|fwRuleRangeOutBase' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp uses dynamic rule range bases"
+else
+  fail "run.cpp still uses hardcoded rule bases"
+fi
+
+# Verify old hardcoded values are gone
+if grep -q 'fwRuleBaseIn = 19000\|fwRuleBaseOut = 59000' "$BUILDDIR/run.cpp"; then
+  fail "run.cpp still has hardcoded 19000/59000 rule bases"
+else
+  pass "run.cpp no longer uses hardcoded 19000/59000"
+fi
+
+# ---------------------------------------------------------------------------
+section "T22: IP address space expansion (§19)"
+
+if grep -q '1u << 24\|address space capacity' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp has IP address space overflow detection"
+else
+  fail "run.cpp missing IP overflow detection"
+fi
+
+# Verify the XXX comment is resolved
+if grep -q 'XXX use 10.0.0.0' "$BUILDDIR/run.cpp"; then
+  fail "run.cpp still has XXX comment for IP allocation"
+else
+  pass "run.cpp IP allocation XXX comment resolved"
+fi
+
+# ---------------------------------------------------------------------------
+section "T23: jail directory permission check (§20)"
+
+if grep -q 'st_uid.*0\|owned by.*uid' "$BUILDDIR/misc.cpp"; then
+  pass "misc.cpp checks jail directory ownership"
+else
+  fail "misc.cpp missing ownership check"
+fi
+
+if grep -q 'chmod.*0700\|st_mode.*0777' "$BUILDDIR/misc.cpp"; then
+  pass "misc.cpp checks/fixes jail directory permissions"
+else
+  fail "misc.cpp missing permission check"
+fi
+
+# Verify the TODO is resolved
+if grep -q 'TODO check that permissions' "$BUILDDIR/misc.cpp"; then
+  fail "misc.cpp still has TODO for permission check"
+else
+  pass "misc.cpp permission check TODO resolved"
+fi
+
+# ---------------------------------------------------------------------------
+section "T24: exception handling cleanup (§21)"
+
+# Old FIXME/XXX markers should be gone
+if grep -q 'FIXME(EXCEPTION' "$BUILDDIR/main.cpp"; then
+  fail "main.cpp still has FIXME(EXCEPTION marker"
+else
+  pass "main.cpp FIXME(EXCEPTION resolved"
+fi
+
+if grep -q 'XXX UNKNOWN EXCEPTION' "$BUILDDIR/main.cpp"; then
+  fail "main.cpp still has XXX UNKNOWN EXCEPTION marker"
+else
+  pass "main.cpp XXX UNKNOWN EXCEPTION resolved"
+fi
+
+if grep -q 'internal error' "$BUILDDIR/main.cpp"; then
+  pass "main.cpp uses clean 'internal error' messages"
+else
+  fail "main.cpp missing clean error messages"
+fi
+
+# ---------------------------------------------------------------------------
+section "T25: GL GPU vendor detection (§22)"
+
+if grep -q 'pciconf\|vendor=0x10de\|vendor=0x1002\|vendor=0x8086' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp detects GPU vendor via pciconf"
+else
+  fail "spec.cpp missing GPU vendor detection"
+fi
+
+# Old nvidia-only XXX should be resolved
+if grep -q 'XXX for now it only works on nvidia' "$BUILDDIR/spec.cpp"; then
+  fail "spec.cpp still has nvidia-only XXX comment"
+else
+  pass "spec.cpp nvidia-only XXX resolved"
+fi
+
+# drm-kmod for AMD/Intel
+if grep -q 'drm-kmod' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp supports AMD/Intel GPUs via drm-kmod"
+else
+  fail "spec.cpp missing drm-kmod for AMD/Intel"
+fi
+
+# ---------------------------------------------------------------------------
+section "T26: tor csh comment cleanup"
+
+if grep -q 'XXX not sure why csh' "$BUILDDIR/spec.cpp"; then
+  fail "spec.cpp still has XXX csh comment"
+else
+  pass "spec.cpp csh XXX comment resolved"
 fi
 
 # ===========================================================================
