@@ -309,6 +309,20 @@ void Spec::validate() const {
   for (auto &ds : zfsDatasets)
     if (ds.empty() || ds[0] == '/' || ds.find("..") != std::string::npos)
       ERR("invalid ZFS dataset name: " << ds)
+
+  // RCTL resource limit names must be valid
+  {
+    static const std::set<std::string> validLimits = {
+      "cputime", "datasize", "stacksize", "coredumpsize", "memoryuse",
+      "memorylocked", "maxproc", "openfiles", "vmemoryuse", "pseudoterminals",
+      "swapuse", "nthr", "msgqqueued", "msgqsize", "nmsgq", "nsem",
+      "nsemop", "nshm", "shmsize", "wallclock", "pcpu", "readbps",
+      "writebps", "readiops", "writeiops"
+    };
+    for (auto &lim : limits)
+      if (validLimits.find(lim.first) == validLimits.end())
+        ERR("unknown resource limit: " << lim.first)
+  }
 }
 
 //
@@ -546,6 +560,29 @@ Spec parseSpec(const std::string &fname) {
           ERR("unknown element zfs/" << b.first << " in spec")
         }
       }
+    } else if (isKey(k, "ipc")) {
+      if (!k.second.IsMap())
+        ERR("ipc must be a map")
+      for (auto b : k.second) {
+        if (isKey(b, "sysvipc")) {
+          if (!YAML::convert<bool>::decode(b.second, spec.allowSysvipc))
+            ERR("ipc/sysvipc must be a boolean")
+        } else if (isKey(b, "raw_sockets") || isKey(b, "raw-sockets")) {
+          spec.ipcRawSocketsOverride = true;
+          if (!YAML::convert<bool>::decode(b.second, spec.ipcRawSocketsValue))
+            ERR("ipc/raw_sockets must be a boolean")
+        } else if (isKey(b, "mqueue")) {
+          if (!YAML::convert<bool>::decode(b.second, spec.allowMqueue))
+            ERR("ipc/mqueue must be a boolean")
+        } else {
+          ERR("unknown element ipc/" << b.first << " in spec")
+        }
+      }
+    } else if (isKey(k, "limits")) {
+      if (!k.second.IsMap())
+        ERR("limits must be a map of resource-name to value")
+      for (auto b : k.second)
+        spec.limits[AsString(b.first)] = AsString(b.second);
     } else if (isKey(k, "scripts")) {
       if (!k.second.IsMap())
         ERR("scripts must be a map")

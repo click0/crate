@@ -33,6 +33,7 @@ static void usage() {
   std::cout << "Commands:" << std::endl;
   std::cout << "  create                     creates a container (run 'crate create -h' for details)" << std::endl;
   std::cout << "  run                        runs the containerzed application (run 'crate run -h' for details)" << std::endl;
+  std::cout << "  validate                   validate a crate spec file (run 'crate validate -h' for details)" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -48,6 +49,16 @@ static void usageCreate() {
 
 static void usageRun() {
   std::cout << "usage: crate run [-h|--help] <create-file>" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Options:" << std::endl;
+  std::cout << "  -h, --help                         show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+}
+
+static void usageValidate() {
+  std::cout << "usage: crate validate [-h|--help] <spec-file>" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Validates a +CRATE.SPEC YAML file for syntax, schema and logical consistency." << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Options:" << std::endl;
   std::cout << "  -h, --help                         show this help screen" << std::endl;
@@ -92,6 +103,8 @@ static Command isCommand(const char* arg) {
     return CmdCreate;
   if (strEq(arg, "run"))
     return CmdRun;
+  if (strEq(arg, "validate"))
+    return CmdValidate;
 
   return CmdNone;
 }
@@ -119,6 +132,10 @@ void Args::validate() {
       ERR("the 'run' command requires the crate file as an argument (-f, --file)")
     if (!std::ifstream(runCrateFile).good())
       ERR("the file passed to the 'run' command can't be opened: " << runCrateFile)
+    break;
+  case CmdValidate:
+    if (validateSpec.empty())
+      ERR("the 'validate' command requires a spec file argument")
     break;
   default:
     err("no command was given");
@@ -243,6 +260,29 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         } else {
           err("unknown argument '%s'", argv[a]);
         }
+        break;
+      case CmdValidate:
+        if (auto argShort = isShort(argv[a])) {
+          switch (argShort) {
+          case 'h':
+            usageValidate();
+            exit(0);
+          default:
+            err("unsupported short option '%s'", argv[a]);
+          }
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) {
+            usageValidate();
+            exit(0);
+          } else {
+            err("unsupported long option '%s'", argv[a]);
+          }
+        } else if (!args.validateSpec.empty()) {
+          err("validate takes exactly one spec file argument");
+        } else {
+          args.validateSpec = argv[a];
+        }
+        break;
       }
     }
   }

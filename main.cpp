@@ -72,6 +72,9 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdRun: {
     succ = runCrate(args, argc - numArgsProcessed, argv + numArgsProcessed, returnCode);
     break;
+  } case CmdValidate: {
+    succ = validateCrateSpec(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}
