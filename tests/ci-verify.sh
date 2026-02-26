@@ -1127,6 +1127,209 @@ else
 fi
 
 # ===========================================================================
+section "T19: Phase 3 features (COW, templates, X11 modes, clipboard, dbus, managed services, socket_proxy)"
+
+# §6 COW
+if grep -q 'CowOptions' "$BUILDDIR/spec.h"; then
+  pass "spec.h has CowOptions struct"
+else
+  fail "spec.h missing CowOptions struct"
+fi
+
+if grep -q '"cow"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses cow section"
+else
+  fail "spec.cpp missing cow parsing"
+fi
+
+if grep -q 'cowOptions' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp has COW clone logic"
+else
+  fail "run.cpp missing COW logic"
+fi
+
+if grep -q 'zfs.*snapshot.*snapName\|zfs.*clone.*cloneName' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp calls zfs snapshot/clone for COW"
+else
+  fail "run.cpp missing zfs snapshot/clone call"
+fi
+
+if grep -q 'destroyCowClone' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp destroys ephemeral COW clones"
+else
+  fail "run.cpp missing COW cleanup"
+fi
+
+if grep -q 'ephemeral.*persistent' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp validates cow mode values"
+else
+  fail "spec.cpp missing cow mode validation"
+fi
+
+# §10 Templates
+if grep -q 'createTemplate' "$BUILDDIR/args.h"; then
+  pass "args.h has createTemplate field"
+else
+  fail "args.h missing createTemplate field"
+fi
+
+if grep -q 'template' "$BUILDDIR/args.cpp"; then
+  pass "args.cpp handles --template flag"
+else
+  fail "args.cpp missing --template handling"
+fi
+
+if grep -q 'crate/templates' "$BUILDDIR/args.cpp"; then
+  pass "args.cpp searches template paths"
+else
+  fail "args.cpp missing template path search"
+fi
+
+# §11 X11 modes
+if grep -q 'X11Options' "$BUILDDIR/spec.h"; then
+  pass "spec.h has X11Options struct"
+else
+  fail "spec.h missing X11Options struct"
+fi
+
+if grep -q '"x11"' "$BUILDDIR/spec.cpp" && grep -q 'x11.*mode' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses x11 mode/resolution"
+else
+  fail "spec.cpp missing x11 mode parsing"
+fi
+
+if grep -q 'Xephyr' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp has Xephyr nested X11 support"
+else
+  fail "run.cpp missing Xephyr support"
+fi
+
+if grep -q 'mode.*none.*no X11\|x11.*none' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp handles x11 mode=none"
+else
+  fail "run.cpp missing x11 mode=none handling"
+fi
+
+# §12 Clipboard
+if grep -q 'ClipboardOptions' "$BUILDDIR/spec.h"; then
+  pass "spec.h has ClipboardOptions struct"
+else
+  fail "spec.h missing ClipboardOptions struct"
+fi
+
+if grep -q '"clipboard"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses clipboard section"
+else
+  fail "spec.cpp missing clipboard parsing"
+fi
+
+# §13 D-Bus
+if grep -q 'DbusOptions' "$BUILDDIR/spec.h"; then
+  pass "spec.h has DbusOptions struct"
+else
+  fail "spec.h missing DbusOptions struct"
+fi
+
+if grep -q '"dbus"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses dbus section"
+else
+  fail "spec.cpp missing dbus parsing"
+fi
+
+if grep -q 'DBUS_SESSION_BUS_ADDRESS' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp sets DBUS_SESSION_BUS_ADDRESS"
+else
+  fail "run.cpp missing DBUS_SESSION_BUS_ADDRESS"
+fi
+
+if grep -q 'dbus-1.*session-local.conf\|session-local.conf' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp generates D-Bus session policy"
+else
+  fail "run.cpp missing D-Bus policy generation"
+fi
+
+# §14 Managed services
+if grep -q 'ManagedService' "$BUILDDIR/spec.h"; then
+  pass "spec.h has ManagedService struct"
+else
+  fail "spec.h missing ManagedService struct"
+fi
+
+if grep -q '"services"' "$BUILDDIR/spec.cpp" && grep -q '"managed"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses services/managed section"
+else
+  fail "spec.cpp missing services/managed parsing"
+fi
+
+if grep -q 'managedServices' "$BUILDDIR/run.cpp" && grep -q 'rc.conf' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp generates rc.conf entries for managed services"
+else
+  fail "run.cpp missing managed services rc.conf"
+fi
+
+if grep -q 'managed.*onestart\|start managed service' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp starts managed services with onestart"
+else
+  fail "run.cpp missing managed service start"
+fi
+
+# §15 Socket proxy
+if grep -q 'SocketProxy' "$BUILDDIR/spec.h"; then
+  pass "spec.h has SocketProxy struct"
+else
+  fail "spec.h missing SocketProxy struct"
+fi
+
+if grep -q '"socket_proxy"\|"socket-proxy"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses socket_proxy section"
+else
+  fail "spec.cpp missing socket_proxy parsing"
+fi
+
+if grep -q 'socketProxy' "$BUILDDIR/run.cpp" && grep -q 'nullfs' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp shares sockets via nullfs"
+else
+  fail "run.cpp missing socket nullfs sharing"
+fi
+
+if grep -q 'socat\|UNIX-LISTEN\|UNIX-CONNECT' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp has socat proxy support"
+else
+  fail "run.cpp missing socat proxy"
+fi
+
+# Validate cross-checks
+if grep -q 'cowOptions' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp checks COW configuration"
+else
+  fail "validate.cpp missing COW checks"
+fi
+
+if grep -q 'x11Options.*nested\|nested.*Xephyr' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp checks nested X11 requirements"
+else
+  fail "validate.cpp missing X11 checks"
+fi
+
+if grep -q 'clipboardOptions' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp checks clipboard isolation"
+else
+  fail "validate.cpp missing clipboard checks"
+fi
+
+if grep -q 'dbusOptions' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp checks D-Bus requirements"
+else
+  fail "validate.cpp missing D-Bus checks"
+fi
+
+if grep -q 'socketProxy' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp checks socket proxy configuration"
+else
+  fail "validate.cpp missing socket proxy checks"
+fi
+
+# ===========================================================================
 #  Summary
 # ===========================================================================
 section "RESULTS"

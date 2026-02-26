@@ -18,6 +18,7 @@ public:
   // create parameters
   std::string createSpec;
   std::string createOutput;
+  std::string createTemplate;  // --template name or path
 
   // run parameters
   std::string runCrateFile;

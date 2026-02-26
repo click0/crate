@@ -795,6 +795,13 @@ bool isZfsKeyLoaded(const std::string &dataset) {
   return stripTrailingSpace(output) == "available";
 }
 
+std::string getUserHomeDir() {
+  struct passwd *pw = ::getpwuid(::getuid());
+  if (pw && pw->pw_dir)
+    return pw->pw_dir;
+  return "";
+}
+
 }
 
 }

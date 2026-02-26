@@ -84,6 +84,58 @@ public:
   bool                                               allowChflags = false;
   bool                                               allowMlock = false;
 
+  // Copy-on-Write filesystem (§6)
+  struct CowOptions {
+    std::string mode;     // "ephemeral" or "persistent"
+    std::string backend;  // "zfs" (default) or "unionfs"
+  };
+  std::unique_ptr<CowOptions>                        cowOptions;
+
+  // GUI/Desktop isolation (§11)
+  struct X11Options {
+    std::string mode = "shared";     // "nested", "shared", "none"
+    std::string resolution = "1280x720";
+    bool clipboardEnabled = true;
+  };
+  std::unique_ptr<X11Options>                        x11Options;
+
+  // Clipboard isolation (§12)
+  struct ClipboardOptions {
+    std::string mode = "shared";     // "isolated", "shared", "none"
+    std::string direction = "both";  // "in", "out", "both", "none"
+  };
+  std::unique_ptr<ClipboardOptions>                  clipboardOptions;
+
+  // D-Bus isolation (§13)
+  struct DbusOptions {
+    bool systemBus = false;
+    bool sessionBus = true;
+    std::vector<std::string> allowOwn;
+    std::vector<std::string> denySend;
+  };
+  std::unique_ptr<DbusOptions>                       dbusOptions;
+
+  // Managed services (§14)
+  struct ManagedService {
+    std::string name;
+    bool enable = true;
+    std::string rcvar;    // optional rc.conf variable name
+  };
+  std::vector<ManagedService>                        managedServices;
+  bool                                               servicesAutoStart = true;
+
+  // Socket proxy (§15)
+  struct SocketProxy {
+    std::vector<std::string> share;  // host sockets to share via nullfs
+    struct ProxyEntry {
+      std::string host;
+      std::string jail;
+      std::string direction = "bidirectional"; // "bidirectional", "in", "out"
+    };
+    std::vector<ProxyEntry> proxy;
+  };
+  std::unique_ptr<SocketProxy>                       socketProxy;
+
   std::map<std::string, std::map<std::string, std::string>> scripts;          // by section, by script name
 
   Spec preprocess() const;

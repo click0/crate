@@ -40,11 +40,17 @@ static void usage() {
 
 static void usageCreate() {
   std::cout << "usage: crate create [-s <spec-file>|--spec <spec-file>] [-o <output-create-file>|--output <output-create-file>]" << std::endl;
+  std::cout << "       crate create --template <name> [-s <spec-file>] [-o <output-create-file>]" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Options:" << std::endl;
-  std::cout << "  -s, --spec <spec-file>             crate specification (required)" << std::endl;
+  std::cout << "  -s, --spec <spec-file>             crate specification (required unless --template)" << std::endl;
+  std::cout << "  -t, --template <name>              use a template as base spec" << std::endl;
   std::cout << "  -o, --output <output-create-file>  output crate file" << std::endl;
   std::cout << "  -h, --help                         show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Templates are searched in:" << std::endl;
+  std::cout << "  ~/.config/crate/templates/<name>.yml" << std::endl;
+  std::cout << "  /usr/local/share/crate/templates/<name>.yml" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -144,8 +150,21 @@ static const char* getArgParam(int aidx, int argc, char** argv) {
 void Args::validate() {
   switch (cmd) {
   case CmdCreate:
-    if (createSpec.empty())
-      ERR("the 'create' command requires the crate spec file as an argument (-s, --spec)")
+    if (createSpec.empty() && createTemplate.empty())
+      ERR("the 'create' command requires either a spec file (-s, --spec) or a template (-t, --template)")
+    if (!createTemplate.empty() && createSpec.empty()) {
+      // resolve template path: check user dir, then system dir
+      auto tryUser = STR(Util::Fs::getUserHomeDir() << "/.config/crate/templates/" << createTemplate << ".yml");
+      auto trySys = STR("/usr/local/share/crate/templates/" << createTemplate << ".yml");
+      if (Util::Fs::fileExists(tryUser))
+        createSpec = tryUser;
+      else if (Util::Fs::fileExists(trySys))
+        createSpec = trySys;
+      else if (Util::Fs::fileExists(createTemplate))
+        createSpec = createTemplate; // treat as path
+      else
+        ERR("template '" << createTemplate << "' not found (searched " << tryUser << " and " << trySys << ")")
+    }
     break;
   case CmdRun:
     if (runCrateFile.empty())
@@ -240,6 +259,9 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           case 's':
             args.createSpec = getArgParam(++a, argc, argv);
             break;
+          case 't':
+            args.createTemplate = getArgParam(++a, argc, argv);
+            break;
           case 'o':
             args.createOutput = getArgParam(++a, argc, argv);
             break;
@@ -252,6 +274,9 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
             exit(0);
           } else if (strEq(argLong, "spec")) {
             args.createSpec = getArgParam(++a, argc, argv);
+            break;
+          } else if (strEq(argLong, "template")) {
+            args.createTemplate = getArgParam(++a, argc, argv);
             break;
           } else if (strEq(argLong, "output")) {
             args.createOutput = getArgParam(++a, argc, argv);
