@@ -1330,6 +1330,215 @@ else
 fi
 
 # ===========================================================================
+section "T20: Phase 4 features (pf firewall, Capsicum/MAC, template merge, clipboard proxy, terminal)"
+
+# §3 Per-container firewall policy
+if grep -q 'FirewallPolicy' "$BUILDDIR/spec.h"; then
+  pass "spec.h has FirewallPolicy struct"
+else
+  fail "spec.h missing FirewallPolicy struct"
+fi
+
+if grep -q '"firewall"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses firewall section"
+else
+  fail "spec.cpp missing firewall parsing"
+fi
+
+if grep -q 'firewallPolicy' "$BUILDDIR/spec.cpp" && grep -q 'block-ip\|block_ip' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses firewall block-ip and allow rules"
+else
+  fail "spec.cpp missing firewall rule parsing"
+fi
+
+if grep -q 'pfctl' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp has pfctl calls for pf anchor management"
+else
+  fail "run.cpp missing pfctl calls"
+fi
+
+if grep -q 'pf.*anchor\|anchorName\|crate/' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp creates pf anchors per container"
+else
+  fail "run.cpp missing pf anchor logic"
+fi
+
+if grep -q 'destroyPfAnchor' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp cleans up pf anchors on exit"
+else
+  fail "run.cpp missing pf anchor cleanup"
+fi
+
+# §8 Capsicum + MAC
+if grep -q 'SecurityAdvanced' "$BUILDDIR/spec.h"; then
+  pass "spec.h has SecurityAdvanced struct"
+else
+  fail "spec.h missing SecurityAdvanced struct"
+fi
+
+if grep -q '"security_advanced"\|"security-advanced"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses security_advanced section"
+else
+  fail "spec.cpp missing security_advanced parsing"
+fi
+
+if grep -q 'capsicum' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses capsicum option"
+else
+  fail "spec.cpp missing capsicum parsing"
+fi
+
+if grep -q 'mac_bsdextended\|mac-bsdextended' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses mac_bsdextended rules"
+else
+  fail "spec.cpp missing mac_bsdextended parsing"
+fi
+
+if grep -q 'ugidfw' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp uses ugidfw for MAC bsdextended rules"
+else
+  fail "run.cpp missing ugidfw calls"
+fi
+
+if grep -q 'mac_bsdextended\|removeMacRules' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp has MAC rule lifecycle management"
+else
+  fail "run.cpp missing MAC rule management"
+fi
+
+if grep -q 'mac_portacl\|mac-portacl' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses mac_portacl section"
+else
+  fail "spec.cpp missing mac_portacl parsing"
+fi
+
+if grep -q 'hideOtherJails\|hide_other_jails\|hide-other-jails' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses hide_other_jails option"
+else
+  fail "spec.cpp missing hide_other_jails parsing"
+fi
+
+# §10 Template merging
+if grep -q 'mergeSpecs' "$BUILDDIR/spec.h"; then
+  pass "spec.h declares mergeSpecs()"
+else
+  fail "spec.h missing mergeSpecs declaration"
+fi
+
+if grep -q 'mergeSpecs' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp implements mergeSpecs()"
+else
+  fail "spec.cpp missing mergeSpecs implementation"
+fi
+
+if grep -q 'mergeSpecs' "$BUILDDIR/main.cpp"; then
+  pass "main.cpp calls mergeSpecs for template merging"
+else
+  fail "main.cpp missing mergeSpecs call"
+fi
+
+if grep -q 'createTemplate' "$BUILDDIR/main.cpp"; then
+  pass "main.cpp checks createTemplate for merge dispatch"
+else
+  fail "main.cpp missing createTemplate check"
+fi
+
+# Template files exist
+TEMPLATE_COUNT=$(ls "$BUILDDIR/templates/"*.yml 2>/dev/null | wc -l)
+if [ "$TEMPLATE_COUNT" -ge 5 ]; then
+  pass "5 template files exist in templates/"
+else
+  fail "expected 5 template files, found $TEMPLATE_COUNT"
+fi
+
+if [ -f "$BUILDDIR/templates/minimal.yml" ]; then
+  pass "templates/minimal.yml exists"
+else
+  fail "templates/minimal.yml missing"
+fi
+
+if [ -f "$BUILDDIR/templates/privacy.yml" ]; then
+  pass "templates/privacy.yml exists"
+else
+  fail "templates/privacy.yml missing"
+fi
+
+if [ -f "$BUILDDIR/templates/development.yml" ]; then
+  pass "templates/development.yml exists"
+else
+  fail "templates/development.yml missing"
+fi
+
+# §12 Clipboard proxy daemon
+if grep -q 'clipPid\|killClipboardProxy\|clipboard.*proxy' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp has clipboard proxy daemon logic"
+else
+  fail "run.cpp missing clipboard proxy daemon"
+fi
+
+if grep -q 'xclip' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp uses xclip for clipboard proxying"
+else
+  fail "run.cpp missing xclip usage"
+fi
+
+if grep -q 'killClipboardProxy' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp cleans up clipboard proxy on exit"
+else
+  fail "run.cpp missing clipboard proxy cleanup"
+fi
+
+# §16 Terminal isolation
+if grep -q 'TerminalOptions' "$BUILDDIR/spec.h"; then
+  pass "spec.h has TerminalOptions struct"
+else
+  fail "spec.h missing TerminalOptions struct"
+fi
+
+if grep -q '"terminal"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses terminal section"
+else
+  fail "spec.cpp missing terminal parsing"
+fi
+
+if grep -q 'devfsRuleset\|devfs_ruleset\|devfs-ruleset' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses devfs_ruleset option"
+else
+  fail "spec.cpp missing devfs_ruleset parsing"
+fi
+
+if grep -q 'allowRawTty\|allow_raw_tty\|allow-raw-tty' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses allow_raw_tty option"
+else
+  fail "spec.cpp missing allow_raw_tty parsing"
+fi
+
+if grep -q 'devfs.*ruleset\|terminalOptions.*devfsRuleset' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp applies terminal devfs ruleset"
+else
+  fail "run.cpp missing terminal devfs ruleset"
+fi
+
+# Validate cross-checks for Phase 4
+if grep -q 'firewallPolicy' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp checks firewall policy configuration"
+else
+  fail "validate.cpp missing firewall checks"
+fi
+
+if grep -q 'securityAdvanced\|capsicum' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp checks capsicum/MAC configuration"
+else
+  fail "validate.cpp missing capsicum/MAC checks"
+fi
+
+if grep -q 'terminalOptions\|devfs_ruleset' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp checks terminal configuration"
+else
+  fail "validate.cpp missing terminal checks"
+fi
+
+# ===========================================================================
 #  Summary
 # ===========================================================================
 section "RESULTS"

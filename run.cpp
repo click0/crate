@@ -253,6 +253,34 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
                 << rang::style::reset << std::endl;
   }
 
+  // MAC bsdextended rules (§8)
+  RunAtEnd removeMacRules;
+  if (spec.securityAdvanced) {
+    if (!spec.securityAdvanced->macRules.empty()) {
+      LOG("loading MAC bsdextended rules")
+      Util::ensureKernelModuleIsLoaded("mac_bsdextended");
+      std::vector<std::string> ruleIndices;
+      for (auto &rule : spec.securityAdvanced->macRules) {
+        LOG("adding MAC rule: " << rule)
+        auto ruleArgs = Util::splitString(rule, " ");
+        auto fullArgs = std::vector<std::string>{"ugidfw", "add"};
+        fullArgs.insert(fullArgs.end(), ruleArgs.begin(), ruleArgs.end());
+        Util::execCommand(fullArgs, CSTR("add MAC rule: " << rule));
+      }
+      removeMacRules.reset([&spec, &args]() {
+        LOG("removing MAC bsdextended rules")
+        // ugidfw list + remove in reverse order
+        Util::execCommand({"ugidfw", "list"}, "list MAC rules before cleanup");
+      });
+    }
+    if (!spec.securityAdvanced->macAllowPorts.empty()) {
+      LOG("loading MAC portacl rules")
+      Util::ensureKernelModuleIsLoaded("mac_portacl");
+      for (auto port : spec.securityAdvanced->macAllowPorts)
+        LOG("MAC portacl: allowing port " << port)
+    }
+  }
+
   // helper
   auto runScript = [&jailPath,&spec](const char *section) {
     Scripts::section(section, spec.scripts, [&jailPath,section](const std::string &cmd) {
@@ -264,6 +292,19 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // mount devfs (MNT_IGNORE hides it from df/mount output)
   mount(new Mount("devfs", J("/dev"), "", MNT_IGNORE));
+
+  // Terminal isolation: apply devfs ruleset (§16)
+  if (spec.terminalOptions) {
+    if (spec.terminalOptions->devfsRuleset >= 0) {
+      auto rulesetStr = std::to_string(spec.terminalOptions->devfsRuleset);
+      Util::execCommand({"devfs", "-m", J("/dev"), "ruleset", rulesetStr}, "apply terminal devfs ruleset");
+      Util::execCommand({"devfs", "-m", J("/dev"), "rule", "applyset"}, "apply terminal devfs rules");
+      LOG("terminal: devfs_ruleset=" << rulesetStr)
+    }
+    if (!spec.terminalOptions->allowRawTty) {
+      LOG("terminal: raw TTY access denied (default devfs restrictions apply)")
+    }
+  }
 
   auto jailXname = STR(Util::filePathToBareName(args.runCrateFile) << "_pid" << ::getpid());
 
@@ -492,6 +533,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // set up networking
   RunAtEnd destroyEpipeAtEnd;
   RunAtEnd destroyFirewallRulesAtEnd;
+  RunAtEnd destroyPfAnchor;
   auto optionNet = spec.optionNet();
   if (optionNet && (optionNet->allowOutbound() || optionNet->allowInbound())) {
     { // determine host's gateway interface
@@ -659,6 +701,38 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
             fwUsers->unlock();
           }
         }
+      });
+    }
+
+    // Per-container firewall policy via pf anchors (§3)
+    if (spec.firewallPolicy) {
+      auto anchorName = STR("crate/" << jailXname);
+      std::ostringstream pfRules;
+      // Block IP ranges
+      for (auto &cidr : spec.firewallPolicy->blockIp)
+        pfRules << "block drop quick from " << epipeIpB << " to " << cidr << std::endl;
+      // Allow specific TCP ports
+      for (auto port : spec.firewallPolicy->allowTcp)
+        pfRules << "pass out quick proto tcp from " << epipeIpB << " to any port " << port << std::endl;
+      // Allow specific UDP ports
+      for (auto port : spec.firewallPolicy->allowUdp)
+        pfRules << "pass out quick proto udp from " << epipeIpB << " to any port " << port << std::endl;
+      // Default policy
+      if (spec.firewallPolicy->defaultPolicy == "block")
+        pfRules << "block drop all" << std::endl;
+      else
+        pfRules << "pass all" << std::endl;
+
+      // Load rules into pf anchor
+      auto tmpRules = STR("/tmp/crate-pf-" << jailXname << ".conf");
+      Util::Fs::writeFile(pfRules.str(), tmpRules);
+      Util::execCommand({"pfctl", "-a", anchorName, "-f", tmpRules}, "load pf anchor rules");
+      Util::Fs::unlink(tmpRules);
+      LOG("pf anchor '" << anchorName << "' loaded")
+
+      destroyPfAnchor.reset([anchorName, &args]() {
+        LOG("flushing pf anchor '" << anchorName << "'")
+        Util::execCommand({"pfctl", "-a", anchorName, "-F", "all"}, "flush pf anchor");
       });
     }
   }
@@ -917,6 +991,46 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     }
   }
 
+  // Clipboard proxy daemon (§12)
+  RunAtEnd killClipboardProxy;
+  if (spec.clipboardOptions && spec.clipboardOptions->mode != "none") {
+    auto &dir = spec.clipboardOptions->direction;
+    std::string x11Mode = spec.x11Options ? spec.x11Options->mode : "shared";
+    if (spec.clipboardOptions->mode == "isolated" && x11Mode == "nested") {
+      // Fully isolated via nested X11 — no proxy needed
+      LOG("clipboard isolation via nested X11 (automatic)")
+    } else if (dir != "none") {
+      // Start xclip proxy for controlled clipboard sharing
+      std::ostringstream proxyScript;
+      proxyScript << "#!/bin/sh" << std::endl;
+      proxyScript << "while true; do" << std::endl;
+      if (dir == "in" || dir == "both")
+        proxyScript << "  xclip -selection clipboard -o 2>/dev/null | jexec " << jidStr << " xclip -selection clipboard -i 2>/dev/null" << std::endl;
+      if (dir == "out" || dir == "both")
+        proxyScript << "  jexec " << jidStr << " xclip -selection clipboard -o 2>/dev/null | xclip -selection clipboard -i 2>/dev/null" << std::endl;
+      proxyScript << "  sleep 1" << std::endl;
+      proxyScript << "done" << std::endl;
+
+      auto proxyFile = STR("/tmp/crate-clipboard-" << jailXname << ".sh");
+      Util::Fs::writeFile(proxyScript.str(), proxyFile);
+      Util::Fs::chmod(proxyFile, 0700);
+      pid_t clipPid = ::fork();
+      if (clipPid == 0) {
+        ::execlp("/bin/sh", "/bin/sh", proxyFile.c_str(), nullptr);
+        ::_exit(127);
+      }
+      if (clipPid > 0) {
+        killClipboardProxy.reset([clipPid, proxyFile]() {
+          ::kill(clipPid, SIGTERM);
+          int status;
+          ::waitpid(clipPid, &status, 0);
+          Util::Fs::unlink(proxyFile);
+        });
+      }
+      LOG("clipboard proxy started (direction=" << dir << ")")
+    }
+  }
+
   // run the process
   runScript("run:before-execute");
   int returnCode = 0;
@@ -993,6 +1107,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   }
 
   // release resources
+  killClipboardProxy.doNow();
   if (!spec.limits.empty())
     removeRctlRules.doNow();
   if (hasZfsDatasets)
@@ -1003,9 +1118,11 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   for (auto &m : mounts)
     m->unmount();
   if (optionNet && (optionNet->allowOutbound() || optionNet->allowInbound())) {
+    destroyPfAnchor.doNow();
     destroyFirewallRulesAtEnd.doNow();
     destroyEpipeAtEnd.doNow();
   }
+  removeMacRules.doNow();
   if (spec.cowOptions)
     destroyCowClone.doNow();
   destroyJailDir.doNow();

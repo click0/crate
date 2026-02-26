@@ -1,0 +1,5 @@
+# Minimal template: bare jail with no network, no X11
+# Usage: crate create --template minimal -s myapp.yml -o myapp.crate
+
+base:
+  keep: []

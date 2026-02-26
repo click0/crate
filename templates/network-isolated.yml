@@ -1,0 +1,11 @@
+# Network-isolated template: no network, X11 GUI via nested Xephyr
+# Usage: crate create --template network-isolated -s myapp.yml -o myapp.crate
+
+x11:
+  mode: nested
+  resolution: 1280x720
+  clipboard: false
+
+clipboard:
+  mode: isolated
+  direction: none

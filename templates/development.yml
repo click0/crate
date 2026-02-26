@@ -1,0 +1,16 @@
+# Development template: full network access, shared home directory
+# Usage: crate create --template development -s myapp.yml -o myapp.crate
+
+options:
+  net:
+    outbound: [wan, lan, dns]
+
+dirs:
+  share:
+    - [$HOME, $HOME]
+
+ipc:
+  sysvipc: true
+
+security:
+  allow_mlock: true

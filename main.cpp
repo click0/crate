@@ -65,6 +65,11 @@ static int mainGuarded(int argc, char** argv) {
   switch (args.cmd) {
   case CmdCreate: {
     auto spec = parseSpec(args.createSpec);
+    // Template merging (§10): merge template spec with user spec
+    if (!args.createTemplate.empty()) {
+      auto templateSpec = parseSpec(args.createTemplate);
+      spec = mergeSpecs(templateSpec, spec);
+    }
     spec.validate();
     createCacheDirectoryIfNeeded();
     succ = createCrate(args, spec.preprocess());

@@ -136,6 +136,31 @@ public:
   };
   std::unique_ptr<SocketProxy>                       socketProxy;
 
+  // Per-container firewall policy (§3)
+  struct FirewallPolicy {
+    std::vector<std::string> blockIp;      // CIDR ranges to block
+    std::vector<unsigned>    allowTcp;     // allowed TCP ports
+    std::vector<unsigned>    allowUdp;     // allowed UDP ports
+    std::string              defaultPolicy = "allow"; // "allow" or "block"
+  };
+  std::unique_ptr<FirewallPolicy>                    firewallPolicy;
+
+  // Advanced security: Capsicum + MAC (§8)
+  struct SecurityAdvanced {
+    bool capsicum = false;                 // enter capability mode before exec
+    std::vector<std::string> macRules;     // mac_bsdextended rules
+    std::vector<unsigned> macAllowPorts;   // mac_portacl allowed ports
+    bool hideOtherJails = true;            // prevent seeing other jails
+  };
+  std::unique_ptr<SecurityAdvanced>                  securityAdvanced;
+
+  // Terminal isolation (§16)
+  struct TerminalOptions {
+    int devfsRuleset = -1;                 // -1=auto, otherwise specific ruleset number
+    bool allowRawTty = false;              // allow raw TTY access
+  };
+  std::unique_ptr<TerminalOptions>                   terminalOptions;
+
   std::map<std::string, std::map<std::string, std::string>> scripts;          // by section, by script name
 
   Spec preprocess() const;
@@ -152,3 +177,4 @@ private:
 };
 
 Spec parseSpec(const std::string &fname);
+Spec mergeSpecs(const Spec &base, const Spec &overlay);
