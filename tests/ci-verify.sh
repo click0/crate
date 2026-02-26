@@ -595,16 +595,17 @@ else
   fail "run.cpp missing shellQuote on argv in argsToString"
 fi
 
-if grep -q 'shellQuote(user)' "$BUILDDIR/run.cpp"; then
-  pass "run.cpp quotes user in jexec commands"
+# user and jailPath now go through exec (no shell) — verify exec-based patterns
+if grep -q 'execCommandGetStatus.*jexec' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp uses execCommandGetStatus for jexec (user/jid via exec, not shell)"
 else
-  fail "run.cpp missing shellQuote on user variable"
+  fail "run.cpp missing execCommandGetStatus for jexec"
 fi
 
-if grep -q 'shellQuote(path)' "$BUILDDIR/cmd.cpp"; then
-  pass "cmd.cpp quotes path in chroot command"
+if grep -q 'execInJail' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp uses execInJail for in-jail commands (exec-based)"
 else
-  fail "cmd.cpp missing shellQuote on chroot path"
+  fail "run.cpp missing execInJail lambda"
 fi
 
 # Values migrated to exec — must NOT need shellQuote (no shell involved)
@@ -697,11 +698,11 @@ else
   fail "run.cpp missing signal handling (sigaction/g_signalReceived)"
 fi
 
-# RAII popen
-if grep -q 'unique_ptr<FILE' "$BUILDDIR/util.cpp"; then
-  pass "util.cpp uses RAII unique_ptr<FILE> for popen"
+# RAII file descriptors
+if grep -q 'UniqueFd' "$BUILDDIR/util.h"; then
+  pass "util.h has UniqueFd RAII wrapper for file descriptors"
 else
-  fail "util.cpp missing RAII popen wrapper"
+  fail "util.h missing UniqueFd RAII wrapper"
 fi
 
 # Path safety validation
@@ -739,6 +740,46 @@ if grep -q 'xzThreadsArg' "$BUILDDIR/cmd.cpp" && grep -q 'xzThreadsArg' "$BUILDD
   pass "xzThreadsArg used for exec-based xz calls"
 else
   fail "xzThreadsArg missing from cmd.cpp or run.cpp"
+fi
+
+# Shell elimination: no system()/popen()/runCommand() in source files
+if ! grep -q 'system(' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp has no system() calls (fully exec-based)"
+else
+  fail "run.cpp still uses system()"
+fi
+
+if ! grep -q 'popen(' "$BUILDDIR/util.cpp"; then
+  pass "util.cpp has no popen() calls (fully exec-based)"
+else
+  fail "util.cpp still uses popen()"
+fi
+
+if ! grep -q 'runCommand(' "$BUILDDIR/run.cpp" && ! grep -q 'runCommand(' "$BUILDDIR/create.cpp"; then
+  pass "runCommand() removed from run.cpp and create.cpp"
+else
+  fail "runCommand() still present in run.cpp or create.cpp"
+fi
+
+# fnmatch-based wildcard expansion (no shell)
+if grep -q 'fnmatch' "$BUILDDIR/util.cpp"; then
+  pass "util.cpp uses fnmatch for wildcard expansion (no shell)"
+else
+  fail "util.cpp missing fnmatch-based wildcard expansion"
+fi
+
+# make_shared for factory methods
+if grep -q 'make_shared' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp uses make_shared for factory methods"
+else
+  fail "spec.cpp missing make_shared usage"
+fi
+
+# execCommandGetStatus for status-returning exec
+if grep -q 'execCommandGetStatus' "$BUILDDIR/util.cpp"; then
+  pass "util.cpp implements execCommandGetStatus"
+else
+  fail "util.cpp missing execCommandGetStatus implementation"
 fi
 
 # ===========================================================================
