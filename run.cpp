@@ -191,6 +191,43 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     LOG("spec-required encryption verified on dataset '" << dataset << "'")
   }
 
+  // Copy-on-Write setup (§6)
+  RunAtEnd destroyCowClone;
+  if (spec.cowOptions) {
+    if (spec.cowOptions->backend == "zfs") {
+      if (!Util::Fs::isOnZfs(jailPath))
+        ERR("cow/backend=zfs requires jail directory on ZFS")
+      auto baseDataset = Util::Fs::getZfsDataset(jailPath);
+      if (baseDataset.empty())
+        ERR("cannot determine ZFS dataset for jail directory")
+      auto snapName = STR(baseDataset << "@cow-" << Util::randomHex(4));
+      auto cloneName = STR(baseDataset << "/cow-" << Util::randomHex(4));
+      Util::execCommand({"zfs", "snapshot", snapName}, "create COW base snapshot");
+      Util::execCommand({"zfs", "clone", snapName, cloneName}, "create COW clone");
+      auto cloneMountpoint = Util::stripTrailingSpace(
+        Util::execCommandGetOutput({"zfs", "get", "-H", "-o", "value", "mountpoint", cloneName}, "get clone mountpoint"));
+      LOG("COW clone created: " << cloneName << " at " << cloneMountpoint)
+      if (spec.cowOptions->mode == "ephemeral") {
+        destroyCowClone.reset([cloneName, snapName, &args]() {
+          LOG("destroying ephemeral COW clone " << cloneName)
+          Util::execCommand({"zfs", "destroy", cloneName}, "destroy COW clone");
+          Util::execCommand({"zfs", "destroy", snapName}, "destroy COW base snapshot");
+        });
+      }
+    } else if (spec.cowOptions->backend == "unionfs") {
+      auto overlayDir = STR(jailPath << "-cow-writable");
+      Util::Fs::mkdir(overlayDir, S_IRUSR|S_IWUSR|S_IXUSR);
+      mount(new Mount("unionfs", jailPath, overlayDir, 0));
+      LOG("COW unionfs overlay mounted at " << jailPath)
+      if (spec.cowOptions->mode == "ephemeral") {
+        destroyCowClone.reset([overlayDir, &args]() {
+          LOG("removing ephemeral unionfs overlay " << overlayDir)
+          Util::Fs::rmdirHier(overlayDir);
+        });
+      }
+    }
+  }
+
   // check the pre-conditions
   int origIpForwarding = -1; // -1 = not modified; 0 = was off and we turned it on
   if (spec.optionExists("net")) {
@@ -239,18 +276,71 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   };
   setJailEnv("CRATE", "yes"); // let the app know that it runs from the crate. CAVEAT if you remove this, the env(1) command below needs to be removed when there is no env
 
-  // turn options on
+  // turn options on — X11 with mode support (§11)
+  RunAtEnd killXephyrAtEnd;
   if (spec.optionExists("x11")) {
-    LOG("x11 option is requested: mount the X11 socket in jail")
-    // create the X11 socket directory (sticky bit like standard /tmp/.X11-unix)
-    Util::Fs::mkdir(J("/tmp/.X11-unix"), 01777);
-    // mount the X11 socket directory in jail
-    mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix", MNT_IGNORE));
-    // DISPLAY variable copied to jail
-    auto *display = ::getenv("DISPLAY");
-    if (display == nullptr)
-      ERR("DISPLAY environment variable is not set")
-    setJailEnv("DISPLAY", display);
+    std::string x11Mode = "shared";
+    if (spec.x11Options)
+      x11Mode = spec.x11Options->mode;
+
+    if (x11Mode == "none") {
+      LOG("x11 option (mode=none): no X11 access")
+    } else if (x11Mode == "nested") {
+      // Nested X11 via Xephyr: complete isolation (§11)
+      auto resolution = (spec.x11Options && !spec.x11Options->resolution.empty())
+                        ? spec.x11Options->resolution : std::string("1280x720");
+      auto *hostDisplay = ::getenv("DISPLAY");
+      if (hostDisplay == nullptr)
+        ERR("DISPLAY environment variable is not set (needed for Xephyr host connection)")
+      // Pick display number to avoid collisions
+      unsigned dispNum = 99 + (::getpid() % 100);
+      auto dispStr = STR(":" << dispNum);
+      LOG("x11 nested mode: starting Xephyr at " << resolution << " on display " << dispStr)
+      // Xephyr runs on host, creates nested X server
+      pid_t xephyrPid = ::fork();
+      if (xephyrPid == 0) {
+        ::execlp("Xephyr", "Xephyr", dispStr.c_str(),
+                 "-screen", resolution.c_str(),
+                 "-resizeable", "-no-host-grab",
+                 nullptr);
+        ::_exit(127);
+      }
+      if (xephyrPid == -1)
+        ERR("failed to fork Xephyr: " << strerror(errno))
+      ::usleep(500000); // give Xephyr 500ms to create socket
+      Util::Fs::mkdir(J("/tmp/.X11-unix"), 01777);
+      mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix", MNT_IGNORE));
+      setJailEnv("DISPLAY", dispStr);
+      killXephyrAtEnd.reset([xephyrPid, &args]() {
+        LOG("killing Xephyr pid=" << xephyrPid)
+        ::kill(xephyrPid, SIGTERM);
+        int status;
+        ::waitpid(xephyrPid, &status, 0);
+      });
+    } else {
+      // Shared mode (default): mount X11 socket directly
+      LOG("x11 option (mode=shared): mount the X11 socket in jail")
+      Util::Fs::mkdir(J("/tmp/.X11-unix"), 01777);
+      mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix", MNT_IGNORE));
+      auto *display = ::getenv("DISPLAY");
+      if (display == nullptr)
+        ERR("DISPLAY environment variable is not set")
+      setJailEnv("DISPLAY", display);
+    }
+  }
+
+  // Clipboard isolation (§12)
+  if (spec.clipboardOptions) {
+    auto &cbMode = spec.clipboardOptions->mode;
+    std::string x11Mode = spec.x11Options ? spec.x11Options->mode : "shared";
+    if (cbMode == "isolated") {
+      if (x11Mode == "nested")
+        LOG("clipboard isolation: active (via nested X11)")
+      else
+        LOG("clipboard isolation: requested but x11 is not nested — limited isolation")
+    } else if (cbMode == "none") {
+      LOG("clipboard disabled")
+    }
   }
 
   // create jail // also see https://www.cyberciti.biz/faq/how-to-configure-a-freebsd-jail-with-vnet-and-zfs/
@@ -673,6 +763,44 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     }
   }
 
+  // Socket proxying (§15)
+  RunAtEnd destroySocatProxies;
+  if (spec.socketProxy) {
+    for (auto &sockPath : spec.socketProxy->share) {
+      Util::safePath(sockPath, "/", "shared socket");
+      auto parentDir = sockPath.substr(0, sockPath.rfind('/'));
+      std::filesystem::create_directories(J(parentDir));
+      Util::Fs::writeFile("", J(sockPath));
+      mount(new Mount("nullfs", J(sockPath), sockPath, MNT_IGNORE));
+      LOG("shared socket: " << sockPath)
+    }
+    std::vector<pid_t> socatPids;
+    for (auto &entry : spec.socketProxy->proxy) {
+      LOG("starting socket proxy: " << entry.host << " <-> " << entry.jail)
+      auto jailParent = entry.jail.substr(0, entry.jail.rfind('/'));
+      std::filesystem::create_directories(J(jailParent));
+      pid_t pid = ::fork();
+      if (pid == 0) {
+        ::execlp("socat", "socat",
+                 STR("UNIX-LISTEN:" << J(entry.jail) << ",fork").c_str(),
+                 STR("UNIX-CONNECT:" << entry.host).c_str(),
+                 nullptr);
+        ::_exit(127);
+      }
+      if (pid > 0)
+        socatPids.push_back(pid);
+    }
+    if (!socatPids.empty()) {
+      destroySocatProxies.reset([socatPids]() {
+        for (auto pid : socatPids) {
+          ::kill(pid, SIGTERM);
+          int status;
+          ::waitpid(pid, &status, 0);
+        }
+      });
+    }
+  }
+
   // DNS filtering: generate unbound config and set up resolver (§4)
   if (spec.dnsFilter) {
     std::ostringstream conf;
@@ -716,6 +844,57 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     LOG("DNS filtering configured: " << spec.dnsFilter->block.size() << " blocked domains")
   }
 
+  // D-Bus isolation (§13)
+  if (spec.dbusOptions) {
+    if (spec.dbusOptions->sessionBus) {
+      LOG("configuring D-Bus session bus inside jail")
+      std::ostringstream policy;
+      policy << "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"" << std::endl;
+      policy << " \"http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd\">" << std::endl;
+      policy << "<busconfig>" << std::endl;
+      policy << "  <type>custom</type>" << std::endl;
+      policy << "  <listen>unix:path=/var/run/dbus/session_bus</listen>" << std::endl;
+      policy << "  <auth>EXTERNAL</auth>" << std::endl;
+      policy << "  <policy context=\"default\">" << std::endl;
+      policy << "    <allow send_destination=\"*\" eavesdrop=\"false\"/>" << std::endl;
+      policy << "    <allow receive_sender=\"*\"/>" << std::endl;
+      for (auto &name : spec.dbusOptions->allowOwn)
+        policy << "    <allow own=\"" << name << "\"/>" << std::endl;
+      for (auto &name : spec.dbusOptions->denySend)
+        policy << "    <deny send_destination=\"" << name << "\"/>" << std::endl;
+      policy << "  </policy>" << std::endl;
+      policy << "</busconfig>" << std::endl;
+      Util::Fs::mkdir(J("/usr/local/etc/dbus-1"), 0755);
+      writeFileInJail(policy.str(), "/usr/local/etc/dbus-1/session-local.conf");
+      Util::Fs::mkdir(J("/var/run/dbus"), 0755);
+      setJailEnv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/var/run/dbus/session_bus");
+      LOG("D-Bus session bus configured")
+    }
+    if (!spec.dbusOptions->systemBus) {
+      LOG("D-Bus system bus disabled (not mounting host socket)")
+    }
+  }
+
+  // Managed services: generate rc.conf entries (§14)
+  if (!spec.managedServices.empty()) {
+    std::ostringstream rcConf;
+    for (auto &svc : spec.managedServices) {
+      auto var = svc.rcvar.empty() ? STR(svc.name << "_enable") : svc.rcvar;
+      rcConf << var << "=\"" << (svc.enable ? "YES" : "NO") << "\"" << std::endl;
+    }
+    appendFileInJail(rcConf.str(), "/etc/rc.conf");
+    LOG("managed services: " << spec.managedServices.size() << " rc.conf entries generated")
+
+    if (spec.servicesAutoStart) {
+      for (auto &svc : spec.managedServices) {
+        if (svc.enable) {
+          LOG("starting managed service: " << svc.name)
+          execInJail({"/usr/sbin/service", svc.name, "onestart"}, CSTR("start managed service " << svc.name));
+        }
+      }
+    }
+  }
+
   // start services, if any
   runScript("run:before-start-services");
   if (!spec.runServices.empty())
@@ -725,12 +904,17 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // copy X11 authentication files into the user's home directory in jail
   if (spec.optionExists("x11")) {
-    // copy the .Xauthority and .ICEauthority files if they are present
-    for (auto &file : {STR(homeDir << "/.Xauthority"), STR(homeDir << "/.ICEauthority")})
-      if (Util::Fs::fileExists(file)) {
-        Util::Fs::copyFile(file, J(file));
-        Util::Fs::chown(J(file), myuid, mygid);
-      }
+    // skip auth copy if clipboard disabled or x11 mode is none
+    bool skipX11Auth = (spec.x11Options && spec.x11Options->mode == "none") ||
+                       (spec.clipboardOptions && spec.clipboardOptions->mode == "none" &&
+                        spec.x11Options && spec.x11Options->mode != "nested");
+    if (!skipX11Auth) {
+      for (auto &file : {STR(homeDir << "/.Xauthority"), STR(homeDir << "/.ICEauthority")})
+        if (Util::Fs::fileExists(file)) {
+          Util::Fs::copyFile(file, J(file));
+          Util::Fs::chown(J(file), myuid, mygid);
+        }
+    }
   }
 
   // run the process
@@ -783,6 +967,16 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   } else {
     runScript("run:after-execute");
 
+    // stop managed services in reverse order (§14)
+    if (!spec.managedServices.empty() && spec.servicesAutoStart) {
+      for (auto it = spec.managedServices.rbegin(); it != spec.managedServices.rend(); ++it) {
+        if (it->enable) {
+          LOG("stopping managed service: " << it->name)
+          execInJail({"/usr/sbin/service", it->name, "onestop"}, CSTR("stop managed service " << it->name));
+        }
+      }
+    }
+
     // stop services, if any
     if (!spec.runServices.empty())
       for (auto &service : Util::reverseVector(spec.runServices))
@@ -804,12 +998,16 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   if (hasZfsDatasets)
     detachZfsDatasets.doNow();
   destroyJail.doNow();
+  killXephyrAtEnd.doNow();
+  destroySocatProxies.doNow();
   for (auto &m : mounts)
     m->unmount();
   if (optionNet && (optionNet->allowOutbound() || optionNet->allowInbound())) {
     destroyFirewallRulesAtEnd.doNow();
     destroyEpipeAtEnd.doNow();
   }
+  if (spec.cowOptions)
+    destroyCowClone.doNow();
   destroyJailDir.doNow();
 
   // done

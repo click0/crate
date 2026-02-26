@@ -59,6 +59,39 @@ bool validateCrateSpec(const Args &args) {
   if (spec.allowMlock)
     warn("security/allow_mlock=true lets jail processes lock memory — may affect host performance");
 
+  // COW cross-checks (§6)
+  if (spec.cowOptions) {
+    if (spec.cowOptions->backend == "zfs")
+      warn("cow/backend=zfs requires jail directory to be on a ZFS dataset");
+    if (spec.cowOptions->mode == "persistent")
+      warn("cow/mode=persistent will accumulate clone datasets over time; clean up manually");
+  }
+
+  // X11 nested mode cross-checks (§11)
+  if (spec.x11Options) {
+    if (spec.x11Options->mode == "nested")
+      warn("x11/mode=nested requires Xephyr to be installed on the host");
+  }
+
+  // Clipboard cross-checks (§12)
+  if (spec.clipboardOptions) {
+    if (spec.clipboardOptions->mode == "isolated" &&
+        (!spec.x11Options || spec.x11Options->mode != "nested"))
+      warn("clipboard/mode=isolated only provides full isolation with x11/mode=nested");
+  }
+
+  // D-Bus cross-checks (§13)
+  if (spec.dbusOptions) {
+    if (spec.dbusOptions->sessionBus)
+      warn("dbus/session=true requires dbus-daemon to be installed in the container");
+  }
+
+  // Socket proxy cross-checks (§15)
+  if (spec.socketProxy) {
+    if (spec.socketProxy->share.empty() && spec.socketProxy->proxy.empty())
+      warn("socket_proxy section present but no share/proxy entries defined");
+  }
+
   // Report
   std::cout << rang::fg::green << "Spec '" << args.validateSpec << "' is valid";
   if (warnings > 0)

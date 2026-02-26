@@ -159,6 +159,7 @@ bool isOnZfs(const std::string &path);
 std::string getZfsDataset(const std::string &path);
 bool isZfsEncrypted(const std::string &dataset);
 bool isZfsKeyLoaded(const std::string &dataset);
+std::string getUserHomeDir();
 
 }
 

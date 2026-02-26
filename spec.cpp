@@ -340,6 +340,44 @@ void Spec::validate() const {
   // enforce_statfs range
   if (enforceStatfs != -1 && (enforceStatfs < 0 || enforceStatfs > 2))
     ERR("security/enforce_statfs must be 0, 1, or 2")
+
+  // COW validation (§6)
+  if (cowOptions) {
+    if (cowOptions->mode != "ephemeral" && cowOptions->mode != "persistent")
+      ERR("cow/mode must be 'ephemeral' or 'persistent'")
+    if (cowOptions->backend != "zfs" && cowOptions->backend != "unionfs")
+      ERR("cow/backend must be 'zfs' or 'unionfs'")
+  }
+
+  // clipboard validation (§12)
+  if (clipboardOptions) {
+    if (clipboardOptions->mode != "isolated" && clipboardOptions->mode != "shared" && clipboardOptions->mode != "none")
+      ERR("clipboard/mode must be 'isolated', 'shared', or 'none'")
+  }
+
+  // D-Bus validation (§13)
+  if (dbusOptions) {
+    if (!dbusOptions->systemBus && !dbusOptions->sessionBus)
+      ERR("dbus section present but both system and session are disabled")
+  }
+
+  // managed services validation (§14)
+  for (auto &ms : managedServices)
+    if (ms.name.empty())
+      ERR("managed service entry missing name")
+
+  // socket proxy validation (§15)
+  if (socketProxy) {
+    for (auto &s : socketProxy->share)
+      if (s.empty() || s[0] != '/')
+        ERR("socket_proxy/share paths must be absolute: " << s)
+    for (auto &p : socketProxy->proxy) {
+      if (p.host.empty() || p.host[0] != '/')
+        ERR("socket_proxy/proxy/host path must be absolute: " << p.host)
+      if (p.jail.empty() || p.jail[0] != '/')
+        ERR("socket_proxy/proxy/jail path must be absolute: " << p.jail)
+    }
+  }
 }
 
 //
@@ -655,6 +693,176 @@ Spec parseSpec(const std::string &fname) {
             ERR("security/allow_mlock must be a boolean")
         } else {
           ERR("unknown element security/" << b.first << " in spec")
+        }
+      }
+    } else if (isKey(k, "cow")) {
+      // Copy-on-Write filesystem (§6)
+      if (!k.second.IsMap())
+        ERR("cow must be a map")
+      spec.cowOptions = std::make_unique<Spec::CowOptions>();
+      spec.cowOptions->backend = "zfs";
+      spec.cowOptions->mode = "ephemeral";
+      for (auto b : k.second) {
+        if (isKey(b, "mode")) {
+          scalar(b.second, spec.cowOptions->mode, "cow/mode");
+          if (spec.cowOptions->mode != "ephemeral" && spec.cowOptions->mode != "persistent")
+            ERR("cow/mode must be 'ephemeral' or 'persistent'")
+        } else if (isKey(b, "backend")) {
+          scalar(b.second, spec.cowOptions->backend, "cow/backend");
+          if (spec.cowOptions->backend != "zfs" && spec.cowOptions->backend != "unionfs")
+            ERR("cow/backend must be 'zfs' or 'unionfs'")
+        } else {
+          ERR("unknown element cow/" << b.first << " in spec")
+        }
+      }
+    } else if (isKey(k, "x11")) {
+      // GUI/Desktop isolation (§11) — top-level x11 section
+      if (k.second.IsMap()) {
+        spec.x11Options = std::make_unique<Spec::X11Options>();
+        for (auto b : k.second) {
+          if (isKey(b, "mode")) {
+            scalar(b.second, spec.x11Options->mode, "x11/mode");
+            if (spec.x11Options->mode != "nested" && spec.x11Options->mode != "shared" && spec.x11Options->mode != "none")
+              ERR("x11/mode must be 'nested', 'shared', or 'none'")
+          } else if (isKey(b, "resolution")) {
+            scalar(b.second, spec.x11Options->resolution, "x11/resolution");
+          } else if (isKey(b, "clipboard")) {
+            if (!YAML::convert<bool>::decode(b.second, spec.x11Options->clipboardEnabled))
+              ERR("x11/clipboard must be a boolean")
+          } else {
+            ERR("unknown element x11/" << b.first << " in spec")
+          }
+        }
+        // ensure x11 is in options map for optionExists("x11")
+        if (spec.options.find("x11") == spec.options.end())
+          spec.options["x11"] = nullptr;
+      } else if (k.second.IsScalar()) {
+        // simple form: x11: true
+        bool val;
+        if (YAML::convert<bool>::decode(k.second, val) && val)
+          spec.options["x11"] = nullptr;
+      } else {
+        ERR("x11 must be a map or boolean")
+      }
+    } else if (isKey(k, "clipboard")) {
+      // Clipboard isolation (§12)
+      if (!k.second.IsMap())
+        ERR("clipboard must be a map")
+      spec.clipboardOptions = std::make_unique<Spec::ClipboardOptions>();
+      for (auto b : k.second) {
+        if (isKey(b, "mode")) {
+          scalar(b.second, spec.clipboardOptions->mode, "clipboard/mode");
+          if (spec.clipboardOptions->mode != "isolated" && spec.clipboardOptions->mode != "shared" && spec.clipboardOptions->mode != "none")
+            ERR("clipboard/mode must be 'isolated', 'shared', or 'none'")
+        } else if (isKey(b, "direction")) {
+          scalar(b.second, spec.clipboardOptions->direction, "clipboard/direction");
+          if (spec.clipboardOptions->direction != "in" && spec.clipboardOptions->direction != "out"
+              && spec.clipboardOptions->direction != "both" && spec.clipboardOptions->direction != "none")
+            ERR("clipboard/direction must be 'in', 'out', 'both', or 'none'")
+        } else {
+          ERR("unknown element clipboard/" << b.first << " in spec")
+        }
+      }
+    } else if (isKey(k, "dbus")) {
+      // D-Bus isolation (§13)
+      if (!k.second.IsMap())
+        ERR("dbus must be a map")
+      spec.dbusOptions = std::make_unique<Spec::DbusOptions>();
+      for (auto b : k.second) {
+        if (isKey(b, "system")) {
+          if (!YAML::convert<bool>::decode(b.second, spec.dbusOptions->systemBus))
+            ERR("dbus/system must be a boolean")
+        } else if (isKey(b, "session")) {
+          if (!YAML::convert<bool>::decode(b.second, spec.dbusOptions->sessionBus))
+            ERR("dbus/session must be a boolean")
+        } else if (isKey(b, "policy")) {
+          if (!b.second.IsMap())
+            ERR("dbus/policy must be a map")
+          for (auto p : b.second) {
+            if (isKey(p, "allow_own") || isKey(p, "allow-own")) {
+              listOrScalarOnly(p.second, spec.dbusOptions->allowOwn, "dbus/policy/allow_own");
+            } else if (isKey(p, "deny_send") || isKey(p, "deny-send")) {
+              listOrScalarOnly(p.second, spec.dbusOptions->denySend, "dbus/policy/deny_send");
+            } else {
+              ERR("unknown element dbus/policy/" << p.first << " in spec")
+            }
+          }
+        } else {
+          ERR("unknown element dbus/" << b.first << " in spec")
+        }
+      }
+    } else if (isKey(k, "services")) {
+      // Managed services (§14)
+      if (!k.second.IsMap())
+        ERR("services must be a map")
+      for (auto b : k.second) {
+        if (isKey(b, "managed")) {
+          if (!b.second.IsSequence())
+            ERR("services/managed must be a list")
+          for (auto svc : b.second) {
+            Spec::ManagedService ms;
+            if (svc.IsScalar()) {
+              ms.name = AsString(svc);
+            } else if (svc.IsMap()) {
+              for (auto f : svc) {
+                if (AsString(f.first) == "name")
+                  ms.name = AsString(f.second);
+                else if (AsString(f.first) == "enable") {
+                  if (!YAML::convert<bool>::decode(f.second, ms.enable))
+                    ERR("services/managed/enable must be a boolean")
+                } else if (AsString(f.first) == "rcvar")
+                  ms.rcvar = AsString(f.second);
+                else
+                  ERR("unknown field in services/managed: " << f.first)
+              }
+            } else {
+              ERR("services/managed entries must be scalars or maps")
+            }
+            if (ms.name.empty())
+              ERR("services/managed entry missing 'name'")
+            spec.managedServices.push_back(ms);
+          }
+        } else if (isKey(b, "auto_start") || isKey(b, "auto-start")) {
+          if (!YAML::convert<bool>::decode(b.second, spec.servicesAutoStart))
+            ERR("services/auto_start must be a boolean")
+        } else {
+          ERR("unknown element services/" << b.first << " in spec")
+        }
+      }
+    } else if (isKey(k, "socket_proxy") || isKey(k, "socket-proxy")) {
+      // Socket proxy (§15)
+      if (!k.second.IsMap())
+        ERR("socket_proxy must be a map")
+      spec.socketProxy = std::make_unique<Spec::SocketProxy>();
+      for (auto b : k.second) {
+        if (isKey(b, "share")) {
+          listOrScalarOnly(b.second, spec.socketProxy->share, "socket_proxy/share");
+        } else if (isKey(b, "proxy")) {
+          if (!b.second.IsSequence())
+            ERR("socket_proxy/proxy must be a list")
+          for (auto p : b.second) {
+            if (!p.IsMap())
+              ERR("socket_proxy/proxy entries must be maps")
+            Spec::SocketProxy::ProxyEntry entry;
+            for (auto f : p) {
+              if (AsString(f.first) == "host")
+                entry.host = AsString(f.second);
+              else if (AsString(f.first) == "jail")
+                entry.jail = AsString(f.second);
+              else if (AsString(f.first) == "direction") {
+                entry.direction = AsString(f.second);
+                if (entry.direction != "bidirectional" && entry.direction != "in" && entry.direction != "out")
+                  ERR("socket_proxy/proxy/direction must be 'bidirectional', 'in', or 'out'")
+              } else {
+                ERR("unknown field in socket_proxy/proxy: " << f.first)
+              }
+            }
+            if (entry.host.empty() || entry.jail.empty())
+              ERR("socket_proxy/proxy entries require 'host' and 'jail' fields")
+            spec.socketProxy->proxy.push_back(entry);
+          }
+        } else {
+          ERR("unknown element socket_proxy/" << b.first << " in spec")
         }
       }
     } else if (isKey(k, "scripts")) {
