@@ -29,6 +29,7 @@
 #include <sys/param.h>
 #include <sys/mount.h>
 #include <sys/linker.h>
+#include <sys/wait.h>
 #include <pwd.h>
 
 
@@ -93,6 +94,8 @@ std::string runCommandGetOutput(const std::string &cmd, const std::string &what)
   FILE *f = ::popen(cmd.c_str(), "r");
   if (f == nullptr)
     ERR2("run external command", "popen failed for (" << cmd << ")")
+  // RAII wrapper ensures pclose() is called even if an exception occurs during read
+  std::unique_ptr<FILE, decltype(&::pclose)> fp(f, ::pclose);
   // read command's output
   std::ostringstream ss;
   char buf[1025];
@@ -104,10 +107,186 @@ std::string runCommandGetOutput(const std::string &cmd, const std::string &what)
       ss << buf;
     }
   } while (nbytes == sizeof(buf)-1);
-  // cleanup: pclose() waits for the child process (fclose would leak zombies)
-  ::pclose(f);
-  //
   return ss.str();
+}
+
+// Convert vector<string> argv to char*[] for execvp
+static std::vector<char*> toExecArgv(const std::vector<std::string> &argv) {
+  std::vector<char*> cargv;
+  cargv.reserve(argv.size() + 1);
+  for (auto &a : argv)
+    cargv.push_back(const_cast<char*>(a.c_str()));
+  cargv.push_back(nullptr);
+  return cargv;
+}
+
+void execCommand(const std::vector<std::string> &argv, const std::string &what) {
+  if (argv.empty())
+    ERR2("exec command", "empty argv for: " << what)
+  auto cargv = toExecArgv(argv);
+  pid_t pid = ::fork();
+  if (pid == -1)
+    ERR2("exec command", "fork failed for '" << what << "': " << strerror(errno))
+  if (pid == 0) {
+    // child
+    ::execvp(cargv[0], cargv.data());
+    ::_exit(127); // exec failed
+  }
+  // parent: wait for child
+  int status;
+  while (::waitpid(pid, &status, 0) == -1) {
+    if (errno != EINTR)
+      ERR2("exec command", "waitpid failed for '" << what << "': " << strerror(errno))
+  }
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    ERR2("exec command", "'" << what << "' failed with exit status " << code)
+  }
+}
+
+std::string execCommandGetOutput(const std::vector<std::string> &argv, const std::string &what) {
+  if (argv.empty())
+    ERR2("exec command", "empty argv for: " << what)
+  int pipefd[2];
+  if (::pipe(pipefd) == -1)
+    ERR2("exec command", "pipe failed for '" << what << "': " << strerror(errno))
+  auto cargv = toExecArgv(argv);
+  pid_t pid = ::fork();
+  if (pid == -1) {
+    ::close(pipefd[0]);
+    ::close(pipefd[1]);
+    ERR2("exec command", "fork failed for '" << what << "': " << strerror(errno))
+  }
+  if (pid == 0) {
+    // child: redirect stdout to pipe write end
+    ::close(pipefd[0]);
+    ::dup2(pipefd[1], STDOUT_FILENO);
+    ::close(pipefd[1]);
+    ::execvp(cargv[0], cargv.data());
+    ::_exit(127);
+  }
+  // parent: read from pipe read end
+  ::close(pipefd[1]);
+  std::ostringstream ss;
+  char buf[4096];
+  ssize_t nbytes;
+  while ((nbytes = ::read(pipefd[0], buf, sizeof(buf))) > 0)
+    ss.write(buf, nbytes);
+  ::close(pipefd[0]);
+  // wait for child
+  int status;
+  while (::waitpid(pid, &status, 0) == -1) {
+    if (errno != EINTR)
+      ERR2("exec command", "waitpid failed for '" << what << "': " << strerror(errno))
+  }
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    ERR2("exec command", "'" << what << "' failed with exit status " << code)
+  }
+  return ss.str();
+}
+
+// Internal: run a pipeline of commands, optionally capturing last stdout into a string
+static std::string execPipelineImpl(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
+                                    const std::string &stdinFile, const std::string &stdoutFile, bool capture) {
+  if (cmds.empty())
+    ERR2("exec pipeline", "empty pipeline for: " << what)
+
+  int n = cmds.size();
+  // Create n-1 pipes
+  std::vector<int> pipefds(2 * (n - 1));
+  for (int i = 0; i < n - 1; i++) {
+    if (::pipe(&pipefds[2*i]) == -1)
+      ERR2("exec pipeline", "pipe() failed for '" << what << "': " << strerror(errno))
+  }
+
+  // Capture pipe for last process stdout (when capture=true)
+  int capturePipe[2] = {-1, -1};
+  if (capture) {
+    if (::pipe(capturePipe) == -1)
+      ERR2("exec pipeline", "pipe() failed for capture: " << strerror(errno))
+  }
+
+  // Fork children
+  std::vector<pid_t> pids(n);
+  for (int i = 0; i < n; i++) {
+    auto cargv = toExecArgv(cmds[i]);
+    pid_t pid = ::fork();
+    if (pid == -1)
+      ERR2("exec pipeline", "fork() failed for '" << what << "': " << strerror(errno))
+    if (pid == 0) {
+      // child i
+      // stdin: from previous pipe or stdinFile (for first)
+      if (i == 0 && !stdinFile.empty()) {
+        int fd = ::open(stdinFile.c_str(), O_RDONLY);
+        if (fd == -1) ::_exit(127);
+        ::dup2(fd, STDIN_FILENO);
+        ::close(fd);
+      } else if (i > 0) {
+        ::dup2(pipefds[2*(i-1)], STDIN_FILENO);
+      }
+      // stdout: to next pipe, or stdoutFile/capture (for last)
+      if (i < n - 1) {
+        ::dup2(pipefds[2*i+1], STDOUT_FILENO);
+      } else {
+        if (!stdoutFile.empty()) {
+          int fd = ::open(stdoutFile.c_str(), O_WRONLY|O_CREAT|O_TRUNC, 0644);
+          if (fd == -1) ::_exit(127);
+          ::dup2(fd, STDOUT_FILENO);
+          ::close(fd);
+        } else if (capture) {
+          ::dup2(capturePipe[1], STDOUT_FILENO);
+        }
+      }
+      // close all pipe fds in child
+      for (auto fd : pipefds) ::close(fd);
+      if (capturePipe[0] >= 0) ::close(capturePipe[0]);
+      if (capturePipe[1] >= 0) ::close(capturePipe[1]);
+      ::execvp(cargv[0], cargv.data());
+      ::_exit(127);
+    }
+    pids[i] = pid;
+  }
+
+  // Parent: close all pipe fds
+  for (auto fd : pipefds) ::close(fd);
+  if (capturePipe[1] >= 0) ::close(capturePipe[1]);
+
+  // Read captured output if needed
+  std::ostringstream ss;
+  if (capture) {
+    char buf[4096];
+    ssize_t nbytes;
+    while ((nbytes = ::read(capturePipe[0], buf, sizeof(buf))) > 0)
+      ss.write(buf, nbytes);
+    ::close(capturePipe[0]);
+  }
+
+  // Wait for all children
+  bool failed = false;
+  for (int i = 0; i < n; i++) {
+    int status;
+    while (::waitpid(pids[i], &status, 0) == -1) {
+      if (errno != EINTR)
+        ERR2("exec pipeline", "waitpid failed for '" << what << "': " << strerror(errno))
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+      failed = true;
+  }
+  if (failed)
+    ERR2("exec pipeline", "'" << what << "' pipeline failed")
+
+  return ss.str();
+}
+
+void execPipeline(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
+                  const std::string &stdinFile, const std::string &stdoutFile) {
+  execPipelineImpl(cmds, what, stdinFile, stdoutFile, false);
+}
+
+std::string execPipelineGetOutput(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
+                                  const std::string &stdinFile) {
+  return execPipelineImpl(cmds, what, stdinFile, "", true);
 }
 
 void ckSyscallError(int res, const char *syscall, const char *arg, const std::function<bool(int)> whiteWash) {
@@ -267,6 +446,16 @@ std::string shellQuote(const std::string &arg) {
       ss << chr;
   ss << '\'';
   return ss.str();
+}
+
+std::string safePath(const std::string &path, const std::string &requiredPrefix, const std::string &what) {
+  namespace fs = std::filesystem;
+  auto canonical = fs::weakly_canonical(path).string();
+  if (canonical.size() < requiredPrefix.size() ||
+      canonical.compare(0, requiredPrefix.size(), requiredPrefix) != 0)
+    ERR2("path validation", "'" << what << "' path '" << path << "' resolves to '"
+         << canonical << "' which is outside required prefix '" << requiredPrefix << "'")
+  return canonical;
 }
 
 namespace Fs {
@@ -563,16 +752,16 @@ std::string getZfsDataset(const std::string &path) {
 }
 
 bool isZfsEncrypted(const std::string &dataset) {
-  auto output = runCommandGetOutput(
-    STR("zfs get -H -o value encryption " << shellQuote(dataset)),
+  auto output = execCommandGetOutput(
+    {"zfs", "get", "-H", "-o", "value", "encryption", dataset},
     "check ZFS encryption");
   auto val = stripTrailingSpace(output);
   return !val.empty() && val != "off" && val != "-";
 }
 
 bool isZfsKeyLoaded(const std::string &dataset) {
-  auto output = runCommandGetOutput(
-    STR("zfs get -H -o value keystatus " << shellQuote(dataset)),
+  auto output = execCommandGetOutput(
+    {"zfs", "get", "-H", "-o", "value", "keystatus", dataset},
     "check ZFS key status");
   return stripTrailingSpace(output) == "available";
 }

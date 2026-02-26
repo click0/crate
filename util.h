@@ -84,6 +84,14 @@ namespace Util {
 
 void runCommand(const std::string &cmd, const std::string &what);
 std::string runCommandGetOutput(const std::string &cmd, const std::string &what);
+// exec-based execution: no shell involved, immune to command injection
+void execCommand(const std::vector<std::string> &argv, const std::string &what);
+std::string execCommandGetOutput(const std::vector<std::string> &argv, const std::string &what);
+// exec-based pipeline: chain of commands connected by pipes
+void execPipeline(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
+                  const std::string &stdinFile = "", const std::string &stdoutFile = "");
+std::string execPipelineGetOutput(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
+                                  const std::string &stdinFile = "");
 void ckSyscallError(int res, const char *syscall, const char *arg, const std::function<bool(int)> whiteWash = [](int err) {return false;});
 std::string tmSecMs();
 std::string filePathToBareName(const std::string &path);
@@ -101,6 +109,7 @@ std::string pathSubstituteVarsInPath(const std::string &path);
 std::string pathSubstituteVarsInString(const std::string &str);
 std::vector<std::string> reverseVector(const std::vector<std::string> &v);
 std::string shellQuote(const std::string &arg);
+std::string safePath(const std::string &path, const std::string &requiredPrefix, const std::string &what);
 
 namespace Fs {
 

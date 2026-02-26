@@ -265,7 +265,9 @@ static void removeRedundantJailParts(const std::string &jailPath, const Spec &sp
 
   // remove static libs if not requested to keep them
   if (!spec.optionExists("no-rm-static-libs"))
-    Util::runCommand(STR("find " << Util::shellQuote(jailPath) << " -name '*.a' -delete"), "remove static libs");
+    for (auto &entry : std::filesystem::recursive_directory_iterator(jailPath))
+      if (entry.is_regular_file() && entry.path().extension() == ".a")
+        Fs::unlink(entry.path());
 }
 
 //
@@ -283,7 +285,7 @@ bool createCrate(const Args &args, const Spec &spec) {
   // download the base archive if not yet
   if (!Util::Fs::fileExists(Locations::baseArchive)) {
     std::cout << "downloading base.txz from " << Locations::baseArchiveUrl << " ..." << std::endl;
-    Util::runCommand(STR("fetch -o " << Util::shellQuote(Locations::baseArchive) << " " << Util::shellQuote(Locations::baseArchiveUrl)), "download base.txz");
+    Util::execCommand({"fetch", "-o", Locations::baseArchive, Locations::baseArchiveUrl}, "download base.txz");
     std::cout << "base.txz has finished downloading" << std::endl;
   }
 
@@ -315,9 +317,9 @@ bool createCrate(const Args &args, const Spec &spec) {
 
   // unpack the base archive
   LOG("unpacking the base archive")
-  Util::runCommand(STR(Cmd::xz << " --decompress < " << Util::shellQuote(Locations::baseArchive)
-                       << " | tar -xf - --uname \"\" --gname \"\" -C " << Util::shellQuote(jailPath)),
-                   "unpack the system base into the jail directory");
+  Util::execPipeline(
+    {{"xz", Cmd::xzThreadsArg, "--decompress"}, {"tar", "-xf", "-", "--uname", "", "--gname", "", "-C", jailPath}},
+    "unpack the system base into the jail directory", Locations::baseArchive);
   runScript("create:start");
 
   // copy /etc/resolv.conf into the jail directory such that pkg would be able to resolve addresses
@@ -363,7 +365,9 @@ bool createCrate(const Args &args, const Spec &spec) {
 
   // pack the jail into a .crate file
   LOG("creating the crate file " << crateFileName)
-  Util::runCommand(STR("tar cf - -C " << Util::shellQuote(jailPath) << " . | " << Cmd::xz << " --extreme > " << Util::shellQuote(crateFileName)), "compress the jail directory into the crate file");
+  Util::execPipeline(
+    {{"tar", "cf", "-", "-C", jailPath, "."}, {"xz", Cmd::xzThreadsArg, "--extreme"}},
+    "compress the jail directory into the crate file", "", crateFileName);
   Util::Fs::chown(crateFileName, myuid, mygid);
 
   // remove the create directory

@@ -51,12 +51,12 @@ void Mount::mount() {
     param("target", (void*)target.c_str(), (size_t)-1);
   param("errmsg", errmsg,                sizeof(errmsg));
   int res = ::nmount(&iov[0], iov.size(), flags);
+  // Free strdup'd names BEFORE checking error — prevents leak if ERR throws
+  for (unsigned i = 0; i < iov.size(); i += 2)
+    ::free(iov[i].iov_base);
   if (res != 0)
     ERR("nmount of '" << target << "' on '" << fspath << "' failed: " << strerror(errno) << (errmsg[0] ? STR(" (" << errmsg << ")") : ""))
   mounted = true;
-
-  for (unsigned i = 0; i < iov.size(); i += 2)
-    ::free(iov[i].iov_base);
 }
 
 void Mount::unmount(bool doThrow) {

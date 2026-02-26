@@ -15,6 +15,7 @@
 
 #include <string>
 #include <vector>
+#include <fstream>
 
 namespace Net {
 
@@ -84,7 +85,21 @@ std::vector<IpInfo> getIfaceIp4Addresses(const std::string &ifaceName) {
 }
 
 std::string getNameserverIp() {
-  return Util::stripTrailingSpace(Util::runCommandGetOutput("grep -i '^nameserver' /etc/resolv.conf | head -n1 | cut -d ' ' -f2", "find nameserver IP address"));
+  std::ifstream resolv("/etc/resolv.conf");
+  if (!resolv.is_open())
+    ERR2("network", "failed to open /etc/resolv.conf")
+  std::string line;
+  while (std::getline(resolv, line)) {
+    // match "nameserver <ip>" (case insensitive prefix)
+    if (line.size() > 11 &&
+        (line.substr(0, 11) == "nameserver " || line.substr(0, 11) == "NAMESERVER " || line.substr(0, 11) == "Nameserver ")) {
+      auto ip = Util::stripTrailingSpace(line.substr(11));
+      if (!ip.empty())
+        return ip;
+    }
+  }
+  ERR2("network", "no nameserver found in /etc/resolv.conf")
+  return ""; // unreachable
 }
 
 }
