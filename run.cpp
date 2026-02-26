@@ -122,23 +122,8 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   auto jailPath = STR(Locations::jailDirectoryPath << "/jail-" << Util::filePathToBareName(args.runCrateFile) << "-" << Util::randomHex(4));
   Util::Fs::mkdir(jailPath, S_IRUSR|S_IWUSR|S_IXUSR);
 
-  // check encryption requirements (§1)
-  if (spec.encrypted) {
-    if (!Util::Fs::isOnZfs(jailPath))
-      ERR("spec requires encrypted storage but jail directory is not on ZFS; "
-          "create a ZFS dataset with: zfs create -o encryption=aes-256-gcm -o keyformat=passphrase <pool>/crate")
-    auto dataset = Util::Fs::getZfsDataset(jailPath);
-    if (dataset.empty())
-      ERR("cannot determine ZFS dataset for jail directory")
-    if (!Util::Fs::isZfsEncrypted(dataset))
-      ERR("spec requires encryption but ZFS dataset '" << dataset << "' is not encrypted; "
-          "create with: zfs create -o encryption=aes-256-gcm -o keyformat=passphrase " << dataset)
-    if (!Util::Fs::isZfsKeyLoaded(dataset))
-      ERR("ZFS dataset '" << dataset << "' is encrypted but key is not loaded; "
-          "run 'zfs load-key " << dataset << "' first")
-    LOG("jail directory on encrypted ZFS dataset '" << dataset << "'")
-  } else if (Util::Fs::isOnZfs(jailPath)) {
-    // opportunistic: check if already on encrypted ZFS without spec requesting it
+  // check if jail directory is on encrypted ZFS (opportunistic, pre-spec)
+  if (Util::Fs::isOnZfs(jailPath)) {
     auto dataset = Util::Fs::getZfsDataset(jailPath);
     if (!dataset.empty() && Util::Fs::isZfsEncrypted(dataset)) {
       if (!Util::Fs::isZfsKeyLoaded(dataset))
@@ -188,6 +173,23 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // parse +CRATE.SPEC
   auto spec = parseSpec(J("/+CRATE.SPEC")).preprocess();
+
+  // enforce encryption requirement from spec (§1)
+  if (spec.encrypted) {
+    if (!Util::Fs::isOnZfs(jailPath))
+      ERR("spec requires encrypted storage but jail directory is not on ZFS; "
+          "create a ZFS dataset with: zfs create -o encryption=aes-256-gcm -o keyformat=passphrase <pool>/crate")
+    auto dataset = Util::Fs::getZfsDataset(jailPath);
+    if (dataset.empty())
+      ERR("cannot determine ZFS dataset for jail directory")
+    if (!Util::Fs::isZfsEncrypted(dataset))
+      ERR("spec requires encryption but ZFS dataset '" << dataset << "' is not encrypted; "
+          "create with: zfs create -o encryption=aes-256-gcm -o keyformat=passphrase " << dataset)
+    if (!Util::Fs::isZfsKeyLoaded(dataset))
+      ERR("ZFS dataset '" << dataset << "' is encrypted but key is not loaded; "
+          "run 'zfs load-key " << dataset << "' first")
+    LOG("spec-required encryption verified on dataset '" << dataset << "'")
+  }
 
   // check the pre-conditions
   int origIpForwarding = -1; // -1 = not modified; 0 = was off and we turned it on
