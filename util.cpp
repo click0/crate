@@ -150,29 +150,27 @@ std::string execCommandGetOutput(const std::vector<std::string> &argv, const std
   int pipefd[2];
   if (::pipe(pipefd) == -1)
     ERR2("exec command", "pipe failed for '" << what << "': " << strerror(errno))
+  UniqueFd pipeRead(pipefd[0]), pipeWrite(pipefd[1]);
   auto cargv = toExecArgv(argv);
   pid_t pid = ::fork();
-  if (pid == -1) {
-    ::close(pipefd[0]);
-    ::close(pipefd[1]);
+  if (pid == -1)
     ERR2("exec command", "fork failed for '" << what << "': " << strerror(errno))
-  }
   if (pid == 0) {
-    // child: redirect stdout to pipe write end
-    ::close(pipefd[0]);
-    ::dup2(pipefd[1], STDOUT_FILENO);
-    ::close(pipefd[1]);
+    // child: redirect stdout to pipe write end (no RAII in child — exec replaces process)
+    ::close(pipeRead.release());
+    ::dup2(pipeWrite.get(), STDOUT_FILENO);
+    ::close(pipeWrite.release());
     ::execvp(cargv[0], cargv.data());
     ::_exit(127);
   }
   // parent: read from pipe read end
-  ::close(pipefd[1]);
+  pipeWrite.reset(); // close write end
   std::ostringstream ss;
   char buf[4096];
   ssize_t nbytes;
-  while ((nbytes = ::read(pipefd[0], buf, sizeof(buf))) > 0)
+  while ((nbytes = ::read(pipeRead.get(), buf, sizeof(buf))) > 0)
     ss.write(buf, nbytes);
-  ::close(pipefd[0]);
+  pipeRead.reset(); // close read end
   // wait for child
   int status;
   while (::waitpid(pid, &status, 0) == -1) {
@@ -196,16 +194,31 @@ static std::string execPipelineImpl(const std::vector<std::vector<std::string>> 
   // Create n-1 pipes
   std::vector<int> pipefds(2 * (n - 1));
   for (int i = 0; i < n - 1; i++) {
-    if (::pipe(&pipefds[2*i]) == -1)
+    if (::pipe(&pipefds[2*i]) == -1) {
+      // Close already-created pipes on failure
+      for (int j = 0; j < 2*i; j++) ::close(pipefds[j]);
       ERR2("exec pipeline", "pipe() failed for '" << what << "': " << strerror(errno))
+    }
   }
 
   // Capture pipe for last process stdout (when capture=true)
   int capturePipe[2] = {-1, -1};
   if (capture) {
-    if (::pipe(capturePipe) == -1)
+    if (::pipe(capturePipe) == -1) {
+      for (auto fd : pipefds) ::close(fd);
       ERR2("exec pipeline", "pipe() failed for capture: " << strerror(errno))
+    }
   }
+
+  // Scope guard: close all pipe fds if an exception occurs during fork
+  bool pipesClosedByParent = false;
+  RunAtEnd pipeGuard([&]() {
+    if (!pipesClosedByParent) {
+      for (auto fd : pipefds) if (fd >= 0) ::close(fd);
+      if (capturePipe[0] >= 0) ::close(capturePipe[0]);
+      if (capturePipe[1] >= 0) ::close(capturePipe[1]);
+    }
+  });
 
   // Fork children
   std::vector<pid_t> pids(n);
@@ -248,7 +261,8 @@ static std::string execPipelineImpl(const std::vector<std::vector<std::string>> 
     pids[i] = pid;
   }
 
-  // Parent: close all pipe fds
+  // Parent: close all pipe fds (scope guard no longer needed)
+  pipesClosedByParent = true;
   for (auto fd : pipefds) ::close(fd);
   if (capturePipe[1] >= 0) ::close(capturePipe[1]);
 

@@ -142,9 +142,9 @@ Spec::NetOptDetails::NetOptDetails()
   outboundDns(false)
 { }
 
-Spec::NetOptDetails* Spec::NetOptDetails::createDefault() {
+std::shared_ptr<Spec::NetOptDetails> Spec::NetOptDetails::createDefault() {
   // default "net" options allow all outbound and no inbound
-  auto d = new NetOptDetails;
+  auto d = std::make_shared<NetOptDetails>();
   d->outboundWan  = true; // all outbound is allowed by default
   d->outboundLan  = true;
   d->outboundHost = true;
@@ -196,9 +196,9 @@ Spec::TorOptDetails::TorOptDetails()
 : controlPort(false)
 { }
 
-Spec::TorOptDetails* Spec::TorOptDetails::createDefault() {
+std::shared_ptr<Spec::TorOptDetails> Spec::TorOptDetails::createDefault() {
   // default "tor" option runs tor in the default mode, which is to just have the http proxy port open, and nothing else
-  return new TorOptDetails;
+  return std::make_shared<TorOptDetails>();
 }
 
 // preprocess function processes some options, etc. for simplicity of use both by users and by our 'create' module
@@ -443,11 +443,11 @@ Spec parseSpec(const std::string &fname) {
         // options are a list (simplified format): set details to options that support them
         auto itNet = spec.options.find("net");
         if (itNet != spec.options.end())
-          itNet->second.reset(Spec::NetOptDetails::createDefault()); // default "net" option details
+          itNet->second = Spec::NetOptDetails::createDefault(); // default "net" option details
         auto itTor = spec.options.find("tor");
         if (itTor != spec.options.end()) {
-          itTor->second.reset(Spec::TorOptDetails::createDefault()); // default "tor" option details
-          spec.options["net"].reset(new Spec::NetOptDetails); // blank "net" option details
+          itTor->second = Spec::TorOptDetails::createDefault(); // default "tor" option details
+          spec.options["net"] = std::make_shared<Spec::NetOptDetails>(); // blank "net" option details
           spec.optionNetWr()->outboundWan = true; // only WAN, DNS isn't needed for Tor
         }
       } else if (k.second.IsMap()) {
@@ -465,7 +465,7 @@ Spec parseSpec(const std::string &fname) {
             auto &optVal = spec.options[soptName];
             if (soptName == "net") {
               if (soptVal.IsMap()) {
-                optVal.reset(new Spec::NetOptDetails); // blank "net" option details
+                optVal = std::make_shared<Spec::NetOptDetails>(); // blank "net" option details
                 auto optNetDetails = static_cast<Spec::NetOptDetails*>(optVal.get());
                 for (auto netOpt : soptVal) {
                   if (AsString(netOpt.first) == "outbound") {
@@ -513,9 +513,9 @@ Spec parseSpec(const std::string &fname) {
                     ERR("the invalid value options/net/" << netOpt.first << " supplied")
                 }
               } else
-                optVal.reset(Spec::NetOptDetails::createDefault()); // default "net" option details
+                optVal = Spec::NetOptDetails::createDefault(); // default "net" option details
             } else if (soptName == "tor") { // ASSUME that the "tor" option is after the "net" option
-              optVal.reset(new Spec::TorOptDetails); // blank "tor" option details
+              optVal = std::make_shared<Spec::TorOptDetails>(); // blank "tor" option details
               if (soptVal.IsMap()) {
                 auto optTorDetails = static_cast<Spec::TorOptDetails*>(optVal.get());
                 for (auto torOpt : soptVal) {
@@ -528,7 +528,7 @@ Spec parseSpec(const std::string &fname) {
               }
               // always set options/net/wan for tor
               if (!spec.optionExists("net"))
-                spec.options["net"].reset(new Spec::NetOptDetails); // blank "net" option details
+                spec.options["net"] = std::make_shared<Spec::NetOptDetails>(); // blank "net" option details
               spec.optionNetWr()->outboundWan = true; // only WAN, DNS isn't needed for Tor
             } else {
               if (!soptVal.IsNull())

@@ -76,6 +76,25 @@ public:
   void doNow();
 };
 
+// RAII wrapper for file descriptors
+class UniqueFd {
+  int fd_;
+public:
+  explicit UniqueFd(int fd = -1) : fd_(fd) {}
+  ~UniqueFd() { if (fd_ >= 0) ::close(fd_); }
+  UniqueFd(const UniqueFd&) = delete;
+  UniqueFd& operator=(const UniqueFd&) = delete;
+  UniqueFd(UniqueFd&& o) noexcept : fd_(o.fd_) { o.fd_ = -1; }
+  UniqueFd& operator=(UniqueFd&& o) noexcept {
+    if (fd_ >= 0) ::close(fd_);
+    fd_ = o.fd_; o.fd_ = -1;
+    return *this;
+  }
+  int get() const { return fd_; }
+  int release() { int f = fd_; fd_ = -1; return f; }
+  void reset(int fd = -1) { if (fd_ >= 0) ::close(fd_); fd_ = fd; }
+};
+
 //
 // utility functions
 //

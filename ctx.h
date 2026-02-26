@@ -4,6 +4,7 @@
 
 #include <unistd.h>
 
+#include <memory>
 #include <set>
 #include <string>
 
@@ -17,7 +18,7 @@ class FwUsers {
   FwUsers();
 public:
   ~FwUsers();
-  static FwUsers* lock();       // lock, open, and read
+  static std::unique_ptr<FwUsers> lock();  // lock, open, and read
   void unlock();            // unlock, close, and possibly save
   bool isEmpty() const;
   void add(pid_t pid);
