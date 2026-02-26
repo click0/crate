@@ -378,6 +378,22 @@ void Spec::validate() const {
         ERR("socket_proxy/proxy/jail path must be absolute: " << p.jail)
     }
   }
+
+  // firewall policy validation (§3)
+  if (firewallPolicy) {
+    for (auto port : firewallPolicy->allowTcp)
+      if (port == 0 || port > 65535)
+        ERR("firewall/allow-tcp port out of range: " << port)
+    for (auto port : firewallPolicy->allowUdp)
+      if (port == 0 || port > 65535)
+        ERR("firewall/allow-udp port out of range: " << port)
+  }
+
+  // terminal validation (§16)
+  if (terminalOptions) {
+    if (terminalOptions->devfsRuleset != -1 && (terminalOptions->devfsRuleset < 0 || terminalOptions->devfsRuleset > 65535))
+      ERR("terminal/devfs_ruleset must be 0-65535")
+  }
 }
 
 //
@@ -865,6 +881,82 @@ Spec parseSpec(const std::string &fname) {
           ERR("unknown element socket_proxy/" << b.first << " in spec")
         }
       }
+    } else if (isKey(k, "firewall")) {
+      // Per-container firewall policy (§3)
+      if (!k.second.IsMap())
+        ERR("firewall must be a map")
+      spec.firewallPolicy = std::make_unique<Spec::FirewallPolicy>();
+      for (auto b : k.second) {
+        if (isKey(b, "block-ip") || isKey(b, "block_ip")) {
+          listOrScalarOnly(b.second, spec.firewallPolicy->blockIp, "firewall/block-ip");
+        } else if (isKey(b, "allow-tcp") || isKey(b, "allow_tcp")) {
+          if (b.second.IsSequence()) {
+            for (auto p : b.second)
+              spec.firewallPolicy->allowTcp.push_back(Util::toUInt(AsString(p)));
+          } else if (b.second.IsScalar()) {
+            spec.firewallPolicy->allowTcp.push_back(Util::toUInt(AsString(b.second)));
+          }
+        } else if (isKey(b, "allow-udp") || isKey(b, "allow_udp")) {
+          if (b.second.IsSequence()) {
+            for (auto p : b.second)
+              spec.firewallPolicy->allowUdp.push_back(Util::toUInt(AsString(p)));
+          } else if (b.second.IsScalar()) {
+            spec.firewallPolicy->allowUdp.push_back(Util::toUInt(AsString(b.second)));
+          }
+        } else if (isKey(b, "default")) {
+          scalar(b.second, spec.firewallPolicy->defaultPolicy, "firewall/default");
+          if (spec.firewallPolicy->defaultPolicy != "allow" && spec.firewallPolicy->defaultPolicy != "block")
+            ERR("firewall/default must be 'allow' or 'block'")
+        } else {
+          ERR("unknown element firewall/" << b.first << " in spec")
+        }
+      }
+    } else if (isKey(k, "security_advanced") || isKey(k, "security-advanced")) {
+      // Advanced security: Capsicum + MAC (§8)
+      if (!k.second.IsMap())
+        ERR("security_advanced must be a map")
+      spec.securityAdvanced = std::make_unique<Spec::SecurityAdvanced>();
+      for (auto b : k.second) {
+        if (isKey(b, "capsicum")) {
+          if (!YAML::convert<bool>::decode(b.second, spec.securityAdvanced->capsicum))
+            ERR("security_advanced/capsicum must be a boolean")
+        } else if (isKey(b, "mac_bsdextended") || isKey(b, "mac-bsdextended")) {
+          listOrScalarOnly(b.second, spec.securityAdvanced->macRules, "security_advanced/mac_bsdextended");
+        } else if (isKey(b, "mac_portacl") || isKey(b, "mac-portacl")) {
+          if (b.second.IsMap()) {
+            for (auto p : b.second) {
+              if (AsString(p.first) == "allow_ports" || AsString(p.first) == "allow-ports") {
+                if (p.second.IsSequence()) {
+                  for (auto port : p.second)
+                    spec.securityAdvanced->macAllowPorts.push_back(Util::toUInt(AsString(port)));
+                }
+              } else {
+                ERR("unknown element security_advanced/mac_portacl/" << p.first)
+              }
+            }
+          }
+        } else if (isKey(b, "hide_other_jails") || isKey(b, "hide-other-jails")) {
+          if (!YAML::convert<bool>::decode(b.second, spec.securityAdvanced->hideOtherJails))
+            ERR("security_advanced/hide_other_jails must be a boolean")
+        } else {
+          ERR("unknown element security_advanced/" << b.first << " in spec")
+        }
+      }
+    } else if (isKey(k, "terminal")) {
+      // Terminal isolation (§16)
+      if (!k.second.IsMap())
+        ERR("terminal must be a map")
+      spec.terminalOptions = std::make_unique<Spec::TerminalOptions>();
+      for (auto b : k.second) {
+        if (isKey(b, "devfs_ruleset") || isKey(b, "devfs-ruleset")) {
+          spec.terminalOptions->devfsRuleset = Util::toUInt(AsString(b.second));
+        } else if (isKey(b, "allow_raw_tty") || isKey(b, "allow-raw-tty")) {
+          if (!YAML::convert<bool>::decode(b.second, spec.terminalOptions->allowRawTty))
+            ERR("terminal/allow_raw_tty must be a boolean")
+        } else {
+          ERR("unknown element terminal/" << b.first << " in spec")
+        }
+      }
     } else if (isKey(k, "scripts")) {
       if (!k.second.IsMap())
         ERR("scripts must be a map")
@@ -880,5 +972,91 @@ Spec parseSpec(const std::string &fname) {
   }
 
   return spec;
+}
+
+Spec mergeSpecs(const Spec &base, const Spec &overlay) {
+  Spec result = base;
+
+  // Lists: append overlay items
+  for (auto &v : overlay.baseKeep) result.baseKeep.push_back(v);
+  for (auto &v : overlay.baseKeepWildcard) result.baseKeepWildcard.push_back(v);
+  for (auto &v : overlay.baseRemove) result.baseRemove.push_back(v);
+  for (auto &v : overlay.pkgInstall) result.pkgInstall.push_back(v);
+  for (auto &v : overlay.pkgLocalOverride) result.pkgLocalOverride.push_back(v);
+  for (auto &v : overlay.pkgAdd) result.pkgAdd.push_back(v);
+  for (auto &v : overlay.pkgNuke) result.pkgNuke.push_back(v);
+  for (auto &v : overlay.runServices) result.runServices.push_back(v);
+  for (auto &v : overlay.dirsShare) result.dirsShare.push_back(v);
+  for (auto &v : overlay.filesShare) result.filesShare.push_back(v);
+  for (auto &v : overlay.zfsDatasets) result.zfsDatasets.push_back(v);
+  for (auto &v : overlay.managedServices) result.managedServices.push_back(v);
+
+  // Scalars: overlay wins if non-default
+  if (!overlay.runCmdExecutable.empty()) {
+    result.runCmdExecutable = overlay.runCmdExecutable;
+    result.runCmdArgs = overlay.runCmdArgs;
+  }
+  if (overlay.encrypted) result.encrypted = overlay.encrypted;
+  if (!overlay.encryptionMethod.empty()) result.encryptionMethod = overlay.encryptionMethod;
+  if (!overlay.encryptionKeyformat.empty()) result.encryptionKeyformat = overlay.encryptionKeyformat;
+  if (!overlay.encryptionCipher.empty()) result.encryptionCipher = overlay.encryptionCipher;
+  if (overlay.allowSysvipc) result.allowSysvipc = true;
+  if (overlay.allowMqueue) result.allowMqueue = true;
+  if (overlay.ipcRawSocketsOverride) {
+    result.ipcRawSocketsOverride = true;
+    result.ipcRawSocketsValue = overlay.ipcRawSocketsValue;
+  }
+  if (overlay.enforceStatfs >= 0) result.enforceStatfs = overlay.enforceStatfs;
+  if (overlay.allowQuotas) result.allowQuotas = true;
+  if (overlay.allowSetHostname) result.allowSetHostname = true;
+  if (overlay.allowChflags) result.allowChflags = true;
+  if (overlay.allowMlock) result.allowMlock = true;
+
+  // Maps: overlay wins for conflicts
+  for (auto &opt : overlay.options) result.options[opt.first] = opt.second;
+  for (auto &lim : overlay.limits) result.limits[lim.first] = lim.second;
+  for (auto &s : overlay.scripts)
+    for (auto &sc : s.second)
+      result.scripts[s.first][sc.first] = sc.second;
+
+  // Unique_ptrs: overlay wins if set
+  if (overlay.dnsFilter) {
+    result.dnsFilter = std::make_unique<Spec::DnsFilter>();
+    *result.dnsFilter = *overlay.dnsFilter;
+  }
+  if (overlay.cowOptions) {
+    result.cowOptions = std::make_unique<Spec::CowOptions>();
+    *result.cowOptions = *overlay.cowOptions;
+  }
+  if (overlay.x11Options) {
+    result.x11Options = std::make_unique<Spec::X11Options>();
+    *result.x11Options = *overlay.x11Options;
+  }
+  if (overlay.clipboardOptions) {
+    result.clipboardOptions = std::make_unique<Spec::ClipboardOptions>();
+    *result.clipboardOptions = *overlay.clipboardOptions;
+  }
+  if (overlay.dbusOptions) {
+    result.dbusOptions = std::make_unique<Spec::DbusOptions>();
+    *result.dbusOptions = *overlay.dbusOptions;
+  }
+  if (overlay.socketProxy) {
+    result.socketProxy = std::make_unique<Spec::SocketProxy>();
+    *result.socketProxy = *overlay.socketProxy;
+  }
+  if (overlay.firewallPolicy) {
+    result.firewallPolicy = std::make_unique<Spec::FirewallPolicy>();
+    *result.firewallPolicy = *overlay.firewallPolicy;
+  }
+  if (overlay.securityAdvanced) {
+    result.securityAdvanced = std::make_unique<Spec::SecurityAdvanced>();
+    *result.securityAdvanced = *overlay.securityAdvanced;
+  }
+  if (overlay.terminalOptions) {
+    result.terminalOptions = std::make_unique<Spec::TerminalOptions>();
+    *result.terminalOptions = *overlay.terminalOptions;
+  }
+
+  return result;
 }
 

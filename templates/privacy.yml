@@ -1,0 +1,27 @@
+# Privacy template: Tor routing, encrypted storage, ephemeral COW, DNS filtering
+# Usage: crate create --template privacy -s myapp.yml -o myapp.crate
+
+options:
+  tor:
+    control-port: false
+
+encrypted:
+  method: zfs
+  cipher: aes-256-gcm
+
+cow:
+  mode: ephemeral
+  backend: zfs
+
+dns_filter:
+  block:
+    - "*.doubleclick.net"
+    - "*.googlesyndication.com"
+    - "*.googleadservices.com"
+    - "*.facebook.com"
+    - "*.analytics.google.com"
+  redirect_blocked: nxdomain
+
+clipboard:
+  mode: isolated
+  direction: none

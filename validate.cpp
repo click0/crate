@@ -92,6 +92,29 @@ bool validateCrateSpec(const Args &args) {
       warn("socket_proxy section present but no share/proxy entries defined");
   }
 
+  // Firewall policy cross-checks (§3)
+  if (spec.firewallPolicy) {
+    if (!spec.optionExists("net"))
+      warn("firewall policy requires 'net' option to be enabled");
+    if (spec.firewallPolicy->defaultPolicy == "block" &&
+        spec.firewallPolicy->allowTcp.empty() && spec.firewallPolicy->allowUdp.empty())
+      warn("firewall default=block with no allow rules — all outbound traffic will be blocked");
+  }
+
+  // Capsicum/MAC cross-checks (§8)
+  if (spec.securityAdvanced) {
+    if (spec.securityAdvanced->capsicum)
+      warn("capsicum mode is very restrictive — only pre-opened file descriptors will be usable");
+    if (!spec.securityAdvanced->macRules.empty())
+      warn("mac_bsdextended rules require the mac_bsdextended kernel module to be loaded");
+  }
+
+  // Terminal cross-checks (§16)
+  if (spec.terminalOptions) {
+    if (spec.terminalOptions->devfsRuleset >= 0)
+      warn("custom devfs_ruleset may affect device visibility inside the jail");
+  }
+
   // Report
   std::cout << rang::fg::green << "Spec '" << args.validateSpec << "' is valid";
   if (warnings > 0)

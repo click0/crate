@@ -1,0 +1,10 @@
+# Standard template: basic network access, shared Downloads directory
+# Usage: crate create --template standard -s myapp.yml -o myapp.crate
+
+options:
+  net:
+    outbound: [wan, dns]
+
+dirs:
+  share:
+    - [$HOME/Downloads, $HOME/Downloads]
