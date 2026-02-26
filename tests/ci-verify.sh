@@ -1611,15 +1611,11 @@ else
   fail "run.cpp missing JAIL_OWN_DESC"
 fi
 
-# sys/jail.h C++ safety fix in freebsd-src
-if [ -f "$BUILDDIR/../freebsd-src/sys/sys/jail.h" ]; then
-  if grep -q 'netinet/in.h' "$BUILDDIR/../freebsd-src/sys/sys/jail.h"; then
-    pass "freebsd-src: sys/jail.h includes netinet/in.h for C++ safety"
-  else
-    fail "freebsd-src: sys/jail.h missing netinet/in.h include"
-  fi
+# sys/jail.h C++ safety workaround (bug #238928) in run.cpp
+if grep -q 'extern "C"' "$BUILDDIR/run.cpp" && grep -q 'sys/jail.h' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp wraps sys/jail.h in extern C for C++ safety (bug #238928)"
 else
-  skip "freebsd-src not found (standalone crate build)"
+  fail "run.cpp missing extern C workaround for sys/jail.h"
 fi
 
 # ===========================================================================
