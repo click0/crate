@@ -101,8 +101,6 @@ public:
 
 namespace Util {
 
-void runCommand(const std::string &cmd, const std::string &what);
-std::string runCommandGetOutput(const std::string &cmd, const std::string &what);
 // exec-based execution: no shell involved, immune to command injection
 void execCommand(const std::vector<std::string> &argv, const std::string &what);
 int execCommandGetStatus(const std::vector<std::string> &argv, const std::string &what); // returns raw wait status

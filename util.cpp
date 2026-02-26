@@ -82,35 +82,6 @@ void RunAtEnd::doNow() {
 
 namespace Util {
 
-void runCommand(const std::string &cmd, const std::string &what) {
-  int res = ::system(cmd.c_str());
-  SYSCALL(res, "system", what.c_str()); // syscall failure
-  // command failure
-  if (res != 0)
-    ERR2("run external command", "the command '" << what << "' failed with the exit status " << res)
-}
-
-std::string runCommandGetOutput(const std::string &cmd, const std::string &what) {
-  // start the command
-  FILE *f = ::popen(cmd.c_str(), "r");
-  if (f == nullptr)
-    ERR2("run external command", "popen failed for (" << cmd << ")")
-  // RAII wrapper ensures pclose() is called even if an exception occurs during read
-  std::unique_ptr<FILE, decltype(&::pclose)> fp(f, ::pclose);
-  // read command's output
-  std::ostringstream ss;
-  char buf[1025];
-  size_t nbytes;
-  do {
-    nbytes = ::fread(buf, 1, sizeof(buf)-1, f);
-    if (nbytes > 0) {
-      buf[nbytes] = 0;
-      ss << buf;
-    }
-  } while (nbytes == sizeof(buf)-1);
-  return ss.str();
-}
-
 // Convert vector<string> argv to char*[] for execvp
 static std::vector<char*> toExecArgv(const std::vector<std::string> &argv) {
   std::vector<char*> cargv;
