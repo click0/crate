@@ -76,16 +76,34 @@ public:
   void doNow();
 };
 
+// RAII wrapper for file descriptors
+class UniqueFd {
+  int fd_;
+public:
+  explicit UniqueFd(int fd = -1) : fd_(fd) {}
+  ~UniqueFd() { if (fd_ >= 0) ::close(fd_); }
+  UniqueFd(const UniqueFd&) = delete;
+  UniqueFd& operator=(const UniqueFd&) = delete;
+  UniqueFd(UniqueFd&& o) noexcept : fd_(o.fd_) { o.fd_ = -1; }
+  UniqueFd& operator=(UniqueFd&& o) noexcept {
+    if (fd_ >= 0) ::close(fd_);
+    fd_ = o.fd_; o.fd_ = -1;
+    return *this;
+  }
+  int get() const { return fd_; }
+  int release() { int f = fd_; fd_ = -1; return f; }
+  void reset(int fd = -1) { if (fd_ >= 0) ::close(fd_); fd_ = fd; }
+};
+
 //
 // utility functions
 //
 
 namespace Util {
 
-void runCommand(const std::string &cmd, const std::string &what);
-std::string runCommandGetOutput(const std::string &cmd, const std::string &what);
 // exec-based execution: no shell involved, immune to command injection
 void execCommand(const std::vector<std::string> &argv, const std::string &what);
+int execCommandGetStatus(const std::vector<std::string> &argv, const std::string &what); // returns raw wait status
 std::string execCommandGetOutput(const std::vector<std::string> &argv, const std::string &what);
 // exec-based pipeline: chain of commands connected by pipes
 void execPipeline(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
@@ -110,6 +128,7 @@ std::string pathSubstituteVarsInString(const std::string &str);
 std::vector<std::string> reverseVector(const std::vector<std::string> &v);
 std::string shellQuote(const std::string &arg);
 std::string safePath(const std::string &path, const std::string &requiredPrefix, const std::string &what);
+std::string randomHex(int bytes);
 
 namespace Fs {
 
@@ -135,7 +154,7 @@ char isElfFileOrDir(const std::string &file); // returns 'E'LF, 'D'ir, or 'N'o
 std::set<std::string> findElfFiles(const std::string &dir);
 bool hasExtension(const char *file, const char *extension);
 void copyFile(const std::string &srcFile, const std::string &dstFile);
-std::vector<std::string> expandWildcards(const std::string &wildcardPath, const std::string &cmdPrefix = "");
+std::vector<std::string> expandWildcards(const std::string &wildcardPath, const std::string &rootPrefix = "");
 bool isOnZfs(const std::string &path);
 std::string getZfsDataset(const std::string &path);
 bool isZfsEncrypted(const std::string &dataset);

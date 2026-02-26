@@ -119,7 +119,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   int res;
 
   // create the jail directory
-  auto jailPath = STR(Locations::jailDirectoryPath << "/jail-" << Util::filePathToBareName(args.runCrateFile) << "-pid" << ::getpid());
+  auto jailPath = STR(Locations::jailDirectoryPath << "/jail-" << Util::filePathToBareName(args.runCrateFile) << "-" << Util::randomHex(4));
   Util::Fs::mkdir(jailPath, S_IRUSR|S_IWUSR|S_IXUSR);
 
   // check if jail directory is on encrypted ZFS
@@ -202,7 +202,8 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // helper
   auto runScript = [&jailPath,&spec](const char *section) {
     Scripts::section(section, spec.scripts, [&jailPath,section](const std::string &cmd) {
-      Util::runCommand(STR("ASSUME_ALWAYS_YES=yes /usr/sbin/chroot " << Util::shellQuote(jailPath) << " " << cmd), CSTR("run script#" << section));
+      Util::execCommand({"/usr/sbin/chroot", jailPath, "/bin/sh", "-c",
+                         STR("ASSUME_ALWAYS_YES=yes " << cmd)}, CSTR("run script#" << section));
     });
   };
   runScript("run:begin");
@@ -334,13 +335,6 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     auto fullArgv = std::vector<std::string>{"jexec", jidStr};
     fullArgv.insert(fullArgv.end(), argv.begin(), argv.end());
     Util::execCommand(fullArgv, descr);
-  };
-  // legacy shell-based helper (for commands that need shell features)
-  auto runCommandInJail = [jid](auto cmd, auto descr) {
-    Util::runCommand(STR("jexec " << jid << " " << cmd), descr);
-  };
-  auto runCommandInJailSilently = [jid](auto cmd, auto descr) {
-    Util::runCommand(STR("jexec " << jid << " " << cmd << " > /dev/null"), descr);
   };
   auto writeFileInJail = [J](auto str, auto file) {
     Util::Fs::writeFile(str, J(file));
@@ -533,9 +527,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // rc-initializion (is this really needed?) This depends on the executables /bin/kenv, /sbin/sysctl, /bin/date which need to be kept during the 'create' phase
   if (optionInitializeRc)
-    runCommandInJailSilently("/bin/sh /etc/rc", "exec.start");
+    execInJail({"/bin/sh", "/etc/rc"}, "exec.start");
   else
-    runCommandInJailSilently("service ipfw start > /dev/null", "start firewall in jail");
+    execInJail({"/bin/sh", "-c", "service ipfw start > /dev/null 2>&1"}, "start firewall in jail");
 
   // add the same user to jail, make group=user for now
   {
@@ -645,11 +639,11 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   int returnCode = 0;
   if (!spec.runCmdExecutable.empty()) {
     LOG("running the command in jail: env=" << jailEnv)
-    int status = ::system(CSTR("jexec -l -U " << Util::shellQuote(user) << " " << jid
-                               << " /usr/bin/env " << jailEnv
-                               << (spec.optionExists("dbg-ktrace") ? " /usr/bin/ktrace" : "")
-                               << " " << Util::shellQuote(spec.runCmdExecutable) << spec.runCmdArgs << argsToString(argc, argv)));
-    // system() returns the full wait status; extract the actual exit code
+    // Build inner command for jexec -l (login shell parses this string)
+    auto innerCmd = STR("/usr/bin/env " << jailEnv
+                        << (spec.optionExists("dbg-ktrace") ? " /usr/bin/ktrace" : "")
+                        << " " << Util::shellQuote(spec.runCmdExecutable) << spec.runCmdArgs << argsToString(argc, argv));
+    int status = Util::execCommandGetStatus({"jexec", "-l", "-U", user, jidStr, innerCmd}, "run command in jail");
     returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     LOG("command has finished in jail: returnCode=" << returnCode)
   } else {
@@ -679,7 +673,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     Util::Fs::chmod(J(cmdFile), 0500); // User-RX
     // run it the same way as we would any other command
     {
-      int status = ::system(CSTR("jexec -l -U " << Util::shellQuote(user) << " " << jid << " " << cmdFile));
+      int status = Util::execCommandGetStatus({"jexec", "-l", "-U", user, jidStr, cmdFile}, "run service command in jail");
       returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     }
   }
@@ -700,7 +694,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
     // rc-uninitializion (is this really needed?)
     if (optionInitializeRc)
-      runCommandInJail("/bin/sh /etc/rc.shutdown", "exec.stop");
+      execInJail({"/bin/sh", "/etc/rc.shutdown"}, "exec.stop");
 
     runScript("run:end");
   }

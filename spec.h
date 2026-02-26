@@ -16,7 +16,7 @@ public:
   class NetOptDetails : public OptDetails {
   public:
     NetOptDetails();
-    static NetOptDetails* createDefault();
+    static std::shared_ptr<NetOptDetails> createDefault();
     typedef std::pair<unsigned,unsigned> PortRange;
     bool outboundWan;                 // allow outbound connections to WAN
     bool outboundLan;                 // allow outbound connections to LAN
@@ -31,7 +31,7 @@ public:
   class TorOptDetails : public OptDetails {
   public:
     TorOptDetails();
-    static TorOptDetails* createDefault();
+    static std::shared_ptr<TorOptDetails> createDefault();
     bool controlPort;                 // option to have control port created to be used from inside of the container
   };
   std::vector<std::string>                           baseKeep;

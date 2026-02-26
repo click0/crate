@@ -64,8 +64,21 @@ static void notifyUserOfLongProcess(bool begin, const std::string &processName, 
   std::cout << "==" << rang::fg::reset << std::endl;
 }
 
-static void runChrootCommand(const std::string &jailPath, const std::string &cmd, const char *descr) {
-  Util::runCommand(STR(Cmd::chroot(jailPath) << cmd), descr);
+// exec-based chroot: for pkg commands and similar (argv array, no shell)
+static void runChrootCommand(const std::string &jailPath, const std::vector<std::string> &argv,
+                             const char *descr, const std::string &stdoutFile = "") {
+  auto fullArgv = std::vector<std::string>{"/usr/sbin/chroot", jailPath, "/usr/bin/env", "ASSUME_ALWAYS_YES=yes"};
+  fullArgv.insert(fullArgv.end(), argv.begin(), argv.end());
+  if (stdoutFile.empty())
+    Util::execCommand(fullArgv, descr);
+  else
+    Util::execPipeline({fullArgv}, descr, "", stdoutFile);
+}
+
+// exec-based chroot with shell: for user scripts that need /bin/sh -c
+static void runChrootScript(const std::string &jailPath, const std::string &cmd, const char *descr) {
+  Util::execCommand({"/usr/sbin/chroot", jailPath, "/bin/sh", "-c",
+                     STR("ASSUME_ALWAYS_YES=yes " << cmd)}, descr);
 }
 
 static void installAndAddPackagesInJail(const std::string &jailPath,
@@ -82,33 +95,40 @@ static void installAndAddPackagesInJail(const std::string &jailPath,
   notifyUserOfLongProcess(true, "pkg", STR("install the required packages: " << (pkgsInstall+pkgsAdd)));
 
   // install
-  if (!pkgsInstall.empty())
-    runChrootCommand(jailPath, STR("pkg install " << pkgsInstall), "install the requested packages into the jail");
+  if (!pkgsInstall.empty()) {
+    auto argv = std::vector<std::string>{"pkg", "install"};
+    argv.insert(argv.end(), pkgsInstall.begin(), pkgsInstall.end());
+    runChrootCommand(jailPath, argv, "install the requested packages into the jail");
+  }
   if (!pkgsAdd.empty()) {
     for (auto &p : pkgsAdd) {
       Util::Fs::copyFile(p, STR(J("/tmp/") << Util::filePathToFileName(p)));
-      runChrootCommand(jailPath, STR("pkg add /tmp/" << Util::filePathToFileName(p)), "remove the added package files from jail");
+      runChrootCommand(jailPath, {"pkg", "add", STR("/tmp/" << Util::filePathToFileName(p))},
+                       "add the package file in jail");
     }
   }
 
-  // override packages with locally avaukable packages
+  // override packages with locally available packages
   for (auto lo : pkgLocalOverride) {
     if (!Util::Fs::fileExists(lo.second))
       ERR("package override: failed to find the package file '" << lo.second << "'")
-    runChrootCommand(jailPath, STR("pkg delete " << lo.first), CSTR("remove the package '" << lo.first << "' for local override in jail"));
+    runChrootCommand(jailPath, {"pkg", "delete", lo.first},
+                     CSTR("remove the package '" << lo.first << "' for local override in jail"));
     Util::Fs::copyFile(lo.second, STR(J("/tmp/") << Util::filePathToFileName(lo.second)));
-    runChrootCommand(jailPath, STR("pkg add /tmp/" << Util::filePathToFileName(lo.second)), CSTR("add the local override package '" << lo.second << "' in jail"));
+    runChrootCommand(jailPath, {"pkg", "add", STR("/tmp/" << Util::filePathToFileName(lo.second))},
+                     CSTR("add the local override package '" << lo.second << "' in jail"));
     Util::Fs::unlink(J(STR("/tmp/" << Util::filePathToFileName(lo.second))));
   }
 
   // nuke packages when requested
   for (auto &n : pkgNuke)
-    runChrootCommand(jailPath, STR("/usr/local/sbin/pkg-static delete -y -f " << n), "nuke the package in the jail");
+    runChrootCommand(jailPath, {"/usr/local/sbin/pkg-static", "delete", "-y", "-f", n},
+                     "nuke the package in the jail");
 
   // write the +CRATE.PKGS file
-  runChrootCommand(jailPath, STR("pkg info > " << J("/+CRATE.PKGS")), "write +CRATE.PKGS file");
+  runChrootCommand(jailPath, {"pkg", "info"}, "write +CRATE.PKGS file", J("/+CRATE.PKGS"));
   // cleanup: delete the pkg package: it will not be needed any more, and delete the added package files
-  runChrootCommand(jailPath, "pkg delete -f pkg", "remove the 'pkg' package from jail");
+  runChrootCommand(jailPath, {"pkg", "delete", "-f", "pkg"}, "remove the 'pkg' package from jail");
   if (!pkgsAdd.empty())
     for (const auto &entry : std::filesystem::directory_iterator(STR(jailPath << "/tmp")))
       if (!entry.is_directory())
@@ -121,15 +141,23 @@ static std::set<std::string> getElfDependencies(const std::string &elfPath, cons
                                                 std::function<bool(const std::string&)> filter = [](const std::string &path) {return true;})
 {
   std::set<std::string> dset;
-  // It is possible to use elf(3) to read shared library dependences from the elf file,
-  // but it's hard to then find the disk location, ld-elf.so does this through some WooDoo magic.
-  // Instead, we just use ldd(1) to read this information.
-  std::istringstream is(Util::runCommandGetOutput(
-    STR(Cmd::chroot(jailPath) << "/bin/sh -c \"ldd " << elfPath << " | grep '=>' | sed -e 's|.* => ||; s| .*||'\""), "get elf dependencies"));
-  std::string s;
-  while (std::getline(is, s, '\n'))
-    if (!s.empty() && filter(s))
-      dset.insert(s);
+  // Use ldd(1) via exec (no shell) and parse output in C++
+  // ldd output format: "  libfoo.so.1 => /usr/lib/libfoo.so.1 (0x...)"
+  auto output = Util::execCommandGetOutput(
+    {"/usr/sbin/chroot", jailPath, "ldd", elfPath}, "get elf dependencies");
+  std::istringstream is(output);
+  std::string line;
+  while (std::getline(is, line)) {
+    auto arrow = line.find("=>");
+    if (arrow == std::string::npos) continue;
+    auto pathStart = line.find_first_not_of(" \t", arrow + 2);
+    if (pathStart == std::string::npos) continue;
+    auto pathEnd = line.find_first_of(" \t(", pathStart);
+    auto path = (pathEnd != std::string::npos) ? line.substr(pathStart, pathEnd - pathStart) : line.substr(pathStart);
+    path = Util::stripTrailingSpace(path);
+    if (!path.empty() && filter(path))
+      dset.insert(path);
+  }
   return dset;
 }
 
@@ -174,7 +202,7 @@ static void removeRedundantJailParts(const std::string &jailPath, const Spec &sp
   for (auto &file : spec.baseKeep)
     keepFile(file);
   for (auto &fileWildcard : spec.baseKeepWildcard)
-    for (auto &file : Util::Fs::expandWildcards(fileWildcard, Cmd::chroot(jailPath)))
+    for (auto &file : Util::Fs::expandWildcards(fileWildcard, jailPath))
       keepFile(file);
   if (!spec.runServices.empty()) {
     keepFile("/usr/sbin/service");  // needed to run a service
@@ -290,7 +318,7 @@ bool createCrate(const Args &args, const Spec &spec) {
   }
 
   // create the jail directory
-  auto jailPath = STR(Locations::jailDirectoryPath << "/chroot-create-" << Util::filePathToBareName(crateFileName) << "-pid" << ::getpid());
+  auto jailPath = STR(Locations::jailDirectoryPath << "/chroot-create-" << Util::filePathToBareName(crateFileName) << "-" << Util::randomHex(4));
   res = mkdir(jailPath.c_str(), S_IRUSR|S_IWUSR|S_IXUSR);
   if (res == -1)
     ERR("failed to create the jail directory '" << jailPath << "': " << strerror(errno))
@@ -305,7 +333,7 @@ bool createCrate(const Args &args, const Spec &spec) {
   // helper
   auto runScript = [&jailPath,&spec](const char *section) {
     Scripts::section(section, spec.scripts, [&jailPath,section](const std::string &cmd) {
-      runChrootCommand(jailPath, cmd, CSTR("run script#" << section));
+      runChrootScript(jailPath, cmd, CSTR("run script#" << section));
     });
   };
 

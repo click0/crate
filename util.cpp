@@ -31,6 +31,7 @@
 #include <sys/linker.h>
 #include <sys/wait.h>
 #include <pwd.h>
+#include <fnmatch.h>
 
 
 #define SYSCALL(res, syscall, arg ...) Util::ckSyscallError(res, syscall, arg)
@@ -81,35 +82,6 @@ void RunAtEnd::doNow() {
 
 namespace Util {
 
-void runCommand(const std::string &cmd, const std::string &what) {
-  int res = ::system(cmd.c_str());
-  SYSCALL(res, "system", what.c_str()); // syscall failure
-  // command failure
-  if (res != 0)
-    ERR2("run external command", "the command '" << what << "' failed with the exit status " << res)
-}
-
-std::string runCommandGetOutput(const std::string &cmd, const std::string &what) {
-  // start the command
-  FILE *f = ::popen(cmd.c_str(), "r");
-  if (f == nullptr)
-    ERR2("run external command", "popen failed for (" << cmd << ")")
-  // RAII wrapper ensures pclose() is called even if an exception occurs during read
-  std::unique_ptr<FILE, decltype(&::pclose)> fp(f, ::pclose);
-  // read command's output
-  std::ostringstream ss;
-  char buf[1025];
-  size_t nbytes;
-  do {
-    nbytes = ::fread(buf, 1, sizeof(buf)-1, f);
-    if (nbytes > 0) {
-      buf[nbytes] = 0;
-      ss << buf;
-    }
-  } while (nbytes == sizeof(buf)-1);
-  return ss.str();
-}
-
 // Convert vector<string> argv to char*[] for execvp
 static std::vector<char*> toExecArgv(const std::vector<std::string> &argv) {
   std::vector<char*> cargv;
@@ -144,35 +116,54 @@ void execCommand(const std::vector<std::string> &argv, const std::string &what) 
   }
 }
 
+int execCommandGetStatus(const std::vector<std::string> &argv, const std::string &what) {
+  if (argv.empty())
+    ERR2("exec command", "empty argv for: " << what)
+  auto cargv = toExecArgv(argv);
+  pid_t pid = ::fork();
+  if (pid == -1)
+    ERR2("exec command", "fork failed for '" << what << "': " << strerror(errno))
+  if (pid == 0) {
+    // child
+    ::execvp(cargv[0], cargv.data());
+    ::_exit(127); // exec failed
+  }
+  // parent: wait for child, return raw wait status
+  int status;
+  while (::waitpid(pid, &status, 0) == -1) {
+    if (errno != EINTR)
+      ERR2("exec command", "waitpid failed for '" << what << "': " << strerror(errno))
+  }
+  return status;
+}
+
 std::string execCommandGetOutput(const std::vector<std::string> &argv, const std::string &what) {
   if (argv.empty())
     ERR2("exec command", "empty argv for: " << what)
   int pipefd[2];
   if (::pipe(pipefd) == -1)
     ERR2("exec command", "pipe failed for '" << what << "': " << strerror(errno))
+  UniqueFd pipeRead(pipefd[0]), pipeWrite(pipefd[1]);
   auto cargv = toExecArgv(argv);
   pid_t pid = ::fork();
-  if (pid == -1) {
-    ::close(pipefd[0]);
-    ::close(pipefd[1]);
+  if (pid == -1)
     ERR2("exec command", "fork failed for '" << what << "': " << strerror(errno))
-  }
   if (pid == 0) {
-    // child: redirect stdout to pipe write end
-    ::close(pipefd[0]);
-    ::dup2(pipefd[1], STDOUT_FILENO);
-    ::close(pipefd[1]);
+    // child: redirect stdout to pipe write end (no RAII in child — exec replaces process)
+    ::close(pipeRead.release());
+    ::dup2(pipeWrite.get(), STDOUT_FILENO);
+    ::close(pipeWrite.release());
     ::execvp(cargv[0], cargv.data());
     ::_exit(127);
   }
   // parent: read from pipe read end
-  ::close(pipefd[1]);
+  pipeWrite.reset(); // close write end
   std::ostringstream ss;
   char buf[4096];
   ssize_t nbytes;
-  while ((nbytes = ::read(pipefd[0], buf, sizeof(buf))) > 0)
+  while ((nbytes = ::read(pipeRead.get(), buf, sizeof(buf))) > 0)
     ss.write(buf, nbytes);
-  ::close(pipefd[0]);
+  pipeRead.reset(); // close read end
   // wait for child
   int status;
   while (::waitpid(pid, &status, 0) == -1) {
@@ -196,16 +187,31 @@ static std::string execPipelineImpl(const std::vector<std::vector<std::string>> 
   // Create n-1 pipes
   std::vector<int> pipefds(2 * (n - 1));
   for (int i = 0; i < n - 1; i++) {
-    if (::pipe(&pipefds[2*i]) == -1)
+    if (::pipe(&pipefds[2*i]) == -1) {
+      // Close already-created pipes on failure
+      for (int j = 0; j < 2*i; j++) ::close(pipefds[j]);
       ERR2("exec pipeline", "pipe() failed for '" << what << "': " << strerror(errno))
+    }
   }
 
   // Capture pipe for last process stdout (when capture=true)
   int capturePipe[2] = {-1, -1};
   if (capture) {
-    if (::pipe(capturePipe) == -1)
+    if (::pipe(capturePipe) == -1) {
+      for (auto fd : pipefds) ::close(fd);
       ERR2("exec pipeline", "pipe() failed for capture: " << strerror(errno))
+    }
   }
+
+  // Scope guard: close all pipe fds if an exception occurs during fork
+  bool pipesClosedByParent = false;
+  RunAtEnd pipeGuard([&]() {
+    if (!pipesClosedByParent) {
+      for (auto fd : pipefds) if (fd >= 0) ::close(fd);
+      if (capturePipe[0] >= 0) ::close(capturePipe[0]);
+      if (capturePipe[1] >= 0) ::close(capturePipe[1]);
+    }
+  });
 
   // Fork children
   std::vector<pid_t> pids(n);
@@ -248,7 +254,8 @@ static std::string execPipelineImpl(const std::vector<std::vector<std::string>> 
     pids[i] = pid;
   }
 
-  // Parent: close all pipe fds
+  // Parent: close all pipe fds (scope guard no longer needed)
+  pipesClosedByParent = true;
   for (auto fd : pipefds) ::close(fd);
   if (capturePipe[1] >= 0) ::close(capturePipe[1]);
 
@@ -456,6 +463,16 @@ std::string safePath(const std::string &path, const std::string &requiredPrefix,
     ERR2("path validation", "'" << what << "' path '" << path << "' resolves to '"
          << canonical << "' which is outside required prefix '" << requiredPrefix << "'")
   return canonical;
+}
+
+std::string randomHex(int bytes) {
+  std::vector<unsigned char> buf(bytes);
+  ::arc4random_buf(buf.data(), buf.size());
+  std::ostringstream ss;
+  ss << std::hex << std::setfill('0');
+  for (auto b : buf)
+    ss << std::setw(2) << static_cast<int>(b);
+  return ss.str();
 }
 
 namespace Fs {
@@ -727,12 +744,24 @@ void copyFile(const std::string &srcFile, const std::string &dstFile) {
   try {
     fs::copy_file(srcFile, dstFile);
   } catch (fs::filesystem_error& e) {
-    ERR2("copy file", "could not copy file file1.txt: " << e.what())
+    ERR2("copy file", "could not copy '" << srcFile << "' to '" << dstFile << "': " << e.what())
   }
 }
 
-std::vector<std::string> expandWildcards(const std::string &wildcardPath, const std::string &cmdPrefix) {
-  return splitString(runCommandGetOutput(STR(cmdPrefix << "/bin/ls " << wildcardPath), "wildcard expansion"), "\n"); // XXX the 'wildcard' library might help (?)
+std::vector<std::string> expandWildcards(const std::string &wildcardPath, const std::string &rootPrefix) {
+  // Filesystem-based wildcard expansion using fnmatch (no shell involved)
+  auto lastSlash = wildcardPath.rfind('/');
+  if (lastSlash == std::string::npos)
+    return {};
+  auto dir = wildcardPath.substr(0, lastSlash);
+  auto pattern = wildcardPath.substr(lastSlash + 1);
+  auto fullDir = rootPrefix + dir;
+  std::vector<std::string> results;
+  if (fs::exists(fullDir) && fs::is_directory(fullDir))
+    for (const auto &entry : fs::directory_iterator(fullDir))
+      if (::fnmatch(pattern.c_str(), entry.path().filename().c_str(), 0) == 0)
+        results.push_back(dir + "/" + entry.path().filename().string());
+  return results;
 }
 
 bool isOnZfs(const std::string &path) {
