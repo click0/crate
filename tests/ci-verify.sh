@@ -937,6 +937,195 @@ else
   fail "Makefile missing validate.cpp"
 fi
 
+# ---------------------------------------------------------------------------
+section "T18: Phase 2 features (snapshots, encryption, DNS filter, security)"
+
+# Snapshot command
+if grep -q 'CmdSnapshot' "$BUILDDIR/args.h"; then
+  pass "args.h has CmdSnapshot command"
+else
+  fail "args.h missing CmdSnapshot"
+fi
+
+if [ -f "$BUILDDIR/snapshot.cpp" ]; then
+  pass "snapshot.cpp exists"
+else
+  fail "snapshot.cpp not found"
+fi
+
+if grep -q 'snapshotCrate' "$BUILDDIR/commands.h"; then
+  pass "commands.h declares snapshotCrate"
+else
+  fail "commands.h missing snapshotCrate"
+fi
+
+if grep -q 'snapshotCrate' "$BUILDDIR/main.cpp"; then
+  pass "main.cpp dispatches CmdSnapshot to snapshotCrate"
+else
+  fail "main.cpp missing CmdSnapshot dispatch"
+fi
+
+if grep -q '"zfs".*"snapshot"' "$BUILDDIR/snapshot.cpp"; then
+  pass "snapshot.cpp calls zfs snapshot"
+else
+  fail "snapshot.cpp missing zfs snapshot call"
+fi
+
+if grep -q '"zfs".*"rollback"' "$BUILDDIR/snapshot.cpp"; then
+  pass "snapshot.cpp calls zfs rollback"
+else
+  fail "snapshot.cpp missing zfs rollback call"
+fi
+
+if grep -q '"zfs".*"diff"' "$BUILDDIR/snapshot.cpp"; then
+  pass "snapshot.cpp calls zfs diff"
+else
+  fail "snapshot.cpp missing zfs diff call"
+fi
+
+if grep -q 'snapshot' "$BUILDDIR/Makefile"; then
+  pass "Makefile includes snapshot.cpp"
+else
+  fail "Makefile missing snapshot.cpp"
+fi
+
+# Snapshot arg parsing
+if grep -q 'snapshotSubcmd' "$BUILDDIR/args.h" && grep -q 'snapshotDataset' "$BUILDDIR/args.h"; then
+  pass "args.h has snapshot parameter fields"
+else
+  fail "args.h missing snapshot parameter fields"
+fi
+
+if grep -q 'snapshotSubcmd.*"create"' "$BUILDDIR/args.cpp" && grep -q 'snapshotSubcmd.*"diff"' "$BUILDDIR/args.cpp"; then
+  pass "args.cpp validates snapshot subcommands"
+else
+  fail "args.cpp missing snapshot subcommand validation"
+fi
+
+# Encrypted containers
+if grep -q 'encrypted' "$BUILDDIR/spec.h"; then
+  pass "spec.h has encrypted field"
+else
+  fail "spec.h missing encrypted field"
+fi
+
+if grep -q '"encrypted"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses encrypted section"
+else
+  fail "spec.cpp missing encrypted parsing"
+fi
+
+if grep -q 'encryptionMethod\|encryptionCipher' "$BUILDDIR/spec.h"; then
+  pass "spec.h has encryption method/cipher fields"
+else
+  fail "spec.h missing encryption method/cipher fields"
+fi
+
+if grep -q 'aes-256-gcm' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp validates AES encryption ciphers"
+else
+  fail "spec.cpp missing AES cipher validation"
+fi
+
+if grep -q 'spec.encrypted' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp checks spec.encrypted for ZFS encryption enforcement"
+else
+  fail "run.cpp missing spec.encrypted check"
+fi
+
+# DNS filtering
+if grep -q 'DnsFilter\|dnsFilter' "$BUILDDIR/spec.h"; then
+  pass "spec.h has DnsFilter struct"
+else
+  fail "spec.h missing DnsFilter"
+fi
+
+if grep -q '"dns_filter"\|"dns-filter"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses dns_filter section"
+else
+  fail "spec.cpp missing dns_filter parsing"
+fi
+
+if grep -q 'unbound' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp has unbound DNS integration"
+else
+  fail "run.cpp missing unbound integration"
+fi
+
+if grep -q 'always_nxdomain\|local-zone' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp generates unbound blocking rules"
+else
+  fail "run.cpp missing unbound blocking rules"
+fi
+
+if grep -q 'redirect_blocked\|redirect-blocked' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses redirect_blocked option"
+else
+  fail "spec.cpp missing redirect_blocked parsing"
+fi
+
+# Security hardening
+if grep -q 'enforceStatfs' "$BUILDDIR/spec.h"; then
+  pass "spec.h has enforceStatfs field"
+else
+  fail "spec.h missing enforceStatfs"
+fi
+
+if grep -q 'allowChflags\|allowMlock' "$BUILDDIR/spec.h"; then
+  pass "spec.h has allowChflags/allowMlock fields"
+else
+  fail "spec.h missing allowChflags/allowMlock"
+fi
+
+if grep -q '"security"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses security section"
+else
+  fail "spec.cpp missing security parsing"
+fi
+
+if grep -q '"allow.quotas"' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp passes allow.quotas to jail_setv"
+else
+  fail "run.cpp missing allow.quotas in jail_setv"
+fi
+
+if grep -q '"allow.set_hostname"' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp passes allow.set_hostname to jail_setv"
+else
+  fail "run.cpp missing allow.set_hostname in jail_setv"
+fi
+
+if grep -q '"allow.chflags"' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp passes allow.chflags to jail_setv"
+else
+  fail "run.cpp missing allow.chflags in jail_setv"
+fi
+
+if grep -q '"allow.mlock"' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp passes allow.mlock to jail_setv"
+else
+  fail "run.cpp missing allow.mlock in jail_setv"
+fi
+
+# Validate cross-checks for new features
+if grep -q 'dnsFilter\|dns_filter' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp checks dns_filter configuration"
+else
+  fail "validate.cpp missing dns_filter checks"
+fi
+
+if grep -q 'encrypted' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp checks encryption configuration"
+else
+  fail "validate.cpp missing encryption checks"
+fi
+
+if grep -q 'allowChflags\|allow_chflags' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp warns about chflags/mlock security implications"
+else
+  fail "validate.cpp missing chflags/mlock warnings"
+fi
+
 # ===========================================================================
 #  Summary
 # ===========================================================================

@@ -63,6 +63,27 @@ public:
   // Resource limits via RCTL (§5)
   std::map<std::string, std::string>                 limits;                  // RCTL resource limits: name -> value
 
+  // Encryption (§1)
+  bool                                               encrypted = false;       // require encrypted ZFS dataset
+  std::string                                        encryptionMethod;        // "zfs" (default/only)
+  std::string                                        encryptionKeyformat;     // "passphrase", "hex", "raw"
+  std::string                                        encryptionCipher;        // "aes-256-gcm" (default)
+
+  // DNS filtering (§4)
+  struct DnsFilter {
+    std::vector<std::string> allow;           // wildcard patterns to allow
+    std::vector<std::string> block;           // wildcard patterns to block
+    std::string              redirectBlocked;  // IP or "nxdomain"
+  };
+  std::unique_ptr<DnsFilter>                         dnsFilter;
+
+  // Security hardening (§8)
+  int                                                enforceStatfs = -1;      // -1=auto, 0/1/2
+  bool                                               allowQuotas = false;
+  bool                                               allowSetHostname = false;
+  bool                                               allowChflags = false;
+  bool                                               allowMlock = false;
+
   std::map<std::string, std::map<std::string, std::string>> scripts;          // by section, by script name
 
   Spec preprocess() const;

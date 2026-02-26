@@ -34,6 +34,7 @@ static void usage() {
   std::cout << "  create                     creates a container (run 'crate create -h' for details)" << std::endl;
   std::cout << "  run                        runs the containerzed application (run 'crate run -h' for details)" << std::endl;
   std::cout << "  validate                   validate a crate spec file (run 'crate validate -h' for details)" << std::endl;
+  std::cout << "  snapshot                   manage ZFS snapshots (run 'crate snapshot -h' for details)" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -52,6 +53,23 @@ static void usageRun() {
   std::cout << "" << std::endl;
   std::cout << "Options:" << std::endl;
   std::cout << "  -h, --help                         show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+}
+
+static void usageSnapshot() {
+  std::cout << "usage: crate snapshot <subcommand> <dataset> [name] [name2]" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Manage ZFS snapshots for container datasets." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Subcommands:" << std::endl;
+  std::cout << "  create <dataset> [name]        create a snapshot (auto-names if omitted)" << std::endl;
+  std::cout << "  list <dataset>                 list snapshots of a dataset" << std::endl;
+  std::cout << "  restore <dataset> <name>       rollback to a snapshot" << std::endl;
+  std::cout << "  delete <dataset> <name>        delete a snapshot" << std::endl;
+  std::cout << "  diff <dataset> <s1> [s2]       show changes between snapshots" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Options:" << std::endl;
+  std::cout << "  -h, --help                     show this help screen" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -105,6 +123,8 @@ static Command isCommand(const char* arg) {
     return CmdRun;
   if (strEq(arg, "validate"))
     return CmdValidate;
+  if (strEq(arg, "snapshot"))
+    return CmdSnapshot;
 
   return CmdNone;
 }
@@ -136,6 +156,16 @@ void Args::validate() {
   case CmdValidate:
     if (validateSpec.empty())
       ERR("the 'validate' command requires a spec file argument")
+    break;
+  case CmdSnapshot:
+    if (snapshotSubcmd.empty())
+      ERR("the 'snapshot' command requires a subcommand (create, list, restore, delete, diff)")
+    if (snapshotDataset.empty())
+      ERR("the 'snapshot' command requires a ZFS dataset name")
+    if ((snapshotSubcmd == "restore" || snapshotSubcmd == "delete") && snapshotName.empty())
+      ERR("the 'snapshot " << snapshotSubcmd << "' command requires a snapshot name")
+    if (snapshotSubcmd == "diff" && snapshotName.empty())
+      ERR("the 'snapshot diff' command requires at least one snapshot name")
     break;
   default:
     err("no command was given");
@@ -281,6 +311,38 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           err("validate takes exactly one spec file argument");
         } else {
           args.validateSpec = argv[a];
+        }
+        break;
+      case CmdSnapshot:
+        if (auto argShort = isShort(argv[a])) {
+          switch (argShort) {
+          case 'h':
+            usageSnapshot();
+            exit(0);
+          default:
+            err("unsupported short option '%s'", argv[a]);
+          }
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) {
+            usageSnapshot();
+            exit(0);
+          } else {
+            err("unsupported long option '%s'", argv[a]);
+          }
+        } else if (args.snapshotSubcmd.empty()) {
+          args.snapshotSubcmd = argv[a];
+          if (args.snapshotSubcmd != "create" && args.snapshotSubcmd != "list" &&
+              args.snapshotSubcmd != "restore" && args.snapshotSubcmd != "delete" &&
+              args.snapshotSubcmd != "diff")
+            err("unknown snapshot subcommand '%s'", argv[a]);
+        } else if (args.snapshotDataset.empty()) {
+          args.snapshotDataset = argv[a];
+        } else if (args.snapshotName.empty()) {
+          args.snapshotName = argv[a];
+        } else if (args.snapshotName2.empty()) {
+          args.snapshotName2 = argv[a];
+        } else {
+          err("too many arguments for 'snapshot' command");
         }
         break;
       }

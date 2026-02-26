@@ -122,7 +122,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   auto jailPath = STR(Locations::jailDirectoryPath << "/jail-" << Util::filePathToBareName(args.runCrateFile) << "-" << Util::randomHex(4));
   Util::Fs::mkdir(jailPath, S_IRUSR|S_IWUSR|S_IXUSR);
 
-  // check if jail directory is on encrypted ZFS
+  // check if jail directory is on encrypted ZFS (opportunistic, pre-spec)
   if (Util::Fs::isOnZfs(jailPath)) {
     auto dataset = Util::Fs::getZfsDataset(jailPath);
     if (!dataset.empty() && Util::Fs::isZfsEncrypted(dataset)) {
@@ -173,6 +173,23 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // parse +CRATE.SPEC
   auto spec = parseSpec(J("/+CRATE.SPEC")).preprocess();
+
+  // enforce encryption requirement from spec (§1)
+  if (spec.encrypted) {
+    if (!Util::Fs::isOnZfs(jailPath))
+      ERR("spec requires encrypted storage but jail directory is not on ZFS; "
+          "create a ZFS dataset with: zfs create -o encryption=aes-256-gcm -o keyformat=passphrase <pool>/crate")
+    auto dataset = Util::Fs::getZfsDataset(jailPath);
+    if (dataset.empty())
+      ERR("cannot determine ZFS dataset for jail directory")
+    if (!Util::Fs::isZfsEncrypted(dataset))
+      ERR("spec requires encryption but ZFS dataset '" << dataset << "' is not encrypted; "
+          "create with: zfs create -o encryption=aes-256-gcm -o keyformat=passphrase " << dataset)
+    if (!Util::Fs::isZfsKeyLoaded(dataset))
+      ERR("ZFS dataset '" << dataset << "' is encrypted but key is not loaded; "
+          "run 'zfs load-key " << dataset << "' first")
+    LOG("spec-required encryption verified on dataset '" << dataset << "'")
+  }
 
   // check the pre-conditions
   int origIpForwarding = -1; // -1 = not modified; 0 = was off and we turned it on
@@ -246,7 +263,16 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   const char *optSysvipc = spec.allowSysvipc ? "true" : "false";
   const bool hasZfsDatasets = !spec.zfsDatasets.empty();
   const char *optZfsMount = hasZfsDatasets ? "true" : "false";
-  const char *optEnforceStatfs = hasZfsDatasets ? "1" : "2";
+  // enforce_statfs: spec override > ZFS auto-detect > default(2)
+  const char *optEnforceStatfs;
+  if (spec.enforceStatfs >= 0)
+    optEnforceStatfs = spec.enforceStatfs == 0 ? "0" : (spec.enforceStatfs == 1 ? "1" : "2");
+  else
+    optEnforceStatfs = hasZfsDatasets ? "1" : "2";
+  const char *optAllowQuotas = spec.allowQuotas ? "true" : "false";
+  const char *optSetHostname = spec.allowSetHostname ? "true" : "false";
+  const char *optAllowChflags = spec.allowChflags ? "true" : "false";
+  const char *optAllowMlock = spec.allowMlock ? "true" : "false";
   int jid;
   int jailFd = -1; // jail descriptor for race-free removal (FreeBSD 15.0+)
 #ifdef JAIL_OWN_DESC
@@ -263,6 +289,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       "allow.sysvipc", optSysvipc,
       "allow.mount", optZfsMount,
       "allow.mount.zfs", optZfsMount,
+      "allow.quotas", optAllowQuotas,
+      "allow.set_hostname", optSetHostname,
+      "allow.chflags", optAllowChflags,
+      "allow.mlock", optAllowMlock,
       "enforce_statfs", optEnforceStatfs,
       "vnet", nullptr/*"new"*/, // possible values are: nullptr, { "disable", "new", "inherit" }, see lib/libjail/jail.c
       "desc", descBuf,
@@ -284,6 +314,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       "allow.sysvipc", optSysvipc,
       "allow.mount", optZfsMount,
       "allow.mount.zfs", optZfsMount,
+      "allow.quotas", optAllowQuotas,
+      "allow.set_hostname", optSetHostname,
+      "allow.chflags", optAllowChflags,
+      "allow.mlock", optAllowMlock,
       "enforce_statfs", optEnforceStatfs,
       "vnet", nullptr/*"new"*/, // possible values are: nullptr, { "disable", "new", "inherit" }, see lib/libjail/jail.c
       nullptr);
@@ -637,6 +671,49 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     } else { // fileJail exists, but fileHost doesn't
       Util::Fs::link(J(fileJail), fileHost);
     }
+  }
+
+  // DNS filtering: generate unbound config and set up resolver (§4)
+  if (spec.dnsFilter) {
+    std::ostringstream conf;
+    conf << "server:" << std::endl;
+    conf << "  interface: 127.0.0.1" << std::endl;
+    conf << "  port: 53" << std::endl;
+    conf << "  access-control: 127.0.0.0/8 allow" << std::endl;
+    conf << "  do-not-query-localhost: no" << std::endl;
+    conf << "  hide-identity: yes" << std::endl;
+    conf << "  hide-version: yes" << std::endl;
+
+    // block rules: each domain becomes a local-zone
+    auto redirect = spec.dnsFilter->redirectBlocked;
+    bool useNxdomain = redirect.empty() || redirect == "nxdomain";
+    for (auto &pattern : spec.dnsFilter->block) {
+      auto domain = pattern;
+      // convert wildcard "*.ads.example.com" to unbound local-zone format
+      if (domain.size() > 2 && domain.substr(0, 2) == "*.")
+        domain = domain.substr(2);
+      if (useNxdomain) {
+        conf << "  local-zone: \"" << domain << "\" always_nxdomain" << std::endl;
+      } else {
+        conf << "  local-zone: \"" << domain << "\" redirect" << std::endl;
+        conf << "  local-data: \"" << domain << " A " << redirect << "\"" << std::endl;
+      }
+    }
+
+    // forward zone for upstream DNS
+    auto nameserverIpDns = Net::getNameserverIp();
+    conf << "forward-zone:" << std::endl;
+    conf << "  name: \".\"" << std::endl;
+    conf << "  forward-addr: " << nameserverIpDns << std::endl;
+
+    // write config to jail
+    Util::Fs::mkdir(J("/usr/local/etc/unbound"), 0755);
+    writeFileInJail(conf.str(), "/usr/local/etc/unbound/unbound.conf");
+
+    // override resolv.conf to point to local unbound
+    writeFileInJail("nameserver 127.0.0.1\n", "/etc/resolv.conf");
+
+    LOG("DNS filtering configured: " << spec.dnsFilter->block.size() << " blocked domains")
   }
 
   // start services, if any

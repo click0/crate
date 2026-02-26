@@ -4,7 +4,7 @@
 
 #include <string>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot};
 
 class Args {
 public:
@@ -24,6 +24,12 @@ public:
 
   // validate parameters
   std::string validateSpec;
+
+  // snapshot parameters
+  std::string snapshotSubcmd;   // "create", "list", "restore", "delete", "diff"
+  std::string snapshotDataset;  // ZFS dataset name
+  std::string snapshotName;     // snapshot name (for create/restore/delete)
+  std::string snapshotName2;    // second snapshot name (for diff)
 
   void validate();
 };
