@@ -31,6 +31,7 @@
 #include <sys/linker.h>
 #include <sys/wait.h>
 #include <pwd.h>
+#include <fnmatch.h>
 
 
 #define SYSCALL(res, syscall, arg ...) Util::ckSyscallError(res, syscall, arg)
@@ -142,6 +143,27 @@ void execCommand(const std::vector<std::string> &argv, const std::string &what) 
     int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
     ERR2("exec command", "'" << what << "' failed with exit status " << code)
   }
+}
+
+int execCommandGetStatus(const std::vector<std::string> &argv, const std::string &what) {
+  if (argv.empty())
+    ERR2("exec command", "empty argv for: " << what)
+  auto cargv = toExecArgv(argv);
+  pid_t pid = ::fork();
+  if (pid == -1)
+    ERR2("exec command", "fork failed for '" << what << "': " << strerror(errno))
+  if (pid == 0) {
+    // child
+    ::execvp(cargv[0], cargv.data());
+    ::_exit(127); // exec failed
+  }
+  // parent: wait for child, return raw wait status
+  int status;
+  while (::waitpid(pid, &status, 0) == -1) {
+    if (errno != EINTR)
+      ERR2("exec command", "waitpid failed for '" << what << "': " << strerror(errno))
+  }
+  return status;
 }
 
 std::string execCommandGetOutput(const std::vector<std::string> &argv, const std::string &what) {
@@ -745,8 +767,20 @@ void copyFile(const std::string &srcFile, const std::string &dstFile) {
   }
 }
 
-std::vector<std::string> expandWildcards(const std::string &wildcardPath, const std::string &cmdPrefix) {
-  return splitString(runCommandGetOutput(STR(cmdPrefix << "/bin/ls " << wildcardPath), "wildcard expansion"), "\n"); // XXX the 'wildcard' library might help (?)
+std::vector<std::string> expandWildcards(const std::string &wildcardPath, const std::string &rootPrefix) {
+  // Filesystem-based wildcard expansion using fnmatch (no shell involved)
+  auto lastSlash = wildcardPath.rfind('/');
+  if (lastSlash == std::string::npos)
+    return {};
+  auto dir = wildcardPath.substr(0, lastSlash);
+  auto pattern = wildcardPath.substr(lastSlash + 1);
+  auto fullDir = rootPrefix + dir;
+  std::vector<std::string> results;
+  if (fs::exists(fullDir) && fs::is_directory(fullDir))
+    for (const auto &entry : fs::directory_iterator(fullDir))
+      if (::fnmatch(pattern.c_str(), entry.path().filename().c_str(), 0) == 0)
+        results.push_back(dir + "/" + entry.path().filename().string());
+  return results;
 }
 
 bool isOnZfs(const std::string &path) {

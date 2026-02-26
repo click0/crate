@@ -105,6 +105,7 @@ void runCommand(const std::string &cmd, const std::string &what);
 std::string runCommandGetOutput(const std::string &cmd, const std::string &what);
 // exec-based execution: no shell involved, immune to command injection
 void execCommand(const std::vector<std::string> &argv, const std::string &what);
+int execCommandGetStatus(const std::vector<std::string> &argv, const std::string &what); // returns raw wait status
 std::string execCommandGetOutput(const std::vector<std::string> &argv, const std::string &what);
 // exec-based pipeline: chain of commands connected by pipes
 void execPipeline(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
@@ -154,7 +155,7 @@ char isElfFileOrDir(const std::string &file); // returns 'E'LF, 'D'ir, or 'N'o
 std::set<std::string> findElfFiles(const std::string &dir);
 bool hasExtension(const char *file, const char *extension);
 void copyFile(const std::string &srcFile, const std::string &dstFile);
-std::vector<std::string> expandWildcards(const std::string &wildcardPath, const std::string &cmdPrefix = "");
+std::vector<std::string> expandWildcards(const std::string &wildcardPath, const std::string &rootPrefix = "");
 bool isOnZfs(const std::string &path);
 std::string getZfsDataset(const std::string &path);
 bool isZfsEncrypted(const std::string &dataset);
