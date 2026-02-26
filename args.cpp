@@ -46,6 +46,7 @@ static void usageCreate() {
   std::cout << "  -s, --spec <spec-file>             crate specification (required unless --template)" << std::endl;
   std::cout << "  -t, --template <name>              use a template as base spec" << std::endl;
   std::cout << "  -o, --output <output-create-file>  output crate file" << std::endl;
+  std::cout << "      --use-pkgbase                  bootstrap jail via pkgbase instead of base.txz" << std::endl;
   std::cout << "  -h, --help                         show this help screen" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Templates are searched in:" << std::endl;
@@ -268,6 +269,9 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           default:
             err("unsupported short option '%s'", argv[a]);
           }
+        } else if (strEq(argv[a], "--use-pkgbase")) {
+          args.usePkgbase = true;
+          break;
         } else if (auto argLong = isLong(argv[a])) {
           if (strEq(argLong, "help")) {
             usageCreate();

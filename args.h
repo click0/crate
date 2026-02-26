@@ -19,6 +19,7 @@ public:
   std::string createSpec;
   std::string createOutput;
   std::string createTemplate;  // --template name or path
+  bool usePkgbase = false;     // --use-pkgbase: bootstrap jail via pkgbase instead of base.txz
 
   // run parameters
   std::string runCrateFile;

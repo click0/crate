@@ -67,8 +67,12 @@ static UserInfo userInfo = []() -> UserInfo {
 
 // options
 static bool optionInitializeRc = false; // this pulls a lot of dependencies, and starts a lot of things that we don't need in crate
-static unsigned fwRuleBaseIn = 19000;  // ipfw rule number base for in rules: in rules should be before out rules because of rule conflicts
-static unsigned fwRuleBaseOut = 59000; // ipfw rule number base TODO Need to investigate how to eliminate rule conflicts.
+// ipfw rule number bases (§18): dynamically assigned via FwSlots to eliminate conflicts.
+// Each crate gets a unique slot; rule numbers are: base + slot*10 + offset.
+// IN rules use range 10000-29999, OUT rules use range 50000-64999.
+static const unsigned fwSlotSize = 10;         // rules per slot (enough for NAT+filter per container)
+static const unsigned fwRuleRangeInBase = 10000;
+static const unsigned fwRuleRangeOutBase = 50000;
 
 // hosts's default gateway network parameters
 static std::string gwIface;
@@ -555,6 +559,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   RunAtEnd destroyEpipeAtEnd;
   RunAtEnd destroyFirewallRulesAtEnd;
   RunAtEnd destroyPfAnchor;
+  RunAtEnd releaseFwSlot;
   auto optionNet = spec.optionNet();
   if (optionNet && (optionNet->allowOutbound() || optionNet->allowInbound())) {
     { // determine host's gateway interface
@@ -588,14 +593,17 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     std::string epipeIfaceA = Util::stripTrailingSpace(Util::execCommandGetOutput({"ifconfig", "epair", "create"}, "create the jail epipe"));
     std::string epipeIfaceB = STR(epipeIfaceA.substr(0, epipeIfaceA.size()-1) << "b"); // jail side
     unsigned epairNum = std::stoul(epipeIfaceA.substr(5/*skip epair*/, epipeIfaceA.size()-5-1));
+    // IP allocation (§19): uses 10.0.0.0/8 private address space for container networking.
+    // Each container pair (host-side + jail-side) needs 2 IPs from a /31 subnet.
+    // Starting offset 100 avoids .0 (network) and .1 (common gateway).
+    // Maximum concurrent containers: (2^24 - 100) / 2 = ~8,388,558.
     auto numToIp = [](unsigned epairNum, unsigned ipIdx2) {
-      // XXX use 10.0.0.0/8 network for this purpose because number of containers can be large, and we need to have that many IP addresses available
-      unsigned ip = 100 + 2*epairNum + ipIdx2; // 100 to avoid the addresses .0 and .1
-      unsigned ip1 = ip % 256;
-      ip /= 256;
-      unsigned ip2 = ip % 256;
-      ip /= 256;
-      unsigned ip3 = ip;
+      unsigned ip = 100 + 2*epairNum + ipIdx2;
+      if (ip >= (1u << 24))
+        ERR2("IP allocation", "epair number " << epairNum << " exceeds 10.0.0.0/8 address space capacity")
+      unsigned ip1 = ip & 0xFF;
+      unsigned ip2 = (ip >> 8) & 0xFF;
+      unsigned ip3 = (ip >> 16) & 0xFF;
       return STR("10." << ip3 << "." << ip2 << "." << ip1);
     };
     auto epipeIpA = numToIp(epairNum, 0), epipeIpB = numToIp(epairNum, 1);
@@ -629,11 +637,24 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         argv.insert(argv.end(), fwargs.begin(), fwargs.end());
         Util::execCommand(argv, "firewall rule");
       };
-      auto fwRuleInNo  = fwRuleBaseIn + 1/*common rules*/ + epairNum/*per-crate rules*/;
+      // §18: Allocate a unique rule slot via FwSlots to eliminate conflicts
+      unsigned fwSlot;
+      {
+        auto fwSlots = Ctx::FwSlots::lock();
+        fwSlot = fwSlots->allocate(::getpid());
+        fwSlots->unlock();
+      }
+      releaseFwSlot.reset([&args]() {
+        auto fwSlots = Ctx::FwSlots::lock();
+        fwSlots->release(::getpid());
+        fwSlots->unlock();
+      });
+      LOG("firewall slot " << fwSlot << " allocated for pid " << ::getpid())
+      auto fwRuleInNo  = fwRuleRangeInBase + fwSlot * fwSlotSize + 1;
       auto fwNatInNo = fwRuleInNo;
-      auto fwNatOutCommonNo = fwRuleBaseOut;
-      auto fwRuleOutCommonNo = fwRuleBaseOut;
-      auto fwRuleOutNo = fwRuleBaseOut + 1/*common rules*/ + epairNum/*per-crate rules*/;
+      auto fwNatOutCommonNo = fwRuleRangeOutBase;
+      auto fwRuleOutCommonNo = fwRuleRangeOutBase;
+      auto fwRuleOutNo = fwRuleRangeOutBase + fwSlot * fwSlotSize + 1;
 
       auto ruleInS  = std::to_string(fwRuleInNo);
       auto natInS   = std::to_string(fwNatInNo);
@@ -1142,6 +1163,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     destroyPfAnchor.doNow();
     destroyFirewallRulesAtEnd.doNow();
     destroyEpipeAtEnd.doNow();
+    releaseFwSlot.doNow();
   }
   removeMacRules.doNow();
   if (spec.cowOptions)
