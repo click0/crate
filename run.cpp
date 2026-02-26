@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/param.h>
+#include <fcntl.h>
 #include <sys/mount.h>
 #include <sys/wait.h>
 // sys/jail.h isn't C++-safe: https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=238928
