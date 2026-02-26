@@ -119,7 +119,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   int res;
 
   // create the jail directory
-  auto jailPath = STR(Locations::jailDirectoryPath << "/jail-" << Util::filePathToBareName(args.runCrateFile) << "-pid" << ::getpid());
+  auto jailPath = STR(Locations::jailDirectoryPath << "/jail-" << Util::filePathToBareName(args.runCrateFile) << "-" << Util::randomHex(4));
   Util::Fs::mkdir(jailPath, S_IRUSR|S_IWUSR|S_IXUSR);
 
   // check if jail directory is on encrypted ZFS

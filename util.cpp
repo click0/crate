@@ -465,6 +465,16 @@ std::string safePath(const std::string &path, const std::string &requiredPrefix,
   return canonical;
 }
 
+std::string randomHex(int bytes) {
+  std::vector<unsigned char> buf(bytes);
+  ::arc4random_buf(buf.data(), buf.size());
+  std::ostringstream ss;
+  ss << std::hex << std::setfill('0');
+  for (auto b : buf)
+    ss << std::setw(2) << static_cast<int>(b);
+  return ss.str();
+}
+
 namespace Fs {
 
 namespace fs = std::filesystem;
@@ -734,7 +744,7 @@ void copyFile(const std::string &srcFile, const std::string &dstFile) {
   try {
     fs::copy_file(srcFile, dstFile);
   } catch (fs::filesystem_error& e) {
-    ERR2("copy file", "could not copy file file1.txt: " << e.what())
+    ERR2("copy file", "could not copy '" << srcFile << "' to '" << dstFile << "': " << e.what())
   }
 }
 

@@ -318,7 +318,7 @@ bool createCrate(const Args &args, const Spec &spec) {
   }
 
   // create the jail directory
-  auto jailPath = STR(Locations::jailDirectoryPath << "/chroot-create-" << Util::filePathToBareName(crateFileName) << "-pid" << ::getpid());
+  auto jailPath = STR(Locations::jailDirectoryPath << "/chroot-create-" << Util::filePathToBareName(crateFileName) << "-" << Util::randomHex(4));
   res = mkdir(jailPath.c_str(), S_IRUSR|S_IWUSR|S_IXUSR);
   if (res == -1)
     ERR("failed to create the jail directory '" << jailPath << "': " << strerror(errno))
