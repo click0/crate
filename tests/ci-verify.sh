@@ -1539,6 +1539,90 @@ else
 fi
 
 # ===========================================================================
+section "T21: Phase 5 — FreeBSD 15.0 compatibility fixes"
+
+# HTTPS URL for base archive download
+if grep -q 'https://download.freebsd.org' "$BUILDDIR/locs.cpp"; then
+  pass "locs.cpp uses HTTPS URL for base archive"
+else
+  fail "locs.cpp missing HTTPS URL (still using FTP?)"
+fi
+
+# Release vs snapshot detection
+if grep -q 'releases.*snapshots\|RELEASE' "$BUILDDIR/locs.cpp"; then
+  pass "locs.cpp detects release vs snapshot URL"
+else
+  fail "locs.cpp missing release/snapshot detection"
+fi
+
+# _WITH_GETLINE removed
+if ! grep -q '_WITH_GETLINE' "$BUILDDIR/util.cpp"; then
+  pass "util.cpp has no _WITH_GETLINE (dead code removed)"
+else
+  fail "util.cpp still has _WITH_GETLINE"
+fi
+
+# Container OS version marker written at create time
+if grep -q 'CRATE.OSVERSION' "$BUILDDIR/create.cpp"; then
+  pass "create.cpp writes +CRATE.OSVERSION version marker"
+else
+  fail "create.cpp missing +CRATE.OSVERSION write"
+fi
+
+# Container OS version marker read at run time
+if grep -q 'CRATE.OSVERSION' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp reads +CRATE.OSVERSION for version-mismatch detection"
+else
+  fail "run.cpp missing +CRATE.OSVERSION read"
+fi
+
+# Host-vs-container version comparison
+if grep -q 'hostMajor.*containerMajor\|containerMajor.*hostMajor' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp compares host vs container FreeBSD major version"
+else
+  fail "run.cpp missing host-vs-container version comparison"
+fi
+
+# ipfw compat commit reference
+if grep -q '4a77657cbc01' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp references ipfw compat removal commit (4a77657cbc01)"
+else
+  fail "run.cpp missing ipfw compat commit reference"
+fi
+
+# epair checksum offload fix
+if grep -q 'txcsum.*txcsum6\|-txcsum' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp disables epair checksum offload (-txcsum -txcsum6)"
+else
+  fail "run.cpp missing epair checksum offload fix"
+fi
+
+# VNET loader.conf documentation
+if grep -q 'loader.conf' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp documents loader.conf for net.inet.ip.forwarding"
+else
+  fail "run.cpp missing loader.conf documentation"
+fi
+
+# Jail descriptor API (JAIL_OWN_DESC)
+if grep -q 'JAIL_OWN_DESC' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp uses JAIL_OWN_DESC for race-free jail management"
+else
+  fail "run.cpp missing JAIL_OWN_DESC"
+fi
+
+# sys/jail.h C++ safety fix in freebsd-src
+if [ -f "$BUILDDIR/../freebsd-src/sys/sys/jail.h" ]; then
+  if grep -q 'netinet/in.h' "$BUILDDIR/../freebsd-src/sys/sys/jail.h"; then
+    pass "freebsd-src: sys/jail.h includes netinet/in.h for C++ safety"
+  else
+    fail "freebsd-src: sys/jail.h missing netinet/in.h include"
+  fi
+else
+  skip "freebsd-src not found (standalone crate build)"
+fi
+
+# ===========================================================================
 #  Summary
 # ===========================================================================
 section "RESULTS"

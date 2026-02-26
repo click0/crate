@@ -348,6 +348,10 @@ bool createCrate(const Args &args, const Spec &spec) {
   Util::execPipeline(
     {{"xz", Cmd::xzThreadsArg, "--decompress"}, {"tar", "-xf", "-", "--uname", "", "--gname", "", "-C", jailPath}},
     "unpack the system base into the jail directory", Locations::baseArchive);
+
+  // Record FreeBSD version used to build this container (for version-mismatch detection at run time)
+  Util::Fs::writeFile(STR(Util::getFreeBSDMajorVersion() << "\n"), STR(jailPath << "/+CRATE.OSVERSION"));
+
   runScript("create:start");
 
   // copy /etc/resolv.conf into the jail directory such that pkg would be able to resolve addresses

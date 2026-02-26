@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/param.h>
+#include <fcntl.h>
 #include <sys/mount.h>
 #include <sys/wait.h>
 // sys/jail.h isn't C++-safe: https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=238928
@@ -244,13 +245,33 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       LOG("enabling net.inet.ip.forwarding (was 0, will restore on exit)")
       Util::setSysctlInt("net.inet.ip.forwarding", 1);
     }
-    // warn about ipfw binary incompatibility on FreeBSD 15.0+
-    if (Util::getFreeBSDMajorVersion() >= 15)
-      std::cerr << rang::fg::yellow
-                << "warning: FreeBSD " << Util::getSysctlString("kern.osrelease") << " detected. "
-                << "Containers created on FreeBSD <15.0 may have ipfw binary incompatibility. "
-                << "Rebuild containers with a FreeBSD 15.0+ base if networking fails."
-                << rang::style::reset << std::endl;
+    // Detect container-vs-host FreeBSD version mismatch for ipfw compatibility
+    {
+      int hostMajor = Util::getFreeBSDMajorVersion();
+      int containerMajor = 0;
+      auto osverFile = J("/+CRATE.OSVERSION");
+      if (Util::Fs::fileExists(osverFile)) {
+        int fd = ::open(osverFile.c_str(), O_RDONLY);
+        if (fd >= 0) {
+          char buf[16] = {0};
+          auto n = ::read(fd, buf, sizeof(buf)-1);
+          ::close(fd);
+          if (n > 0) try { containerMajor = std::stoi(buf); } catch (...) {}
+        }
+      }
+      if (containerMajor > 0 && hostMajor > 0 && containerMajor != hostMajor) {
+        std::cerr << rang::fg::yellow
+                  << "warning: host is FreeBSD " << hostMajor
+                  << " but container base is FreeBSD " << containerMajor << ". ";
+        if (hostMajor >= 15 && containerMajor < 15)
+          std::cerr << "ipfw inside the container may fail due to removed compatibility code "
+                    << "in FreeBSD 15.0 (commit 4a77657cbc01). "
+                    << "Rebuild the container with a FreeBSD 15.0+ base.";
+        else
+          std::cerr << "Cross-version containers may have subtle incompatibilities.";
+        std::cerr << rang::style::reset << std::endl;
+      }
+    }
   }
 
   // MAC bsdextended rules (§8)
