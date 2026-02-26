@@ -91,14 +91,14 @@ Implementation:
 3. Flush anchor rules at jail stop
 4. Since VNET gives each jail its own stack, rules can also run inside the jail's own pf instance
 
-This approach scales better than the current flat ipfw rule numbering (which has TODO about rule conflicts in `run.cpp:51`).
+This approach would complement the current dynamic ipfw rule allocation (via `FwSlots` in `run.cpp`) with more flexible per-container policies.
 
 ---
 
 ## 4. DNS Filtering — Per-Jail DNS Proxy
 
 ### Sandboxie approach
-SandboxieCrack hooks DNS resolution in user mode (`core/dll/dns_filter.c`). Intercepts `WSALookupServiceBeginW`/`WSALookupServiceNextW` and `getaddrinfo` to apply per-sandbox domain allow/block lists with wildcard pattern matching. The filter maintains an IP entry cache to avoid repeated lookups for the same domains. Filtering can be dynamically enabled/disabled per sandbox, and rules support both domain-based patterns (e.g., `*.ads.example.com`) and IP-based filtering of resolution results. Blocked domains can be redirected to localhost or suppressed entirely.
+SandboxieCrack hooks DNS resolution in user mode (`core/dll/dns_filter.c`). Intercepts `WSALookupServiceBeginW`/`WSALookupServiceNextW` and `WSALookupServiceEnd` to apply per-sandbox domain allow/block lists with wildcard pattern matching. The filter maintains a static IP entry table populated at initialization to match resolution results against configured patterns. Filtering is enabled or disabled based on global driver configuration (certificate status and network options), and rules support both domain-based patterns (e.g., `*.ads.example.com`) and IP-based filtering of resolution results. Blocked domains can be redirected to localhost or suppressed entirely.
 
 ### FreeBSD equivalent
 - **Per-jail `resolv.conf`** — Already possible; jail gets its own `/etc/resolv.conf`
@@ -205,7 +205,7 @@ Benefits over Sandboxie: Filesystem-level COW (ZFS) is transparent, atomic, and 
 ## 7. IPC Namespace Controls — Jail SysV IPC
 
 ### Sandboxie approach
-SandboxieCrack filters IPC at multiple levels (`core/drv/ipc.c`, `core/drv/ipc_port.c`): LPC/ALPC ports, events, EventPairs, KeyedEvents, mutexes, semaphores, job objects, and named pipes. The driver intercepts `NtCreatePort`, `NtConnectPort`, and related syscalls, applying per-sandbox allow/block policies. Dynamic RPC ports are tracked via `IPC_DYNAMIC_PORT`/`IPC_DYNAMIC_PORTS` structures, which maintain a port registry with locks for thread safety. The driver also handles spooler port forwarding and RPC endpoint mapper filtering to prevent cross-sandbox service access.
+SandboxieCrack filters IPC at multiple levels (`core/drv/ipc.c`, `core/drv/ipc_port.c`): LPC/ALPC ports, events, EventPairs, KeyedEvents, mutexes, semaphores, job objects, and named pipes. The driver intercepts port-related syscalls in `core/drv/ipc.c` (`NtCreatePort`, `NtConnectPort`, `NtAlpcConnectPort`, etc.), while `core/drv/ipc_port.c` applies message-level filtering on established connections with per-sandbox allow/block policies. Dynamic RPC ports are tracked via `IPC_DYNAMIC_PORT`/`IPC_DYNAMIC_PORTS` structures, which maintain a port registry with locks for thread safety. The driver also handles spooler port forwarding and RPC endpoint mapper filtering to prevent cross-sandbox service access.
 
 ### FreeBSD equivalent
 - **Jail `allow.sysvipc`** — Controls access to System V IPC (shared memory, semaphores, message queues)
@@ -515,7 +515,7 @@ Benefits over Sandboxie: Unix domain sockets with `nullfs` mounts are simpler th
 ## 16. Terminal/Console Isolation
 
 ### Sandboxie approach
-SandboxieCrack isolates terminal and console sessions per sandbox (`core/dll/terminal.c` for user-mode hooks, `core/svc/terminalserver.cpp` for the privileged terminal server). Console window creation, input/output, and terminal session management are intercepted to prevent cross-sandbox terminal access and ensure each sandbox has an isolated console environment.
+SandboxieCrack hooks Windows Terminal Services (RDP) session APIs (`core/dll/terminal.c` for user-mode hooks, `core/svc/terminalserver.cpp` for the privileged RDP session proxy). The DLL intercepts WinStation and WTS APIs (`WinStationEnumerateW`, `WTSEnumerateSessionsW`, `WTSEnumerateProcessesW`, `WTSQueryUserToken`, etc.) to prevent sandboxed applications from enumerating or interacting with Remote Desktop sessions outside their sandbox. The `terminalserver.cpp` service dynamically loads `winsta.dll` and provides session query, remoteability checks, name resolution, property retrieval, and disconnect operations via a pipe-based communication protocol.
 
 ### FreeBSD equivalent
 - **Per-jail PTY allocation** — Each jail gets its own pseudo-terminal devices
@@ -549,7 +549,7 @@ Benefits over Sandboxie: No hooking needed — jail PTY isolation is kernel-enfo
 | **High** | ZFS snapshots | `zfs snapshot/clone` | Medium | State management, rollback |
 | **High** | DNS filtering | `unbound(8)` | Medium | Privacy, security |
 | **High** | GUI isolation (nested X11) | Xephyr / Xpra | Medium | Prevents X11 escape |
-| **Medium** | pf firewall anchors | `pf(4)` | Medium | Replaces fragile ipfw numbering |
+| **Medium** | pf firewall anchors | `pf(4)` | Medium | Complements dynamic ipfw allocation |
 | **Medium** | Container templates | N/A (YAML) | Low | Usability |
 | **Medium** | Config validation | N/A (code) | Low | Developer experience |
 | **Medium** | COW filesystem | ZFS clones | Medium | Disk efficiency |
