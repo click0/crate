@@ -75,6 +75,9 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdValidate: {
     succ = validateCrateSpec(args);
     break;
+  } case CmdSnapshot: {
+    succ = snapshotCrate(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}

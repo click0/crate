@@ -40,6 +40,25 @@ bool validateCrateSpec(const Args &args) {
   if (!spec.limits.empty() && spec.limits.find("maxproc") == spec.limits.end())
     warn("limits section present but maxproc not set — consider setting a process limit");
 
+  // Encryption cross-checks (§1)
+  if (spec.encrypted)
+    warn("encrypted=true requires ZFS dataset with encryption enabled on the jail directory");
+
+  // DNS filter cross-checks (§4)
+  if (spec.dnsFilter) {
+    if (spec.dnsFilter->block.empty() && spec.dnsFilter->allow.empty())
+      warn("dns_filter section present but no allow/block rules defined");
+    if (!spec.optionExists("net"))
+      warn("dns_filter requires networking (option 'net') to be useful");
+  }
+
+  // Security cross-checks (§8)
+  if (spec.allowChflags)
+    warn("security/allow_chflags=true lets jail processes change file flags — reduces host protection");
+
+  if (spec.allowMlock)
+    warn("security/allow_mlock=true lets jail processes lock memory — may affect host performance");
+
   // Report
   std::cout << rang::fg::green << "Spec '" << args.validateSpec << "' is valid";
   if (warnings > 0)

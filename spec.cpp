@@ -323,6 +323,23 @@ void Spec::validate() const {
       if (validLimits.find(lim.first) == validLimits.end())
         ERR("unknown resource limit: " << lim.first)
   }
+
+  // encryption validation
+  if (encrypted) {
+    if (!encryptionMethod.empty() && encryptionMethod != "zfs")
+      ERR("only 'zfs' encryption method is currently supported")
+    if (!encryptionKeyformat.empty() && encryptionKeyformat != "passphrase"
+        && encryptionKeyformat != "hex" && encryptionKeyformat != "raw")
+      ERR("unsupported encryption keyformat: " << encryptionKeyformat)
+    if (!encryptionCipher.empty() && encryptionCipher != "aes-256-gcm"
+        && encryptionCipher != "aes-256-ccm" && encryptionCipher != "aes-128-gcm"
+        && encryptionCipher != "aes-128-ccm")
+      ERR("unsupported encryption cipher: " << encryptionCipher)
+  }
+
+  // enforce_statfs range
+  if (enforceStatfs != -1 && (enforceStatfs < 0 || enforceStatfs > 2))
+    ERR("security/enforce_statfs must be 0, 1, or 2")
 }
 
 //
@@ -583,6 +600,63 @@ Spec parseSpec(const std::string &fname) {
         ERR("limits must be a map of resource-name to value")
       for (auto b : k.second)
         spec.limits[AsString(b.first)] = AsString(b.second);
+    } else if (isKey(k, "encrypted")) {
+      if (k.second.IsScalar()) {
+        // simple form: encrypted: true
+        if (!YAML::convert<bool>::decode(k.second, spec.encrypted))
+          ERR("encrypted must be a boolean or a map")
+      } else if (k.second.IsMap()) {
+        spec.encrypted = true;
+        for (auto b : k.second) {
+          if (isKey(b, "method"))
+            scalar(b.second, spec.encryptionMethod, "encrypted/method");
+          else if (isKey(b, "keyformat"))
+            scalar(b.second, spec.encryptionKeyformat, "encrypted/keyformat");
+          else if (isKey(b, "cipher"))
+            scalar(b.second, spec.encryptionCipher, "encrypted/cipher");
+          else
+            ERR("unknown element encrypted/" << b.first << " in spec")
+        }
+      } else {
+        ERR("encrypted must be a boolean or a map")
+      }
+    } else if (isKey(k, "dns_filter") || isKey(k, "dns-filter")) {
+      if (!k.second.IsMap())
+        ERR("dns_filter must be a map")
+      spec.dnsFilter = std::make_unique<Spec::DnsFilter>();
+      for (auto b : k.second) {
+        if (isKey(b, "allow")) {
+          listOrScalarOnly(b.second, spec.dnsFilter->allow, "dns_filter/allow");
+        } else if (isKey(b, "block")) {
+          listOrScalarOnly(b.second, spec.dnsFilter->block, "dns_filter/block");
+        } else if (isKey(b, "redirect_blocked") || isKey(b, "redirect-blocked")) {
+          scalar(b.second, spec.dnsFilter->redirectBlocked, "dns_filter/redirect_blocked");
+        } else {
+          ERR("unknown element dns_filter/" << b.first << " in spec")
+        }
+      }
+    } else if (isKey(k, "security")) {
+      if (!k.second.IsMap())
+        ERR("security must be a map")
+      for (auto b : k.second) {
+        if (isKey(b, "enforce_statfs") || isKey(b, "enforce-statfs")) {
+          spec.enforceStatfs = Util::toUInt(AsString(b.second));
+        } else if (isKey(b, "allow_quotas") || isKey(b, "allow-quotas")) {
+          if (!YAML::convert<bool>::decode(b.second, spec.allowQuotas))
+            ERR("security/allow_quotas must be a boolean")
+        } else if (isKey(b, "allow_set_hostname") || isKey(b, "allow-set-hostname")) {
+          if (!YAML::convert<bool>::decode(b.second, spec.allowSetHostname))
+            ERR("security/allow_set_hostname must be a boolean")
+        } else if (isKey(b, "allow_chflags") || isKey(b, "allow-chflags")) {
+          if (!YAML::convert<bool>::decode(b.second, spec.allowChflags))
+            ERR("security/allow_chflags must be a boolean")
+        } else if (isKey(b, "allow_mlock") || isKey(b, "allow-mlock")) {
+          if (!YAML::convert<bool>::decode(b.second, spec.allowMlock))
+            ERR("security/allow_mlock must be a boolean")
+        } else {
+          ERR("unknown element security/" << b.first << " in spec")
+        }
+      }
     } else if (isKey(k, "scripts")) {
       if (!k.second.IsMap())
         ERR("scripts must be a map")
