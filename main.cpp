@@ -9,6 +9,8 @@
 
 #include <rang.hpp>
 
+#include <paths.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 #include <iostream>
@@ -29,6 +31,32 @@ static int mainGuarded(int argc, char** argv) {
                                << " (you ran it just as root, this isn't yet supported)"
                                << rang::style::reset << std::endl;
     return 1;
+  }
+
+  //
+  // Sanitize environment for setuid safety (CWE-426, CWE-250).
+  // Clear all inherited environment variables and rebuild with safe defaults.
+  // This prevents PATH manipulation, LD_PRELOAD injection, and other env-based attacks.
+  //
+  {
+    const char* term    = ::getenv("TERM");
+    const char* display = ::getenv("DISPLAY");
+    const char* wayland = ::getenv("WAYLAND_DISPLAY");
+    const char* lang    = ::getenv("LANG");
+    const char* xauth   = ::getenv("XAUTHORITY");
+
+    extern char **environ;
+    static char *empty_env[] = { nullptr };
+    environ = empty_env;
+
+    ::setenv("PATH", _PATH_DEFPATH, 1);
+    ::setenv("HOME", "/root", 1);
+    ::setenv("SHELL", _PATH_BSHELL, 1);
+    if (term)    ::setenv("TERM", term, 1);
+    if (display) ::setenv("DISPLAY", display, 1);
+    if (wayland) ::setenv("WAYLAND_DISPLAY", wayland, 1);
+    if (lang)    ::setenv("LANG", lang, 1);
+    if (xauth)   ::setenv("XAUTHORITY", xauth, 1);
   }
 
   //

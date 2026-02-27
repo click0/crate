@@ -6,6 +6,7 @@
 #include "cmd.h"
 #include "mount.h"
 #include "scripts.h"
+#include "pathnames.h"
 #include "util.h"
 #include "err.h"
 #include "commands.h"
@@ -77,7 +78,7 @@ static void runChrootCommand(const std::string &jailPath, const std::vector<std:
 
 // exec-based chroot with shell: for user scripts that need /bin/sh -c
 static void runChrootScript(const std::string &jailPath, const std::string &cmd, const char *descr) {
-  Util::execCommand({"/usr/sbin/chroot", jailPath, "/bin/sh", "-c",
+  Util::execCommand({CRATE_PATH_CHROOT, jailPath, CRATE_PATH_SH, "-c",
                      STR("ASSUME_ALWAYS_YES=yes " << cmd)}, descr);
 }
 
@@ -105,13 +106,13 @@ static void bootstrapJailViaPkgbase(const std::string &jailPath, bool logProgres
   // Install FreeBSD-set-base (meta-package that pulls in the entire base system)
   // Using host's pkg with -r flag to install into the jail root
   notifyUserOfLongProcess(true, "pkg (pkgbase)", "install FreeBSD base system via pkgbase");
-  Util::execCommand({"pkg", "-r", jailPath,
+  Util::execCommand({CRATE_PATH_PKG, "-r", jailPath,
                      "install", "-y", "-r", "FreeBSD-base",
                      "FreeBSD-runtime"},
                     "install FreeBSD base system via pkgbase");
 
   // Also install rc, utilities, and other essentials commonly needed in jails
-  Util::execCommand({"pkg", "-r", jailPath,
+  Util::execCommand({CRATE_PATH_PKG, "-r", jailPath,
                      "install", "-y", "-r", "FreeBSD-base",
                      "FreeBSD-rc", "FreeBSD-utilities", "FreeBSD-jail"},
                     "install additional pkgbase components for jail");
@@ -138,14 +139,14 @@ static void installAndAddPackagesInJail(const std::string &jailPath,
 
   // install
   if (!pkgsInstall.empty()) {
-    auto argv = std::vector<std::string>{"pkg", "install"};
+    auto argv = std::vector<std::string>{CRATE_PATH_PKG, "install"};
     argv.insert(argv.end(), pkgsInstall.begin(), pkgsInstall.end());
     runChrootCommand(jailPath, argv, "install the requested packages into the jail");
   }
   if (!pkgsAdd.empty()) {
     for (auto &p : pkgsAdd) {
       Util::Fs::copyFile(p, STR(J("/tmp/") << Util::filePathToFileName(p)));
-      runChrootCommand(jailPath, {"pkg", "add", STR("/tmp/" << Util::filePathToFileName(p))},
+      runChrootCommand(jailPath, {CRATE_PATH_PKG, "add", STR("/tmp/" << Util::filePathToFileName(p))},
                        "add the package file in jail");
     }
   }
@@ -154,10 +155,10 @@ static void installAndAddPackagesInJail(const std::string &jailPath,
   for (auto lo : pkgLocalOverride) {
     if (!Util::Fs::fileExists(lo.second))
       ERR("package override: failed to find the package file '" << lo.second << "'")
-    runChrootCommand(jailPath, {"pkg", "delete", lo.first},
+    runChrootCommand(jailPath, {CRATE_PATH_PKG, "delete", lo.first},
                      CSTR("remove the package '" << lo.first << "' for local override in jail"));
     Util::Fs::copyFile(lo.second, STR(J("/tmp/") << Util::filePathToFileName(lo.second)));
-    runChrootCommand(jailPath, {"pkg", "add", STR("/tmp/" << Util::filePathToFileName(lo.second))},
+    runChrootCommand(jailPath, {CRATE_PATH_PKG, "add", STR("/tmp/" << Util::filePathToFileName(lo.second))},
                      CSTR("add the local override package '" << lo.second << "' in jail"));
     Util::Fs::unlink(J(STR("/tmp/" << Util::filePathToFileName(lo.second))));
   }
@@ -168,9 +169,9 @@ static void installAndAddPackagesInJail(const std::string &jailPath,
                      "nuke the package in the jail");
 
   // write the +CRATE.PKGS file
-  runChrootCommand(jailPath, {"pkg", "info"}, "write +CRATE.PKGS file", J("/+CRATE.PKGS"));
+  runChrootCommand(jailPath, {CRATE_PATH_PKG, "info"}, "write +CRATE.PKGS file", J("/+CRATE.PKGS"));
   // cleanup: delete the pkg package: it will not be needed any more, and delete the added package files
-  runChrootCommand(jailPath, {"pkg", "delete", "-f", "pkg"}, "remove the 'pkg' package from jail");
+  runChrootCommand(jailPath, {CRATE_PATH_PKG, "delete", "-f", "pkg"}, "remove the 'pkg' package from jail");
   if (!pkgsAdd.empty())
     for (const auto &entry : std::filesystem::directory_iterator(STR(jailPath << "/tmp")))
       if (!entry.is_directory())
@@ -386,14 +387,14 @@ bool createCrate(const Args &args, const Spec &spec) {
     // download the base archive if not yet
     if (!Util::Fs::fileExists(Locations::baseArchive)) {
       std::cout << "downloading base.txz from " << Locations::baseArchiveUrl << " ..." << std::endl;
-      Util::execCommand({"fetch", "-o", Locations::baseArchive, Locations::baseArchiveUrl}, "download base.txz");
+      Util::execCommand({CRATE_PATH_FETCH, "-o", Locations::baseArchive, Locations::baseArchiveUrl}, "download base.txz");
       std::cout << "base.txz has finished downloading" << std::endl;
     }
 
     // unpack the base archive
     LOG("unpacking the base archive")
     Util::execPipeline(
-      {{"xz", Cmd::xzThreadsArg, "--decompress"}, {"tar", "-xf", "-", "--uname", "", "--gname", "", "-C", jailPath}},
+      {{CRATE_PATH_XZ, Cmd::xzThreadsArg, "--decompress"}, {CRATE_PATH_TAR, "-xf", "-", "--uname", "", "--gname", "", "-C", jailPath}},
       "unpack the system base into the jail directory", Locations::baseArchive);
   }
 
@@ -448,7 +449,7 @@ bool createCrate(const Args &args, const Spec &spec) {
   // pack the jail into a .crate file
   LOG("creating the crate file " << crateFileName)
   Util::execPipeline(
-    {{"tar", "cf", "-", "-C", jailPath, "."}, {"xz", Cmd::xzThreadsArg, "--extreme"}},
+    {{CRATE_PATH_TAR, "cf", "-", "-C", jailPath, "."}, {CRATE_PATH_XZ, Cmd::xzThreadsArg, "--extreme"}},
     "compress the jail directory into the crate file", "", crateFileName);
   Util::Fs::chown(crateFileName, myuid, mygid);
 

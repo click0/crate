@@ -8,6 +8,7 @@
 #include "net.h"
 #include "scripts.h"
 #include "ctx.h"
+#include "pathnames.h"
 #include "util.h"
 #include "err.h"
 #include "commands.h"
@@ -160,7 +161,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   LOG("validating the crate file " << args.runCrateFile)
   {
     auto listing = Util::execPipelineGetOutput(
-      {{"xz", Cmd::xzThreadsArg, "--decompress"}, {"tar", "tf", "-"}},
+      {{CRATE_PATH_XZ, Cmd::xzThreadsArg, "--decompress"}, {CRATE_PATH_TAR, "tf", "-"}},
       "list crate archive contents", args.runCrateFile);
     std::istringstream is(listing);
     std::string entry;
@@ -173,7 +174,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // extract the crate archive into the jail directory
   LOG("extracting the crate file " << args.runCrateFile << " into " << jailPath)
   Util::execPipeline(
-    {{"xz", Cmd::xzThreadsArg, "--decompress"}, {"tar", "xf", "-", "-C", jailPath}},
+    {{CRATE_PATH_XZ, Cmd::xzThreadsArg, "--decompress"}, {CRATE_PATH_TAR, "xf", "-", "-C", jailPath}},
     "extract the crate file into the jail directory", args.runCrateFile);
 
   // parse +CRATE.SPEC
@@ -207,16 +208,16 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         ERR("cannot determine ZFS dataset for jail directory")
       auto snapName = STR(baseDataset << "@cow-" << Util::randomHex(4));
       auto cloneName = STR(baseDataset << "/cow-" << Util::randomHex(4));
-      Util::execCommand({"zfs", "snapshot", snapName}, "create COW base snapshot");
-      Util::execCommand({"zfs", "clone", snapName, cloneName}, "create COW clone");
+      Util::execCommand({CRATE_PATH_ZFS, "snapshot", snapName}, "create COW base snapshot");
+      Util::execCommand({CRATE_PATH_ZFS, "clone", snapName, cloneName}, "create COW clone");
       auto cloneMountpoint = Util::stripTrailingSpace(
-        Util::execCommandGetOutput({"zfs", "get", "-H", "-o", "value", "mountpoint", cloneName}, "get clone mountpoint"));
+        Util::execCommandGetOutput({CRATE_PATH_ZFS, "get", "-H", "-o", "value", "mountpoint", cloneName}, "get clone mountpoint"));
       LOG("COW clone created: " << cloneName << " at " << cloneMountpoint)
       if (spec.cowOptions->mode == "ephemeral") {
         destroyCowClone.reset([cloneName, snapName, &args]() {
           LOG("destroying ephemeral COW clone " << cloneName)
-          Util::execCommand({"zfs", "destroy", cloneName}, "destroy COW clone");
-          Util::execCommand({"zfs", "destroy", snapName}, "destroy COW base snapshot");
+          Util::execCommand({CRATE_PATH_ZFS, "destroy", cloneName}, "destroy COW clone");
+          Util::execCommand({CRATE_PATH_ZFS, "destroy", snapName}, "destroy COW base snapshot");
         });
       }
     } else if (spec.cowOptions->backend == "unionfs") {
@@ -288,14 +289,14 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       for (auto &rule : spec.securityAdvanced->macRules) {
         LOG("adding MAC rule: " << rule)
         auto ruleArgs = Util::splitString(rule, " ");
-        auto fullArgs = std::vector<std::string>{"ugidfw", "add"};
+        auto fullArgs = std::vector<std::string>{CRATE_PATH_UGIDFW, "add"};
         fullArgs.insert(fullArgs.end(), ruleArgs.begin(), ruleArgs.end());
         Util::execCommand(fullArgs, CSTR("add MAC rule: " << rule));
       }
       removeMacRules.reset([&spec, &args]() {
         LOG("removing MAC bsdextended rules")
         // ugidfw list + remove in reverse order
-        Util::execCommand({"ugidfw", "list"}, "list MAC rules before cleanup");
+        Util::execCommand({CRATE_PATH_UGIDFW, "list"}, "list MAC rules before cleanup");
       });
     }
     if (!spec.securityAdvanced->macAllowPorts.empty()) {
@@ -322,8 +323,8 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   if (spec.terminalOptions) {
     if (spec.terminalOptions->devfsRuleset >= 0) {
       auto rulesetStr = std::to_string(spec.terminalOptions->devfsRuleset);
-      Util::execCommand({"devfs", "-m", J("/dev"), "ruleset", rulesetStr}, "apply terminal devfs ruleset");
-      Util::execCommand({"devfs", "-m", J("/dev"), "rule", "applyset"}, "apply terminal devfs rules");
+      Util::execCommand({CRATE_PATH_DEVFS, "-m", J("/dev"), "ruleset", rulesetStr}, "apply terminal devfs ruleset");
+      Util::execCommand({CRATE_PATH_DEVFS, "-m", J("/dev"), "rule", "applyset"}, "apply terminal devfs rules");
       LOG("terminal: devfs_ruleset=" << rulesetStr)
     }
     if (!spec.terminalOptions->allowRawTty) {
@@ -365,10 +366,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       // Xephyr runs on host, creates nested X server
       pid_t xephyrPid = ::fork();
       if (xephyrPid == 0) {
-        ::execlp("Xephyr", "Xephyr", dispStr.c_str(),
-                 "-screen", resolution.c_str(),
-                 "-resizeable", "-no-host-grab",
-                 nullptr);
+        ::execl(CRATE_PATH_XEPHYR, "Xephyr", dispStr.c_str(),
+                "-screen", resolution.c_str(),
+                "-resizeable", "-no-host-grab",
+                nullptr);
         ::_exit(127);
       }
       if (xephyrPid == -1)
@@ -513,12 +514,12 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     for (auto &lim : spec.limits) {
       auto rule = STR("jail:" << jidStr << ":" << lim.first << ":deny=" << lim.second);
       LOG("applying RCTL rule: " << rule)
-      Util::execCommand({"rctl", "-a", rule}, CSTR("apply RCTL rule " << lim.first));
+      Util::execCommand({CRATE_PATH_RCTL, "-a", rule}, CSTR("apply RCTL rule " << lim.first));
     }
     removeRctlRules.reset([jid, &args]() {
       auto jidStr = std::to_string(jid);
       LOG("removing RCTL rules for jail " << jidStr)
-      Util::execCommand({"rctl", "-r", STR("jail:" << jidStr)}, "remove RCTL rules");
+      Util::execCommand({CRATE_PATH_RCTL, "-r", STR("jail:" << jidStr)}, "remove RCTL rules");
     });
   }
 
@@ -528,14 +529,14 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     auto jidStr = std::to_string(jid);
     for (auto &dataset : spec.zfsDatasets) {
       LOG("attaching ZFS dataset " << dataset << " to jail " << jid)
-      Util::execCommand({"zfs", "jail", jidStr, dataset},
+      Util::execCommand({CRATE_PATH_ZFS, "jail", jidStr, dataset},
         CSTR("attach ZFS dataset " << dataset));
     }
     detachZfsDatasets.reset([&spec, jid, &args]() {
       auto jidStr = std::to_string(jid);
       for (auto &dataset : Util::reverseVector(spec.zfsDatasets)) {
         LOG("detaching ZFS dataset " << dataset << " from jail " << jid)
-        Util::execCommand({"zfs", "unjail", jidStr, dataset},
+        Util::execCommand({CRATE_PATH_ZFS, "unjail", jidStr, dataset},
           CSTR("detach ZFS dataset " << dataset));
       }
     });
@@ -544,7 +545,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // helpers for jail access (exec-based: no shell)
   auto jidStr = std::to_string(jid);
   auto execInJail = [&jidStr](const std::vector<std::string> &argv, const std::string &descr) {
-    auto fullArgv = std::vector<std::string>{"jexec", jidStr};
+    auto fullArgv = std::vector<std::string>{CRATE_PATH_JEXEC, jidStr};
     fullArgv.insert(fullArgv.end(), argv.begin(), argv.end());
     Util::execCommand(fullArgv, descr);
   };
@@ -565,7 +566,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     { // determine host's gateway interface
       auto elts = Util::splitString(
                     Util::execPipelineGetOutput(
-                      {{"netstat", "-rn"}, {"grep", "^default"}, {"sed", "s| *| |"}},
+                      {{CRATE_PATH_NETSTAT, "-rn"}, {CRATE_PATH_GREP, "^default"}, {CRATE_PATH_SED, "s| *| |"}},
                       "determine host's gateway interface"),
                     " "
                   );
@@ -588,9 +589,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
     // create the epipe
     // set the lo0 IP address (lo0 is always automatically present in vnet jails)
-    execInJail({"ifconfig", "lo0", "inet", "127.0.0.1"}, "set up the lo0 interface in jail");
+    execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet", "127.0.0.1"}, "set up the lo0 interface in jail");
     // create networking interface
-    std::string epipeIfaceA = Util::stripTrailingSpace(Util::execCommandGetOutput({"ifconfig", "epair", "create"}, "create the jail epipe"));
+    std::string epipeIfaceA = Util::stripTrailingSpace(Util::execCommandGetOutput({CRATE_PATH_IFCONFIG, "epair", "create"}, "create the jail epipe"));
     std::string epipeIfaceB = STR(epipeIfaceA.substr(0, epipeIfaceA.size()-1) << "b"); // jail side
     unsigned epairNum = std::stoul(epipeIfaceA.substr(5/*skip epair*/, epipeIfaceA.size()-5-1));
     // IP allocation (§19): uses 10.0.0.0/8 private address space for container networking.
@@ -609,13 +610,13 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     auto epipeIpA = numToIp(epairNum, 0), epipeIpB = numToIp(epairNum, 1);
     // disable checksum offload on epair interfaces to work around FreeBSD 15.0 bug
     // where packets between jails/host get dropped due to uncomputed checksums
-    Util::execCommand({"ifconfig", epipeIfaceA, "-txcsum", "-txcsum6"}, "disable checksum offload on epair (host side)");
-    Util::execCommand({"ifconfig", epipeIfaceB, "-txcsum", "-txcsum6"}, "disable checksum offload on epair (jail side)");
+    Util::execCommand({CRATE_PATH_IFCONFIG, epipeIfaceA, "-txcsum", "-txcsum6"}, "disable checksum offload on epair (host side)");
+    Util::execCommand({CRATE_PATH_IFCONFIG, epipeIfaceB, "-txcsum", "-txcsum6"}, "disable checksum offload on epair (jail side)");
     // transfer the interface into jail
-    Util::execCommand({"ifconfig", epipeIfaceB, "vnet", jidStr}, "transfer the network interface into jail");
+    Util::execCommand({CRATE_PATH_IFCONFIG, epipeIfaceB, "vnet", jidStr}, "transfer the network interface into jail");
     // set the IP addresses on the jail epipe
-    execInJail({"ifconfig", epipeIfaceB, "inet", epipeIpB, "netmask", "0xfffffffe"}, "set up IP jail epipe addresses");
-    Util::execCommand({"ifconfig", epipeIfaceA, "inet", epipeIpA, "netmask", "0xfffffffe"}, "set up IP jail epipe addresses");
+    execInJail({CRATE_PATH_IFCONFIG, epipeIfaceB, "inet", epipeIpB, "netmask", "0xfffffffe"}, "set up IP jail epipe addresses");
+    Util::execCommand({CRATE_PATH_IFCONFIG, epipeIfaceA, "inet", epipeIpA, "netmask", "0xfffffffe"}, "set up IP jail epipe addresses");
     // enable firewall in jail
     //if (optionInitializeRc)
       appendFileInJail(STR(
@@ -624,16 +625,16 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         ),
         "/etc/rc.conf");
     // set default route in jail
-    execInJail({"route", "add", "default", epipeIpA}, "set default route in jail");
+    execInJail({CRATE_PATH_ROUTE, "add", "default", epipeIpA}, "set default route in jail");
     // destroy the epipe when finished
     destroyEpipeAtEnd.reset([epipeIfaceA]() {
-      Util::execCommand({"ifconfig", epipeIfaceA, "destroy"}, CSTR("destroy the jail epipe (" << epipeIfaceA << ")"));
+      Util::execCommand({CRATE_PATH_IFCONFIG, epipeIfaceA, "destroy"}, CSTR("destroy the jail epipe (" << epipeIfaceA << ")"));
     });
     // add firewall rules to NAT and route packets from jails to host's default GW
     {
       // exec-based ipfw wrapper: no shell, argv array passed directly
       auto execFW = [](const std::vector<std::string> &fwargs) {
-        auto argv = std::vector<std::string>{"ipfw", "-q"};
+        auto argv = std::vector<std::string>{CRATE_PATH_IPFW, "-q"};
         argv.insert(argv.end(), fwargs.begin(), fwargs.end());
         Util::execCommand(argv, "firewall rule");
       };
@@ -726,14 +727,14 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         auto ruleOutCommonS = std::to_string(fwRuleOutCommonNo);
         // delete the rule(s) for this epipe
         if (optionNet->allowInbound())
-          Util::execCommand({"ipfw", "delete", ruleInS}, "destroy firewall rule");
+          Util::execCommand({CRATE_PATH_IPFW, "delete", ruleInS}, "destroy firewall rule");
         if (optionNet->allowOutbound()) {
-          Util::execCommand({"ipfw", "delete", ruleOutS}, "destroy firewall rule");
+          Util::execCommand({CRATE_PATH_IPFW, "delete", ruleOutS}, "destroy firewall rule");
           { // possibly delete the common rules if this is the last firewall
             std::unique_ptr<Ctx::FwUsers> fwUsers(Ctx::FwUsers::lock());
             fwUsers->del(::getpid());
             if (fwUsers->isEmpty()) {
-              Util::execCommand({"ipfw", "delete", ruleOutCommonS}, "destroy firewall rule");
+              Util::execCommand({CRATE_PATH_IPFW, "delete", ruleOutCommonS}, "destroy firewall rule");
               // restore ip.forwarding to its original value if we changed it
               if (origIpForwarding == 0) {
                 LOG("restoring net.inet.ip.forwarding to 0")
@@ -768,13 +769,13 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       // Load rules into pf anchor
       auto tmpRules = STR("/tmp/crate-pf-" << jailXname << ".conf");
       Util::Fs::writeFile(pfRules.str(), tmpRules);
-      Util::execCommand({"pfctl", "-a", anchorName, "-f", tmpRules}, "load pf anchor rules");
+      Util::execCommand({CRATE_PATH_PFCTL, "-a", anchorName, "-f", tmpRules}, "load pf anchor rules");
       Util::Fs::unlink(tmpRules);
       LOG("pf anchor '" << anchorName << "' loaded")
 
       destroyPfAnchor.reset([anchorName, &args]() {
         LOG("flushing pf anchor '" << anchorName << "'")
-        Util::execCommand({"pfctl", "-a", anchorName, "-F", "all"}, "flush pf anchor");
+        Util::execCommand({CRATE_PATH_PFCTL, "-a", anchorName, "-F", "all"}, "flush pf anchor");
       });
     }
   }
@@ -897,10 +898,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       std::filesystem::create_directories(J(jailParent));
       pid_t pid = ::fork();
       if (pid == 0) {
-        ::execlp("socat", "socat",
-                 STR("UNIX-LISTEN:" << J(entry.jail) << ",fork").c_str(),
-                 STR("UNIX-CONNECT:" << entry.host).c_str(),
-                 nullptr);
+        ::execl(CRATE_PATH_SOCAT, "socat",
+                STR("UNIX-LISTEN:" << J(entry.jail) << ",fork").c_str(),
+                STR("UNIX-CONNECT:" << entry.host).c_str(),
+                nullptr);
         ::_exit(127);
       }
       if (pid > 0)
@@ -1058,7 +1059,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       Util::Fs::chmod(proxyFile, 0700);
       pid_t clipPid = ::fork();
       if (clipPid == 0) {
-        ::execlp("/bin/sh", "/bin/sh", proxyFile.c_str(), nullptr);
+        ::execl(CRATE_PATH_SH, CRATE_PATH_SH, proxyFile.c_str(), nullptr);
         ::_exit(127);
       }
       if (clipPid > 0) {
@@ -1082,7 +1083,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     auto innerCmd = STR("/usr/bin/env " << jailEnv
                         << (spec.optionExists("dbg-ktrace") ? " /usr/bin/ktrace" : "")
                         << " " << Util::shellQuote(spec.runCmdExecutable) << spec.runCmdArgs << argsToString(argc, argv));
-    int status = Util::execCommandGetStatus({"jexec", "-l", "-U", user, jidStr, innerCmd}, "run command in jail");
+    int status = Util::execCommandGetStatus({CRATE_PATH_JEXEC, "-l", "-U", user, jidStr, innerCmd}, "run command in jail");
     returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     LOG("command has finished in jail: returnCode=" << returnCode)
   } else {
@@ -1112,7 +1113,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     Util::Fs::chmod(J(cmdFile), 0500); // User-RX
     // run it the same way as we would any other command
     {
-      int status = Util::execCommandGetStatus({"jexec", "-l", "-U", user, jidStr, cmdFile}, "run service command in jail");
+      int status = Util::execCommandGetStatus({CRATE_PATH_JEXEC, "-l", "-U", user, jidStr, cmdFile}, "run service command in jail");
       returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     }
   }

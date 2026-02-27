@@ -23,9 +23,13 @@ static void createDirectoryIfNeeded(const char *dir, const char *what) {
     ERR2(STR("create " << what << " directory"), "failed to create the " << what << " directory '" << dir << "': " << strerror(errno))
 
   // Verify permissions (§20): jail directory must be owned by root with mode 0700
-  // to prevent unprivileged users from manipulating jail contents
+  // to prevent unprivileged users from manipulating jail contents.
+  // Use lstat() to detect symlink attacks (CWE-59).
   struct stat sb;
-  if (::stat(dir, &sb) == 0) {
+  if (::lstat(dir, &sb) == 0) {
+    if (S_ISLNK(sb.st_mode))
+      ERR2(STR("check " << what << " directory"),
+           what << " directory '" << dir << "' is a symlink, refusing to use it")
     if (sb.st_uid != 0)
       ERR2(STR("check " << what << " directory"),
            what << " directory '" << dir << "' is owned by uid " << sb.st_uid << ", expected root (uid 0)")

@@ -1,6 +1,7 @@
 // Copyright (C) 2019 by Yuri Victorovich. All rights reserved.
 
 #include "util.h"
+#include "pathnames.h"
 #include "err.h"
 
 #include <string>
@@ -82,7 +83,7 @@ void RunAtEnd::doNow() {
 
 namespace Util {
 
-// Convert vector<string> argv to char*[] for execvp
+// Convert vector<string> argv to char*[] for execv
 static std::vector<char*> toExecArgv(const std::vector<std::string> &argv) {
   std::vector<char*> cargv;
   cargv.reserve(argv.size() + 1);
@@ -101,7 +102,7 @@ void execCommand(const std::vector<std::string> &argv, const std::string &what) 
     ERR2("exec command", "fork failed for '" << what << "': " << strerror(errno))
   if (pid == 0) {
     // child
-    ::execvp(cargv[0], cargv.data());
+    ::execv(cargv[0], cargv.data());
     ::_exit(127); // exec failed
   }
   // parent: wait for child
@@ -125,7 +126,7 @@ int execCommandGetStatus(const std::vector<std::string> &argv, const std::string
     ERR2("exec command", "fork failed for '" << what << "': " << strerror(errno))
   if (pid == 0) {
     // child
-    ::execvp(cargv[0], cargv.data());
+    ::execv(cargv[0], cargv.data());
     ::_exit(127); // exec failed
   }
   // parent: wait for child, return raw wait status
@@ -153,7 +154,7 @@ std::string execCommandGetOutput(const std::vector<std::string> &argv, const std
     ::close(pipeRead.release());
     ::dup2(pipeWrite.get(), STDOUT_FILENO);
     ::close(pipeWrite.release());
-    ::execvp(cargv[0], cargv.data());
+    ::execv(cargv[0], cargv.data());
     ::_exit(127);
   }
   // parent: read from pipe read end
@@ -248,7 +249,7 @@ static std::string execPipelineImpl(const std::vector<std::vector<std::string>> 
       for (auto fd : pipefds) ::close(fd);
       if (capturePipe[0] >= 0) ::close(capturePipe[0]);
       if (capturePipe[1] >= 0) ::close(capturePipe[1]);
-      ::execvp(cargv[0], cargv.data());
+      ::execv(cargv[0], cargv.data());
       ::_exit(127);
     }
     pids[i] = pid;
@@ -782,7 +783,7 @@ std::string getZfsDataset(const std::string &path) {
 
 bool isZfsEncrypted(const std::string &dataset) {
   auto output = execCommandGetOutput(
-    {"zfs", "get", "-H", "-o", "value", "encryption", dataset},
+    {CRATE_PATH_ZFS, "get", "-H", "-o", "value", "encryption", dataset},
     "check ZFS encryption");
   auto val = stripTrailingSpace(output);
   return !val.empty() && val != "off" && val != "-";
@@ -790,7 +791,7 @@ bool isZfsEncrypted(const std::string &dataset) {
 
 bool isZfsKeyLoaded(const std::string &dataset) {
   auto output = execCommandGetOutput(
-    {"zfs", "get", "-H", "-o", "value", "keystatus", dataset},
+    {CRATE_PATH_ZFS, "get", "-H", "-o", "value", "keystatus", dataset},
     "check ZFS key status");
   return stripTrailingSpace(output) == "available";
 }
