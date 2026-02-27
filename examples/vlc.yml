@@ -1,0 +1,18 @@
+##
+## container for VLC media player
+##
+
+---
+
+pkg:
+    install:
+        - vlc
+
+run:
+    command: /usr/local/bin/vlc
+
+options:
+    - net
+    - x11
+    - gl
+    - video

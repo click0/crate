@@ -1,0 +1,20 @@
+##
+## container for GIMP, the GNU Image Manipulation Program
+##
+
+---
+
+pkg:
+    install:
+        - gimp
+
+run:
+    command: /usr/local/bin/gimp
+
+dirs:
+    share:
+        - [$HOME/Pictures, $HOME/Pictures]
+
+options:
+    - x11
+    - gl

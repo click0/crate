@@ -1,0 +1,50 @@
+##
+## container for Firefox browser through the I2P anonymous network (via i2pd)
+## I2PD runs as a local service providing HTTP proxy on port 4444.
+## Firefox is configured to use this proxy for browsing .i2p sites.
+##
+
+---
+
+base:
+    keep:
+        - /sbin/sysctl
+        - /usr/sbin/chown
+
+pkg:
+    install:
+        - firefox
+        - i2pd
+
+run:
+    service: i2pd
+    command: /usr/local/bin/firefox
+
+options:
+    net:
+        outbound: wan
+    x11:
+    gl:
+    video:
+
+scripts:
+    run:before-start-services:
+        - "mkdir -p /var/db/i2pd /var/log/i2pd /var/run/i2pd"
+        - "echo i2pd_enable=\"YES\" >> /etc/rc.conf"
+        ## Uncomment to limit i2pd bandwidth (L=32K O=256K P=2048K X=unlimited):
+        #- "sed -i '' 's/^# *bandwidth *=.*/bandwidth = O/' /usr/local/etc/i2pd/i2pd.conf"
+        - "chown -R i2pd:i2pd /var/db/i2pd /var/log/i2pd /var/run/i2pd"
+    run:before-execute:
+        - "mkdir -p $HOME/.mozilla/firefox/crate.default"
+        - "echo 'user_pref(\"network.proxy.type\", 1);' > $HOME/.mozilla/firefox/crate.default/user.js"
+        - "echo 'user_pref(\"network.proxy.http\", \"127.0.0.1\");' >> $HOME/.mozilla/firefox/crate.default/user.js"
+        - "echo 'user_pref(\"network.proxy.http_port\", 4444);' >> $HOME/.mozilla/firefox/crate.default/user.js"
+        - "echo 'user_pref(\"network.proxy.no_proxies_on\", \"\");' >> $HOME/.mozilla/firefox/crate.default/user.js"
+        - "echo '[Profile0]' > $HOME/.mozilla/firefox/profiles.ini"
+        - "echo 'Name=crate' >> $HOME/.mozilla/firefox/profiles.ini"
+        - "echo 'IsRelative=1' >> $HOME/.mozilla/firefox/profiles.ini"
+        - "echo 'Path=crate.default' >> $HOME/.mozilla/firefox/profiles.ini"
+        - "echo 'Default=1' >> $HOME/.mozilla/firefox/profiles.ini"
+        - "echo '[General]' >> $HOME/.mozilla/firefox/profiles.ini"
+        - "echo 'StartWithLastProfile=1' >> $HOME/.mozilla/firefox/profiles.ini"
+        - "chown -R $USER $HOME/.mozilla"

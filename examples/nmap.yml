@@ -1,0 +1,20 @@
+##
+## container for nmap, the network mapper / security scanner
+##
+## Usage: crate run -f nmap.crate -- -sV target.example.com
+##
+
+---
+
+pkg:
+    install:
+        - nmap
+
+run:
+    command: /usr/local/bin/nmap
+
+ipc:
+    raw_sockets: true
+
+options:
+    - net

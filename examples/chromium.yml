@@ -11,12 +11,6 @@ base:
 pkg:
     install:
         - chromium
-    nuke:
-        - python36
-        - linux-c7-expat
-        - linux-c7-fontconfig
-        - linux-c7-xorg-libs
-        - linux_base-c7
 
 run:
     command: /usr/local/bin/chrome

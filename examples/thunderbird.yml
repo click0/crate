@@ -1,0 +1,22 @@
+##
+## container for Thunderbird email client
+##
+
+---
+
+pkg:
+    install:
+        - thunderbird
+
+run:
+    command: /usr/local/bin/thunderbird
+
+dirs:
+    share:
+        - [$HOME/.thunderbird, $HOME/.thunderbird]
+
+options:
+    - net
+    - x11
+    - gl
+    - ssl-certs
