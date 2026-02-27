@@ -1,0 +1,22 @@
+##
+## container for Telegram Desktop messenger
+##
+
+---
+
+pkg:
+    install:
+        - telegram-desktop
+
+run:
+    command: /usr/local/bin/Telegram
+
+dirs:
+    share:
+        - [$HOME/.local/share/TelegramDesktop, $HOME/.local/share/TelegramDesktop]
+
+options:
+    - net
+    - x11
+    - gl
+    - video

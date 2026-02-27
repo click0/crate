@@ -1,4 +1,8 @@
+##
+## container for a standalone Tor relay/proxy service
+##
+
 ---
 
 options:
-    tor: service
+    - tor

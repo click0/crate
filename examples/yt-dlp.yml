@@ -1,0 +1,24 @@
+##
+## container for yt-dlp, a youtube-dl fork with additional features
+## Downloads videos to shared ~/Downloads directory.
+##
+## Usage: crate run -f yt-dlp.crate -- https://www.youtube.com/watch?v=...
+##
+
+---
+
+pkg:
+    install:
+        - yt-dlp
+        - ffmpeg
+
+run:
+    command: /usr/local/bin/yt-dlp -o "$HOME/Downloads/%(title)s.%(ext)s"
+
+dirs:
+    share:
+        - [$HOME/Downloads, $HOME/Downloads]
+
+options:
+    - net
+    - ssl-certs

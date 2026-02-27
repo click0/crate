@@ -1,0 +1,24 @@
+##
+## container for aria2, a lightweight multi-protocol download utility
+## Supports HTTP/HTTPS, FTP, SFTP, BitTorrent and Metalink.
+## Downloads to shared ~/Downloads directory.
+##
+## Usage: crate run -f aria2.crate -- https://example.com/file.iso
+##
+
+---
+
+pkg:
+    install:
+        - aria2
+
+run:
+    command: /usr/local/bin/aria2c -d $HOME/Downloads
+
+dirs:
+    share:
+        - [$HOME/Downloads, $HOME/Downloads]
+
+options:
+    - net
+    - ssl-certs

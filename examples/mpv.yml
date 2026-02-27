@@ -1,0 +1,17 @@
+##
+## container for mpv, a free and open source media player
+##
+
+---
+
+pkg:
+    install:
+        - mpv
+
+run:
+    command: /usr/local/bin/mpv
+
+options:
+    - x11
+    - gl
+    - video

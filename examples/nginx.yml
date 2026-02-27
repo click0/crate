@@ -1,0 +1,35 @@
+##
+## container for nginx web server
+## Serves static files from shared $HOME/www directory on port 8080 (host) -> 80 (jail).
+##
+## ASSUMES: directory $HOME/www exists with your website content
+##
+
+---
+
+base:
+    keep:
+        - /usr/sbin/chown
+
+pkg:
+    install: nginx
+
+run:
+    service: nginx
+
+dirs:
+    share:
+        -
+            - /usr/local/www/nginx
+            - $HOME/www
+
+options:
+    net:
+        outbound: dns
+        inbound-tcp:
+            8080: 80
+
+scripts:
+    run:before-start-services:
+        - "echo nginx_enable=\"YES\" >> /etc/rc.conf"
+        - "chown -R www:www /usr/local/www/nginx"

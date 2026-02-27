@@ -1,0 +1,36 @@
+##
+## container for Syncthing, a continuous file synchronization program
+## Web UI accessible at http://localhost:8384
+##
+## ASSUMES: directory $HOME/Sync exists for synchronized files
+##
+
+---
+
+base:
+    keep:
+        - /usr/sbin/chown
+
+pkg:
+    install: syncthing
+
+run:
+    service: syncthing
+
+dirs:
+    share:
+        - [$HOME/Sync, $HOME/Sync]
+
+options:
+    net:
+        outbound: wan dns
+        inbound-tcp:
+            8384: 8384
+            22000: 22000
+        inbound-udp:
+            22000: 22000
+
+scripts:
+    run:before-start-services:
+        - "echo syncthing_enable=\"YES\" >> /etc/rc.conf"
+        - "echo syncthing_home=\"/var/db/syncthing\" >> /etc/rc.conf"

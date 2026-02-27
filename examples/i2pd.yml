@@ -1,0 +1,44 @@
+##
+## container for I2PD, a C++ implementation of the I2P anonymous network client
+## Runs as a service with HTTP proxy (4444), SOCKS proxy (4447), and web console (7070).
+##
+## Bandwidth can be limited via i2pd.conf (see scripts section below):
+##   L=32KB/s  O=256KB/s  P=2048KB/s  X=unlimited  (or integer in KB/s)
+##   share = percentage of bandwidth for transit traffic (0-100, default 100)
+##
+
+---
+
+base:
+    keep:
+        - /usr/sbin/chown
+
+pkg:
+    install: i2pd
+
+run:
+    service: i2pd
+
+options:
+    net:
+        outbound: wan
+        inbound-tcp:
+            4444: 4444
+            4447: 4447
+            7070: 7070
+
+## To limit i2pd bandwidth, uncomment and adjust:
+#limits:
+#    readbps: 256k       # OS-level RCTL limit on jail I/O (optional)
+#    writebps: 256k
+
+scripts:
+    run:before-start-services:
+        - "mkdir -p /var/db/i2pd /var/log/i2pd /var/run/i2pd"
+        - "echo i2pd_enable=\"YES\" >> /etc/rc.conf"
+        ## Uncomment to set i2pd-level bandwidth limit:
+        ## L=32KB/s  O=256KB/s  P=2048KB/s  X=unlimited  (or integer KB/s)
+        #- "sed -i '' 's/^# *bandwidth *=.*/bandwidth = O/' /usr/local/etc/i2pd/i2pd.conf"
+        ## share = % of bandwidth for transit traffic (0=no transit, 100=full)
+        #- "sed -i '' 's/^# *share *=.*/share = 50/' /usr/local/etc/i2pd/i2pd.conf"
+        - "chown -R i2pd:i2pd /var/db/i2pd /var/log/i2pd /var/run/i2pd"
