@@ -1351,7 +1351,7 @@ else
   fail "spec.cpp missing firewall rule parsing"
 fi
 
-if grep -q 'pfctl' "$BUILDDIR/run.cpp"; then
+if grep -qi 'pfctl' "$BUILDDIR/run.cpp"; then
   pass "run.cpp has pfctl calls for pf anchor management"
 else
   fail "run.cpp missing pfctl calls"
