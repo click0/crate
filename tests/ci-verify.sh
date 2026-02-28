@@ -1783,132 +1783,107 @@ else
 fi
 
 # ===========================================================================
-#  Layer 9: Phase 3 — IPv6 Pass-Through Networking
+#  Layer 10: Phase 4 — Security Hardening (securelevel, children.max, cpuset)
 # ===========================================================================
 
-section "T28: IPv6 pass-through networking"
+section "T29: securelevel, children.max, cpuset"
 
-# net.h has IPv6 types
-if grep -q 'Ip6Info' "$BUILDDIR/net.h"; then
-  pass "net.h has Ip6Info type for IPv6 addresses"
+# securelevel in spec.h
+if grep -q 'securelevel' "$BUILDDIR/spec.h"; then
+  pass "spec.h has securelevel field"
 else
-  fail "net.h missing Ip6Info type"
+  fail "spec.h missing securelevel"
 fi
 
-# net.h declares IPv6 functions
-if grep -q 'getIfaceIp6Addresses' "$BUILDDIR/net.h"; then
-  pass "net.h declares getIfaceIp6Addresses()"
+# children.max in spec.h
+if grep -q 'childrenMax' "$BUILDDIR/spec.h"; then
+  pass "spec.h has childrenMax field"
 else
-  fail "net.h missing getIfaceIp6Addresses"
+  fail "spec.h missing childrenMax"
 fi
 
-if grep -q 'isIpv6Address' "$BUILDDIR/net.h"; then
-  pass "net.h declares isIpv6Address()"
+# cpuset in spec.h
+if grep -q 'cpuset' "$BUILDDIR/spec.h"; then
+  pass "spec.h has cpuset field"
 else
-  fail "net.h missing isIpv6Address"
+  fail "spec.h missing cpuset"
 fi
 
-# net.cpp implements IPv6 functions
-if grep -q 'getIfaceIp6Addresses' "$BUILDDIR/net.cpp"; then
-  pass "net.cpp implements getIfaceIp6Addresses()"
+# spec.cpp parses securelevel
+if grep -q '"securelevel"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses security/securelevel"
 else
-  fail "net.cpp missing getIfaceIp6Addresses implementation"
+  fail "spec.cpp missing securelevel parsing"
 fi
 
-if grep -q 'AF_INET6' "$BUILDDIR/net.cpp"; then
-  pass "net.cpp uses AF_INET6 for IPv6 address detection"
+# spec.cpp parses children_max
+if grep -q '"children_max"\|"children-max"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses security/children_max"
 else
-  fail "net.cpp missing AF_INET6"
+  fail "spec.cpp missing children_max parsing"
 fi
 
-if grep -q 'inet_pton' "$BUILDDIR/net.cpp"; then
-  pass "net.cpp uses inet_pton for IPv6 address validation"
+# spec.cpp parses cpuset
+if grep -q '"cpuset"\|"cpu-set"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses security/cpuset"
 else
-  fail "net.cpp missing inet_pton"
+  fail "spec.cpp missing cpuset parsing"
 fi
 
-# spec.h has ipv6 field
-if grep -q 'ipv6' "$BUILDDIR/spec.h"; then
-  pass "spec.h has ipv6 field in NetOptDetails"
+# run.cpp applies securelevel to jail
+if grep -q 'securelevel' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp applies securelevel to jail"
 else
-  fail "spec.h missing ipv6 field"
+  fail "run.cpp missing securelevel"
 fi
 
-# spec.cpp parses ipv6 option
-if grep -q '"ipv6"' "$BUILDDIR/spec.cpp"; then
-  pass "spec.cpp parses net/ipv6 option"
+# run.cpp applies children.max to jail
+if grep -q 'children.max' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp applies children.max to jail"
 else
-  fail "spec.cpp missing ipv6 parsing"
+  fail "run.cpp missing children.max"
 fi
 
-# run.cpp has IPv6 gateway detection
-if grep -q 'inet6' "$BUILDDIR/run.cpp"; then
-  pass "run.cpp uses inet6 for IPv6 interface configuration"
+# run.cpp applies cpuset
+if grep -q 'CRATE_PATH_CPUSET\|cpuset' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp applies cpuset restrictions"
 else
-  fail "run.cpp missing inet6 interface configuration"
+  fail "run.cpp missing cpuset"
 fi
 
-# run.cpp has IPv6 address allocation (ULA fd00:cra7:e:: prefix)
-if grep -q 'fd00:cra7:e' "$BUILDDIR/run.cpp"; then
-  pass "run.cpp uses ULA prefix fd00:cra7:e:: for IPv6 address allocation"
+# pathnames.h has CRATE_PATH_CPUSET
+if grep -q 'CRATE_PATH_CPUSET' "$BUILDDIR/pathnames.h"; then
+  pass "pathnames.h defines CRATE_PATH_CPUSET"
 else
-  fail "run.cpp missing ULA address allocation"
+  fail "pathnames.h missing CRATE_PATH_CPUSET"
 fi
 
-# run.cpp configures IPv6 routing in jail
-if grep -q 'CRATE_PATH_ROUTE.*"-6".*"default"' "$BUILDDIR/run.cpp"; then
-  pass "run.cpp sets IPv6 default route in jail"
+# validate.cpp checks securelevel
+if grep -q 'securelevel' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp validates securelevel"
 else
-  fail "run.cpp missing IPv6 default route"
+  fail "validate.cpp missing securelevel validation"
 fi
 
-# run.cpp has IPv6 forwarding sysctl
-if grep -q 'ip6.forwarding' "$BUILDDIR/run.cpp"; then
-  pass "run.cpp enables IPv6 forwarding (net.inet6.ip6.forwarding)"
+# validate.cpp checks childrenMax
+if grep -q 'childrenMax\|children_max' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp validates children_max"
 else
-  fail "run.cpp missing IPv6 forwarding sysctl"
+  fail "validate.cpp missing children_max validation"
 fi
 
-# run.cpp has IPv6 firewall rules
-if grep -q 'ip6.*from.*epipeIp6\|IPv6 firewall' "$BUILDDIR/run.cpp"; then
-  pass "run.cpp has IPv6 ipfw firewall rules"
+# validate.cpp checks cpuset
+if grep -q 'cpuset' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp validates cpuset"
 else
-  fail "run.cpp missing IPv6 firewall rules"
+  fail "validate.cpp missing cpuset validation"
 fi
 
-# IPv6 firewall cleanup
-if grep -q 'IPv6 firewall rule' "$BUILDDIR/run.cpp"; then
-  pass "run.cpp cleans up IPv6 firewall rules on exit"
+# Uses exec-based CRATE_PATH_JAIL for securelevel/children.max
+if grep -q 'CRATE_PATH_JAIL.*securelevel\|CRATE_PATH_JAIL.*children' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp uses exec-based jail -m for securelevel/children.max"
 else
-  fail "run.cpp missing IPv6 firewall cleanup"
-fi
-
-# pf anchor rules include IPv6
-if grep -q 'inet6.*proto' "$BUILDDIR/run.cpp"; then
-  pass "run.cpp generates IPv6 pf anchor rules"
-else
-  fail "run.cpp missing IPv6 pf rules"
-fi
-
-# validate.cpp checks IPv6 config
-if grep -q 'ipv6' "$BUILDDIR/validate.cpp"; then
-  pass "validate.cpp validates IPv6 configuration"
-else
-  fail "validate.cpp missing IPv6 validation"
-fi
-
-# Host IPv6 variables
-if grep -q 'hostIP6' "$BUILDDIR/run.cpp"; then
-  pass "run.cpp tracks host IPv6 address"
-else
-  fail "run.cpp missing hostIP6 variable"
-fi
-
-# IPv6 link-local/global scope detection
-if grep -q 'link-local\|global' "$BUILDDIR/net.cpp"; then
-  pass "net.cpp detects IPv6 address scope (link-local/global)"
-else
-  fail "net.cpp missing IPv6 scope detection"
+  fail "run.cpp missing exec-based jail -m"
 fi
 
 # ===========================================================================

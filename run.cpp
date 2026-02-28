@@ -366,6 +366,74 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   auto jailInfo = RunJail::createJail(spec, jailPath, args.logProgress);
   int jid = jailInfo.jid;
   const bool hasZfsDatasets = !spec.zfsDatasets.empty();
+  const char *optZfsMount = hasZfsDatasets ? "true" : "false";
+  // enforce_statfs: spec override > ZFS auto-detect > default(2)
+  const char *optEnforceStatfs;
+  if (spec.enforceStatfs >= 0)
+    optEnforceStatfs = spec.enforceStatfs == 0 ? "0" : (spec.enforceStatfs == 1 ? "1" : "2");
+  else
+    optEnforceStatfs = hasZfsDatasets ? "1" : "2";
+  const char *optAllowQuotas = spec.allowQuotas ? "true" : "false";
+  const char *optSetHostname = spec.allowSetHostname ? "true" : "false";
+  const char *optAllowChflags = spec.allowChflags ? "true" : "false";
+  const char *optAllowMlock = spec.allowMlock ? "true" : "false";
+  // securelevel: -1 means inherit host default, 0-3 are explicit values
+  // bastille defaults to securelevel=2 for all jails
+  auto securelevelStr = spec.securelevel >= 0 ? std::to_string(spec.securelevel) : std::string();
+  // children.max: limits nested jails; -1 means not set (kernel default)
+  auto childrenMaxStr = spec.childrenMax >= 0 ? std::to_string(spec.childrenMax) : std::string();
+  int jid;
+  int jailFd = -1; // jail descriptor for race-free removal (FreeBSD 15.0+)
+#ifdef JAIL_OWN_DESC
+  if (Util::getFreeBSDMajorVersion() >= 15) {
+    // Use owning jail descriptor: eliminates TOCTOU race in jail_remove(),
+    // and auto-removes jail if crate crashes (kernel closes the owning fd)
+    char descBuf[32] = {0};
+    res = ::jail_setv(JAIL_CREATE | JAIL_OWN_DESC,
+      "path", jailPath.c_str(),
+      "host.hostname", Util::gethostname().c_str(),
+      "persist", nullptr,
+      "allow.raw_sockets", optRawSockets, // allow ping-pong, overridable via ipc section
+      "allow.socket_af", optNet,
+      "allow.sysvipc", optSysvipc,
+      "allow.mount", optZfsMount,
+      "allow.mount.zfs", optZfsMount,
+      "allow.quotas", optAllowQuotas,
+      "allow.set_hostname", optSetHostname,
+      "allow.chflags", optAllowChflags,
+      "allow.mlock", optAllowMlock,
+      "enforce_statfs", optEnforceStatfs,
+      "vnet", nullptr/*"new"*/, // possible values are: nullptr, { "disable", "new", "inherit" }, see lib/libjail/jail.c
+      "desc", descBuf,
+      nullptr);
+    if (res == -1)
+      ERR("failed to create jail: " << jail_errmsg)
+    jid = res;
+    jailFd = std::atoi(descBuf);
+    LOG("jail descriptor fd=" << jailFd)
+  } else
+#endif
+  {
+    res = ::jail_setv(JAIL_CREATE,
+      "path", jailPath.c_str(),
+      "host.hostname", Util::gethostname().c_str(),
+      "persist", nullptr,
+      "allow.raw_sockets", optRawSockets, // allow ping-pong, overridable via ipc section
+      "allow.socket_af", optNet,
+      "allow.sysvipc", optSysvipc,
+      "allow.mount", optZfsMount,
+      "allow.mount.zfs", optZfsMount,
+      "allow.quotas", optAllowQuotas,
+      "allow.set_hostname", optSetHostname,
+      "allow.chflags", optAllowChflags,
+      "allow.mlock", optAllowMlock,
+      "enforce_statfs", optEnforceStatfs,
+      "vnet", nullptr/*"new"*/, // possible values are: nullptr, { "disable", "new", "inherit" }, see lib/libjail/jail.c
+      nullptr);
+    if (res == -1)
+      ERR("failed to create jail: " << jail_errmsg)
+    jid = res;
+  }
 
   RunAtEnd destroyJail([jailInfo,&jailXname,runScript,&args]() {
     runScript("run:before-remove-jail");
@@ -377,6 +445,34 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   runScript("run:after-create-jail");
   LOG("jail " << jailXname << " has been created, jid=" << jid)
+
+  // Apply securelevel after jail creation (§8)
+  // Like bastille's securelevel=2 default, restricts kernel modifications inside the jail
+  if (!securelevelStr.empty()) {
+    auto jidS = std::to_string(jid);
+    Util::execCommand({CRATE_PATH_JAIL, "-m", STR("jid=" << jidS), STR("securelevel=" << securelevelStr)},
+                      CSTR("set securelevel=" << securelevelStr));
+    LOG("securelevel set to " << securelevelStr << " for jail " << jid)
+  }
+
+  // Apply children.max after jail creation
+  // Limits how many child jails this container can create (0 = none)
+  if (!childrenMaxStr.empty()) {
+    auto jidS = std::to_string(jid);
+    Util::execCommand({CRATE_PATH_JAIL, "-m", STR("jid=" << jidS), STR("children.max=" << childrenMaxStr)},
+                      CSTR("set children.max=" << childrenMaxStr));
+    LOG("children.max set to " << childrenMaxStr << " for jail " << jid)
+  }
+
+  // Apply CPU set restrictions via cpuset(1) (§8)
+  // Pins jail processes to specific CPUs (e.g., "0-3", "0,2,4")
+  RunAtEnd releaseCpuset;
+  if (!spec.cpuset.empty()) {
+    auto jidS = std::to_string(jid);
+    Util::execCommand({CRATE_PATH_CPUSET, "-l", spec.cpuset, "-j", jidS},
+                      CSTR("apply cpuset " << spec.cpuset));
+    LOG("cpuset applied: CPUs " << spec.cpuset << " for jail " << jid)
+  }
 
   // apply RCTL resource limits (§5)
   RunAtEnd removeRctlRules = RunJail::applyRctlLimits(spec, jid, args.logProgress);

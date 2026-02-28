@@ -726,6 +726,16 @@ Spec parseSpec(const std::string &fname) {
         } else if (isKey(b, "allow_mlock") || isKey(b, "allow-mlock")) {
           if (!YAML::convert<bool>::decode(b.second, spec.allowMlock))
             ERR("security/allow_mlock must be a boolean")
+        } else if (isKey(b, "securelevel") || isKey(b, "secure-level")) {
+          spec.securelevel = Util::toUInt(AsString(b.second));
+          if (spec.securelevel < -1 || spec.securelevel > 3)
+            ERR("security/securelevel must be between -1 and 3")
+        } else if (isKey(b, "children_max") || isKey(b, "children-max")) {
+          spec.childrenMax = std::stoi(AsString(b.second));
+          if (spec.childrenMax < 0)
+            ERR("security/children_max must be >= 0")
+        } else if (isKey(b, "cpuset") || isKey(b, "cpu-set")) {
+          spec.cpuset = AsString(b.second);
         } else {
           ERR("unknown element security/" << b.first << " in spec")
         }
