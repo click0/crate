@@ -1776,6 +1776,110 @@ else
 fi
 
 # ===========================================================================
+#  Layer 10: Phase 4 — Security Hardening (securelevel, children.max, cpuset)
+# ===========================================================================
+
+section "T29: securelevel, children.max, cpuset"
+
+# securelevel in spec.h
+if grep -q 'securelevel' "$BUILDDIR/spec.h"; then
+  pass "spec.h has securelevel field"
+else
+  fail "spec.h missing securelevel"
+fi
+
+# children.max in spec.h
+if grep -q 'childrenMax' "$BUILDDIR/spec.h"; then
+  pass "spec.h has childrenMax field"
+else
+  fail "spec.h missing childrenMax"
+fi
+
+# cpuset in spec.h
+if grep -q 'cpuset' "$BUILDDIR/spec.h"; then
+  pass "spec.h has cpuset field"
+else
+  fail "spec.h missing cpuset"
+fi
+
+# spec.cpp parses securelevel
+if grep -q '"securelevel"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses security/securelevel"
+else
+  fail "spec.cpp missing securelevel parsing"
+fi
+
+# spec.cpp parses children_max
+if grep -q '"children_max"\|"children-max"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses security/children_max"
+else
+  fail "spec.cpp missing children_max parsing"
+fi
+
+# spec.cpp parses cpuset
+if grep -q '"cpuset"\|"cpu-set"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses security/cpuset"
+else
+  fail "spec.cpp missing cpuset parsing"
+fi
+
+# run.cpp applies securelevel to jail
+if grep -q 'securelevel' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp applies securelevel to jail"
+else
+  fail "run.cpp missing securelevel"
+fi
+
+# run.cpp applies children.max to jail
+if grep -q 'children.max' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp applies children.max to jail"
+else
+  fail "run.cpp missing children.max"
+fi
+
+# run.cpp applies cpuset
+if grep -q 'CRATE_PATH_CPUSET\|cpuset' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp applies cpuset restrictions"
+else
+  fail "run.cpp missing cpuset"
+fi
+
+# pathnames.h has CRATE_PATH_CPUSET
+if grep -q 'CRATE_PATH_CPUSET' "$BUILDDIR/pathnames.h"; then
+  pass "pathnames.h defines CRATE_PATH_CPUSET"
+else
+  fail "pathnames.h missing CRATE_PATH_CPUSET"
+fi
+
+# validate.cpp checks securelevel
+if grep -q 'securelevel' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp validates securelevel"
+else
+  fail "validate.cpp missing securelevel validation"
+fi
+
+# validate.cpp checks childrenMax
+if grep -q 'childrenMax\|children_max' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp validates children_max"
+else
+  fail "validate.cpp missing children_max validation"
+fi
+
+# validate.cpp checks cpuset
+if grep -q 'cpuset' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp validates cpuset"
+else
+  fail "validate.cpp missing cpuset validation"
+fi
+
+# Uses exec-based CRATE_PATH_JAIL for securelevel/children.max
+if grep -q 'CRATE_PATH_JAIL.*securelevel\|CRATE_PATH_JAIL.*children' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp uses exec-based jail -m for securelevel/children.max"
+else
+  fail "run.cpp missing exec-based jail -m"
+fi
+
+# ===========================================================================
 #  Summary
 # ===========================================================================
 section "RESULTS"

@@ -59,6 +59,22 @@ bool validateCrateSpec(const Args &args) {
   if (spec.allowMlock)
     warn("security/allow_mlock=true lets jail processes lock memory — may affect host performance");
 
+  if (spec.securelevel >= 0 && spec.securelevel < 2)
+    warn("security/securelevel=" + std::to_string(spec.securelevel) + " is less restrictive than bastille's default (2)");
+
+  if (spec.childrenMax > 0)
+    warn("security/children_max=" + std::to_string(spec.childrenMax) + " allows nested jails — ensure this is intended");
+
+  if (!spec.cpuset.empty()) {
+    // Basic validation: must contain only digits, commas, and hyphens
+    for (char c : spec.cpuset) {
+      if (!::isdigit(c) && c != ',' && c != '-') {
+        warn("security/cpuset contains invalid character '" + std::string(1, c) + "'");
+        break;
+      }
+    }
+  }
+
   // COW cross-checks (§6)
   if (spec.cowOptions) {
     if (spec.cowOptions->backend == "zfs")

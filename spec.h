@@ -83,6 +83,9 @@ public:
   bool                                               allowSetHostname = false;
   bool                                               allowChflags = false;
   bool                                               allowMlock = false;
+  int                                                securelevel = -1;        // -1=auto (inherit host), 0-3
+  int                                                childrenMax = -1;        // -1=auto (no children.max), 0=no child jails
+  std::string                                        cpuset;                  // CPU set (e.g. "0-3", "0,2,4")
 
   // Copy-on-Write filesystem (§6)
   struct CowOptions {
