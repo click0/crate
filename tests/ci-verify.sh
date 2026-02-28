@@ -494,7 +494,7 @@ else
 fi
 
 # Source-level: run.cpp has ZFS dataset attach/detach (exec-based: "zfs", "jail")
-if grep -q '"zfs".*"jail"' "$BUILDDIR/run.cpp" && grep -q '"zfs".*"unjail"' "$BUILDDIR/run.cpp"; then
+if grep -qE 'CRATE_PATH_ZFS.*"jail"|"zfs".*"jail"' "$BUILDDIR/run.cpp" && grep -qE 'CRATE_PATH_ZFS.*"unjail"|"zfs".*"unjail"' "$BUILDDIR/run.cpp"; then
   pass "run.cpp has ZFS dataset attach/detach (exec-based)"
 else
   fail "run.cpp missing ZFS dataset attach/detach"
@@ -596,7 +596,7 @@ else
 fi
 
 # user and jailPath now go through exec (no shell) — verify exec-based patterns
-if grep -q 'execCommandGetStatus.*jexec' "$BUILDDIR/run.cpp"; then
+if grep -qE 'execCommandGetStatus.*CRATE_PATH_JEXEC|execCommandGetStatus.*jexec' "$BUILDDIR/run.cpp"; then
   pass "run.cpp uses execCommandGetStatus for jexec (user/jid via exec, not shell)"
 else
   fail "run.cpp missing execCommandGetStatus for jexec"
@@ -874,7 +874,7 @@ else
   fail "spec.h missing limits field"
 fi
 
-if grep -q 'rctl' "$BUILDDIR/run.cpp"; then
+if grep -qE 'CRATE_PATH_RCTL|[Rr]ctl' "$BUILDDIR/run.cpp"; then
   pass "run.cpp has RCTL support"
 else
   fail "run.cpp missing RCTL support"
@@ -965,19 +965,19 @@ else
   fail "main.cpp missing CmdSnapshot dispatch"
 fi
 
-if grep -q '"zfs".*"snapshot"' "$BUILDDIR/snapshot.cpp"; then
+if grep -qE 'CRATE_PATH_ZFS.*"snapshot"|"zfs".*"snapshot"' "$BUILDDIR/snapshot.cpp"; then
   pass "snapshot.cpp calls zfs snapshot"
 else
   fail "snapshot.cpp missing zfs snapshot call"
 fi
 
-if grep -q '"zfs".*"rollback"' "$BUILDDIR/snapshot.cpp"; then
+if grep -qE 'CRATE_PATH_ZFS.*"rollback"|"zfs".*"rollback"' "$BUILDDIR/snapshot.cpp"; then
   pass "snapshot.cpp calls zfs rollback"
 else
   fail "snapshot.cpp missing zfs rollback call"
 fi
 
-if grep -q '"zfs".*"diff"' "$BUILDDIR/snapshot.cpp"; then
+if grep -qE 'CRATE_PATH_ZFS.*"diff"|"zfs".*"diff"' "$BUILDDIR/snapshot.cpp"; then
   pass "snapshot.cpp calls zfs diff"
 else
   fail "snapshot.cpp missing zfs diff call"
@@ -1148,7 +1148,7 @@ else
   fail "run.cpp missing COW logic"
 fi
 
-if grep -q 'zfs.*snapshot.*snapName\|zfs.*clone.*cloneName' "$BUILDDIR/run.cpp"; then
+if grep -qE 'CRATE_PATH_ZFS.*snapshot.*snapName|"zfs".*snapshot.*snapName|CRATE_PATH_ZFS.*clone.*cloneName|"zfs".*clone.*cloneName' "$BUILDDIR/run.cpp"; then
   pass "run.cpp calls zfs snapshot/clone for COW"
 else
   fail "run.cpp missing zfs snapshot/clone call"
