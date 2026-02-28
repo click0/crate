@@ -4,7 +4,7 @@
 
 #include <string>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdList, CmdInfo, CmdClean, CmdConsole};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport};
 
 class Args {
 public:

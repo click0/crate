@@ -1782,6 +1782,165 @@ else
   pass "spec.cpp csh XXX comment resolved"
 fi
 
+# ---------------------------------------------------------------------------
+section "T27: export/import commands"
+
+# --- Source structure ---
+
+# export.cpp exists
+if [ -f "$BUILDDIR/export.cpp" ]; then
+  pass "export.cpp exists"
+else
+  fail "export.cpp missing"
+fi
+
+# import.cpp exists
+if [ -f "$BUILDDIR/import.cpp" ]; then
+  pass "import.cpp exists"
+else
+  fail "import.cpp missing"
+fi
+
+# export.cpp uses CRATE_PATH_JLS for container resolution
+if grep -q 'CRATE_PATH_JLS' "$BUILDDIR/export.cpp"; then
+  pass "export.cpp uses CRATE_PATH_JLS"
+else
+  fail "export.cpp missing CRATE_PATH_JLS"
+fi
+
+# export.cpp uses exec-based tar+xz pipeline
+if grep -q 'CRATE_PATH_TAR' "$BUILDDIR/export.cpp" && grep -q 'CRATE_PATH_XZ' "$BUILDDIR/export.cpp"; then
+  pass "export.cpp uses exec-based tar+xz pipeline"
+else
+  fail "export.cpp missing tar/xz pipeline"
+fi
+
+# export.cpp generates SHA256 checksum
+if grep -q 'sha256' "$BUILDDIR/export.cpp"; then
+  pass "export.cpp generates SHA256 checksum"
+else
+  fail "export.cpp missing SHA256 checksum"
+fi
+
+# import.cpp validates directory traversal
+if grep -q '\.\.' "$BUILDDIR/import.cpp"; then
+  pass "import.cpp validates against directory traversal"
+else
+  fail "import.cpp missing directory traversal check"
+fi
+
+# import.cpp checks +CRATE.SPEC presence
+if grep -q 'CRATE.SPEC' "$BUILDDIR/import.cpp"; then
+  pass "import.cpp checks +CRATE.SPEC presence"
+else
+  fail "import.cpp missing +CRATE.SPEC check"
+fi
+
+# import.cpp checks OS version compatibility
+if grep -q 'CRATE.OSVERSION' "$BUILDDIR/import.cpp"; then
+  pass "import.cpp checks OS version compatibility"
+else
+  fail "import.cpp missing OS version check"
+fi
+
+# import.cpp supports --force flag
+if grep -q 'importForce' "$BUILDDIR/import.cpp"; then
+  pass "import.cpp supports --force flag"
+else
+  fail "import.cpp missing --force support"
+fi
+
+# import.cpp validates xz archive format
+if grep -q 'isXzArchive' "$BUILDDIR/import.cpp"; then
+  pass "import.cpp validates xz archive format"
+else
+  fail "import.cpp missing xz archive validation"
+fi
+
+# --- Args integration ---
+
+# args.h has CmdExport and CmdImport
+if grep -q 'CmdExport' "$BUILDDIR/args.h" && grep -q 'CmdImport' "$BUILDDIR/args.h"; then
+  pass "args.h has CmdExport and CmdImport"
+else
+  fail "args.h missing CmdExport/CmdImport"
+fi
+
+# args.h has export/import fields
+if grep -q 'exportTarget' "$BUILDDIR/args.h" && grep -q 'importFile' "$BUILDDIR/args.h"; then
+  pass "args.h has export/import parameter fields"
+else
+  fail "args.h missing export/import fields"
+fi
+
+# args.cpp has usage functions for export and import
+if grep -q 'usageExport' "$BUILDDIR/args.cpp" && grep -q 'usageImport' "$BUILDDIR/args.cpp"; then
+  pass "args.cpp has export/import usage functions"
+else
+  fail "args.cpp missing export/import usage"
+fi
+
+# args.cpp recognizes export/import commands
+if grep -q '"export"' "$BUILDDIR/args.cpp" && grep -q '"import"' "$BUILDDIR/args.cpp"; then
+  pass "args.cpp recognizes export/import commands"
+else
+  fail "args.cpp missing export/import command recognition"
+fi
+
+# --- commands.h integration ---
+
+if grep -q 'exportCrate' "$BUILDDIR/commands.h" && grep -q 'importCrate' "$BUILDDIR/commands.h"; then
+  pass "commands.h declares exportCrate and importCrate"
+else
+  fail "commands.h missing exportCrate/importCrate declarations"
+fi
+
+# --- main.cpp dispatch ---
+
+if grep -q 'CmdExport' "$BUILDDIR/main.cpp" && grep -q 'CmdImport' "$BUILDDIR/main.cpp"; then
+  pass "main.cpp dispatches CmdExport and CmdImport"
+else
+  fail "main.cpp missing CmdExport/CmdImport dispatch"
+fi
+
+# --- Makefile ---
+
+if grep -q 'export.cpp' "$BUILDDIR/Makefile" && grep -q 'import.cpp' "$BUILDDIR/Makefile"; then
+  pass "Makefile includes export.cpp and import.cpp"
+else
+  fail "Makefile missing export.cpp/import.cpp"
+fi
+
+# --- Security: no shell usage ---
+
+if ! grep -q 'system(' "$BUILDDIR/export.cpp" && ! grep -q 'popen(' "$BUILDDIR/export.cpp"; then
+  pass "export.cpp has no shell-based execution (system/popen)"
+else
+  fail "export.cpp uses system() or popen()"
+fi
+
+if ! grep -q 'system(' "$BUILDDIR/import.cpp" && ! grep -q 'popen(' "$BUILDDIR/import.cpp"; then
+  pass "import.cpp has no shell-based execution (system/popen)"
+else
+  fail "import.cpp uses system() or popen()"
+fi
+
+# --- export uses absolute paths ---
+
+if grep -q 'CRATE_PATH_' "$BUILDDIR/export.cpp"; then
+  pass "export.cpp uses CRATE_PATH_ absolute path macros"
+else
+  fail "export.cpp missing absolute path macros"
+fi
+
+# --- import uses absolute paths ---
+
+if grep -q 'CRATE_PATH_' "$BUILDDIR/import.cpp"; then
+  pass "import.cpp uses CRATE_PATH_ absolute path macros"
+else
+  fail "import.cpp missing absolute path macros"
+fi
+
 # ===========================================================================
 #  Layer 10: Phase 4 — Security Hardening (securelevel, children.max, cpuset)
 # ===========================================================================
