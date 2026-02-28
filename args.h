@@ -44,6 +44,15 @@ public:
   // clean parameters
   bool cleanDryRun = false;     // -n/--dry-run: show what would be cleaned
 
+  // export parameters
+  std::string exportTarget;     // container name or JID
+  std::string exportOutput;     // -o/--output: output file path
+
+  // import parameters
+  std::string importFile;       // archive file to import
+  std::string importOutput;     // -o/--output: output directory
+  bool importForce = false;     // -f/--force: skip checksum verification
+
   // console parameters
   std::string consoleTarget;    // jail name or JID
   std::string consoleUser;      // -u/--user: user to login as

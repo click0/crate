@@ -135,6 +135,12 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdConsole: {
     succ = consoleCrate(args, argc - numArgsProcessed, argv + numArgsProcessed);
     break;
+  } case CmdExport: {
+    succ = exportCrate(args);
+    break;
+  } case CmdImport: {
+    succ = importCrate(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}
