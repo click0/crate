@@ -1,5 +1,5 @@
 
-SRCS=   main.cpp args.cpp spec.cpp create.cpp run.cpp locs.cpp cmd.cpp mount.cpp net.cpp ctx.cpp scripts.cpp misc.cpp util.cpp err.cpp validate.cpp snapshot.cpp
+SRCS=   main.cpp args.cpp spec.cpp create.cpp run.cpp run_net.cpp run_jail.cpp run_gui.cpp run_services.cpp config.cpp locs.cpp cmd.cpp mount.cpp net.cpp ctx.cpp scripts.cpp misc.cpp util.cpp err.cpp validate.cpp snapshot.cpp
 OBJS=   $(SRCS:.cpp=.o)
 
 PREFIX   ?=  /usr/local
@@ -33,9 +33,9 @@ clean:
 	rm -f $(OBJS) crate lst-all-script-sections.h
 
 # generated sources
-lst-all-script-sections.h: create.cpp run.cpp
+lst-all-script-sections.h: create.cpp run.cpp run_net.cpp run_jail.cpp run_gui.cpp run_services.cpp
 	@(echo "static std::set<std::string> allScriptSections = {\"\"" && \
-	  grep -h "runScript(" create.cpp run.cpp | sed -e 's|.*runScript(|, |; s|);||' && \
+	  grep -h "runScript(" create.cpp run.cpp run_net.cpp run_jail.cpp run_gui.cpp run_services.cpp | sed -e 's|.*runScript(|, |; s|);||' && \
 	  echo "};" \
 	 ) > $@
 	@touch spec.cpp
