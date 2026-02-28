@@ -14,3 +14,5 @@ bool listCrates(const Args &args);
 bool infoCrate(const Args &args);
 bool cleanCrates(const Args &args);
 bool consoleCrate(const Args &args, int argc, char** argv);
+bool exportCrate(const Args &args);
+bool importCrate(const Args &args);
