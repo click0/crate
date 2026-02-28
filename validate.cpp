@@ -37,6 +37,17 @@ bool validateCrateSpec(const Args &args) {
       warn("net/outbound includes LAN with tor enabled — traffic may bypass Tor");
   }
 
+  // IPv6 cross-checks
+  if (spec.optionExists("net")) {
+    auto optNet = spec.optionNet();
+    if (optNet && optNet->ipv6) {
+      if (!optNet->allowOutbound())
+        warn("net/ipv6=true but no outbound traffic allowed — IPv6 will have no effect");
+      if (spec.optionExists("tor"))
+        warn("net/ipv6=true with tor — Tor does not support IPv6 outbound by default");
+    }
+  }
+
   if (!spec.limits.empty() && spec.limits.find("maxproc") == spec.limits.end())
     warn("limits section present but maxproc not set — consider setting a process limit");
 

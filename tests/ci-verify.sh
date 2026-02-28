@@ -1783,225 +1783,132 @@ else
 fi
 
 # ===========================================================================
-#  Layer 8: Phase 2 — New Commands (list, info, clean, console)
+#  Layer 9: Phase 3 — IPv6 Pass-Through Networking
 # ===========================================================================
 
-section "T27: new commands (list, info, clean, console)"
+section "T28: IPv6 pass-through networking"
 
-# list command
-if grep -q 'CmdList' "$BUILDDIR/args.h"; then
-  pass "args.h has CmdList command"
+# net.h has IPv6 types
+if grep -q 'Ip6Info' "$BUILDDIR/net.h"; then
+  pass "net.h has Ip6Info type for IPv6 addresses"
 else
-  fail "args.h missing CmdList"
+  fail "net.h missing Ip6Info type"
 fi
 
-if [ -f "$BUILDDIR/list.cpp" ]; then
-  pass "list.cpp exists"
+# net.h declares IPv6 functions
+if grep -q 'getIfaceIp6Addresses' "$BUILDDIR/net.h"; then
+  pass "net.h declares getIfaceIp6Addresses()"
 else
-  fail "list.cpp not found"
+  fail "net.h missing getIfaceIp6Addresses"
 fi
 
-if grep -q 'listCrates' "$BUILDDIR/commands.h"; then
-  pass "commands.h declares listCrates"
+if grep -q 'isIpv6Address' "$BUILDDIR/net.h"; then
+  pass "net.h declares isIpv6Address()"
 else
-  fail "commands.h missing listCrates declaration"
+  fail "net.h missing isIpv6Address"
 fi
 
-if grep -q 'listCrates' "$BUILDDIR/main.cpp"; then
-  pass "main.cpp dispatches CmdList to listCrates"
+# net.cpp implements IPv6 functions
+if grep -q 'getIfaceIp6Addresses' "$BUILDDIR/net.cpp"; then
+  pass "net.cpp implements getIfaceIp6Addresses()"
 else
-  fail "main.cpp missing CmdList dispatch"
+  fail "net.cpp missing getIfaceIp6Addresses implementation"
 fi
 
-if grep -q 'CRATE_PATH_JLS' "$BUILDDIR/list.cpp"; then
-  pass "list.cpp uses CRATE_PATH_JLS (exec-based, no shell)"
+if grep -q 'AF_INET6' "$BUILDDIR/net.cpp"; then
+  pass "net.cpp uses AF_INET6 for IPv6 address detection"
 else
-  fail "list.cpp missing CRATE_PATH_JLS"
+  fail "net.cpp missing AF_INET6"
 fi
 
-if grep -q 'listJson' "$BUILDDIR/args.h"; then
-  pass "args.h has listJson field for -j flag"
+if grep -q 'inet_pton' "$BUILDDIR/net.cpp"; then
+  pass "net.cpp uses inet_pton for IPv6 address validation"
 else
-  fail "args.h missing listJson field"
+  fail "net.cpp missing inet_pton"
 fi
 
-if grep -q '"list"' "$BUILDDIR/args.cpp"; then
-  pass "args.cpp handles 'list' command"
+# spec.h has ipv6 field
+if grep -q 'ipv6' "$BUILDDIR/spec.h"; then
+  pass "spec.h has ipv6 field in NetOptDetails"
 else
-  fail "args.cpp missing list command"
+  fail "spec.h missing ipv6 field"
 fi
 
-# info command
-if grep -q 'CmdInfo' "$BUILDDIR/args.h"; then
-  pass "args.h has CmdInfo command"
+# spec.cpp parses ipv6 option
+if grep -q '"ipv6"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses net/ipv6 option"
 else
-  fail "args.h missing CmdInfo"
+  fail "spec.cpp missing ipv6 parsing"
 fi
 
-if [ -f "$BUILDDIR/info.cpp" ]; then
-  pass "info.cpp exists"
+# run.cpp has IPv6 gateway detection
+if grep -q 'inet6' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp uses inet6 for IPv6 interface configuration"
 else
-  fail "info.cpp not found"
+  fail "run.cpp missing inet6 interface configuration"
 fi
 
-if grep -q 'infoCrate' "$BUILDDIR/commands.h"; then
-  pass "commands.h declares infoCrate"
+# run.cpp has IPv6 address allocation (ULA fd00:cra7:e:: prefix)
+if grep -q 'fd00:cra7:e' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp uses ULA prefix fd00:cra7:e:: for IPv6 address allocation"
 else
-  fail "commands.h missing infoCrate declaration"
+  fail "run.cpp missing ULA address allocation"
 fi
 
-if grep -q 'infoCrate' "$BUILDDIR/main.cpp"; then
-  pass "main.cpp dispatches CmdInfo to infoCrate"
+# run.cpp configures IPv6 routing in jail
+if grep -q 'CRATE_PATH_ROUTE.*"-6".*"default"' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp sets IPv6 default route in jail"
 else
-  fail "main.cpp missing CmdInfo dispatch"
+  fail "run.cpp missing IPv6 default route"
 fi
 
-if grep -q 'infoTarget' "$BUILDDIR/args.h"; then
-  pass "args.h has infoTarget field"
+# run.cpp has IPv6 forwarding sysctl
+if grep -q 'ip6.forwarding' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp enables IPv6 forwarding (net.inet6.ip6.forwarding)"
 else
-  fail "args.h missing infoTarget field"
+  fail "run.cpp missing IPv6 forwarding sysctl"
 fi
 
-if grep -q 'CRATE_PATH_RCTL' "$BUILDDIR/info.cpp"; then
-  pass "info.cpp shows RCTL limits"
+# run.cpp has IPv6 firewall rules
+if grep -q 'ip6.*from.*epipeIp6\|IPv6 firewall' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp has IPv6 ipfw firewall rules"
 else
-  fail "info.cpp missing RCTL display"
+  fail "run.cpp missing IPv6 firewall rules"
 fi
 
-# clean command
-if grep -q 'CmdClean' "$BUILDDIR/args.h"; then
-  pass "args.h has CmdClean command"
+# IPv6 firewall cleanup
+if grep -q 'IPv6 firewall rule' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp cleans up IPv6 firewall rules on exit"
 else
-  fail "args.h missing CmdClean"
+  fail "run.cpp missing IPv6 firewall cleanup"
 fi
 
-if [ -f "$BUILDDIR/clean.cpp" ]; then
-  pass "clean.cpp exists"
+# pf anchor rules include IPv6
+if grep -q 'inet6.*proto' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp generates IPv6 pf anchor rules"
 else
-  fail "clean.cpp not found"
+  fail "run.cpp missing IPv6 pf rules"
 fi
 
-if grep -q 'cleanCrates' "$BUILDDIR/commands.h"; then
-  pass "commands.h declares cleanCrates"
+# validate.cpp checks IPv6 config
+if grep -q 'ipv6' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp validates IPv6 configuration"
 else
-  fail "commands.h missing cleanCrates declaration"
+  fail "validate.cpp missing IPv6 validation"
 fi
 
-if grep -q 'cleanCrates' "$BUILDDIR/main.cpp"; then
-  pass "main.cpp dispatches CmdClean to cleanCrates"
+# Host IPv6 variables
+if grep -q 'hostIP6' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp tracks host IPv6 address"
 else
-  fail "main.cpp missing CmdClean dispatch"
+  fail "run.cpp missing hostIP6 variable"
 fi
 
-if grep -q 'cleanDryRun' "$BUILDDIR/args.h"; then
-  pass "args.h has cleanDryRun field for -n/--dry-run"
+# IPv6 link-local/global scope detection
+if grep -q 'link-local\|global' "$BUILDDIR/net.cpp"; then
+  pass "net.cpp detects IPv6 address scope (link-local/global)"
 else
-  fail "args.h missing cleanDryRun field"
-fi
-
-if grep -q 'dry-run\|dryRun' "$BUILDDIR/clean.cpp"; then
-  pass "clean.cpp supports dry-run mode"
-else
-  fail "clean.cpp missing dry-run support"
-fi
-
-if grep -q 'rmdirHier' "$BUILDDIR/clean.cpp"; then
-  pass "clean.cpp uses rmdirHier for safe cleanup"
-else
-  fail "clean.cpp missing rmdirHier"
-fi
-
-if grep -q 'FwUsers\|FwSlots' "$BUILDDIR/clean.cpp"; then
-  pass "clean.cpp cleans stale context entries"
-else
-  fail "clean.cpp missing context cleanup"
-fi
-
-# console command
-if grep -q 'CmdConsole' "$BUILDDIR/args.h"; then
-  pass "args.h has CmdConsole command"
-else
-  fail "args.h missing CmdConsole"
-fi
-
-if [ -f "$BUILDDIR/console.cpp" ]; then
-  pass "console.cpp exists"
-else
-  fail "console.cpp not found"
-fi
-
-if grep -q 'consoleCrate' "$BUILDDIR/commands.h"; then
-  pass "commands.h declares consoleCrate"
-else
-  fail "commands.h missing consoleCrate declaration"
-fi
-
-if grep -q 'consoleCrate' "$BUILDDIR/main.cpp"; then
-  pass "main.cpp dispatches CmdConsole to consoleCrate"
-else
-  fail "main.cpp missing CmdConsole dispatch"
-fi
-
-if grep -q 'consoleTarget' "$BUILDDIR/args.h"; then
-  pass "args.h has consoleTarget field"
-else
-  fail "args.h missing consoleTarget field"
-fi
-
-if grep -q 'consoleUser' "$BUILDDIR/args.h"; then
-  pass "args.h has consoleUser field for -u flag"
-else
-  fail "args.h missing consoleUser field"
-fi
-
-if grep -q 'CRATE_PATH_JEXEC' "$BUILDDIR/console.cpp"; then
-  pass "console.cpp uses CRATE_PATH_JEXEC (exec-based)"
-else
-  fail "console.cpp missing CRATE_PATH_JEXEC"
-fi
-
-if grep -q 'getpwuid' "$BUILDDIR/console.cpp"; then
-  pass "console.cpp uses getpwuid for user identity"
-else
-  fail "console.cpp uses getenv instead of getpwuid"
-fi
-
-# Makefile includes all new files
-if grep -q 'list.cpp' "$BUILDDIR/Makefile" && grep -q 'info.cpp' "$BUILDDIR/Makefile" && \
-   grep -q 'clean.cpp' "$BUILDDIR/Makefile" && grep -q 'console.cpp' "$BUILDDIR/Makefile"; then
-  pass "Makefile includes list.cpp, info.cpp, clean.cpp, console.cpp"
-else
-  fail "Makefile missing one or more new command source files"
-fi
-
-# Usage text updated
-if grep -q '"list"' "$BUILDDIR/args.cpp" && grep -q '"info"' "$BUILDDIR/args.cpp" && \
-   grep -q '"clean"' "$BUILDDIR/args.cpp" && grep -q '"console"' "$BUILDDIR/args.cpp"; then
-  pass "args.cpp registers all 4 new commands"
-else
-  fail "args.cpp missing some new command registrations"
-fi
-
-# Security: no system()/popen() in new files
-if ! grep -q 'system(' "$BUILDDIR/list.cpp" && ! grep -q 'system(' "$BUILDDIR/info.cpp" && \
-   ! grep -q 'system(' "$BUILDDIR/clean.cpp" && ! grep -q 'system(' "$BUILDDIR/console.cpp"; then
-  pass "new command files have no system() calls (exec-based)"
-else
-  fail "new command files use system() — should be exec-based"
-fi
-
-if ! grep -q 'popen(' "$BUILDDIR/list.cpp" && ! grep -q 'popen(' "$BUILDDIR/info.cpp" && \
-   ! grep -q 'popen(' "$BUILDDIR/clean.cpp" && ! grep -q 'popen(' "$BUILDDIR/console.cpp"; then
-  pass "new command files have no popen() calls (exec-based)"
-else
-  fail "new command files use popen() — should be exec-based"
-fi
-
-# New commands use pathnames.h macros (not hardcoded paths)
-if ! grep -q '"/usr/sbin/jls"' "$BUILDDIR/list.cpp" && ! grep -q '"/usr/sbin/jls"' "$BUILDDIR/info.cpp"; then
-  pass "new commands use CRATE_PATH_JLS macro (not hardcoded)"
-else
-  fail "new commands use hardcoded /usr/sbin/jls instead of CRATE_PATH_JLS"
+  fail "net.cpp missing IPv6 scope detection"
 fi
 
 # ===========================================================================

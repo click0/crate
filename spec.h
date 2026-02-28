@@ -22,6 +22,7 @@ public:
     bool outboundLan;                 // allow outbound connections to LAN
     bool outboundHost;                // allow outbound connections to the host
     bool outboundDns;                 // allow DNS
+    bool ipv6;                        // enable IPv6 pass-through networking
     std::vector<std::pair<PortRange, PortRange>> inboundPortsTcp;
     std::vector<std::pair<PortRange, PortRange>> inboundPortsUdp;
 
