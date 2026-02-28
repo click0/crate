@@ -9,3 +9,7 @@ bool createCrate(const Args &args, const Spec &spec);
 bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode);
 bool validateCrateSpec(const Args &args);
 bool snapshotCrate(const Args &args);
+bool listCrates(const Args &args);
+bool infoCrate(const Args &args);
+bool cleanCrates(const Args &args);
+bool consoleCrate(const Args &args, int argc, char** argv);

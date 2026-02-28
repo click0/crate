@@ -111,6 +111,18 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdSnapshot: {
     succ = snapshotCrate(args);
     break;
+  } case CmdList: {
+    succ = listCrates(args);
+    break;
+  } case CmdInfo: {
+    succ = infoCrate(args);
+    break;
+  } case CmdClean: {
+    succ = cleanCrates(args);
+    break;
+  } case CmdConsole: {
+    succ = consoleCrate(args, argc - numArgsProcessed, argv + numArgsProcessed);
+    break;
   } case CmdNone: {
     break; // impossible
   }}
