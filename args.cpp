@@ -225,6 +225,10 @@ static Command isCommand(const char* arg) {
     return CmdClean;
   if (strEq(arg, "console"))
     return CmdConsole;
+  if (strEq(arg, "export"))
+    return CmdExport;
+  if (strEq(arg, "import"))
+    return CmdImport;
 
   return CmdNone;
 }
