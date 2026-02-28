@@ -1,261 +1,261 @@
-# Crate vs BastilleBSD — Детальное сравнение
+# Crate vs BastilleBSD — Detailed Comparison
 
-> Обновлённая версия (2025). Предыдущая версия: [COMPARISON-BASTILLEBSD-v1-pre-2025.md](COMPARISON-BASTILLEBSD-v1-pre-2025.md).
+> Updated version (2025). Previous version: [COMPARISON-BASTILLEBSD-v1-pre-2025.md](COMPARISON-BASTILLEBSD-v1-pre-2025.md).
 
-## Общее описание
+## General Overview
 
 | | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **Назначение** | Контейнеризатор FreeBSD — упаковывает пакеты и сервисы в изолированные самодостаточные «крейты» | Система автоматизации развёртывания и управления контейнеризированными приложениями на FreeBSD |
-| **Язык** | C++17 (~4 000 строк) | Shell-скрипты (POSIX sh) |
-| **Лицензия** | ISC | BSD |
-| **Статус** | Alpha (с 2019, активная разработка) | Стабильный (v1.4.0, активная разработка с 2018) |
-| **Философия** | Минималистичные одноразовые контейнеры для приложений; упор на десктопные приложения и GUI с глубокой изоляцией | Полноценный менеджер jail-ов для серверов и инфраструктуры; DevOps-ориентированный |
-| **Зависимости** | yaml-cpp, libjail, librang | Только базовая система FreeBSD (sh, jail, zfs, pkg) |
+| **Purpose** | FreeBSD containerizer — packages applications and services into isolated, self-contained "crates" | Automation system for deploying and managing containerized applications on FreeBSD |
+| **Language** | C++17 (~4,000 lines) | Shell scripts (POSIX sh) |
+| **License** | ISC | BSD |
+| **Status** | Alpha (since 2019, active development) | Stable (v1.4.0, active development since 2018) |
+| **Philosophy** | Minimalist disposable application containers; focus on desktop applications and GUI with deep isolation | Full-featured jail manager for servers and infrastructure; DevOps-oriented |
+| **Dependencies** | yaml-cpp, libjail, librang | Only the base FreeBSD system (sh, jail, zfs, pkg) |
 
 ---
 
-## Архитектура и модель работы
+## Architecture and Operating Model
 
-### Crate — «Упаковка и запуск»
+### Crate — "Package and Run"
 ```
-spec.yml → [crate create] → myapp.crate (XZ-архив)
+spec.yml → [crate create] → myapp.crate (XZ archive)
                                   ↓
                             [crate run]
                                   ↓
-                    Временный jail + ZFS COW + сеть + firewall
+                    Temporary jail + ZFS COW + network + firewall
                                   ↓
-                          Выполнение приложения
+                          Application execution
                                   ↓
-              RAII-очистка (jail, mount, firewall, epair, ZFS)
+              RAII cleanup (jail, mount, firewall, epair, ZFS)
 ```
-- **Эфемерная модель**: jail создаётся при запуске и уничтожается после завершения
-- 4 команды: `create`, `run`, `validate`, `snapshot`
-- Агрессивная оптимизация: анализ ELF-зависимостей через ldd, удаление ненужных файлов
-- Контейнер — самодостаточный XZ-архив (`.crate`)
-- RAII-паттерны (RunAtEnd) гарантируют очистку даже при ошибках и сигналах
+- **Ephemeral model**: jail is created at launch and destroyed after completion
+- 4 commands: `create`, `run`, `validate`, `snapshot`
+- Aggressive optimization: ELF dependency analysis via ldd, removal of unnecessary files
+- Container is a self-contained XZ archive (`.crate`)
+- RAII patterns (RunAtEnd) guarantee cleanup even on errors and signals
 
-### BastilleBSD — «Создание и управление»
+### BastilleBSD — "Create and Manage"
 ```
-bastille bootstrap 14.2-RELEASE → базовый релиз
+bastille bootstrap 14.2-RELEASE → base release
 bastille create myjail 14.2-RELEASE 10.0.0.1 → persistent jail
-bastille start/stop/restart myjail → управление жизненным циклом
-bastille template myjail user/template → автоматизация настройки
+bastille start/stop/restart myjail → lifecycle management
+bastille template myjail user/template → configuration automation
 ```
-- **Персистентная модель**: jail-ы живут долго, управляются как сервисы
-- ~40 подкоманд для полного управления жизненным циклом
-- Jail-ы хранятся на диске (ZFS или UFS)
-- Поддержка тонких (thin) и толстых (thick) jail-ов
+- **Persistent model**: jails are long-lived, managed as services
+- ~40 subcommands for full lifecycle management
+- Jails are stored on disk (ZFS or UFS)
+- Support for thin and thick jails
 
 ---
 
-## CLI-команды
+## CLI Commands
 
-### Crate (4 команды)
-| Команда | Описание |
+### Crate (4 commands)
+| Command | Description |
 |---|---|
-| `crate create -s spec.yml -o app.crate` | Создать контейнер из спецификации |
-| `crate create -s spec.yml --template base.yml` | Создать с наследованием от шаблона |
-| `crate create -s spec.yml --use-pkgbase` | Создать через pkgbase (FreeBSD 16+) |
-| `crate run -f app.crate [-- args]` | Запустить контейнер |
-| `crate validate -s spec.yml` | Проверить спецификацию |
-| `crate snapshot create\|list\|restore\|delete\|diff` | Управление ZFS-снапшотами |
+| `crate create -s spec.yml -o app.crate` | Create a container from a specification |
+| `crate create -s spec.yml --template base.yml` | Create with template inheritance |
+| `crate create -s spec.yml --use-pkgbase` | Create via pkgbase (FreeBSD 16+) |
+| `crate run -f app.crate [-- args]` | Run a container |
+| `crate validate -s spec.yml` | Validate a specification |
+| `crate snapshot create\|list\|restore\|delete\|diff` | Manage ZFS snapshots |
 
-### BastilleBSD (~40 подкоманд)
-| Команда | Описание |
+### BastilleBSD (~40 subcommands)
+| Command | Description |
 |---|---|
-| `bastille bootstrap` | Загрузить релиз FreeBSD/Linux или шаблон |
-| `bastille create` | Создать jail (thin/thick/clone/empty/linux) |
-| `bastille start/stop/restart` | Управление запуском |
-| `bastille destroy` | Удалить jail или релиз |
-| `bastille console` | Войти в jail (интерактивная сессия) |
-| `bastille cmd` | Выполнить команду в jail-е |
-| `bastille clone` | Клонировать jail |
-| `bastille rename` | Переименовать jail |
-| `bastille migrate` | Мигрировать jail на удалённый сервер (live для ZFS) |
-| `bastille export/import` | Экспорт/импорт jail-ов (совместим с iocage, ezjail) |
-| `bastille template` | Применить шаблон (Bastillefile) к jail-у |
-| `bastille pkg` | Управление пакетами (pkg/apt для Linux) |
-| `bastille service` | Управление сервисами |
-| `bastille mount/umount` | Монтирование томов (включая ZFS mount) |
-| `bastille network` | Добавить/удалить сетевые интерфейсы (с v0.14) |
-| `bastille rdr` | Перенаправление портов через pf (с IPv6, v1.4) |
-| `bastille limits` | Ресурсные ограничения (rctl + cpuset) |
-| `bastille list` | Список jail-ов, релизов, шаблонов (JSON, приоритеты) |
-| `bastille config` | Получить/установить свойства jail-а |
-| `bastille update/upgrade` | Обновление jail-а |
-| `bastille tags` | Метки для jail-ов (теги как TARGET) |
-| `bastille zfs` | Управление ZFS (snapshot/rollback/jail/unjail/df) |
-| `bastille top/htop` | Мониторинг процессов |
-| `bastille monitor` | Watchdog сервисов с auto-restart (с v1.0) |
-| `bastille cp/jcp/rcp` | Копирование файлов (host↔jail, jail↔jail) |
-| `bastille convert` | Конвертация thin↔thick |
-| `bastille etcupdate` | Обновление /etc |
-| `bastille verify` | Проверка релиза |
-| `bastille setup` | Автонастройка (loopback, bridge, vnet, netgraph, firewall, storage) |
-| `bastille edit` | Редактирование конфигурации jail-а |
-| `bastille sysrc` | Безопасное редактирование rc-файлов |
+| `bastille bootstrap` | Download a FreeBSD/Linux release or template |
+| `bastille create` | Create a jail (thin/thick/clone/empty/linux) |
+| `bastille start/stop/restart` | Startup management |
+| `bastille destroy` | Delete a jail or release |
+| `bastille console` | Enter a jail (interactive session) |
+| `bastille cmd` | Execute a command inside a jail |
+| `bastille clone` | Clone a jail |
+| `bastille rename` | Rename a jail |
+| `bastille migrate` | Migrate a jail to a remote server (live for ZFS) |
+| `bastille export/import` | Export/import jails (compatible with iocage, ezjail) |
+| `bastille template` | Apply a template (Bastillefile) to a jail |
+| `bastille pkg` | Package management (pkg/apt for Linux) |
+| `bastille service` | Service management |
+| `bastille mount/umount` | Volume mounting (including ZFS mount) |
+| `bastille network` | Add/remove network interfaces (since v0.14) |
+| `bastille rdr` | Port redirection via pf (with IPv6, v1.4) |
+| `bastille limits` | Resource limits (rctl + cpuset) |
+| `bastille list` | List jails, releases, templates (JSON, priorities) |
+| `bastille config` | Get/set jail properties |
+| `bastille update/upgrade` | Update a jail |
+| `bastille tags` | Labels for jails (tags as TARGET) |
+| `bastille zfs` | ZFS management (snapshot/rollback/jail/unjail/df) |
+| `bastille top/htop` | Process monitoring |
+| `bastille monitor` | Service watchdog with auto-restart (since v1.0) |
+| `bastille cp/jcp/rcp` | File copying (host↔jail, jail↔jail) |
+| `bastille convert` | Conversion thin↔thick |
+| `bastille etcupdate` | Update /etc |
+| `bastille verify` | Verify a release |
+| `bastille setup` | Auto-configuration (loopback, bridge, vnet, netgraph, firewall, storage) |
+| `bastille edit` | Edit jail configuration |
+| `bastille sysrc` | Safely edit rc files |
 
-**Вывод**: BastilleBSD предоставляет значительно более широкий набор команд для управления полным жизненным циклом jail-ов. Crate фокусируется на 4 ключевых операциях: сборка, запуск, проверка и управление снапшотами.
+**Conclusion**: BastilleBSD provides a significantly broader set of commands for managing the full jail lifecycle. Crate focuses on 4 key operations: build, run, validate, and snapshot management.
 
 ---
 
-## Типы jail-ов
+## Jail Types
 
-| Тип | **Crate** | **BastilleBSD** |
+| Type | **Crate** | **BastilleBSD** |
 |---|---|---|
-| Тонкие (thin/shared base) | Нет — каждый .crate полностью самодостаточен | **Да** (по умолчанию) — общая базовая система через nullfs |
-| Толстые (thick/independent) | Фактически да — каждый .crate содержит полную копию | **Да** (`-T` флаг) |
-| Клоны (clone) | **Да** (ZFS COW clone при запуске) | **Да** (`-C` флаг, ZFS clone) |
-| Пустые (empty) | Нет | **Да** (`-E` флаг) — для кастомных сборок |
-| Linux jail-ы | Нет | **Да** (`-L`, Ubuntu Noble/Focal/Bionic, Debian; без VNET) |
+| Thin (shared base) | No — each .crate is fully self-contained | **Yes** (default) — shared base system via nullfs |
+| Thick (independent) | Effectively yes — each .crate contains a full copy | **Yes** (`-T` flag) |
+| Clone | **Yes** (ZFS COW clone at runtime) | **Yes** (`-C` flag, ZFS clone) |
+| Empty | No | **Yes** (`-E` flag) — for custom builds |
+| Linux jails | No | **Yes** (`-L`, Ubuntu Noble/Focal/Bionic, Debian; without VNET) |
 
 ---
 
-## Хранение данных и ZFS
+## Data Storage and ZFS
 
-| Возможность | **Crate** | **BastilleBSD** |
+| Feature | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **ZFS нативная интеграция** | **Да** | **Да** (подкоманда `zfs`) |
-| **ZFS snapshots** | **Да** (`crate snapshot create/list/restore/delete/diff`) | **Да** |
-| **ZFS clone (COW)** | **Да** (автоматический при `cow/backend: zfs`) | **Да** (для тонких jail-ов) |
-| **ZFS шифрование** | **Да** (`encrypted: true` в spec, проверка при запуске) | Нет (шифрование на уровне пула) |
-| **ZFS datasets в jail** | **Да** (`zfs-datasets:` в YAML, `allow.mount.zfs`) | **Да** (`bastille zfs jail`, v1.0+) |
-| **ZFS send/recv** | Нет | **Да** (live export без остановки jail, migrate) |
-| **Copy-on-Write (COW)** | **Да** (ZFS clone или unionfs, ephemeral/persistent режимы) | Через ZFS clone |
-| **UFS** | Да (по умолчанию) | **Да** |
-| **Shared dirs** | Да (nullfs в YAML) | Да (`bastille mount`) |
-| **Shared files** | Да (hardlink + fallback mount) | Через mount |
-| **Формат контейнера** | `.crate` (XZ-архив) | Каталог на файловой системе |
-| **Оптимизация размера** | **Да** (ELF-анализ, удаление лишнего) | Нет (полная система) |
-| **ZFS опции при создании** | Нет | Да (`-Z "compression=lz4,atime=off"`, v0.14+) |
-| **pkgbase (FreeBSD 16+)** | **Да** (`--use-pkgbase` флаг) | **Да** (`bootstrap --pkgbase`) |
+| **Native ZFS integration** | **Yes** | **Yes** (`zfs` subcommand) |
+| **ZFS snapshots** | **Yes** (`crate snapshot create/list/restore/delete/diff`) | **Yes** |
+| **ZFS clone (COW)** | **Yes** (automatic with `cow/backend: zfs`) | **Yes** (for thin jails) |
+| **ZFS encryption** | **Yes** (`encrypted: true` in spec, verified at runtime) | No (encryption at pool level) |
+| **ZFS datasets in jail** | **Yes** (`zfs-datasets:` in YAML, `allow.mount.zfs`) | **Yes** (`bastille zfs jail`, v1.0+) |
+| **ZFS send/recv** | No | **Yes** (live export without stopping jail, migrate) |
+| **Copy-on-Write (COW)** | **Yes** (ZFS clone or unionfs, ephemeral/persistent modes) | Via ZFS clone |
+| **UFS** | Yes (default) | **Yes** |
+| **Shared dirs** | Yes (nullfs in YAML) | Yes (`bastille mount`) |
+| **Shared files** | Yes (hardlink + fallback mount) | Via mount |
+| **Container format** | `.crate` (XZ archive) | Directory on the filesystem |
+| **Size optimization** | **Yes** (ELF analysis, stripping unnecessary files) | No (full system) |
+| **ZFS options on creation** | No | Yes (`-Z "compression=lz4,atime=off"`, v0.14+) |
+| **pkgbase (FreeBSD 16+)** | **Yes** (`--use-pkgbase` flag) | **Yes** (`bootstrap --pkgbase`) |
 
-**Вывод**: Crate теперь имеет полноценную интеграцию с ZFS, включая снапшоты, COW-клоны, шифрование и подключение datasets к jail. BastilleBSD по-прежнему лидирует по ZFS send/recv для миграции.
+**Conclusion**: Crate now has full-featured ZFS integration, including snapshots, COW clones, encryption, and dataset attachment to jails. BastilleBSD still leads in ZFS send/recv for migration.
 
 ---
 
-## Сеть
+## Networking
 
-| Возможность | **Crate** | **BastilleBSD** |
+| Feature | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **VNET** | Да (epair, автоматическая настройка) | Да (5 режимов: -V, -B, -P, alias, inherit) |
-| **Физический интерфейс** | Нет | Да (`-V` — авто-создание bridge + epair) |
-| **Bridge** | Нет | Да (`-B` — подключение к существующему мосту) |
-| **Passthrough** | Нет | Да (`-P` — прямой проброс интерфейса, v1.1+) |
-| **Netgraph** | Нет | Да (`bastille setup netgraph`, альтернатива if_bridge, v1.0+) |
-| **NAT** | Да (ipfw NAT, автоматические правила) | Через pf loopback NAT (`bastille rdr`) |
-| **Перенаправление портов** | Да (inbound-tcp/udp в YAML) | Да (`bastille rdr`, +IPv6 в v1.4) |
-| **IP-адресация** | Автоматическая (10.0.0.0/8, до ~8M контейнеров) | Ручная или DHCP (SYNCDHCP для VNET) |
-| **DNS** | **Опциональная пересылка + DNS-фильтрация** | Через `bastille edit resolv.conf` |
-| **Outbound-контроль** | **Да** (wan/lan/host/dns гранулярность) | Через firewall-правила (pf/ipfw) |
-| **VLAN** | Нет | Да (`--vlan ID`, v0.14+) |
-| **Static MAC** | Нет | Да (`-M` флаг) |
-| **IPv6** | Нет | **Да** (dual-stack `-D`, SLAAC, IPv6 rdr в v1.4) |
-| **Динамические epair** | Нет (статические) | Да (`e0a_jailname`/`e0b_jailname`, v1.0+) |
-| **Несколько интерфейсов** | Нет | Да (`bastille network add/remove`, v0.14+) |
-| **Checksum offload workaround** | **Да** (FreeBSD 15.0 epair bug) | Нет данных |
+| **VNET** | Yes (epair, automatic configuration) | Yes (5 modes: -V, -B, -P, alias, inherit) |
+| **Physical interface** | No | Yes (`-V` — auto-create bridge + epair) |
+| **Bridge** | No | Yes (`-B` — connect to existing bridge) |
+| **Passthrough** | No | Yes (`-P` — direct interface passthrough, v1.1+) |
+| **Netgraph** | No | Yes (`bastille setup netgraph`, alternative to if_bridge, v1.0+) |
+| **NAT** | Yes (ipfw NAT, automatic rules) | Via pf loopback NAT (`bastille rdr`) |
+| **Port forwarding** | Yes (inbound-tcp/udp in YAML) | Yes (`bastille rdr`, +IPv6 in v1.4) |
+| **IP addressing** | Automatic (10.0.0.0/8, up to ~8M containers) | Manual or DHCP (SYNCDHCP for VNET) |
+| **DNS** | **Optional forwarding + DNS filtering** | Via `bastille edit resolv.conf` |
+| **Outbound control** | **Yes** (wan/lan/host/dns granularity) | Via firewall rules (pf/ipfw) |
+| **VLAN** | No | Yes (`--vlan ID`, v0.14+) |
+| **Static MAC** | No | Yes (`-M` flag) |
+| **IPv6** | No | **Yes** (dual-stack `-D`, SLAAC, IPv6 rdr in v1.4) |
+| **Dynamic epair** | No (static) | Yes (`e0a_jailname`/`e0b_jailname`, v1.0+) |
+| **Multiple interfaces** | No | Yes (`bastille network add/remove`, v0.14+) |
+| **Checksum offload workaround** | **Yes** (FreeBSD 15.0 epair bug) | No data |
 
-**Вывод**: Crate предоставляет удобное автоматическое управление сетью с гранулярным контролем исходящего трафика и DNS-фильтрацией. BastilleBSD предлагает значительно больше сетевых режимов (5 типов + netgraph), IPv6, DHCP, VLAN и конфигурации уровня предприятия.
+**Conclusion**: Crate provides convenient automatic network management with granular outbound traffic control and DNS filtering. BastilleBSD offers significantly more networking modes (5 types + netgraph), IPv6, DHCP, VLAN, and enterprise-level configurations.
 
 ---
 
-## Файрвол
+## Firewall
 
-| Возможность | **Crate** | **BastilleBSD** |
+| Feature | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **ipfw** | **Да** (автоматические NAT правила) | Да (ручная настройка) |
-| **pf** | **Да** (per-container pf anchor, §3) | **Да** (нативная интеграция) |
-| **Per-container policy** | **Да** (`firewall:` секция в YAML: block_ip, allow_tcp/udp, default_policy) | Через pf rules |
-| **Динамические слоты** | **Да** (FwSlots: уникальные номера правил, без конфликтов, §18) | pf rdr-anchor с таблицами |
-| **Порт-форвардинг** | В YAML: `inbound-tcp: {3100: 3000}` | `bastille rdr TARGET tcp 80 8080` |
-| **Автоочистка правил** | **Да** (RAII, ref-counting для общих правил) | `bastille rdr TARGET list/clear` |
-| **ip.forwarding** | Автосохранение/восстановление оригинального значения | Ручная настройка |
+| **ipfw** | **Yes** (automatic NAT rules) | Yes (manual configuration) |
+| **pf** | **Yes** (per-container pf anchor, §3) | **Yes** (native integration) |
+| **Per-container policy** | **Yes** (`firewall:` section in YAML: block_ip, allow_tcp/udp, default_policy) | Via pf rules |
+| **Dynamic slots** | **Yes** (FwSlots: unique rule numbers, no conflicts, §18) | pf rdr-anchor with tables |
+| **Port forwarding** | In YAML: `inbound-tcp: {3100: 3000}` | `bastille rdr TARGET tcp 80 8080` |
+| **Automatic rule cleanup** | **Yes** (RAII, ref-counting for shared rules) | `bastille rdr TARGET list/clear` |
+| **ip.forwarding** | Auto-save/restore of original value | Manual configuration |
 
-**Вывод**: Crate теперь поддерживает оба файрвола (ipfw и pf), с per-container firewall policy через pf anchors и автоматическим управлением ipfw через динамические слоты. BastilleBSD ориентирован на pf с полным контролем якорей и таблиц.
+**Conclusion**: Crate now supports both firewalls (ipfw and pf), with per-container firewall policy via pf anchors and automatic ipfw management through dynamic slots. BastilleBSD is oriented toward pf with full anchor and table control.
 
 ---
 
-## Графика и десктоп
+## Graphics and Desktop
 
-| Возможность | **Crate** | **BastilleBSD** |
+| Feature | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **X11 (shared)** | **Да** (проброс X11-сокета + Xauthority) | Нет (не целевой сценарий) |
-| **X11 (nested/Xephyr)** | **Да** (изолированный вложенный X-сервер, §11) | Нет |
-| **X11 (disabled)** | **Да** (`mode: none`) | — |
-| **Clipboard isolation** | **Да** (режимы: isolated/shared/none, направление: in/out/both, §12) | Нет |
-| **D-Bus isolation** | **Да** (system/session bus контроль, allow_own/deny_send, §13) | Нет |
-| **OpenGL/GPU** | **Да** (аппаратное ускорение) | Нет |
-| **Видеоустройства** | **Да** (/dev/videoN проброс) | Нет |
-| **GUI-приложения** | **Да** (Firefox, Chromium, Kodi и т.д.) | Нет (серверная ориентация) |
+| **X11 (shared)** | **Yes** (X11 socket + Xauthority passthrough) | No (not a target use case) |
+| **X11 (nested/Xephyr)** | **Yes** (isolated nested X server, §11) | No |
+| **X11 (disabled)** | **Yes** (`mode: none`) | — |
+| **Clipboard isolation** | **Yes** (modes: isolated/shared/none, direction: in/out/both, §12) | No |
+| **D-Bus isolation** | **Yes** (system/session bus control, allow_own/deny_send, §13) | No |
+| **OpenGL/GPU** | **Yes** (hardware acceleration) | No |
+| **Video devices** | **Yes** (/dev/videoN passthrough) | No |
+| **GUI applications** | **Yes** (Firefox, Chromium, Kodi, etc.) | No (server-oriented) |
 
-**Вывод**: Crate уникально позиционирован для запуска десктопных GUI-приложений в jail-ах с полной изоляцией: вложенный X11, clipboard фильтрация, D-Bus контроль. BastilleBSD ориентирован исключительно на серверные нагрузки.
+**Conclusion**: Crate is uniquely positioned for running desktop GUI applications in jails with full isolation: nested X11, clipboard filtering, D-Bus control. BastilleBSD is oriented exclusively toward server workloads.
 
 ---
 
-## Безопасность
+## Security
 
-| Возможность | **Crate** | **BastilleBSD** |
+| Feature | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **securelevel** | Не задаётся | **securelevel = 2** по умолчанию |
-| **enforce_statfs** | **Настраиваемый** (auto/0/1/2, авто-определение для ZFS) | **2** (фиксированный) |
-| **devfs_ruleset** | **Настраиваемый** (§16, terminal isolation) | Ruleset 4 по умолчанию; 13 для VNET |
-| **RCTL ресурсы** | **Да** (любые RCTL-ресурсы через `limits:` в YAML) | **Да** (через `bastille limits`) |
-| **MAC bsdextended** | **Да** (ugidfw правила через `security:` в YAML, §8) | Нет |
-| **MAC portacl** | **Да** (mac_portacl через `security:`, §8) | Нет |
-| **Capsicum** | **Да** (опция в `security:`, §8) | Нет |
-| **raw_sockets** | Настраиваемый (через ipc: раздел) | **Запрещены** по умолчанию |
-| **SysV IPC** | Настраиваемый (`ipc: sysvipc: true`) | Нет данных |
-| **allow.mlock** | Настраиваемый | Нет данных |
-| **allow.chflags** | Настраиваемый | Нет данных |
-| **allow.set_hostname** | Настраиваемый | Нет данных |
-| **allow.quotas** | Настраиваемый | Нет данных |
-| **children.max** | Не задаётся | 0 (запрет вложенных jail) |
-| **CPU pinning** | Нет | Да (cpuset) |
-| **pathnames.h** | **Да** (абсолютные пути ко всем командам, CWE-426, §pathnames) | Bare names (PATH-relative) |
-| **Очищение env** | **Да** (environ=empty, восстановление только TERM/DISPLAY/LANG) | Нет |
-| **execv vs execvp** | **Да** (execv — без поиска по PATH) | execvp/system (через shell) |
-| **lstat для symlink** | **Да** (CWE-59 защита) | Нет данных |
-| **Jail descriptor** | **Да** (JAIL_OWN_DESC для race-free removal, FreeBSD 15+) | Нет |
-| **Archive traversal** | **Да** (проверка `..` в архивах перед распаковкой) | Нет данных |
-| **Signal-safe cleanup** | **Да** (SIGINT/SIGTERM → RAII destructors) | Через shell trap |
-| **setuid проверка** | Да (требует setuid, запрет запуска из jail) | Да (root) |
-| **DNS-фильтрация** | **Да** (per-jail unbound, блокировка доменов, §4) | Нет |
-| **Socket proxying** | **Да** (socat-based, share/proxy, §15) | Нет |
-| **Terminal isolation** | **Да** (devfs ruleset, TTY контроль, §16) | Нет данных |
-| **Directory traversal защита** | **Да** (Util::safePath проверка shared dirs) | Нет данных |
+| **securelevel** | Not set | **securelevel = 2** by default |
+| **enforce_statfs** | **Configurable** (auto/0/1/2, auto-detection for ZFS) | **2** (fixed) |
+| **devfs_ruleset** | **Configurable** (§16, terminal isolation) | Ruleset 4 by default; 13 for VNET |
+| **RCTL resources** | **Yes** (any RCTL resources via `limits:` in YAML) | **Yes** (via `bastille limits`) |
+| **MAC bsdextended** | **Yes** (ugidfw rules via `security:` in YAML, §8) | No |
+| **MAC portacl** | **Yes** (mac_portacl via `security:`, §8) | No |
+| **Capsicum** | **Yes** (option in `security:`, §8) | No |
+| **raw_sockets** | Configurable (via ipc: section) | **Denied** by default |
+| **SysV IPC** | Configurable (`ipc: sysvipc: true`) | No data |
+| **allow.mlock** | Configurable | No data |
+| **allow.chflags** | Configurable | No data |
+| **allow.set_hostname** | Configurable | No data |
+| **allow.quotas** | Configurable | No data |
+| **children.max** | Not set | 0 (nested jails prohibited) |
+| **CPU pinning** | No | Yes (cpuset) |
+| **pathnames.h** | **Yes** (absolute paths to all commands, CWE-426, §pathnames) | Bare names (PATH-relative) |
+| **Environment sanitization** | **Yes** (environ=empty, restoring only TERM/DISPLAY/LANG) | No |
+| **execv vs execvp** | **Yes** (execv — no PATH search) | execvp/system (via shell) |
+| **lstat for symlinks** | **Yes** (CWE-59 protection) | No data |
+| **Jail descriptor** | **Yes** (JAIL_OWN_DESC for race-free removal, FreeBSD 15+) | No |
+| **Archive traversal** | **Yes** (checking `..` in archives before extraction) | No data |
+| **Signal-safe cleanup** | **Yes** (SIGINT/SIGTERM → RAII destructors) | Via shell trap |
+| **setuid check** | Yes (requires setuid, prohibits running from inside a jail) | Yes (root) |
+| **DNS filtering** | **Yes** (per-jail unbound, domain blocking, §4) | No |
+| **Socket proxying** | **Yes** (socat-based, share/proxy, §15) | No |
+| **Terminal isolation** | **Yes** (devfs ruleset, TTY control, §16) | No data |
+| **Directory traversal protection** | **Yes** (Util::safePath check for shared dirs) | No data |
 
-**Вывод**: Crate предлагает значительно более глубокую многоуровневую модель безопасности: MAC bsdextended/portacl, Capsicum, DNS-фильтрация, clipboard и D-Bus изоляция, pathnames.h для CWE-426, env sanitization, execv, lstat для symlink-атак, JAIL_OWN_DESC для race-free cleanup. BastilleBSD имеет хорошие дефолты безопасности (securelevel=2) и ресурсные лимиты, но меньше опций для fine-grained контроля.
+**Conclusion**: Crate offers a significantly deeper multi-layered security model: MAC bsdextended/portacl, Capsicum, DNS filtering, clipboard and D-Bus isolation, pathnames.h for CWE-426, environment sanitization, execv, lstat for symlink attacks, JAIL_OWN_DESC for race-free cleanup. BastilleBSD has good security defaults (securelevel=2) and resource limits, but fewer options for fine-grained control.
 
 ---
 
-## Шаблонизация и автоматизация
+## Templating and Automation
 
-### Crate — YAML-спецификация с наследованием шаблонов
+### Crate — YAML Specification with Template Inheritance
 
 ```yaml
-# spec.yml (§10: шаблоны через --template)
+# spec.yml (§10: templates via --template)
 pkg:
     install: [firefox, git]
 run:
     command: /usr/local/bin/firefox
 options: [net, x11, gl, video]
 
-# ZFS шифрование (§1)
+# ZFS encryption (§1)
 encrypted: true
 
-# COW файловая система (§6)
+# COW filesystem (§6)
 cow:
-    backend: zfs        # или unionfs
-    mode: ephemeral     # или persistent
+    backend: zfs        # or unionfs
+    mode: ephemeral     # or persistent
 
-# Ресурсные лимиты (§5)
+# Resource limits (§5)
 limits:
     memoryuse: 512M
     pcpu: 50
     maxproc: 100
 
-# DNS-фильтрация (§4)
+# DNS filtering (§4)
 dns:
     block: ["*.ads.example.com", "tracker.example.net"]
     redirect_blocked: nxdomain
@@ -266,7 +266,7 @@ firewall:
     allow_tcp: [80, 443]
     default_policy: block
 
-# X11 изоляция (§11)
+# X11 isolation (§11)
 x11:
     mode: nested        # Xephyr
     resolution: 1920x1080
@@ -274,7 +274,7 @@ x11:
 # Clipboard (§12)
 clipboard:
     mode: isolated
-    direction: out      # только из jail → host
+    direction: out      # jail → host only
 
 # D-Bus (§13)
 dbus:
@@ -282,7 +282,7 @@ dbus:
     system_bus: false
     deny_send: ["org.freedesktop.secrets"]
 
-# IPC контроль (§7)
+# IPC control (§7)
 ipc:
     sysvipc: false
     raw_sockets: false
@@ -294,7 +294,7 @@ sockets:
         - host: /tmp/.X11-unix/X0
           jail: /tmp/.X11-unix/X0
 
-# Security advanced (§8)
+# Advanced security (§8)
 security:
     capsicum: true
     mac_rules: ["subject uid 1001 object not uid 1001 mode rsx"]
@@ -302,7 +302,7 @@ security:
 # ZFS datasets
 zfs-datasets: ["zpool/data/myapp"]
 
-# Жизненные хуки
+# Lifecycle hooks
 scripts:
     run:begin: ["echo 'Starting...'"]
     run:after-create-jail: ["setup.sh"]
@@ -315,9 +315,9 @@ dirs:
         - [/var/db/myapp, $HOME/myapp/db]
 ```
 
-Наследование шаблонов (`--template`): шаблонная спецификация мержится с пользовательской через `mergeSpecs()`.
+Template inheritance (`--template`): the template specification is merged with the user specification via `mergeSpecs()`.
 
-### BastilleBSD — Bastillefile (17 хуков)
+### BastilleBSD — Bastillefile (17 hooks)
 
 ```
 # Bastillefile
@@ -336,209 +336,209 @@ LIMITS memoryuse 1G
 RDR tcp 8080 80
 TAGS web db
 ```
-- Docker-подобный синтаксис с 17 хуками: ARG, ARG+, CMD, CONFIG, CP, INCLUDE, LIMITS, LINE_IN_FILE, MOUNT, PKG, RDR, RENDER, RESTART, SERVICE, SYSRC, TAGS
-- Обязательные аргументы (`ARG+`, v1.4+) — прерывание при отсутствии
-- Встроенные переменные: `${JAIL_NAME}`, `${JAIL_IP}`, `${JAIL_IP6}`
-- Шаблоны в Git-репозиториях с поддержкой поддиректорий (v1.0+)
-- Применяются к уже созданным jail-ам
-- Legacy multi-file формат удалён (с v1.2.2)
+- Docker-like syntax with 17 hooks: ARG, ARG+, CMD, CONFIG, CP, INCLUDE, LIMITS, LINE_IN_FILE, MOUNT, PKG, RDR, RENDER, RESTART, SERVICE, SYSRC, TAGS
+- Required arguments (`ARG+`, v1.4+) — abort if missing
+- Built-in variables: `${JAIL_NAME}`, `${JAIL_IP}`, `${JAIL_IP6}`
+- Templates in Git repositories with subdirectory support (v1.0+)
+- Applied to already created jails
+- Legacy multi-file format removed (since v1.2.2)
 
-**Вывод**: Crate описывает всё в одном YAML-файле с глубокой конфигурацией безопасности, сети, ZFS, GUI, DNS и IPC. Поддерживает наследование шаблонов. BastilleBSD использует Docker-подобный Bastillefile, более привычный для DevOps.
+**Conclusion**: Crate describes everything in a single YAML file with deep configuration for security, networking, ZFS, GUI, DNS, and IPC. Supports template inheritance. BastilleBSD uses a Docker-like Bastillefile, more familiar to DevOps practitioners.
 
 ---
 
-## Управление жизненным циклом
+## Lifecycle Management
 
-| Возможность | **Crate** | **BastilleBSD** |
+| Feature | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **Создание** | Да (create, +шаблоны, +pkgbase) | Да (create, с множеством опций) |
-| **Запуск** | Да (run, эфемерный) | Да (start) |
-| **Остановка** | Автоматическая при выходе (RAII) | Да (stop) |
-| **Перезапуск** | Нет (пересоздание) | Да (restart) |
-| **ZFS snapshots** | **Да** (create/list/restore/delete/diff) | **Да** |
-| **Клонирование** | **Да** (COW при запуске) | Да (clone) |
-| **Переименование** | Нет | Да (rename) |
-| **Миграция** | Нет | **Да** (migrate, включая live через ZFS) |
-| **Обновление ОС** | Пересборка .crate | Да (update, upgrade, etcupdate) |
-| **Экспорт/Импорт** | .crate файлы | Да (совместимость с iocage/ezjail) |
-| **Список** | Нет (эфемерная модель) | Да (list, с приоритетной сортировкой) |
-| **Мониторинг** | Нет | **Да** (top, htop, monitor с auto-restart, v1.0+) |
-| **Валидация** | **Да** (`crate validate`) | Нет данных |
-| **Теги** | Нет | Да (tags) |
-| **Конвертация** | Нет | Да (thin↔thick, convert) |
-| **Version mismatch detect** | **Да** (host vs container FreeBSD version) | Нет |
+| **Creation** | Yes (create, +templates, +pkgbase) | Yes (create, with numerous options) |
+| **Start** | Yes (run, ephemeral) | Yes (start) |
+| **Stop** | Automatic on exit (RAII) | Yes (stop) |
+| **Restart** | No (re-creation) | Yes (restart) |
+| **ZFS snapshots** | **Yes** (create/list/restore/delete/diff) | **Yes** |
+| **Cloning** | **Yes** (COW at runtime) | Yes (clone) |
+| **Renaming** | No | Yes (rename) |
+| **Migration** | No | **Yes** (migrate, including live via ZFS) |
+| **OS update** | Rebuild .crate | Yes (update, upgrade, etcupdate) |
+| **Export/Import** | .crate files | Yes (compatible with iocage/ezjail) |
+| **Listing** | No (ephemeral model) | Yes (list, with priority sorting) |
+| **Monitoring** | No | **Yes** (top, htop, monitor with auto-restart, v1.0+) |
+| **Validation** | **Yes** (`crate validate`) | No data |
+| **Tags** | No | Yes (tags) |
+| **Conversion** | No | Yes (thin↔thick, convert) |
+| **Version mismatch detect** | **Yes** (host vs container FreeBSD version) | No |
 
-**Вывод**: BastilleBSD предоставляет полный цикл управления jail-ами, включая live-миграцию. Crate использует эфемерную модель с ZFS-снапшотами и COW-клонами. Crate добавляет validate и snapshot команды.
+**Conclusion**: BastilleBSD provides a complete jail management lifecycle, including live migration. Crate uses an ephemeral model with ZFS snapshots and COW clones. Crate adds validate and snapshot commands.
 
 ---
 
-## Пакеты и сервисы
+## Packages and Services
 
-| Возможность | **Crate** | **BastilleBSD** |
+| Feature | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **Установка пакетов** | Да (в YAML: pkg.install) | Да (`bastille pkg`) |
-| **Локальные пакеты** | Да (pkg.add, pkg.override) | Через cp + pkg |
-| **pkgbase** | **Да** (`--use-pkgbase`) | **Да** (`--pkgbase`) |
-| **Управление сервисами** | **Да** (run.service + managed services §14) | Да (`bastille service`) |
-| **Managed services** | **Да** (auto-start, auto-stop в обратном порядке, rc.conf генерация) | Через sysrc + service |
-| **Множественные сервисы** | Да | Да |
-| **sysrc** | Через managed services rc.conf | **Да** (`bastille sysrc`) |
-| **Автоочистка пакетов** | **Да** (удаление неиспользуемых зависимостей) | Нет |
-| **Оптимизация (strip)** | **Да** (ELF-анализ, удаление документации) | Нет |
+| **Package installation** | Yes (in YAML: pkg.install) | Yes (`bastille pkg`) |
+| **Local packages** | Yes (pkg.add, pkg.override) | Via cp + pkg |
+| **pkgbase** | **Yes** (`--use-pkgbase`) | **Yes** (`--pkgbase`) |
+| **Service management** | **Yes** (run.service + managed services §14) | Yes (`bastille service`) |
+| **Managed services** | **Yes** (auto-start, auto-stop in reverse order, rc.conf generation) | Via sysrc + service |
+| **Multiple services** | Yes | Yes |
+| **sysrc** | Via managed services rc.conf | **Yes** (`bastille sysrc`) |
+| **Automatic package cleanup** | **Yes** (removal of unused dependencies) | No |
+| **Optimization (strip)** | **Yes** (ELF analysis, documentation removal) | No |
 
 ---
 
-## DNS-фильтрация (уникальная возможность Crate)
+## DNS Filtering (Unique Crate Feature)
 
-| Возможность | **Crate** | **BastilleBSD** |
+| Feature | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **Per-jail DNS resolver** | **Да** (unbound, §4) | Нет |
-| **Блокировка доменов** | **Да** (wildcard-паттерны) | Нет |
-| **Redirect blocked** | **Да** (nxdomain или конкретный IP) | Нет |
-| **Upstream forwarding** | **Да** (автоматически из resolv.conf хоста) | — |
+| **Per-jail DNS resolver** | **Yes** (unbound, §4) | No |
+| **Domain blocking** | **Yes** (wildcard patterns) | No |
+| **Redirect blocked** | **Yes** (nxdomain or specific IP) | No |
+| **Upstream forwarding** | **Yes** (automatically from host resolv.conf) | — |
 
 ---
 
-## IPC и изоляция процессов
+## IPC and Process Isolation
 
-| Возможность | **Crate** | **BastilleBSD** |
+| Feature | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **SysV IPC** | **Настраиваемый** (§7) | Нет данных |
-| **POSIX mqueue** | **Настраиваемый** (§7) | Нет данных |
-| **raw_sockets** | **Настраиваемый** (override через ipc:) | Запрещены по умолчанию |
-| **Socket proxying** | **Да** (socat, share/proxy, §15) | Нет |
-| **D-Bus isolation** | **Да** (session/system bus, policy, §13) | Нет |
-| **Clipboard control** | **Да** (isolated/shared, direction, §12) | Нет |
+| **SysV IPC** | **Configurable** (§7) | No data |
+| **POSIX mqueue** | **Configurable** (§7) | No data |
+| **raw_sockets** | **Configurable** (override via ipc:) | Denied by default |
+| **Socket proxying** | **Yes** (socat, share/proxy, §15) | No |
+| **D-Bus isolation** | **Yes** (session/system bus, policy, §13) | No |
+| **Clipboard control** | **Yes** (isolated/shared, direction, §12) | No |
 
 ---
 
-## Батчевые операции и таргетинг
+## Batch Operations and Targeting
 
-| Возможность | **Crate** | **BastilleBSD** |
+| Feature | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **Множественные цели** | Нет (один контейнер) | **Да** — `ALL`, теги, списки через пробел |
-| **Теги** | Нет | Да (`bastille tags TARGET tag1 tag2`) |
-| **Приоритеты загрузки** | Нет | Да (`-p` — порядок старта/остановки) |
-| **Зависимости** | Нет | Да (beta: зависимый jail автостартует) |
-| **JSON вывод** | Нет | Да (`bastille list -j`) |
+| **Multiple targets** | No (single container) | **Yes** — `ALL`, tags, space-separated lists |
+| **Tags** | No | Yes (`bastille tags TARGET tag1 tag2`) |
+| **Boot priorities** | No | Yes (`-p` — start/stop ordering) |
+| **Dependencies** | No | Yes (beta: dependent jail auto-starts) |
+| **JSON output** | No | Yes (`bastille list -j`) |
 
 ---
 
-## OCI/Docker совместимость
+## OCI/Docker Compatibility
 
 | | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **OCI образы** | Нет | **Нет** |
-| **Docker Hub** | Нет | Нет |
-| **Dockerfile/Containerfile** | Нет | Нет (Bastillefile — своя система) |
-| **Формат экспорта** | `.crate` (XZ) | `.txz` / ZFS snapshot |
+| **OCI images** | No | **No** |
+| **Docker Hub** | No | No |
+| **Dockerfile/Containerfile** | No | No (Bastillefile — proprietary system) |
+| **Export format** | `.crate` (XZ) | `.txz` / ZFS snapshot |
 
-Обе системы работают исключительно в экосистеме FreeBSD jail. Для OCI-контейнеров на FreeBSD рекомендуется **Podman + ocijail**.
+Both systems operate exclusively within the FreeBSD jail ecosystem. For OCI containers on FreeBSD, **Podman + ocijail** is recommended.
 
 ---
 
-## API и веб-интерфейс
+## API and Web Interface
 
 | | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **REST API** | Нет | **Да** (bastille-api, JSON payloads, с v1.0) |
-| **Веб-интерфейс** | Нет | **Да** (bastille-ui — Go + HTML, с ttyd-терминалом) |
-| **Companion-инструменты** | Нет | **Rocinante** — применяет Bastillefile к хосту |
-| **Nomad Driver** | Нет | Планируется (roadmap 2.0.x) |
+| **REST API** | No | **Yes** (bastille-api, JSON payloads, since v1.0) |
+| **Web interface** | No | **Yes** (bastille-ui — Go + HTML, with ttyd terminal) |
+| **Companion tools** | No | **Rocinante** — applies Bastillefile to the host |
+| **Nomad Driver** | No | Planned (roadmap 2.0.x) |
 
 ---
 
-## Совместимость с FreeBSD 15.0+
+## FreeBSD 15.0+ Compatibility
 
-| Возможность | **Crate** | **BastilleBSD** |
+| Feature | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **JAIL_OWN_DESC** | **Да** (race-free jail removal через owning descriptor) | Нет данных |
-| **epair checksum fix** | **Да** (disable txcsum/txcsum6 workaround) | Нет данных |
-| **Version mismatch warning** | **Да** (предупреждение при host ≠ container FreeBSD version) | Нет данных |
-| **ipfw compat warning** | **Да** (FreeBSD 15.0 removed old ipfw compat code) | Нет данных |
-| **getgroups(2) change** | **Да** (adjusted for setgroups behavior change) | Нет данных |
+| **JAIL_OWN_DESC** | **Yes** (race-free jail removal via owning descriptor) | No data |
+| **epair checksum fix** | **Yes** (disable txcsum/txcsum6 workaround) | No data |
+| **Version mismatch warning** | **Yes** (warning when host ≠ container FreeBSD version) | No data |
+| **ipfw compat warning** | **Yes** (FreeBSD 15.0 removed old ipfw compat code) | No data |
+| **getgroups(2) change** | **Yes** (adjusted for setgroups behavior change) | No data |
 
 ---
 
-## Сводная таблица
+## Summary Table
 
-| Критерий | **Crate** | **BastilleBSD** |
+| Criterion | **Crate** | **BastilleBSD** |
 |---|---|---|
-| Зрелость | Alpha (активная разработка) | Стабильный (v1.4.0, февраль 2026) |
-| Модель jail-а | Эфемерный (+ COW persistent) | Персистентный |
-| GUI/Десктоп | **Превосходит** (nested X11, clipboard, D-Bus) | Не поддерживает |
-| Серверное управление | Минимальное | **Превосходит** |
-| ZFS интеграция | **Полная** (snapshots, COW, шифрование, datasets) | **Полная** (+ send/recv, migrate) |
-| Безопасность (глубина) | **Превосходит** (pathnames.h, env, MAC, Capsicum, DNS, execv) | Хорошие дефолты (securelevel=2) |
-| Сетевые режимы | 1 (epair+NAT) + pf anchors | 5+ (VNET, bridge, passthrough, alias, inherit + netgraph) |
-| Размер контейнера | **Оптимизирован** (ELF-анализ) | Полная система |
-| Миграция | Нет | **Да (включая live)** |
-| Шаблоны | YAML-спецификация с наследованием | Bastillefile (Docker-подобный) |
-| Количество команд | 4 (+подкоманды snapshot) | ~40 |
-| Linux jail-ы | Нет | Да (Ubuntu Noble/Focal/Bionic, Debian, экспериментально) |
-| Мониторинг | Нет | Да (monitor с auto-restart) |
-| Ресурсные лимиты (RCTL) | **Да** | **Да** |
-| DNS-фильтрация | **Да** | Нет |
-| Clipboard/D-Bus/Socket | **Да** | Нет |
-| Tor | Да | Через шаблоны |
-| API/Web UI | Нет | **Да** (bastille-api + bastille-ui) |
-| Экосистема | Примеры (Firefox, Kodi...) | Репозиторий шаблонов + bastille-ui |
-| FreeBSD 15.0+ ready | **Да** (JAIL_OWN_DESC, epair fix) | Нет данных |
-| pkgbase (FreeBSD 16+) | **Да** | **Да** |
+| Maturity | Alpha (active development) | Stable (v1.4.0, February 2026) |
+| Jail model | Ephemeral (+ COW persistent) | Persistent |
+| GUI/Desktop | **Superior** (nested X11, clipboard, D-Bus) | Not supported |
+| Server management | Minimal | **Superior** |
+| ZFS integration | **Full** (snapshots, COW, encryption, datasets) | **Full** (+ send/recv, migrate) |
+| Security (depth) | **Superior** (pathnames.h, env, MAC, Capsicum, DNS, execv) | Good defaults (securelevel=2) |
+| Network modes | 1 (epair+NAT) + pf anchors | 5+ (VNET, bridge, passthrough, alias, inherit + netgraph) |
+| Container size | **Optimized** (ELF analysis) | Full system |
+| Migration | No | **Yes (including live)** |
+| Templates | YAML specification with inheritance | Bastillefile (Docker-like) |
+| Number of commands | 4 (+snapshot subcommands) | ~40 |
+| Linux jails | No | Yes (Ubuntu Noble/Focal/Bionic, Debian, experimental) |
+| Monitoring | No | Yes (monitor with auto-restart) |
+| Resource limits (RCTL) | **Yes** | **Yes** |
+| DNS filtering | **Yes** | No |
+| Clipboard/D-Bus/Socket | **Yes** | No |
+| Tor | Yes | Via templates |
+| API/Web UI | No | **Yes** (bastille-api + bastille-ui) |
+| Ecosystem | Examples (Firefox, Kodi...) | Template repository + bastille-ui |
+| FreeBSD 15.0+ ready | **Yes** (JAIL_OWN_DESC, epair fix) | No data |
+| pkgbase (FreeBSD 16+) | **Yes** | **Yes** |
 
 ---
 
-## Когда использовать что?
+## When to Use Which?
 
-### Crate лучше подходит для:
-- Запуска **десктопных GUI-приложений** в изолированной среде (Firefox, Chromium, Kodi)
-- **Sandboxing** с глубокой изоляцией (clipboard, D-Bus, DNS, MAC, Capsicum)
-- **Одноразовых** изолированных сред выполнения
-- Минимизации размера контейнера (оптимизация ELF-зависимостей)
-- Сценариев, требующих **X11/OpenGL/видео** с изоляцией
-- Приложений с требованиями к **ZFS-шифрованию** at-rest
-- Per-container **DNS-фильтрации** (блокировка ad/tracking доменов)
-- Сценариев с высокими требованиями к **безопасности** (CWE-426, CWE-59, MAC)
+### Crate is better suited for:
+- Running **desktop GUI applications** in an isolated environment (Firefox, Chromium, Kodi)
+- **Sandboxing** with deep isolation (clipboard, D-Bus, DNS, MAC, Capsicum)
+- **Disposable** isolated execution environments
+- Minimizing container size (ELF dependency optimization)
+- Scenarios requiring **X11/OpenGL/video** with isolation
+- Applications with **ZFS encryption** at-rest requirements
+- Per-container **DNS filtering** (blocking ad/tracking domains)
+- Scenarios with high **security** requirements (CWE-426, CWE-59, MAC)
 
-### BastilleBSD лучше подходит для:
-- **Серверной инфраструктуры** и DevOps
-- Управления **множеством** долгоживущих jail-ов
-- **Миграции** jail-ов между серверами (включая live)
-- Автоматизации через **шаблоны** (CI/CD)
-- Гранулярного контроля **ресурсов** (CPU pinning через cpuset)
-- Совместимости с другими менеджерами jail-ов (iocage, ezjail импорт)
-- Работы с **Linux jail-ами**
-- Сценариев, требующих **REST API** и программного управления
-- Множественных **сетевых режимов** (bridge, passthrough, VLAN, IPv6)
+### BastilleBSD is better suited for:
+- **Server infrastructure** and DevOps
+- Managing **multiple** long-lived jails
+- **Migrating** jails between servers (including live)
+- Automation via **templates** (CI/CD)
+- Granular **resource** control (CPU pinning via cpuset)
+- Compatibility with other jail managers (iocage, ezjail import)
+- Working with **Linux jails**
+- Scenarios requiring a **REST API** and programmatic management
+- Multiple **networking modes** (bridge, passthrough, VLAN, IPv6)
 
 ---
 
-## Что Crate мог бы позаимствовать у BastilleBSD
+## What Crate Could Borrow from BastilleBSD
 
-1. ~~**ZFS интеграция**~~ ✅ Реализовано (snapshots, COW, шифрование, datasets)
-2. **Персистентный режим** — опция сохранения jail-а между запусками (COW persistent — шаг в этом направлении)
-3. **Список/мониторинг** — команда для просмотра запущенных контейнеров
-4. ~~**Ресурсные лимиты**~~ ✅ Реализовано (RCTL через `limits:` в YAML)
-5. **Клонирование** — создание копий существующих .crate (экспорт/импорт)
-6. **Тонкие jail-ы** — экономия места через общую базовую систему
-7. **IPv6** — поддержка IPv6 в сетевом стеке
-8. **Bridge/Passthrough** — дополнительные сетевые режимы
-9. **Команда list** — просмотр доступных .crate файлов и запущенных контейнеров
-10. **Live-миграция** — перенос работающего контейнера на другой хост
-11. **REST API** — программный интерфейс для интеграции
-12. **CPU pinning** — привязка jail к конкретным CPU ядрам
+1. ~~**ZFS integration**~~ ✅ Implemented (snapshots, COW, encryption, datasets)
+2. **Persistent mode** — option to preserve a jail between runs (COW persistent is a step in this direction)
+3. **Listing/monitoring** — command to view running containers
+4. ~~**Resource limits**~~ ✅ Implemented (RCTL via `limits:` in YAML)
+5. **Cloning** — creating copies of existing .crate files (export/import)
+6. **Thin jails** — saving space through a shared base system
+7. **IPv6** — IPv6 support in the networking stack
+8. **Bridge/Passthrough** — additional networking modes
+9. **List command** — viewing available .crate files and running containers
+10. **Live migration** — transferring a running container to another host
+11. **REST API** — programmatic interface for integration
+12. **CPU pinning** — binding a jail to specific CPU cores
 
-## Что BastilleBSD мог бы позаимствовать у Crate
+## What BastilleBSD Could Borrow from Crate
 
-1. **pathnames.h** — абсолютные пути к командам (CWE-426 protection)
-2. **Очищение environment** — защита от LD_PRELOAD/PATH injection
-3. **execv вместо execvp** — исключение PATH search для setuid-контекста
-4. **DNS-фильтрация** — per-jail blocking нежелательных доменов
-5. **GUI/Desktop изоляция** — nested X11, clipboard control, D-Bus isolation
-6. **MAC bsdextended** — гранулярные правила доступа через ugidfw
-7. **Capsicum** — capability-based security для дополнительной изоляции
-8. **COW filesystem** — прозрачный COW для ephemeral операций
-9. **ZFS encryption** — поддержка шифрованных datasets из коробки
-10. **Archive traversal validation** — проверка `..` перед распаковкой
-11. **JAIL_OWN_DESC** — race-free jail removal через owning descriptor
-12. **ELF-оптимизация** — агрессивное уменьшение размера контейнера
+1. **pathnames.h** — absolute paths to commands (CWE-426 protection)
+2. **Environment sanitization** — protection against LD_PRELOAD/PATH injection
+3. **execv instead of execvp** — eliminating PATH search in setuid context
+4. **DNS filtering** — per-jail blocking of unwanted domains
+5. **GUI/Desktop isolation** — nested X11, clipboard control, D-Bus isolation
+6. **MAC bsdextended** — granular access rules via ugidfw
+7. **Capsicum** — capability-based security for additional isolation
+8. **COW filesystem** — transparent COW for ephemeral operations
+9. **ZFS encryption** — support for encrypted datasets out of the box
+10. **Archive traversal validation** — checking `..` before extraction
+11. **JAIL_OWN_DESC** — race-free jail removal via owning descriptor
+12. **ELF optimization** — aggressive container size reduction
