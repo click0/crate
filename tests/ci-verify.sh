@@ -1775,6 +1775,127 @@ else
   pass "spec.cpp csh XXX comment resolved"
 fi
 
+# ---------------------------------------------------------------------------
+section "T27: UX improvements (NO_COLOR, --version, completions)"
+
+# --- NO_COLOR support ---
+
+# main.cpp preserves NO_COLOR through env sanitization
+if grep -q 'NO_COLOR' "$BUILDDIR/main.cpp"; then
+  pass "main.cpp handles NO_COLOR environment variable"
+else
+  fail "main.cpp missing NO_COLOR handling"
+fi
+
+# main.cpp uses rang::setControlMode to disable colors
+if grep -q 'rang::setControlMode' "$BUILDDIR/main.cpp"; then
+  pass "main.cpp uses rang::setControlMode for color control"
+else
+  fail "main.cpp missing rang::setControlMode"
+fi
+
+# main.cpp checks rang::control::Off
+if grep -q 'rang::control::Off' "$BUILDDIR/main.cpp"; then
+  pass "main.cpp disables colors with rang::control::Off"
+else
+  fail "main.cpp missing rang::control::Off"
+fi
+
+# --- --no-color flag ---
+
+# args.h has noColor field
+if grep -q 'noColor' "$BUILDDIR/args.h"; then
+  pass "args.h has noColor field"
+else
+  fail "args.h missing noColor field"
+fi
+
+# args.cpp recognizes --no-color
+if grep -q '\-\-no-color' "$BUILDDIR/args.cpp"; then
+  pass "args.cpp recognizes --no-color flag"
+else
+  fail "args.cpp missing --no-color recognition"
+fi
+
+# --- --version flag ---
+
+# args.cpp has --version handling
+if grep -q '\-\-version' "$BUILDDIR/args.cpp"; then
+  pass "args.cpp has --version flag"
+else
+  fail "args.cpp missing --version flag"
+fi
+
+# args.cpp has -V short option
+if grep -q "'V'" "$BUILDDIR/args.cpp"; then
+  pass "args.cpp has -V short option for version"
+else
+  fail "args.cpp missing -V short option"
+fi
+
+# args.cpp outputs version string with crate
+if grep -q 'crate 0\.' "$BUILDDIR/args.cpp"; then
+  pass "args.cpp outputs crate version string"
+else
+  fail "args.cpp missing version string"
+fi
+
+# --- Shell completions ---
+
+# completions file exists
+if [ -f "$BUILDDIR/completions/crate.sh" ]; then
+  pass "completions/crate.sh exists"
+else
+  fail "completions/crate.sh missing"
+fi
+
+# completions has bash support
+if grep -q 'BASH_VERSION' "$BUILDDIR/completions/crate.sh"; then
+  pass "completions/crate.sh has bash completion support"
+else
+  fail "completions/crate.sh missing bash support"
+fi
+
+# completions has zsh support
+if grep -q 'ZSH_VERSION' "$BUILDDIR/completions/crate.sh"; then
+  pass "completions/crate.sh has zsh completion support"
+else
+  fail "completions/crate.sh missing zsh support"
+fi
+
+# completions covers all commands
+if grep -q 'create' "$BUILDDIR/completions/crate.sh" && \
+   grep -q 'run' "$BUILDDIR/completions/crate.sh" && \
+   grep -q 'validate' "$BUILDDIR/completions/crate.sh" && \
+   grep -q 'snapshot' "$BUILDDIR/completions/crate.sh"; then
+  pass "completions/crate.sh covers all commands"
+else
+  fail "completions/crate.sh missing some commands"
+fi
+
+# completions has --no-color option
+if grep -q 'no-color' "$BUILDDIR/completions/crate.sh"; then
+  pass "completions/crate.sh includes --no-color option"
+else
+  fail "completions/crate.sh missing --no-color"
+fi
+
+# --- Makefile install-completions ---
+
+if grep -q 'install-completions' "$BUILDDIR/Makefile"; then
+  pass "Makefile has install-completions target"
+else
+  fail "Makefile missing install-completions target"
+fi
+
+# --- usage shows --version and --no-color ---
+
+if grep -q 'version' "$BUILDDIR/args.cpp" && grep -q 'no-color' "$BUILDDIR/args.cpp"; then
+  pass "usage text documents --version and --no-color"
+else
+  fail "usage text missing --version or --no-color documentation"
+fi
+
 # ===========================================================================
 #  Summary
 # ===========================================================================

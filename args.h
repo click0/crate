@@ -14,6 +14,7 @@ public:
 
   // general params
   bool logProgress; // log progress
+  bool noColor = false;  // --no-color: disable colored output (also honors NO_COLOR env)
 
   // create parameters
   std::string createSpec;

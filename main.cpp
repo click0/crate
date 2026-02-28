@@ -38,12 +38,15 @@ static int mainGuarded(int argc, char** argv) {
   // Clear all inherited environment variables and rebuild with safe defaults.
   // This prevents PATH manipulation, LD_PRELOAD injection, and other env-based attacks.
   //
+  bool envNoColor = false;
   {
     const char* term    = ::getenv("TERM");
     const char* display = ::getenv("DISPLAY");
     const char* wayland = ::getenv("WAYLAND_DISPLAY");
     const char* lang    = ::getenv("LANG");
     const char* xauth   = ::getenv("XAUTHORITY");
+    const char* nocolor = ::getenv("NO_COLOR");
+    envNoColor = (nocolor != nullptr);
 
     extern char **environ;
     static char *empty_env[] = { nullptr };
@@ -57,6 +60,7 @@ static int mainGuarded(int argc, char** argv) {
     if (wayland) ::setenv("WAYLAND_DISPLAY", wayland, 1);
     if (lang)    ::setenv("LANG", lang, 1);
     if (xauth)   ::setenv("XAUTHORITY", xauth, 1);
+    if (envNoColor) ::setenv("NO_COLOR", "", 1);
   }
 
   //
@@ -83,6 +87,13 @@ static int mainGuarded(int argc, char** argv) {
   unsigned numArgsProcessed = 0;
   Args args = parseArguments(argc, argv, numArgsProcessed);
   args.validate();
+
+  //
+  // Handle NO_COLOR (https://no-color.org/) and --no-color flag.
+  // When either is set, disable all colored output.
+  //
+  if (args.noColor || envNoColor)
+    rang::setControlMode(rang::control::Off);
 
   //
   // run the requested command
