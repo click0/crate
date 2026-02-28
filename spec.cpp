@@ -139,7 +139,8 @@ Spec::NetOptDetails::NetOptDetails()
 : outboundWan(false),
   outboundLan(false),
   outboundHost(false),
-  outboundDns(false)
+  outboundDns(false),
+  ipv6(false)
 { }
 
 std::shared_ptr<Spec::NetOptDetails> Spec::NetOptDetails::createDefault() {
@@ -609,6 +610,9 @@ Spec parseSpec(const std::string &fname) {
                     } else {
                       ERR("options/net/inbound-udp value must be an array, a scalar or a map")
                     }
+                  } else if (AsString(netOpt.first) == "ipv6") {
+                    if (!YAML::convert<bool>::decode(netOpt.second, optNetDetails->ipv6))
+                      ERR("options/net/ipv6 value must be a boolean")
                   } else
                     ERR("the invalid value options/net/" << netOpt.first << " supplied")
                 }

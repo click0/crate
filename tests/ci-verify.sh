@@ -1776,6 +1776,135 @@ else
 fi
 
 # ===========================================================================
+#  Layer 9: Phase 3 — IPv6 Pass-Through Networking
+# ===========================================================================
+
+section "T28: IPv6 pass-through networking"
+
+# net.h has IPv6 types
+if grep -q 'Ip6Info' "$BUILDDIR/net.h"; then
+  pass "net.h has Ip6Info type for IPv6 addresses"
+else
+  fail "net.h missing Ip6Info type"
+fi
+
+# net.h declares IPv6 functions
+if grep -q 'getIfaceIp6Addresses' "$BUILDDIR/net.h"; then
+  pass "net.h declares getIfaceIp6Addresses()"
+else
+  fail "net.h missing getIfaceIp6Addresses"
+fi
+
+if grep -q 'isIpv6Address' "$BUILDDIR/net.h"; then
+  pass "net.h declares isIpv6Address()"
+else
+  fail "net.h missing isIpv6Address"
+fi
+
+# net.cpp implements IPv6 functions
+if grep -q 'getIfaceIp6Addresses' "$BUILDDIR/net.cpp"; then
+  pass "net.cpp implements getIfaceIp6Addresses()"
+else
+  fail "net.cpp missing getIfaceIp6Addresses implementation"
+fi
+
+if grep -q 'AF_INET6' "$BUILDDIR/net.cpp"; then
+  pass "net.cpp uses AF_INET6 for IPv6 address detection"
+else
+  fail "net.cpp missing AF_INET6"
+fi
+
+if grep -q 'inet_pton' "$BUILDDIR/net.cpp"; then
+  pass "net.cpp uses inet_pton for IPv6 address validation"
+else
+  fail "net.cpp missing inet_pton"
+fi
+
+# spec.h has ipv6 field
+if grep -q 'ipv6' "$BUILDDIR/spec.h"; then
+  pass "spec.h has ipv6 field in NetOptDetails"
+else
+  fail "spec.h missing ipv6 field"
+fi
+
+# spec.cpp parses ipv6 option
+if grep -q '"ipv6"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses net/ipv6 option"
+else
+  fail "spec.cpp missing ipv6 parsing"
+fi
+
+# run.cpp has IPv6 gateway detection
+if grep -q 'inet6' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp uses inet6 for IPv6 interface configuration"
+else
+  fail "run.cpp missing inet6 interface configuration"
+fi
+
+# run.cpp has IPv6 address allocation (ULA fd00:cra7:e:: prefix)
+if grep -q 'fd00:cra7:e' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp uses ULA prefix fd00:cra7:e:: for IPv6 address allocation"
+else
+  fail "run.cpp missing ULA address allocation"
+fi
+
+# run.cpp configures IPv6 routing in jail
+if grep -q 'CRATE_PATH_ROUTE.*"-6".*"default"' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp sets IPv6 default route in jail"
+else
+  fail "run.cpp missing IPv6 default route"
+fi
+
+# run.cpp has IPv6 forwarding sysctl
+if grep -q 'ip6.forwarding' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp enables IPv6 forwarding (net.inet6.ip6.forwarding)"
+else
+  fail "run.cpp missing IPv6 forwarding sysctl"
+fi
+
+# run.cpp has IPv6 firewall rules
+if grep -q 'ip6.*from.*epipeIp6\|IPv6 firewall' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp has IPv6 ipfw firewall rules"
+else
+  fail "run.cpp missing IPv6 firewall rules"
+fi
+
+# IPv6 firewall cleanup
+if grep -q 'IPv6 firewall rule' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp cleans up IPv6 firewall rules on exit"
+else
+  fail "run.cpp missing IPv6 firewall cleanup"
+fi
+
+# pf anchor rules include IPv6
+if grep -q 'inet6.*proto' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp generates IPv6 pf anchor rules"
+else
+  fail "run.cpp missing IPv6 pf rules"
+fi
+
+# validate.cpp checks IPv6 config
+if grep -q 'ipv6' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp validates IPv6 configuration"
+else
+  fail "validate.cpp missing IPv6 validation"
+fi
+
+# Host IPv6 variables
+if grep -q 'hostIP6' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp tracks host IPv6 address"
+else
+  fail "run.cpp missing hostIP6 variable"
+fi
+
+# IPv6 link-local/global scope detection
+if grep -q 'link-local\|global' "$BUILDDIR/net.cpp"; then
+  pass "net.cpp detects IPv6 address scope (link-local/global)"
+else
+  fail "net.cpp missing IPv6 scope detection"
+fi
+
+# ===========================================================================
 #  Summary
 # ===========================================================================
 section "RESULTS"

@@ -79,6 +79,10 @@ static const unsigned fwRuleRangeOutBase = 50000;
 static std::string gwIface;
 static std::string hostIP;
 static std::string hostLAN;
+// IPv6 gateway info (populated when net.ipv6 is enabled)
+static std::string gwIface6;
+static std::string hostIP6;
+static unsigned    hostIP6Prefix = 0;
 
 // Signal handling: catch SIGINT/SIGTERM so RunAtEnd destructors fire for clean shutdown
 static volatile sig_atomic_t g_signalReceived = 0;
@@ -582,6 +586,37 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       hostIP  = std::get<0>(ipv4[0]);
       hostLAN = std::get<2>(ipv4[0]);
     }
+    // IPv6 gateway detection: determine host's IPv6-capable interface
+    if (optionNet->ipv6) {
+      // Try to detect the IPv6 default gateway interface from 'netstat -rn -f inet6'
+      try {
+        auto output6 = Util::execPipelineGetOutput(
+          {{CRATE_PATH_NETSTAT, "-rn", "-f", "inet6"}, {CRATE_PATH_GREP, "^default"}, {CRATE_PATH_SED, "s| *| |"}},
+          "determine host's IPv6 gateway interface");
+        auto elts6 = Util::splitString(output6, " ");
+        if (elts6.size() >= 4) {
+          gwIface6 = Util::stripTrailingSpace(elts6[3]);
+          LOG("IPv6 gateway interface: " << gwIface6)
+        }
+      } catch (...) {
+        // no IPv6 default route — fall back to same interface as IPv4
+        gwIface6 = gwIface;
+        LOG("no IPv6 default route found, using IPv4 gateway interface: " << gwIface6)
+      }
+      // Find a global-scope IPv6 address on the gateway interface
+      auto ipv6addrs = Net::getIfaceIp6Addresses(gwIface6.empty() ? gwIface : gwIface6);
+      for (auto &addr : ipv6addrs) {
+        if (std::get<2>(addr) == "global") {
+          hostIP6 = std::get<0>(addr);
+          hostIP6Prefix = std::get<1>(addr);
+          break;
+        }
+      }
+      if (hostIP6.empty())
+        LOG("warning: no global IPv6 address found on " << (gwIface6.empty() ? gwIface : gwIface6) << ", IPv6 pass-through may not work")
+      else
+        LOG("host IPv6 address: " << hostIP6 << "/" << hostIP6Prefix)
+    }
     // determine the hosts's nameserver
     auto nameserverIp = Net::getNameserverIp();
     // copy /etc/resolv.conf into jail
@@ -626,6 +661,38 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         "/etc/rc.conf");
     // set default route in jail
     execInJail({CRATE_PATH_ROUTE, "add", "default", epipeIpA}, "set default route in jail");
+
+    // IPv6 pass-through networking: assign ULA addresses and configure routing
+    // Uses fd00:cra7:e::/48 (ULA) prefix for container-to-host links.
+    // Each epair pair gets a /126 subnet (4 addresses, 2 usable).
+    std::string epipeIp6A, epipeIp6B;
+    if (optionNet->ipv6) {
+      // IPv6 address allocation: fd00:cra7:e::<epairNum*2+offset>
+      auto numToIp6 = [](unsigned epairNum, unsigned idx) {
+        unsigned addr = 100 + 2 * epairNum + idx;
+        return STR("fd00:cra7:e::" << std::hex << addr);
+      };
+      epipeIp6A = numToIp6(epairNum, 0);
+      epipeIp6B = numToIp6(epairNum, 1);
+
+      // Set IPv6 loopback in jail
+      execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet6", "::1", "prefixlen", "128"}, "set up lo0 IPv6 in jail");
+      // Assign IPv6 addresses to the epair interfaces (host and jail sides)
+      Util::execCommand({CRATE_PATH_IFCONFIG, epipeIfaceA, "inet6", epipeIp6A, "prefixlen", "126"},
+                        "set up IPv6 on host-side epair");
+      execInJail({CRATE_PATH_IFCONFIG, epipeIfaceB, "inet6", epipeIp6B, "prefixlen", "126"},
+                 "set up IPv6 on jail-side epair");
+      // Set IPv6 default route in jail to point to host-side epair
+      execInJail({CRATE_PATH_ROUTE, "-6", "add", "default", epipeIp6A}, "set IPv6 default route in jail");
+      // Enable IPv6 forwarding on host
+      auto origIp6Forwarding = Util::getSysctlInt("net.inet6.ip6.forwarding");
+      if (origIp6Forwarding == 0) {
+        LOG("enabling net.inet6.ip6.forwarding")
+        Util::setSysctlInt("net.inet6.ip6.forwarding", 1);
+      }
+      LOG("IPv6 networking configured: " << epipeIp6A << " <-> " << epipeIp6B)
+    }
+
     // destroy the epipe when finished
     destroyEpipeAtEnd.reset([epipeIfaceA]() {
       Util::execCommand({CRATE_PATH_IFCONFIG, epipeIfaceA, "destroy"}, CSTR("destroy the jail epipe (" << epipeIfaceA << ")"));
@@ -720,8 +787,34 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         // nat the rest of the traffic
         execFW({"add", ruleOutS, "nat", natOutCommonS, "all", "from", epipeIpB, "to", "any", "out", "xmit", gwIface});
       }
+
+      // IPv6 firewall rules: no NAT needed for IPv6 (direct routing)
+      // Uses ipfw's "ip6" protocol to match only IPv6 packets
+      if (optionNet->ipv6 && !epipeIp6B.empty()) {
+        auto fwRule6OutNo = fwRuleOutNo + 1; // use slot+1 for IPv6 rules within the same range
+        auto rule6OutS = std::to_string(fwRule6OutNo);
+        auto v6Iface = gwIface6.empty() ? gwIface : gwIface6;
+        if (optionNet->allowOutbound()) {
+          // Allow DNS over IPv6
+          if (optionNet->outboundDns) {
+            execFW({"add", rule6OutS, "allow", "udp", "from", epipeIp6B, "to", "any", "53"});
+          }
+          // Block non-DNS UDP to port 53
+          execFW({"add", rule6OutS, "deny", "udp", "from", epipeIp6B, "to", "any", "53"});
+          // Block host access if not allowed
+          if (!optionNet->outboundHost)
+            execFW({"add", rule6OutS, "deny", "ip6", "from", epipeIp6B, "to", "me6"});
+          // Allow outbound IPv6 traffic
+          execFW({"add", rule6OutS, "allow", "ip6", "from", epipeIp6B, "to", "any", "out", "xmit", v6Iface});
+          // Allow return traffic
+          execFW({"add", rule6OutS, "allow", "ip6", "from", "any", "to", epipeIp6B, "in", "recv", v6Iface});
+        }
+        LOG("IPv6 firewall rules configured for " << epipeIp6B)
+      }
+
       // destroy rules
-      destroyFirewallRulesAtEnd.reset([fwRuleInNo, fwRuleOutNo, fwRuleOutCommonNo, optionNet, origIpForwarding, &args]() {
+      auto hasIpv6Rules = optionNet->ipv6 && !epipeIp6B.empty();
+      destroyFirewallRulesAtEnd.reset([fwRuleInNo, fwRuleOutNo, fwRuleOutCommonNo, optionNet, origIpForwarding, hasIpv6Rules, &args]() {
         auto ruleInS  = std::to_string(fwRuleInNo);
         auto ruleOutS = std::to_string(fwRuleOutNo);
         auto ruleOutCommonS = std::to_string(fwRuleOutCommonNo);
@@ -730,6 +823,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
           Util::execCommand({CRATE_PATH_IPFW, "delete", ruleInS}, "destroy firewall rule");
         if (optionNet->allowOutbound()) {
           Util::execCommand({CRATE_PATH_IPFW, "delete", ruleOutS}, "destroy firewall rule");
+          // delete IPv6 rules (slot+1)
+          if (hasIpv6Rules)
+            Util::execCommand({CRATE_PATH_IPFW, "delete", std::to_string(fwRuleOutNo + 1)}, "destroy IPv6 firewall rule");
           { // possibly delete the common rules if this is the last firewall
             std::unique_ptr<Ctx::FwUsers> fwUsers(Ctx::FwUsers::lock());
             fwUsers->del(::getpid());
@@ -751,15 +847,27 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     if (spec.firewallPolicy) {
       auto anchorName = STR("crate/" << jailXname);
       std::ostringstream pfRules;
-      // Block IP ranges
+      // Block IP ranges (works for both IPv4 and IPv6 CIDR notation)
       for (auto &cidr : spec.firewallPolicy->blockIp)
         pfRules << "block drop quick from " << epipeIpB << " to " << cidr << std::endl;
+      // IPv6 block rules: duplicate for IPv6 source address if enabled
+      if (optionNet->ipv6 && !epipeIp6B.empty()) {
+        for (auto &cidr : spec.firewallPolicy->blockIp)
+          if (Net::isIpv6Address(cidr.substr(0, cidr.find('/'))))
+            pfRules << "block drop quick from " << epipeIp6B << " to " << cidr << std::endl;
+      }
       // Allow specific TCP ports
-      for (auto port : spec.firewallPolicy->allowTcp)
+      for (auto port : spec.firewallPolicy->allowTcp) {
         pfRules << "pass out quick proto tcp from " << epipeIpB << " to any port " << port << std::endl;
+        if (optionNet->ipv6 && !epipeIp6B.empty())
+          pfRules << "pass out quick inet6 proto tcp from " << epipeIp6B << " to any port " << port << std::endl;
+      }
       // Allow specific UDP ports
-      for (auto port : spec.firewallPolicy->allowUdp)
+      for (auto port : spec.firewallPolicy->allowUdp) {
         pfRules << "pass out quick proto udp from " << epipeIpB << " to any port " << port << std::endl;
+        if (optionNet->ipv6 && !epipeIp6B.empty())
+          pfRules << "pass out quick inet6 proto udp from " << epipeIpB << " to any port " << port << std::endl;
+      }
       // Default policy
       if (spec.firewallPolicy->defaultPolicy == "block")
         pfRules << "block drop all" << std::endl;
