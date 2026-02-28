@@ -1776,6 +1776,228 @@ else
 fi
 
 # ===========================================================================
+#  Layer 8: Phase 2 — New Commands (list, info, clean, console)
+# ===========================================================================
+
+section "T27: new commands (list, info, clean, console)"
+
+# list command
+if grep -q 'CmdList' "$BUILDDIR/args.h"; then
+  pass "args.h has CmdList command"
+else
+  fail "args.h missing CmdList"
+fi
+
+if [ -f "$BUILDDIR/list.cpp" ]; then
+  pass "list.cpp exists"
+else
+  fail "list.cpp not found"
+fi
+
+if grep -q 'listCrates' "$BUILDDIR/commands.h"; then
+  pass "commands.h declares listCrates"
+else
+  fail "commands.h missing listCrates declaration"
+fi
+
+if grep -q 'listCrates' "$BUILDDIR/main.cpp"; then
+  pass "main.cpp dispatches CmdList to listCrates"
+else
+  fail "main.cpp missing CmdList dispatch"
+fi
+
+if grep -q 'CRATE_PATH_JLS' "$BUILDDIR/list.cpp"; then
+  pass "list.cpp uses CRATE_PATH_JLS (exec-based, no shell)"
+else
+  fail "list.cpp missing CRATE_PATH_JLS"
+fi
+
+if grep -q 'listJson' "$BUILDDIR/args.h"; then
+  pass "args.h has listJson field for -j flag"
+else
+  fail "args.h missing listJson field"
+fi
+
+if grep -q '"list"' "$BUILDDIR/args.cpp"; then
+  pass "args.cpp handles 'list' command"
+else
+  fail "args.cpp missing list command"
+fi
+
+# info command
+if grep -q 'CmdInfo' "$BUILDDIR/args.h"; then
+  pass "args.h has CmdInfo command"
+else
+  fail "args.h missing CmdInfo"
+fi
+
+if [ -f "$BUILDDIR/info.cpp" ]; then
+  pass "info.cpp exists"
+else
+  fail "info.cpp not found"
+fi
+
+if grep -q 'infoCrate' "$BUILDDIR/commands.h"; then
+  pass "commands.h declares infoCrate"
+else
+  fail "commands.h missing infoCrate declaration"
+fi
+
+if grep -q 'infoCrate' "$BUILDDIR/main.cpp"; then
+  pass "main.cpp dispatches CmdInfo to infoCrate"
+else
+  fail "main.cpp missing CmdInfo dispatch"
+fi
+
+if grep -q 'infoTarget' "$BUILDDIR/args.h"; then
+  pass "args.h has infoTarget field"
+else
+  fail "args.h missing infoTarget field"
+fi
+
+if grep -q 'CRATE_PATH_RCTL' "$BUILDDIR/info.cpp"; then
+  pass "info.cpp shows RCTL limits"
+else
+  fail "info.cpp missing RCTL display"
+fi
+
+# clean command
+if grep -q 'CmdClean' "$BUILDDIR/args.h"; then
+  pass "args.h has CmdClean command"
+else
+  fail "args.h missing CmdClean"
+fi
+
+if [ -f "$BUILDDIR/clean.cpp" ]; then
+  pass "clean.cpp exists"
+else
+  fail "clean.cpp not found"
+fi
+
+if grep -q 'cleanCrates' "$BUILDDIR/commands.h"; then
+  pass "commands.h declares cleanCrates"
+else
+  fail "commands.h missing cleanCrates declaration"
+fi
+
+if grep -q 'cleanCrates' "$BUILDDIR/main.cpp"; then
+  pass "main.cpp dispatches CmdClean to cleanCrates"
+else
+  fail "main.cpp missing CmdClean dispatch"
+fi
+
+if grep -q 'cleanDryRun' "$BUILDDIR/args.h"; then
+  pass "args.h has cleanDryRun field for -n/--dry-run"
+else
+  fail "args.h missing cleanDryRun field"
+fi
+
+if grep -q 'dry-run\|dryRun' "$BUILDDIR/clean.cpp"; then
+  pass "clean.cpp supports dry-run mode"
+else
+  fail "clean.cpp missing dry-run support"
+fi
+
+if grep -q 'rmdirHier' "$BUILDDIR/clean.cpp"; then
+  pass "clean.cpp uses rmdirHier for safe cleanup"
+else
+  fail "clean.cpp missing rmdirHier"
+fi
+
+if grep -q 'FwUsers\|FwSlots' "$BUILDDIR/clean.cpp"; then
+  pass "clean.cpp cleans stale context entries"
+else
+  fail "clean.cpp missing context cleanup"
+fi
+
+# console command
+if grep -q 'CmdConsole' "$BUILDDIR/args.h"; then
+  pass "args.h has CmdConsole command"
+else
+  fail "args.h missing CmdConsole"
+fi
+
+if [ -f "$BUILDDIR/console.cpp" ]; then
+  pass "console.cpp exists"
+else
+  fail "console.cpp not found"
+fi
+
+if grep -q 'consoleCrate' "$BUILDDIR/commands.h"; then
+  pass "commands.h declares consoleCrate"
+else
+  fail "commands.h missing consoleCrate declaration"
+fi
+
+if grep -q 'consoleCrate' "$BUILDDIR/main.cpp"; then
+  pass "main.cpp dispatches CmdConsole to consoleCrate"
+else
+  fail "main.cpp missing CmdConsole dispatch"
+fi
+
+if grep -q 'consoleTarget' "$BUILDDIR/args.h"; then
+  pass "args.h has consoleTarget field"
+else
+  fail "args.h missing consoleTarget field"
+fi
+
+if grep -q 'consoleUser' "$BUILDDIR/args.h"; then
+  pass "args.h has consoleUser field for -u flag"
+else
+  fail "args.h missing consoleUser field"
+fi
+
+if grep -q 'CRATE_PATH_JEXEC' "$BUILDDIR/console.cpp"; then
+  pass "console.cpp uses CRATE_PATH_JEXEC (exec-based)"
+else
+  fail "console.cpp missing CRATE_PATH_JEXEC"
+fi
+
+if grep -q 'getpwuid' "$BUILDDIR/console.cpp"; then
+  pass "console.cpp uses getpwuid for user identity"
+else
+  fail "console.cpp uses getenv instead of getpwuid"
+fi
+
+# Makefile includes all new files
+if grep -q 'list.cpp' "$BUILDDIR/Makefile" && grep -q 'info.cpp' "$BUILDDIR/Makefile" && \
+   grep -q 'clean.cpp' "$BUILDDIR/Makefile" && grep -q 'console.cpp' "$BUILDDIR/Makefile"; then
+  pass "Makefile includes list.cpp, info.cpp, clean.cpp, console.cpp"
+else
+  fail "Makefile missing one or more new command source files"
+fi
+
+# Usage text updated
+if grep -q '"list"' "$BUILDDIR/args.cpp" && grep -q '"info"' "$BUILDDIR/args.cpp" && \
+   grep -q '"clean"' "$BUILDDIR/args.cpp" && grep -q '"console"' "$BUILDDIR/args.cpp"; then
+  pass "args.cpp registers all 4 new commands"
+else
+  fail "args.cpp missing some new command registrations"
+fi
+
+# Security: no system()/popen() in new files
+if ! grep -q 'system(' "$BUILDDIR/list.cpp" && ! grep -q 'system(' "$BUILDDIR/info.cpp" && \
+   ! grep -q 'system(' "$BUILDDIR/clean.cpp" && ! grep -q 'system(' "$BUILDDIR/console.cpp"; then
+  pass "new command files have no system() calls (exec-based)"
+else
+  fail "new command files use system() — should be exec-based"
+fi
+
+if ! grep -q 'popen(' "$BUILDDIR/list.cpp" && ! grep -q 'popen(' "$BUILDDIR/info.cpp" && \
+   ! grep -q 'popen(' "$BUILDDIR/clean.cpp" && ! grep -q 'popen(' "$BUILDDIR/console.cpp"; then
+  pass "new command files have no popen() calls (exec-based)"
+else
+  fail "new command files use popen() — should be exec-based"
+fi
+
+# New commands use pathnames.h macros (not hardcoded paths)
+if ! grep -q '"/usr/sbin/jls"' "$BUILDDIR/list.cpp" && ! grep -q '"/usr/sbin/jls"' "$BUILDDIR/info.cpp"; then
+  pass "new commands use CRATE_PATH_JLS macro (not hardcoded)"
+else
+  fail "new commands use hardcoded /usr/sbin/jls instead of CRATE_PATH_JLS"
+fi
+
+# ===========================================================================
 #  Summary
 # ===========================================================================
 section "RESULTS"
