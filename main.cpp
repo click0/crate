@@ -111,6 +111,12 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdSnapshot: {
     succ = snapshotCrate(args);
     break;
+  } case CmdExport: {
+    succ = exportCrate(args);
+    break;
+  } case CmdImport: {
+    succ = importCrate(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}

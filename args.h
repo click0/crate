@@ -4,7 +4,7 @@
 
 #include <string>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport};
 
 class Args {
 public:
@@ -32,6 +32,15 @@ public:
   std::string snapshotDataset;  // ZFS dataset name
   std::string snapshotName;     // snapshot name (for create/restore/delete)
   std::string snapshotName2;    // second snapshot name (for diff)
+
+  // export parameters
+  std::string exportTarget;     // container name or JID to export
+  std::string exportOutput;     // output .crate file path (optional)
+
+  // import parameters
+  std::string importFile;       // .crate or archive file to import
+  std::string importOutput;     // output .crate file path (optional)
+  bool        importForce = false; // --force: skip checksum/spec validation
 
   void validate();
 };

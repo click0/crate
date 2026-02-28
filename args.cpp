@@ -35,6 +35,8 @@ static void usage() {
   std::cout << "  run                        runs the containerzed application (run 'crate run -h' for details)" << std::endl;
   std::cout << "  validate                   validate a crate spec file (run 'crate validate -h' for details)" << std::endl;
   std::cout << "  snapshot                   manage ZFS snapshots (run 'crate snapshot -h' for details)" << std::endl;
+  std::cout << "  export                     export a running container to a .crate archive" << std::endl;
+  std::cout << "  import                     import and validate a .crate archive" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -77,6 +79,31 @@ static void usageSnapshot() {
   std::cout << "" << std::endl;
   std::cout << "Options:" << std::endl;
   std::cout << "  -h, --help                     show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+}
+
+static void usageExport() {
+  std::cout << "usage: crate export [-h|--help] [-o <output-file>] <name|JID>" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Export a running container's filesystem to a .crate archive." << std::endl;
+  std::cout << "The container must be running (created via 'crate run')." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Options:" << std::endl;
+  std::cout << "  -o, --output <file>        output .crate file (default: <hostname>-<date>.crate)" << std::endl;
+  std::cout << "  -h, --help                 show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+}
+
+static void usageImport() {
+  std::cout << "usage: crate import [-h|--help] [-o <output-file>] [-f|--force] <archive>" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Import and validate a .crate archive." << std::endl;
+  std::cout << "Verifies checksum, archive integrity, and +CRATE.SPEC presence." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Options:" << std::endl;
+  std::cout << "  -o, --output <file>        output .crate file (default: based on input name)" << std::endl;
+  std::cout << "  -f, --force                skip checksum and spec validation" << std::endl;
+  std::cout << "  -h, --help                 show this help screen" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -132,6 +159,10 @@ static Command isCommand(const char* arg) {
     return CmdValidate;
   if (strEq(arg, "snapshot"))
     return CmdSnapshot;
+  if (strEq(arg, "export"))
+    return CmdExport;
+  if (strEq(arg, "import"))
+    return CmdImport;
 
   return CmdNone;
 }
@@ -186,6 +217,16 @@ void Args::validate() {
       ERR("the 'snapshot " << snapshotSubcmd << "' command requires a snapshot name")
     if (snapshotSubcmd == "diff" && snapshotName.empty())
       ERR("the 'snapshot diff' command requires at least one snapshot name")
+    break;
+  case CmdExport:
+    if (args.exportTarget.empty())
+      ERR("the 'export' command requires a container name or JID")
+    break;
+  case CmdImport:
+    if (args.importFile.empty())
+      ERR("the 'import' command requires an archive file argument")
+    if (!std::ifstream(args.importFile).good())
+      ERR("the file passed to the 'import' command can't be opened: " << args.importFile)
     break;
   default:
     err("no command was given");
@@ -340,6 +381,67 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           err("validate takes exactly one spec file argument");
         } else {
           args.validateSpec = argv[a];
+        }
+        break;
+      case CmdExport:
+        if (auto argShort = isShort(argv[a])) {
+          switch (argShort) {
+          case 'h':
+            usageExport();
+            exit(0);
+          case 'o':
+            args.exportOutput = getArgParam(++a, argc, argv);
+            break;
+          default:
+            err("unsupported short option '%s'", argv[a]);
+          }
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) {
+            usageExport();
+            exit(0);
+          } else if (strEq(argLong, "output")) {
+            args.exportOutput = getArgParam(++a, argc, argv);
+            break;
+          } else {
+            err("unsupported long option '%s'", argv[a]);
+          }
+        } else if (args.exportTarget.empty()) {
+          args.exportTarget = argv[a];
+        } else {
+          err("export takes exactly one container target");
+        }
+        break;
+      case CmdImport:
+        if (auto argShort = isShort(argv[a])) {
+          switch (argShort) {
+          case 'h':
+            usageImport();
+            exit(0);
+          case 'o':
+            args.importOutput = getArgParam(++a, argc, argv);
+            break;
+          case 'f':
+            args.importForce = true;
+            break;
+          default:
+            err("unsupported short option '%s'", argv[a]);
+          }
+        } else if (strEq(argv[a], "--force")) {
+          args.importForce = true;
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) {
+            usageImport();
+            exit(0);
+          } else if (strEq(argLong, "output")) {
+            args.importOutput = getArgParam(++a, argc, argv);
+            break;
+          } else {
+            err("unsupported long option '%s'", argv[a]);
+          }
+        } else if (args.importFile.empty()) {
+          args.importFile = argv[a];
+        } else {
+          err("import takes exactly one archive file");
         }
         break;
       case CmdSnapshot:
