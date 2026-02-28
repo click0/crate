@@ -4,7 +4,7 @@
 
 #include <string>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdList, CmdInfo, CmdClean, CmdConsole};
 
 class Args {
 public:
@@ -32,6 +32,20 @@ public:
   std::string snapshotDataset;  // ZFS dataset name
   std::string snapshotName;     // snapshot name (for create/restore/delete)
   std::string snapshotName2;    // second snapshot name (for diff)
+
+  // list parameters
+  bool listJson = false;        // -j: output as JSON
+
+  // info parameters
+  std::string infoTarget;       // jail name or JID
+
+  // clean parameters
+  bool cleanDryRun = false;     // -n/--dry-run: show what would be cleaned
+
+  // console parameters
+  std::string consoleTarget;    // jail name or JID
+  std::string consoleUser;      // -u/--user: user to login as
+  std::string consoleCmd;       // optional command to run
 
   void validate();
 };
