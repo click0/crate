@@ -1,26 +1,26 @@
-# Анализ совместимости проекта `crate` с FreeBSD 15.0
+# Compatibility Analysis of the `crate` Project with FreeBSD 15.0
 
-**Дата анализа:** 2026-02-19
-**Версия FreeBSD:** 15.0-RELEASE (выпущена 2 декабря 2025)
-**Проект:** crate — контейнеризатор для FreeBSD (C++17)
-
----
-
-## Общая оценка
-
-**Степень совместимости: СРЕДНЯЯ (требуются изменения)**
-
-Проект `crate` является нативным FreeBSD-приложением, написанным на C++17, и в целом
-хорошо совместим с FreeBSD 15.0, однако имеется ряд проблем различной критичности,
-требующих внимания.
+**Date of analysis:** 2026-02-19
+**FreeBSD version:** 15.0-RELEASE (released December 2, 2025)
+**Project:** crate — a containerization tool for FreeBSD (C++17)
 
 ---
 
-## 1. Критические проблемы (CRITICAL)
+## Overall Assessment
 
-### 1.1. URL загрузки base.txz — FTP deprecated
+**Compatibility level: MODERATE (changes required)**
 
-**Файл:** `locs.cpp:15-17`
+The `crate` project is a native FreeBSD application written in C++17 and is generally
+well-compatible with FreeBSD 15.0. However, there are a number of issues of varying
+severity that require attention.
+
+---
+
+## 1. Critical Issues (CRITICAL)
+
+### 1.1. base.txz Download URL — FTP Deprecated
+
+**File:** `locs.cpp:15-17`
 
 ```cpp
 const std::string baseArchiveUrl = STRg("ftp://ftp1.freebsd.org/pub/FreeBSD/snapshots/"
@@ -29,46 +29,46 @@ const std::string baseArchiveUrl = STRg("ftp://ftp1.freebsd.org/pub/FreeBSD/snap
                                         << "/base.txz");
 ```
 
-**Проблема:** Проект использует `ftp://ftp1.freebsd.org/pub/FreeBSD/snapshots/` для загрузки
-base.txz. В FreeBSD 15.0:
+**Issue:** The project uses `ftp://ftp1.freebsd.org/pub/FreeBSD/snapshots/` for downloading
+base.txz. In FreeBSD 15.0:
 
-- `ftpd(8)` удалён из базовой системы
-- Канонический URL изменён на `https://download.freebsd.org/`
-- FTP-серверы FreeBSD постепенно выводятся из эксплуатации
+- `ftpd(8)` has been removed from the base system
+- The canonical URL has been changed to `https://download.freebsd.org/`
+- FreeBSD FTP servers are being gradually decommissioned
 
-Команда `fetch` (используется в `create.cpp:282`) поддерживает HTTPS, но сам URL указывает
-на потенциально недоступный FTP-сервер.
+The `fetch` command (used in `create.cpp:282`) supports HTTPS, but the URL itself points
+to a potentially unavailable FTP server.
 
-Кроме того, с переходом на **pkgbase** в FreeBSD 15.0 структура дистрибутивных наборов
-меняется. В FreeBSD 16 планируется полный отказ от distribution sets (base.txz, kernel.txz)
-в пользу pkgbase. Для создания jail'ов через pkgbase используется:
+Additionally, with the transition to **pkgbase** in FreeBSD 15.0, the structure of distribution
+sets is changing. In FreeBSD 16, a complete transition away from distribution sets (base.txz,
+kernel.txz) in favor of pkgbase is planned. To create jails via pkgbase, use:
 `pkg -r /jails/myjail install FreeBSD-set-base`.
 
-**Действие:** Заменить URL на `https://download.freebsd.org/releases/` или
-`https://download.freebsd.org/snapshots/`, а в перспективе — реализовать поддержку pkgbase.
+**Action:** Replace the URL with `https://download.freebsd.org/releases/` or
+`https://download.freebsd.org/snapshots/`, and in the long term, implement pkgbase support.
 
-### 1.2. Бинарная несовместимость ipfw в jail'ах
+### 1.2. ipfw Binary Incompatibility in Jails
 
-**Файлы:** `run.cpp:264-338`, `create.cpp:212-216`
+**Files:** `run.cpp:264-338`, `create.cpp:212-216`
 
-**Проблема:** Из ядра FreeBSD 15.0 удалён код совместимости для бинарных файлов `ipfw`
-из FreeBSD 7/8 (коммит `4a77657cbc01`). При запуске контейнеров, созданных на базе
-FreeBSD 14.x, на хосте с FreeBSD 15.0 `ipfw` внутри jail'а не будет работать:
+**Issue:** The compatibility code for `ipfw` binaries from FreeBSD 7/8 has been removed
+from the FreeBSD 15.0 kernel (commit `4a77657cbc01`). When running containers created
+on FreeBSD 14.x on a FreeBSD 15.0 host, `ipfw` inside the jail will not work:
 
 ```
 ipfw: setsockopt(IP_FW_XDEL): Invalid argument
 ipfw: getsockopt(IP_FW_XADD): Invalid argument
 ```
 
-Это напрямую затрагивает сетевой стек `crate`, так как проект активно использует `ipfw`
-для NAT и фильтрации трафика внутри и вне jail'а.
+This directly affects the `crate` networking stack, as the project actively uses `ipfw`
+for NAT and traffic filtering inside and outside the jail.
 
-**Действие:** Контейнеры, созданные на FreeBSD <15.0, необходимо пересоздать с base.txz
-от FreeBSD 15.0. Рекомендуется добавить проверку версии при запуске.
+**Action:** Containers created on FreeBSD <15.0 must be recreated with base.txz
+from FreeBSD 15.0. Adding a version check at startup is recommended.
 
-### 1.3. Баг TCP checksum offload в epair-интерфейсах
+### 1.3. TCP Checksum Offload Bug in epair Interfaces
 
-**Файл:** `run.cpp:230-248`
+**File:** `run.cpp:230-248`
 
 ```cpp
 std::string epipeIfaceA = Util::stripTrailingSpace(
@@ -76,32 +76,32 @@ std::string epipeIfaceA = Util::stripTrailingSpace(
 std::string epipeIfaceB = STR(epipeIfaceA.substr(0, epipeIfaceA.size()-1) << "b");
 ```
 
-**Проблема:** После обновления до FreeBSD 15.0 пользователи массово сообщают о проблемах
-с сетевым доступом из VNET jail'ов через epair-интерфейсы
+**Issue:** After upgrading to FreeBSD 15.0, users are widely reporting network access
+problems from VNET jails via epair interfaces
 ([Forum](https://forums.freebsd.org/threads/no-access-to-external-network-from-vnet-jails-in-15-0-release.100669/)).
 
-Причина: epair поддерживает `TXCSUM`/`TXCSUM6` (checksum offloading) и пересылает вычисление
-контрольных сумм на физический интерфейс. Если пакеты не покидают хост (jail->host или
-jail->jail), контрольная сумма никогда не вычисляется, и пакеты отбрасываются.
+Root cause: epair supports `TXCSUM`/`TXCSUM6` (checksum offloading) and delegates checksum
+computation to the physical interface. If packets do not leave the host (jail->host or
+jail->jail), the checksum is never computed and packets are dropped.
 
-**Действие:** После создания epair-интерфейсов добавить:
+**Action:** After creating epair interfaces, add:
 ```
 ifconfig epairXa -txcsum -txcsum6
 ifconfig epairXb -txcsum -txcsum6
 ```
 
-Также замечены проблемы с именованием интерфейсов при переносе в jail — возможно
-появление `vnet0.X` вместо ожидаемого `epairXb`
+There are also reported issues with interface naming when moving into a jail — `vnet0.X`
+may appear instead of the expected `epairXb`
 ([Forum](https://forums.freebsd.org/threads/epair0-behaves-like-schrodingers-cat-and-is-not-working-anymore-after-upgrading-to-15-0.101110/)).
-Требуется тестирование парсинга имён интерфейсов.
+Testing of interface name parsing is required.
 
 ---
 
-## 2. Высокий приоритет (HIGH)
+## 2. High Priority (HIGH)
 
-### 2.1. Jail API — новые файловые дескрипторы
+### 2.1. Jail API — New File Descriptors
 
-**Файл:** `run.cpp:158-169`
+**File:** `run.cpp:158-169`
 
 ```cpp
 res = ::jail_setv(JAIL_CREATE,
@@ -114,22 +114,22 @@ res = ::jail_setv(JAIL_CREATE,
   nullptr);
 ```
 
-**Изменения в FreeBSD 15.0:**
-- Добавлены новые syscall'ы: `jail_set(2)`, `jail_get(2)`, `jail_attach_jd(2)`,
-  `jail_remove_jd(2)` для работы через файловые дескрипторы
-- Устранены race conditions, связанные с использованием jail ID
-- Добавлены параметры `meta` и `env` для метаданных и переменных окружения
-- Поддержка `zfs.dataset` для прикрепления ZFS-датасетов
+**Changes in FreeBSD 15.0:**
+- New syscalls added: `jail_set(2)`, `jail_get(2)`, `jail_attach_jd(2)`,
+  `jail_remove_jd(2)` for working via file descriptors
+- Race conditions associated with using jail IDs have been eliminated
+- `meta` and `env` parameters added for metadata and environment variables
+- `zfs.dataset` support for attaching ZFS datasets
 
-**Статус:** Существующий код с `jail_setv()` и `jail_remove()` продолжает работать
-(обратная совместимость сохранена), но рекомендуется миграция на новый API для
-устранения race conditions.
+**Status:** The existing code using `jail_setv()` and `jail_remove()` continues to work
+(backward compatibility is preserved), but migration to the new API is recommended
+to eliminate race conditions.
 
-**Действие:** Рассмотреть миграцию на jail descriptor API для надёжности.
+**Action:** Consider migrating to the jail descriptor API for reliability.
 
-### 2.2. `sys/jail.h` не является C++-safe
+### 2.2. `sys/jail.h` Is Not C++-Safe
 
-**Файл:** `run.cpp:21-23`
+**File:** `run.cpp:21-23`
 
 ```cpp
 extern "C" { // sys/jail.h isn't C++-safe: https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=238928
@@ -137,72 +137,72 @@ extern "C" { // sys/jail.h isn't C++-safe: https://bugs.freebsd.org/bugzilla/sho
 }
 ```
 
-**Статус:** По имеющимся данным, баг #238928 по-прежнему не исправлен в FreeBSD 15.0.
-Обёртка `extern "C"` остаётся необходимой. Требуется проверка при сборке.
+**Status:** Based on available information, bug #238928 remains unfixed in FreeBSD 15.0.
+The `extern "C"` wrapper is still necessary. Verification during build is required.
 
-### 2.3. Изменение поведения `setgroups(2)` / `getgroups(2)`
+### 2.3. Changed Behavior of `setgroups(2)` / `getgroups(2)`
 
-**Файлы:** `run.cpp:364-367` (использование `pw useradd`, `pw groupadd`, `pw usermod`)
+**Files:** `run.cpp:364-367` (usage of `pw useradd`, `pw groupadd`, `pw usermod`)
 
-**Изменение в FreeBSD 15.0:** `setgroups(2)`, `getgroups(2)` и `initgroups(3)` изменены —
-effective group ID больше не включается в массив. Это может повлиять на настройку
-пользователей внутри jail'а через `pw`.
+**Change in FreeBSD 15.0:** `setgroups(2)`, `getgroups(2)`, and `initgroups(3)` have been
+modified — the effective group ID is no longer included in the array. This may affect
+user configuration inside jails via `pw`.
 
-**Действие:** Протестировать создание пользователей и групп внутри jail'а с FreeBSD 15.0
-base, убедиться что принадлежность к группам (wheel, videoops) корректна.
+**Action:** Test user and group creation inside the jail with FreeBSD 15.0 base,
+ensure that group membership (wheel, videoops) is correct.
 
 ---
 
-## 3. Средний приоритет (MEDIUM)
+## 3. Medium Priority (MEDIUM)
 
-### 3.1. `_WITH_GETLINE` — вероятно, больше не требуется
+### 3.1. `_WITH_GETLINE` — Likely No Longer Required
 
-**Файл:** `util.cpp:20`
+**File:** `util.cpp:20`
 
 ```cpp
 #define _WITH_GETLINE // it breaks on 11.3 w/out this, but the manpage getline(3) doesn't mention _WITH_GETLINE
 ```
 
-**Изменение:** В FreeBSD 15.0 `getline()` экспортируется по умолчанию без необходимости
-определения `_WITH_GETLINE` или `_POSIX_C_SOURCE`. Определение `_WITH_GETLINE` не вызывает
-ошибки, но является мёртвым кодом.
+**Change:** In FreeBSD 15.0, `getline()` is exported by default without requiring the
+definition of `_WITH_GETLINE` or `_POSIX_C_SOURCE`. Defining `_WITH_GETLINE` does not
+cause an error, but constitutes dead code.
 
-**Действие:** Можно безопасно удалить `#define _WITH_GETLINE`. Если нужна обратная
-совместимость с FreeBSD <15.0, можно оставить с комментарием.
+**Action:** `#define _WITH_GETLINE` can be safely removed. If backward compatibility
+with FreeBSD <15.0 is needed, it can be kept with a comment.
 
-### 3.2. LLVM/Clang обновлён до версии 19.1.7
+### 3.2. LLVM/Clang Updated to Version 19.1.7
 
-**Файл:** `Makefile:10`
+**File:** `Makefile:10`
 
 ```makefile
 CXXFLAGS+= -Wall -std=c++17
 ```
 
-**Изменение:** FreeBSD 15.0 поставляется с Clang 19.1.7 (в FreeBSD 14.0 был Clang 16.0.6).
-Clang 19 вводит новые предупреждения и ужесточает проверки.
+**Change:** FreeBSD 15.0 ships with Clang 19.1.7 (FreeBSD 14.0 had Clang 16.0.6).
+Clang 19 introduces new warnings and tightens checks.
 
-**Потенциальные проблемы:**
-- Новые предупреждения при `-Wall` (особенно для C-style casts, неявных преобразований)
-- Более строгая проверка C++17 conformance
-- GoogleTest (если используется) теперь требует C++14 минимум
+**Potential issues:**
+- New warnings under `-Wall` (particularly for C-style casts, implicit conversions)
+- Stricter C++17 conformance checking
+- GoogleTest (if used) now requires C++14 as a minimum
 
-**Действие:** Выполнить тестовую сборку и проверить новые предупреждения/ошибки.
+**Action:** Perform a test build and check for new warnings/errors.
 
-### 3.3. Изменение поведения bridge-интерфейсов
+### 3.3. Changed Behavior of Bridge Interfaces
 
-**Файл:** `run.cpp:230-248` (epair-интерфейсы)
+**File:** `run.cpp:230-248` (epair interfaces)
 
-**Изменение:** В FreeBSD 15.0 bridge начал разрешать IP только на самом bridge, а не
-на member-интерфейсах. Это может повлиять на сетевую конфигурацию VNET jail'ов, если
-используются bridge-интерфейсы.
+**Change:** In FreeBSD 15.0, bridge now resolves IP only on the bridge itself, not on
+member interfaces. This may affect the VNET jail network configuration if bridge interfaces
+are used.
 
-**Статус:** `crate` использует epair напрямую (без bridge), поэтому данное изменение
-скорее всего не затрагивает проект напрямую, но требует внимания при расширении
-сетевых возможностей.
+**Status:** `crate` uses epair directly (without bridge), so this change most likely
+does not affect the project directly, but requires attention when expanding network
+capabilities.
 
-### 3.4. VNET sysctl как loader tunables
+### 3.4. VNET sysctl as Loader Tunables
 
-**Файл:** `run.cpp:109-115`
+**File:** `run.cpp:109-115`
 
 ```cpp
 if (Util::getSysctlInt("kern.features.vimage") == 0)
@@ -211,217 +211,217 @@ if (Util::getSysctlInt("net.inet.ip.forwarding") == 0)
     Util::setSysctlInt("net.inet.ip.forwarding", 1);
 ```
 
-**Изменение:** VNET sysctl переменные теперь могут быть loader tunables (расширение
-`CTLFLAG_TUN`). Это означает, что `net.inet.ip.forwarding` и подобные переменные могут
-быть установлены через loader.conf ещё до загрузки ядра.
+**Change:** VNET sysctl variables can now be loader tunables (`CTLFLAG_TUN` extension).
+This means that `net.inet.ip.forwarding` and similar variables can be set via loader.conf
+before the kernel is loaded.
 
-**Действие:** Функциональность не сломана, но стоит обновить документацию.
+**Action:** Functionality is not broken, but documentation should be updated.
 
 ---
 
-## 4. Низкий приоритет (LOW)
+## 4. Low Priority (LOW)
 
-### 4.1. Совместимость `nmount()` — OK (улучшено)
+### 4.1. `nmount()` Compatibility — OK (Improved)
 
-**Файл:** `mount.cpp:28-59`
+**File:** `mount.cpp:28-59`
 
-`nmount()` — стабильный FreeBSD syscall. В FreeBSD 15.0 исправлена обработка флага
-`MNT_IGNORE` для devfs, fdescfs и nullfs — флаг теперь корректно сохраняется через
-`nmount(2)`, что уменьшает шум от `df(1)` и `mount(8)` при контейнерных рабочих нагрузках.
-API и сигнатура вызова не изменились.
+`nmount()` is a stable FreeBSD syscall. In FreeBSD 15.0, handling of the `MNT_IGNORE` flag
+for devfs, fdescfs, and nullfs has been fixed — the flag is now correctly preserved through
+`nmount(2)`, which reduces noise from `df(1)` and `mount(8)` for containerized workloads.
+The API and call signature have not changed.
 
 ### 4.2. `O_EXLOCK` — OK
 
-**Файл:** `ctx.cpp:34`
+**File:** `ctx.cpp:34`
 
 ```cpp
 ctx->fd = ::open(file().c_str(), O_RDWR|O_CREAT|O_EXLOCK, 0600);
 ```
 
-`O_EXLOCK` — стандартный BSD-флаг, изменений не обнаружено. Работает корректно.
+`O_EXLOCK` is a standard BSD flag; no changes detected. Works correctly.
 
 ### 4.3. `sysctlbyname()` — OK
 
-**Файлы:** `util.cpp:151-170`
+**Files:** `util.cpp:151-170`
 
-Syscall `sysctlbyname()` не претерпел изменений. `sysctl(8)` утилита получила
-дополнительные функции (jail attachment, фильтрация vnet/prison переменных), но API
-для программного доступа стабилен.
+The `sysctlbyname()` syscall has not undergone changes. The `sysctl(8)` utility gained
+additional features (jail attachment, vnet/prison variable filtering), but the programmatic
+access API is stable.
 
 ### 4.4. `kldload()` — OK
 
-**Файл:** `util.cpp:172-174`
+**File:** `util.cpp:172-174`
 
-API `kldload()` стабилен, изменений не обнаружено.
+The `kldload()` API is stable; no changes detected.
 
 ### 4.5. `chflags()` — OK
 
-**Файл:** `util.cpp:331-353`
+**File:** `util.cpp:331-353`
 
-Системный вызов `chflags()` стабилен, изменений не обнаружено.
+The `chflags()` system call is stable; no changes detected.
 
 ### 4.6. `fdclose()` — OK
 
-**Файл:** `util.cpp:276`
+**File:** `util.cpp:276`
 
 ```cpp
 if (::fdclose(file, nullptr) != 0)
 ```
 
-`fdclose()` (появился в FreeBSD 11.0) по-прежнему доступен в FreeBSD 15.0.
+`fdclose()` (introduced in FreeBSD 11.0) remains available in FreeBSD 15.0.
 
-### 4.7. `readdir_r(3)` — deprecated
+### 4.7. `readdir_r(3)` — Deprecated
 
-Проект не использует `readdir_r()` напрямую (вместо этого используется
-`std::filesystem::directory_iterator`), но если какая-либо зависимость использует
-`readdir_r()`, это вызовет предупреждения при компиляции/линковке.
-
----
-
-## 5. Информационные замечания
-
-### 5.1. Удалённые 32-bit платформы
-
-FreeBSD 15.0 прекратил поддержку i386, armv6 и 32-bit powerpc как самостоятельных
-платформ. `crate` собирается на 64-bit платформах — это не затрагивает проект.
-
-### 5.2. Новый jail inotify
-
-FreeBSD 15.0 добавил нативную поддержку `inotify(2)` (Linux-совместимую). Это может
-быть полезно для будущего расширения функциональности `crate` (например, мониторинг
-изменений в jail).
-
-### 5.3. mac_do(4) для jail'ов
-
-`mac_do(4)` стал production-ready в FreeBSD 15.0 и поддерживает изменение правил
-внутри jail'ов через `security.mac.do.rules`. Это может быть полезно для управления
-привилегиями внутри контейнеров.
-
-### 5.4. Service Jails — новый тип jail'ов
-
-FreeBSD 15.0 вводит Service Jails — новый тип jail'ов с `path=/` (общая файловая система
-с хостом), настраиваемый через одну-две строки в `/etc/rc.conf` (`<service>_svcj=YES`).
-Это упрощённая альтернатива для изоляции системных сервисов, не конкурирующая напрямую
-с `crate`, но показывающая направление развития jail-экосистемы FreeBSD.
-
-### 5.5. OCI-совместимые контейнеры
-
-FreeBSD теперь публикует OCI-совместимые контейнерные образы. Это конкурирующий
-подход к контейнеризации, который может повлиять на стратегическое развитие проекта.
-
-### 5.6. pf(4) поддерживает OpenBSD NAT синтаксис
-
-`pf(4)` теперь поддерживает OpenBSD-style NAT синтаксис. Это не затрагивает `crate`
-(который использует `ipfw`), но может быть рассмотрено как альтернатива.
+The project does not use `readdir_r()` directly (using `std::filesystem::directory_iterator`
+instead), but if any dependency uses `readdir_r()`, it will trigger warnings during
+compilation/linking.
 
 ---
 
-## 6. Сводная таблица
+## 5. Informational Notes
 
-| Компонент | Файл(ы) | Совместим? | Приоритет |
-|-----------|---------|------------|-----------|
-| base.txz URL (FTP) | `locs.cpp:15-17` | НЕТ | CRITICAL |
-| ipfw бинарная совм. | `run.cpp`, `create.cpp` | ЧАСТИЧНО | CRITICAL |
-| epair checksum bug | `run.cpp:230-248` | ЧАСТИЧНО | CRITICAL |
-| jail_setv() API | `run.cpp:158-169` | ДА (deprecated-подход) | HIGH |
-| sys/jail.h C++ | `run.cpp:21-23` | ДА (workaround) | HIGH |
-| setgroups/getgroups | `run.cpp:364-367` | ТРЕБУЕТ ТЕСТА | HIGH |
-| _WITH_GETLINE | `util.cpp:20` | ДА (мёртвый код) | MEDIUM |
-| Clang 19 сборка | `Makefile` | ТРЕБУЕТ ТЕСТА | MEDIUM |
-| Bridge поведение | `run.cpp:230-248` | ДА (epair OK) | MEDIUM |
-| VNET sysctl | `run.cpp:109-115` | ДА | MEDIUM |
-| nmount() | `mount.cpp:28-59` | ДА | LOW |
-| O_EXLOCK | `ctx.cpp:34` | ДА | LOW |
-| sysctlbyname() | `util.cpp:151-170` | ДА | LOW |
-| kldload() | `util.cpp:172-174` | ДА | LOW |
-| chflags() | `util.cpp:331-353` | ДА | LOW |
-| fdclose() | `util.cpp:276` | ДА | LOW |
-| nullfs/devfs | `mount.cpp`, `run.cpp` | ДА | LOW |
-| epair интерфейсы | `run.cpp:230-232` | ДА | LOW |
-| pkg менеджер | `create.cpp:69-114` | ДА | LOW |
-| pw/service команды | `run.cpp:356-399` | ДА | LOW |
-| rc.conf система | `run.cpp:250-255` | ДА | LOW |
+### 5.1. Removed 32-bit Platforms
+
+FreeBSD 15.0 discontinued support for i386, armv6, and 32-bit powerpc as standalone
+platforms. `crate` is built on 64-bit platforms — this does not affect the project.
+
+### 5.2. New Jail inotify
+
+FreeBSD 15.0 added native `inotify(2)` support (Linux-compatible). This may be useful
+for future expansion of `crate` functionality (e.g., monitoring changes within a jail).
+
+### 5.3. mac_do(4) for Jails
+
+`mac_do(4)` became production-ready in FreeBSD 15.0 and supports modifying rules
+inside jails via `security.mac.do.rules`. This may be useful for managing privileges
+within containers.
+
+### 5.4. Service Jails — A New Type of Jail
+
+FreeBSD 15.0 introduces Service Jails — a new type of jail with `path=/` (shared
+filesystem with the host), configurable via one or two lines in `/etc/rc.conf`
+(`<service>_svcj=YES`). This is a simplified alternative for isolating system services
+that does not directly compete with `crate`, but demonstrates the direction of development
+of the FreeBSD jail ecosystem.
+
+### 5.5. OCI-Compatible Containers
+
+FreeBSD now publishes OCI-compatible container images. This is a competing approach
+to containerization that may affect the strategic development of the project.
+
+### 5.6. pf(4) Supports OpenBSD NAT Syntax
+
+`pf(4)` now supports OpenBSD-style NAT syntax. This does not affect `crate`
+(which uses `ipfw`), but may be considered as an alternative.
 
 ---
 
-## 7. Рекомендуемый план действий
+## 6. Summary Table
 
-1. **Немедленно:**
-   - Заменить FTP URL в `locs.cpp` на HTTPS (`download.freebsd.org`)
-   - Добавить отключение checksum offload на epair: `ifconfig epairXa -txcsum -txcsum6`
-   - Выполнить тестовую сборку с Clang 19.1.7 на FreeBSD 15.0
+| Component | File(s) | Compatible? | Priority |
+|-----------|---------|-------------|----------|
+| base.txz URL (FTP) | `locs.cpp:15-17` | NO | CRITICAL |
+| ipfw binary compat. | `run.cpp`, `create.cpp` | PARTIAL | CRITICAL |
+| epair checksum bug | `run.cpp:230-248` | PARTIAL | CRITICAL |
+| jail_setv() API | `run.cpp:158-169` | YES (deprecated approach) | HIGH |
+| sys/jail.h C++ | `run.cpp:21-23` | YES (workaround) | HIGH |
+| setgroups/getgroups | `run.cpp:364-367` | NEEDS TESTING | HIGH |
+| _WITH_GETLINE | `util.cpp:20` | YES (dead code) | MEDIUM |
+| Clang 19 build | `Makefile` | NEEDS TESTING | MEDIUM |
+| Bridge behavior | `run.cpp:230-248` | YES (epair OK) | MEDIUM |
+| VNET sysctl | `run.cpp:109-115` | YES | MEDIUM |
+| nmount() | `mount.cpp:28-59` | YES | LOW |
+| O_EXLOCK | `ctx.cpp:34` | YES | LOW |
+| sysctlbyname() | `util.cpp:151-170` | YES | LOW |
+| kldload() | `util.cpp:172-174` | YES | LOW |
+| chflags() | `util.cpp:331-353` | YES | LOW |
+| fdclose() | `util.cpp:276` | YES | LOW |
+| nullfs/devfs | `mount.cpp`, `run.cpp` | YES | LOW |
+| epair interfaces | `run.cpp:230-232` | YES | LOW |
+| pkg manager | `create.cpp:69-114` | YES | LOW |
+| pw/service commands | `run.cpp:356-399` | YES | LOW |
+| rc.conf system | `run.cpp:250-255` | YES | LOW |
 
-2. **Краткосрочно:**
-   - Добавить проверку версии FreeBSD при запуске контейнеров
-   - Протестировать ipfw NAT в контексте jail'ов FreeBSD 15.0
-   - Проверить именование epair-интерфейсов при переносе в jail (vnet0.X vs epairXb)
-   - Проверить создание пользователей/групп через `pw` внутри jail
+---
 
-3. **Среднесрочно:**
-   - Мигрировать на jail descriptor API (jail_set/jail_get через fd)
-   - Добавить поддержку pkgbase как альтернативу base.txz
-   - Удалить `_WITH_GETLINE` (или оставить с условной компиляцией)
+## 7. Recommended Action Plan
 
-4. **Долгосрочно:**
-   - Подготовиться к полному отказу от distribution sets в FreeBSD 16
-   - Рассмотреть OCI-совместимость формата контейнеров
+1. **Immediately:**
+   - Replace FTP URL in `locs.cpp` with HTTPS (`download.freebsd.org`)
+   - Add checksum offload disabling on epair: `ifconfig epairXa -txcsum -txcsum6`
+   - Perform a test build with Clang 19.1.7 on FreeBSD 15.0
+
+2. **Short-term:**
+   - Add FreeBSD version check when starting containers
+   - Test ipfw NAT in the context of FreeBSD 15.0 jails
+   - Verify epair interface naming when moving into a jail (vnet0.X vs epairXb)
+   - Verify user/group creation via `pw` inside the jail
+
+3. **Medium-term:**
+   - Migrate to jail descriptor API (jail_set/jail_get via fd)
+   - Add pkgbase support as an alternative to base.txz
+   - Remove `_WITH_GETLINE` (or keep with conditional compilation)
+
+4. **Long-term:**
+   - Prepare for the complete elimination of distribution sets in FreeBSD 16
+   - Consider OCI compatibility for the container format
 
 ---
 
 ## 8. Phase 6: Code Cleanup & Forward-Looking Features (2026-02-26)
 
-Все критические проблемы из Phase 5 были решены. Phase 6 фокусируется на устранении
-технического долга (все TODO/FIXME/XXX в коде) и подготовке к FreeBSD 16.
+All critical issues from Phase 5 have been resolved. Phase 6 focuses on eliminating
+technical debt (all TODO/FIXME/XXX markers in the code) and preparing for FreeBSD 16.
 
-### 8.1. §17: pkgbase support — **РЕАЛИЗОВАНО**
+### 8.1. §17: pkgbase support — **IMPLEMENTED**
 
-- **Файлы:** `args.h`, `args.cpp`, `create.cpp`
-- `--use-pkgbase` флаг для `crate create`
-- Bootstrapping jail root через `pkg -r <jailpath> install FreeBSD-runtime` и т.д.
-- Записывает `+CRATE.BOOTSTRAP` (pkgbase|base.txz) в контейнер
-- Подготовка к FreeBSD 16, где base.txz будет заменён на pkgbase
+- **Files:** `args.h`, `args.cpp`, `create.cpp`
+- `--use-pkgbase` flag for `crate create`
+- Bootstrapping jail root via `pkg -r <jailpath> install FreeBSD-runtime`, etc.
+- Writes `+CRATE.BOOTSTRAP` (pkgbase|base.txz) to the container
+- Preparation for FreeBSD 16, where base.txz will be replaced by pkgbase
 
-### 8.2. §18: Dynamic ipfw rule allocation — **РЕАЛИЗОВАНО**
+### 8.2. §18: Dynamic ipfw rule allocation — **IMPLEMENTED**
 
-- **Файлы:** `ctx.h`, `ctx.cpp`, `run.cpp`
-- `FwSlots` класс: file-based allocator уникальных номеров правил
-- Каждый crate получает свой слот, исключая конфликты правил
-- Garbage collection удаляет мёртвые PID при аллокации
-- Заменяет hardcoded bases (19000/59000) на динамические ranges (10000-29999, 50000-64999)
+- **Files:** `ctx.h`, `ctx.cpp`, `run.cpp`
+- `FwSlots` class: file-based allocator of unique rule numbers
+- Each crate receives its own slot, preventing rule conflicts
+- Garbage collection removes dead PIDs during allocation
+- Replaces hardcoded bases (19000/59000) with dynamic ranges (10000-29999, 50000-64999)
 
-### 8.3. §19: IP address space documentation & overflow detection — **РЕАЛИЗОВАНО**
+### 8.3. §19: IP address space documentation & overflow detection — **IMPLEMENTED**
 
-- **Файл:** `run.cpp`
-- Документация алгоритма аллокации IP в 10.0.0.0/8
-- Overflow detection: ERR при epairNum > 2^24
-- Bitwise ops вместо деления для clarity
+- **File:** `run.cpp`
+- Documentation of the IP allocation algorithm in 10.0.0.0/8
+- Overflow detection: ERR on epairNum > 2^24
+- Bitwise ops instead of division for clarity
 
-### 8.4. §20: Jail directory permission check — **РЕАЛИЗОВАНО**
+### 8.4. §20: Jail directory permission check — **IMPLEMENTED**
 
-- **Файл:** `misc.cpp`
-- Проверяет владельца (uid 0) и права (0700) при создании jail directory
-- Автоматически исправляет permissions при несоответствии
+- **File:** `misc.cpp`
+- Checks owner (uid 0) and permissions (0700) when creating the jail directory
+- Automatically corrects permissions on mismatch
 
-### 8.5. §21: Exception handling cleanup — **РЕАЛИЗОВАНО**
+### 8.5. §21: Exception handling cleanup — **IMPLEMENTED**
 
-- **Файл:** `main.cpp`
-- Заменены FIXME/XXX маркеры на чистые "internal error:" сообщения
+- **File:** `main.cpp`
+- FIXME/XXX markers replaced with clean "internal error:" messages
 
-### 8.6. §22: GL GPU vendor detection — **РЕАЛИЗОВАНО**
+### 8.6. §22: GL GPU vendor detection — **IMPLEMENTED**
 
-- **Файл:** `spec.cpp`
-- Автоопределение GPU вендора через `pciconf -l`
+- **File:** `spec.cpp`
+- Auto-detection of GPU vendor via `pciconf -l`
 - NVIDIA (0x10de) → nvidia-driver
 - AMD (0x1002) / Intel (0x8086) → drm-kmod
 - Fallback: nvidia-driver (legacy)
 
-### Статус TODO/FIXME/XXX
+### TODO/FIXME/XXX Status
 
-После Phase 6 в кодовой базе **не осталось** маркеров TODO, FIXME или XXX.
+After Phase 6, there are **no remaining** TODO, FIXME, or XXX markers in the codebase.
 
 ---
 
-## Источники
+## Sources
 
 - [FreeBSD 15.0-RELEASE Release Notes](https://www.freebsd.org/releases/15.0R/relnotes/)
 - [FreeBSD 15.0-RELEASE Announcement](https://www.freebsd.org/releases/15.0R/announce/)

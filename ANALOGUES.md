@@ -1,23 +1,23 @@
-# Ближайшие аналоги Crate во FreeBSD
+# Closest Analogues to Crate on FreeBSD
 
-## Ключевые характеристики Crate (для сравнения)
+## Key Characteristics of Crate (for comparison)
 
-1. **Эфемерные jail-ы** — jail создаётся при запуске, уничтожается после завершения
-2. **Самодостаточные архивы** — приложение + зависимости упаковываются в `.crate` (XZ)
-3. **Десктоп/GUI изоляция** — X11, OpenGL, видеоустройства
-4. **Минимальный контейнер** — ELF-анализ через ldd, удаление лишнего
-5. **Декларативная спецификация** — YAML
-6. **Простой CLI** — две команды: `create` и `run`
-7. **Автоматическая сеть** — VNET + ipfw NAT без ручной настройки
-8. **Написан на C++17** (~3 000 строк)
+1. **Ephemeral jails** — a jail is created at launch and destroyed after termination
+2. **Self-contained archives** — application + dependencies are packed into `.crate` (XZ)
+3. **Desktop/GUI isolation** — X11, OpenGL, video devices
+4. **Minimal container** — ELF analysis via ldd, stripping unnecessary files
+5. **Declarative specification** — YAML
+6. **Simple CLI** — two commands: `create` and `run`
+7. **Automatic networking** — VNET + ipfw NAT with no manual configuration
+8. **Written in C++17** (~3,000 lines)
 
 ---
 
-## Матрица сходства
+## Similarity Matrix
 
-| Инструмент | Эфемерность | Архивы | GUI | Минимальность | Декларативность | Простой CLI | Авто-сеть | C/C++ | **Итого /40** |
+| Tool | Ephemeral | Archives | GUI | Minimal | Declarative | Simple CLI | Auto-net | C/C++ | **Total /40** |
 |---|---|---|---|---|---|---|---|---|---|
-| **Crate** (эталон) | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | **40** |
+| **Crate** (reference) | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | **40** |
 | **AppJail** | 4 | 2 | 1 | 3 | 4 | 2 | 4 | 2 | **22** |
 | **Podman + ocijail** | 4 | 4 | 1 | 1 | 2 | 3 | 3 | 1 | **19** |
 | **Kleene** | 4 | 2 | 1 | 1 | 3 | 3 | 4 | 1 | **19** |
@@ -38,34 +38,34 @@
 
 ---
 
-## Подробные описания (по убыванию сходства)
+## Detailed Descriptions (by decreasing similarity)
 
-### 1. AppJail — ближайший аналог (22/40)
+### 1. AppJail — the closest analogue (22/40)
 
 | | |
 |---|---|
 | **URL** | https://github.com/DtxdF/AppJail |
-| **Язык** | POSIX sh + C |
-| **Версия** | 4.9.0 (февраль 2026) |
-| **Статус** | Активно развивается, самый функциональный jail-менеджер |
-| **Порт** | `sysutils/appjail` |
+| **Language** | POSIX sh + C |
+| **Version** | 4.9.0 (February 2026) |
+| **Status** | Actively developed, the most feature-rich jail manager |
+| **Port** | `sysutils/appjail` |
 
-**Почему близок к Crate:**
-- Явная **«эфемерная концепция»** (appjail-ephemeral(7)) — jail-ы как «скот, а не питомцы»
-- **Makejail** — декларативный формат, аналог Dockerfile: `FROM`, `RUN`, `PKG`, `ENTRYPOINT`, `COPY`, `ENV`, `INCLUDE`
-- **`.appjail` архивы** — XZ-сжатые образы с метаданными AJSPEC
-- **TinyJails** — экспериментальная фича для минимальных jail-ов (аналог ELF-оптимизации Crate)
-- **Director** — companion-инструмент для YAML-описания мульти-jail окружений
-- **X11 поддержка** — монтирование `/tmp/.X11-unix` в jail (документировано в handbook)
-- **NAT** — через pf, автоматическое управление виртуальными сетями
-- 101+ готовых Makejail-ов в репозитории
+**Why it is close to Crate:**
+- Explicit **"ephemeral concept"** (appjail-ephemeral(7)) — jails as "cattle, not pets"
+- **Makejail** — a declarative format analogous to Dockerfile: `FROM`, `RUN`, `PKG`, `ENTRYPOINT`, `COPY`, `ENV`, `INCLUDE`
+- **`.appjail` archives** — XZ-compressed images with AJSPEC metadata
+- **TinyJails** — an experimental feature for minimal jails (analogous to Crate's ELF optimization)
+- **Director** — a companion tool for YAML-based multi-jail environment descriptions
+- **X11 support** — mounting `/tmp/.X11-unix` into the jail (documented in the handbook)
+- **NAT** — via pf, automatic virtual network management
+- 101+ ready-made Makejail files in the repository
 
-**Чем отличается:**
-- Jail-ы персистентны по умолчанию (эфемерность — философия, не дефолт)
-- Нет автоматического GPU/OpenGL/video passthrough
-- Нет Xauthority-управления (требуется ручной `xhost +`)
-- 35+ подкоманд vs 2 у Crate
-- Shell, не C++
+**How it differs:**
+- Jails are persistent by default (ephemeral behavior is a philosophy, not the default)
+- No automatic GPU/OpenGL/video passthrough
+- No Xauthority management (manual `xhost +` required)
+- 35+ subcommands vs. 2 in Crate
+- Shell, not C++
 
 ---
 
@@ -74,23 +74,23 @@
 | | |
 |---|---|
 | **URL** | https://github.com/dfr/ocijail |
-| **Язык** | Go (ocijail), Go (podman) |
-| **Статус** | Экспериментальный на FreeBSD, активная разработка FreeBSD Foundation |
-| **Порт** | `sysutils/podman`, `sysutils/ocijail` |
+| **Language** | Go (ocijail), Go (podman) |
+| **Status** | Experimental on FreeBSD, active development by the FreeBSD Foundation |
+| **Port** | `sysutils/podman`, `sysutils/ocijail` |
 
-**Почему близок к Crate:**
-- `podman run --rm` — эфемерный контейнер, уничтожается после выхода (как `crate run`)
-- OCI-образы — самодостаточные архивы (тарболлы слоёв)
-- Docker Hub / реестры образов
-- CNI-сеть
+**Why it is close to Crate:**
+- `podman run --rm` — an ephemeral container, destroyed after exit (like `crate run`)
+- OCI images — self-contained archives (layer tarballs)
+- Docker Hub / image registries
+- CNI networking
 
-**Чем отличается:**
-- OCI-экосистема (не FreeBSD-нативная упаковка)
-- Нет ELF-анализа (полные OS-образы)
-- Нет десктопной/GUI поддержки
-- Требует root (нет rootless на FreeBSD)
-- Большой стек зависимостей
-- Ограниченный выбор FreeBSD-образов
+**How it differs:**
+- OCI ecosystem (not FreeBSD-native packaging)
+- No ELF analysis (full OS images)
+- No desktop/GUI support
+- Requires root (no rootless on FreeBSD)
+- Large dependency stack
+- Limited selection of FreeBSD images
 
 ---
 
@@ -99,22 +99,22 @@
 | | |
 |---|---|
 | **URL** | https://github.com/kleene-project/kleened |
-| **Язык** | Elixir (kleened), Python (klee CLI) |
-| **Версия** | v0.1.0-rc.1 (pre-release) |
-| **Статус** | Ранняя стадия, не для продакшена |
-| **Порт** | `sysutils/kleened`, `sysutils/klee` |
+| **Language** | Elixir (kleened), Python (klee CLI) |
+| **Version** | v0.1.0-rc.1 (pre-release) |
+| **Status** | Early stage, not production-ready |
+| **Port** | `sysutils/kleened`, `sysutils/klee` |
 
-**Почему близок к Crate:**
-- `klee run` — создаёт эфемерный контейнер из образа, уничтожает при выходе (Docker-семантика)
-- Dockerfile-подобная система сборки
-- PF-сеть с автоматической настройкой
+**Why it is close to Crate:**
+- `klee run` — creates an ephemeral container from an image, destroys it on exit (Docker semantics)
+- Dockerfile-like build system
+- PF networking with automatic configuration
 
-**Чем отличается:**
-- Клиент-серверная архитектура (требуется демон kleened)
-- Образы — ZFS-датасеты, не портативные архивы
-- Нет десктопной/GUI поддержки
-- Нет ELF-анализа
-- Требует ZFS
+**How it differs:**
+- Client-server architecture (requires the kleened daemon)
+- Images are ZFS datasets, not portable archives
+- No desktop/GUI support
+- No ELF analysis
+- Requires ZFS
 
 ---
 
@@ -123,25 +123,25 @@
 | | |
 |---|---|
 | **URL** | https://github.com/bsdpot/pot |
-| **Язык** | Shell |
-| **Версия** | 0.16.1 (март 2025) |
-| **Статус** | Активный, используется в продакшене с Nomad |
-| **Порт** | `sysutils/pot` |
+| **Language** | Shell |
+| **Version** | 0.16.1 (March 2025) |
+| **Status** | Active, used in production with Nomad |
+| **Port** | `sysutils/pot` |
 
-**Почему близок к Crate:**
-- XZ-сжатые архивы экспорта (ZFS-снапшоты)
+**Why it is close to Crate:**
+- XZ-compressed export archives (ZFS snapshots)
 - VNET + pf NAT
-- **Nomad-интеграция** — `nomad-pot-driver` обеспечивает эфемерное поведение (pull → create → run → destroy)
-- **Potluck** — реестр готовых образов (50+)
-- Тонкие и толстые jail-ы, flavours (шаблоны)
+- **Nomad integration** — `nomad-pot-driver` provides ephemeral behavior (pull -> create -> run -> destroy)
+- **Potluck** — a registry of ready-made images (50+)
+- Thin and thick jails, flavours (templates)
 
-**Чем отличается:**
-- **Требует ZFS** (не работает на UFS)
-- Нет нативного эфемерного режима (эфемерность — через Nomad)
-- Нет десктопной/GUI поддержки
-- Нет YAML (CLI-флаги + скрипты flavours)
-- Архивы зависят от ZFS (не самодостаточные rootfs)
-- Инфраструктурный/DevOps-инструмент
+**How it differs:**
+- **Requires ZFS** (does not work on UFS)
+- No native ephemeral mode (ephemeral behavior is achieved through Nomad)
+- No desktop/GUI support
+- No YAML (CLI flags + flavour scripts)
+- Archives depend on ZFS (not self-contained rootfs)
+- Infrastructure/DevOps tool
 
 ---
 
@@ -150,12 +150,12 @@
 | | |
 |---|---|
 | **URL** | https://github.com/michael-yuji/xc |
-| **Язык** | Rust |
-| **Статус** | WIP, представлен на BSDCan |
+| **Language** | Rust |
+| **Status** | WIP, presented at BSDCan |
 
-FreeBSD-ориентированный контейнерный движок. Поддерживает OCI-образы и нативные Jailfile. Может запускать Linux-контейнеры через Linuxulator. Демон-архитектура (xcd). Интеграция с PF, ZFS, DTrace.
+A FreeBSD-oriented container engine. Supports OCI images and native Jailfile. Can run Linux containers via Linuxulator. Daemon architecture (xcd). Integration with PF, ZFS, DTrace.
 
-**Чем отличается от Crate:** демон-архитектура, нет десктопной фокусировки, нет ELF-анализа, не в портах.
+**How it differs from Crate:** daemon architecture, no desktop focus, no ELF analysis, not in ports.
 
 ---
 
@@ -164,99 +164,99 @@ FreeBSD-ориентированный контейнерный движок. П
 | | |
 |---|---|
 | **URL** | https://github.com/ssteidl/vessel |
-| **Язык** | C + Tcl |
-| **Статус** | Побочный проект автора |
+| **Language** | C + Tcl |
+| **Status** | Author's side project |
 
-Контейнеры для приложений на FreeBSD. Уникальная особенность: `vessel`-процесс работает рядом с каждым jail-ом, слушая события через kqueue. VesselFile (синтаксис Tcl) для декларативного описания. Частично на C — единственный инструмент кроме Crate, использующий компилируемый язык.
+Application containers on FreeBSD. Unique feature: a `vessel` process runs alongside each jail, listening for events via kqueue. VesselFile (Tcl syntax) for declarative descriptions. Partially written in C — the only tool besides Crate that uses a compiled language.
 
-**Чем отличается от Crate:** не эфемерный по умолчанию, Tcl (не YAML), нет GUI, нет архивов, нет ELF-анализа.
+**How it differs from Crate:** not ephemeral by default, Tcl (not YAML), no GUI, no archives, no ELF analysis.
 
 ---
 
-## Не-jail подходы к изоляции десктопа
+## Non-jail Approaches to Desktop Isolation
 
 ### 7. Capsicumizer (15/40)
 
 | | |
 |---|---|
 | **URL** | https://github.com/myfreeweb/capsicumizer |
-| **Статус** | Заброшен (public domain) |
+| **Status** | Abandoned (public domain) |
 
-**«Super Capsicumizer 9000»** — песочница на основе Capsicum. Запускает программы в capability mode через LD_PRELOAD (libpreopen). Профили на UCL-синтаксисе (как AppArmor). **Может изолировать GUI-приложения** (GTK, X11, Wayland).
+**"Super Capsicumizer 9000"** — a Capsicum-based sandbox. Runs programs in capability mode via LD_PRELOAD (libpreopen). Profiles in UCL syntax (similar to AppArmor). **Can isolate GUI applications** (GTK, X11, Wayland).
 
-Единственный инструмент кроме Crate, специально предназначенный для песочницы десктопных приложений на FreeBSD. Но использует Capsicum (процессный уровень), а не jail-ы (уровень ОС). Не работает с Go-программами (LD_PRELOAD).
+The only tool besides Crate specifically designed for sandboxing desktop applications on FreeBSD. However, it uses Capsicum (process level) rather than jails (OS level). Does not work with Go programs (LD_PRELOAD).
 
 ### 8. Curtain / freebsd-pledge (14/40)
 
 | | |
 |---|---|
 | **URL** | https://github.com/Math2/freebsd-pledge |
-| **Статус** | WIP, требует пересборку ядра |
+| **Status** | WIP, requires a kernel rebuild |
 
-Модуль ядра `mac_curtain` — порт OpenBSD `pledge(3)` и `unveil(3)` на FreeBSD. Утилита `curtain(1)` запускает программы в песочнице с ограничениями файловой системы. Может изолировать Firefox. Но требует кастомную сборку ядра.
+A kernel module `mac_curtain` — a port of OpenBSD's `pledge(3)` and `unveil(3)` to FreeBSD. The `curtain(1)` utility runs programs in a sandbox with filesystem restrictions. Can isolate Firefox. However, it requires a custom kernel build.
 
 ---
 
-## Паттерны (не инструменты)
+## Patterns (not tools)
 
 ### 9. exec.prepare / exec.release (native jail.conf)
 
-Встроенный в FreeBSD (12.2+) механизм через хуки `jail.conf(5)`:
-- `exec.prepare` — выполняется перед созданием jail (например, ZFS clone из шаблона)
-- `exec.release` — выполняется после уничтожения (удаление clone)
+A mechanism built into FreeBSD (12.2+) via `jail.conf(5)` hooks:
+- `exec.prepare` — runs before jail creation (e.g., ZFS clone from a template)
+- `exec.release` — runs after destruction (clone removal)
 
-**Наиболее точное соответствие модели create-run-destroy** на уровне ядра. Но требует ручной конфигурации всего остального.
+**The closest match to the create-run-destroy model** at the kernel level. However, it requires manual configuration of everything else.
 
-### 10. MicroJails (паттерн из FreeBSD Wiki)
+### 10. MicroJails (a pattern from the FreeBSD Wiki)
 
 | | |
 |---|---|
 | **URL** | https://wiki.freebsd.org/VladimirKrstulja/Guides/MicroJails |
 
-Shell-скрипт Владимира Крстули: создаёт голый jail root, копирует `ld-elf.so.1` и только нужные `.so`-библиотеки (найденные через `ldd`), минимальные `/etc`-файлы. **Это точно та же техника**, которую Crate автоматизирует в `create.cpp`. Ручная версия главной технической особенности Crate.
+A shell script by Vladimir Krstulja: creates a bare jail root, copies `ld-elf.so.1` and only the required `.so` libraries (found via `ldd`), plus minimal `/etc` files. **This is exactly the same technique** that Crate automates in `create.cpp`. A manual version of Crate's main technical feature.
 
 ---
 
-## Серверные jail-менеджеры (низкое сходство)
+## Server-oriented Jail Managers (low similarity)
 
-| Инструмент | Описание | Статус |
+| Tool | Description | Status |
 |---|---|---|
-| **BastilleBSD** | Полный менеджер jail-ов, Bastillefile шаблоны, pf, 35+ команд | Стабильный v1.3+ |
-| **CBSD** | «Всё-в-одном»: jail-ы + bhyve + QEMU, SQLite, web UI, кластеринг. Единственный jail-менеджер с документацией по X11 в jail | Стабильный, с 2013 |
-| **iocage** | ZFS-first, UUID-идентификация, шаблоны, плагины | Возрождён под freebsd/iocage, v1.10 |
-| **Blackship** | Новый (декабрь 2025), Rust, TOML, граф зависимостей, state machines | Ранняя стадия |
-| **Focker** | Docker-клон на Python, Fockerfile, ZFS-слои | В портах, разработка непостоянная |
-| **Jailer** | Минималистичный, VNET-only, ZFS-only | Активный, не в портах |
-| **ezjail** | Классический, nullfs shared base | Фактически заброшен |
-| **Service Jails** | FreeBSD 15+, jail любой rc.d-сервис через 1-2 строки в rc.conf | Будет в FreeBSD 15 |
+| **BastilleBSD** | Full-featured jail manager, Bastillefile templates, pf, 35+ commands | Stable v1.3+ |
+| **CBSD** | All-in-one: jails + bhyve + QEMU, SQLite, web UI, clustering. The only jail manager with X11-in-jail documentation | Stable, since 2013 |
+| **iocage** | ZFS-first, UUID identification, templates, plugins | Revived under freebsd/iocage, v1.10 |
+| **Blackship** | New (December 2025), Rust, TOML, dependency graph, state machines | Early stage |
+| **Focker** | Docker clone in Python, Fockerfile, ZFS layers | In ports, sporadic development |
+| **Jailer** | Minimalist, VNET-only, ZFS-only | Active, not in ports |
+| **ezjail** | Classic, nullfs shared base | Effectively abandoned |
+| **Service Jails** | FreeBSD 15+, jail any rc.d service via 1-2 lines in rc.conf | Coming in FreeBSD 15 |
 
 ---
 
-## Ближайшие аналоги по отдельным характеристикам
+## Closest Analogues by Individual Characteristic
 
-| Характеристика Crate | Ближайший аналог |
+| Crate Characteristic | Closest Analogue |
 |---|---|
-| **Эфемерная модель** (create → run → destroy) | `exec.prepare`/`exec.release` (нативный jail.conf), Kleene (`klee run`), Podman (`--rm`) |
-| **Самодостаточные архивы** | Podman (OCI image tarballs), pot (ZFS → XZ), AppJail (`.appjail`) |
-| **Десктоп/GUI изоляция** | Capsicumizer (Capsicum + UCL профили), CBSD (X11 в jail), Curtain (pledge) |
-| **ELF-анализ / минимальный контейнер** | MicroJails (wiki-паттерн, ручной ldd), AppJail TinyJails (экспериментальный) |
-| **Декларативная спецификация** | AppJail Makejail, Focker Fockerfile, Blackship TOML, BastilleBSD Bastillefile |
-| **Простота (2 команды)** | Service Jails (1-2 строки rc.conf), Capsicumizer (одна команда) |
-| **Автоматическая сеть** | AppJail (pf + виртуальные сети), BastilleBSD (pf + rdr-anchor) |
+| **Ephemeral model** (create -> run -> destroy) | `exec.prepare`/`exec.release` (native jail.conf), Kleene (`klee run`), Podman (`--rm`) |
+| **Self-contained archives** | Podman (OCI image tarballs), pot (ZFS -> XZ), AppJail (`.appjail`) |
+| **Desktop/GUI isolation** | Capsicumizer (Capsicum + UCL profiles), CBSD (X11 in jail), Curtain (pledge) |
+| **ELF analysis / minimal container** | MicroJails (wiki pattern, manual ldd), AppJail TinyJails (experimental) |
+| **Declarative specification** | AppJail Makejail, Focker Fockerfile, Blackship TOML, BastilleBSD Bastillefile |
+| **Simplicity (2 commands)** | Service Jails (1-2 lines in rc.conf), Capsicumizer (one command) |
+| **Automatic networking** | AppJail (pf + virtual networks), BastilleBSD (pf + rdr-anchor) |
 
 ---
 
-## Вывод
+## Conclusion
 
-**Ни один инструмент не воспроизводит уникальную комбинацию Crate.** Crate занимает собственную нишу, сочетая:
-- Эфемерные jail-ы
-- Самодостаточные XZ-архивы с ELF-оптимизацией
-- Первоклассную поддержку X11/OpenGL/видео
-- YAML-спецификации
-- CLI из двух команд
-- Автоматическую VNET+NAT сеть
+**No single tool reproduces Crate's unique combination.** Crate occupies its own niche by combining:
+- Ephemeral jails
+- Self-contained XZ archives with ELF optimization
+- First-class X11/OpenGL/video support
+- YAML specifications
+- A two-command CLI
+- Automatic VNET+NAT networking
 
-Ближайший аналог — **AppJail** (22/40), который разделяет эфемерную философию, имеет архивный формат, TinyJails и X11 поддержку, но остаётся полнофункциональным jail-менеджером с 35+ командами.
+The closest analogue is **AppJail** (22/40), which shares the ephemeral philosophy, has an archive format, TinyJails, and X11 support, but remains a full-featured jail manager with 35+ commands.
 
-Для воспроизведения функциональности Crate другими средствами потребуется комбинация:
-**AppJail** (эфемерная концепция + Makejail) + **MicroJails** (ldd-техника) + ручная настройка X11 + **exec.prepare/exec.release** (jail.conf хуки)
+To reproduce Crate's functionality using other tools would require a combination of:
+**AppJail** (ephemeral concept + Makejail) + **MicroJails** (ldd technique) + manual X11 setup + **exec.prepare/exec.release** (jail.conf hooks)
