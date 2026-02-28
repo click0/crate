@@ -22,6 +22,7 @@ public:
     bool outboundLan;                 // allow outbound connections to LAN
     bool outboundHost;                // allow outbound connections to the host
     bool outboundDns;                 // allow DNS
+    bool ipv6;                        // enable IPv6 pass-through networking
     std::vector<std::pair<PortRange, PortRange>> inboundPortsTcp;
     std::vector<std::pair<PortRange, PortRange>> inboundPortsUdp;
 
@@ -83,6 +84,9 @@ public:
   bool                                               allowSetHostname = false;
   bool                                               allowChflags = false;
   bool                                               allowMlock = false;
+  int                                                securelevel = -1;        // -1=auto (inherit host), 0-3
+  int                                                childrenMax = -1;        // -1=auto (no children.max), 0=no child jails
+  std::string                                        cpuset;                  // CPU set (e.g. "0-3", "0,2,4")
 
   // Copy-on-Write filesystem (§6)
   struct CowOptions {

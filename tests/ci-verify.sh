@@ -6,6 +6,13 @@
 
 BUILDDIR="${1:-.}"
 CRATE_BIN="${BUILDDIR}/crate"
+# Module files extracted from the monolithic run.cpp
+RUN_NET="${BUILDDIR}/run_net.cpp"
+RUN_JAIL="${BUILDDIR}/run_jail.cpp"
+RUN_GUI="${BUILDDIR}/run_gui.cpp"
+RUN_SERVICES="${BUILDDIR}/run_services.cpp"
+# All run-related source files (for grep checks)
+RUN_ALL="${BUILDDIR}/run.cpp ${BUILDDIR}/run_net.cpp ${BUILDDIR}/run_jail.cpp ${BUILDDIR}/run_gui.cpp ${BUILDDIR}/run_services.cpp"
 PASS_COUNT=0
 FAIL_COUNT=0
 SKIP_COUNT=0
@@ -307,7 +314,7 @@ fi
 section "T09: epair checksum offload fix"
 
 # Source-level check first
-if grep -q '\-txcsum' "$BUILDDIR/run.cpp" && grep -q '\-txcsum6' "$BUILDDIR/run.cpp"; then
+if grep -q '\-txcsum' $RUN_ALL && grep -q '\-txcsum6' $RUN_ALL; then
   pass "run.cpp disables txcsum/txcsum6 on epair interfaces"
 else
   fail "run.cpp missing -txcsum/-txcsum6 on epair"
@@ -420,7 +427,7 @@ else
   skip "compile-only CI (no full build)"
   section "T09: epair checksum offload fix"
   # Source-level checks still run
-  if grep -q '\-txcsum' "$BUILDDIR/run.cpp" && grep -q '\-txcsum6' "$BUILDDIR/run.cpp"; then
+  if grep -q '\-txcsum' $RUN_ALL && grep -q '\-txcsum6' $RUN_ALL; then
     pass "run.cpp disables txcsum/txcsum6 on epair interfaces"
   else
     fail "run.cpp missing -txcsum/-txcsum6 on epair"
@@ -441,21 +448,21 @@ fi
 section "T12: source-level regression guards"
 
 # ipfw warning for FreeBSD 15+
-if grep -q 'getFreeBSDMajorVersion.*>=.*15' "$BUILDDIR/run.cpp"; then
+if grep -q 'getFreeBSDMajorVersion.*>=.*15' $RUN_ALL; then
   pass "run.cpp has ipfw version >= 15 guard"
 else
   fail "run.cpp missing FreeBSD 15+ ipfw guard"
 fi
 
 # Group membership verification
-if grep -q '/usr/bin/id' "$BUILDDIR/run.cpp"; then
+if grep -q '/usr/bin/id' $RUN_ALL; then
   pass "run.cpp verifies group membership with /usr/bin/id"
 else
   fail "run.cpp missing /usr/bin/id group verification"
 fi
 
 # Dual jail code paths
-JAIL_IFDEFS=$(grep -c '#ifdef JAIL_OWN_DESC' "$BUILDDIR/run.cpp" || echo 0)
+JAIL_IFDEFS=$(grep -c '#ifdef JAIL_OWN_DESC' $RUN_ALL 2>/dev/null | awk -F: '{s+=$NF}END{print s+0}')
 if [ "$JAIL_IFDEFS" -ge 2 ]; then
   pass "run.cpp has ${JAIL_IFDEFS} #ifdef JAIL_OWN_DESC guards (create + destroy)"
 else
@@ -463,14 +470,14 @@ else
 fi
 
 # VNET sysctl comment
-if grep -q 'loader tunable' "$BUILDDIR/run.cpp" || grep -q 'CTLFLAG_TUN\|loader.conf' "$BUILDDIR/run.cpp"; then
+if grep -q 'loader tunable' $RUN_ALL || grep -q 'CTLFLAG_TUN\|loader.conf' $RUN_ALL; then
   pass "run.cpp documents VNET sysctl as loader tunable"
 else
   fail "run.cpp missing VNET loader tunable documentation"
 fi
 
 # sys/jail.h C++ safety comment
-if grep -q '238928' "$BUILDDIR/run.cpp"; then
+if grep -q '238928' $RUN_ALL; then
   pass "run.cpp documents sys/jail.h C++ bug #238928"
 else
   fail "run.cpp missing sys/jail.h C++ safety comment"
@@ -494,7 +501,7 @@ else
 fi
 
 # Source-level: run.cpp has ZFS dataset attach/detach (exec-based: "zfs", "jail")
-if grep -qE 'CRATE_PATH_ZFS.*"jail"|"zfs".*"jail"' "$BUILDDIR/run.cpp" && grep -qE 'CRATE_PATH_ZFS.*"unjail"|"zfs".*"unjail"' "$BUILDDIR/run.cpp"; then
+if grep -qE 'CRATE_PATH_ZFS.*"jail"|"zfs".*"jail"' $RUN_ALL && grep -qE 'CRATE_PATH_ZFS.*"unjail"|"zfs".*"unjail"' $RUN_ALL; then
   pass "run.cpp has ZFS dataset attach/detach (exec-based)"
 else
   fail "run.cpp missing ZFS dataset attach/detach"
@@ -583,40 +590,40 @@ fi
 section "T14: security hardening"
 
 # shellQuote on values still passed through shell (Category C: jexec, chroot)
-if grep -q 'shellQuote(spec.runCmdExecutable)' "$BUILDDIR/run.cpp"; then
+if grep -q 'shellQuote(spec.runCmdExecutable)' $RUN_ALL; then
   pass "run.cpp quotes spec.runCmdExecutable in shell commands"
 else
   fail "run.cpp missing shellQuote on spec.runCmdExecutable"
 fi
 
-if grep -q 'shellQuote(argv\[i\])' "$BUILDDIR/run.cpp"; then
+if grep -q 'shellQuote(argv\[i\])' $RUN_ALL; then
   pass "run.cpp quotes argv elements in argsToString"
 else
   fail "run.cpp missing shellQuote on argv in argsToString"
 fi
 
 # user and jailPath now go through exec (no shell) — verify exec-based patterns
-if grep -qE 'execCommandGetStatus.*CRATE_PATH_JEXEC|execCommandGetStatus.*jexec' "$BUILDDIR/run.cpp"; then
+if grep -qE 'execCommandGetStatus.*CRATE_PATH_JEXEC|execCommandGetStatus.*jexec' $RUN_ALL; then
   pass "run.cpp uses execCommandGetStatus for jexec (user/jid via exec, not shell)"
 else
   fail "run.cpp missing execCommandGetStatus for jexec"
 fi
 
-if grep -q 'execInJail' "$BUILDDIR/run.cpp"; then
+if grep -q 'execInJail' $RUN_ALL; then
   pass "run.cpp uses execInJail for in-jail commands (exec-based)"
 else
   fail "run.cpp missing execInJail lambda"
 fi
 
 # Values migrated to exec — must NOT need shellQuote (no shell involved)
-if grep -q 'execPipeline.*runCrateFile\|stdinFile.*runCrateFile\|runCrateFile.*stdinFile' "$BUILDDIR/run.cpp" \
-   || grep -q 'args.runCrateFile' "$BUILDDIR/run.cpp"; then
+if grep -q 'execPipeline.*runCrateFile\|stdinFile.*runCrateFile\|runCrateFile.*stdinFile' $RUN_ALL \
+   || grep -q 'args.runCrateFile' $RUN_ALL; then
   pass "run.cpp passes args.runCrateFile via exec (no shell)"
 else
   fail "run.cpp: args.runCrateFile handling unclear"
 fi
 
-if grep -q 'execInJail.*service' "$BUILDDIR/run.cpp"; then
+if grep -q 'execInJail.*service' $RUN_ALL; then
   pass "run.cpp passes service names via execInJail (no shell)"
 else
   fail "run.cpp: service names not passed via exec"
@@ -629,20 +636,20 @@ else
 fi
 
 # getpwuid instead of getenv("USER")
-if grep -q 'getpwuid' "$BUILDDIR/run.cpp"; then
+if grep -q 'getpwuid' $RUN_ALL; then
   pass "run.cpp uses getpwuid for user identity"
 else
   fail "run.cpp still uses getenv(USER) instead of getpwuid"
 fi
 
-if ! grep -q 'getenv.*USER' "$BUILDDIR/run.cpp"; then
+if ! grep -q 'getenv.*USER' $RUN_ALL; then
   pass "run.cpp does not use getenv(USER)"
 else
   fail "run.cpp still references getenv(USER)"
 fi
 
 # tar traversal protection
-if grep -q '\.\..*directory traversal' "$BUILDDIR/run.cpp"; then
+if grep -q '\.\..*directory traversal' $RUN_ALL; then
   pass "run.cpp validates crate archive for directory traversal"
 else
   fail "run.cpp missing tar directory traversal validation"
@@ -656,14 +663,14 @@ else
 fi
 
 # ip.forwarding save/restore
-if grep -q 'origIpForwarding' "$BUILDDIR/run.cpp"; then
+if grep -q 'origIpForwarding' $RUN_ALL; then
   pass "run.cpp saves/restores ip.forwarding sysctl"
 else
   fail "run.cpp missing ip.forwarding save/restore"
 fi
 
 # X11 socket directory permissions (01777, not 0777)
-if grep -q '01777' "$BUILDDIR/run.cpp"; then
+if grep -q '01777' $RUN_ALL; then
   pass "run.cpp uses sticky bit (01777) for X11 socket dir"
 else
   fail "run.cpp missing sticky bit on X11 socket directory"
@@ -673,13 +680,13 @@ fi
 section "T15: architectural security hardening"
 
 # exec-based execution in source files
-if grep -q 'execCommand' "$BUILDDIR/util.cpp" && grep -q 'execCommand' "$BUILDDIR/run.cpp"; then
+if grep -q 'execCommand' "$BUILDDIR/util.cpp" && grep -q 'execCommand' $RUN_ALL; then
   pass "execCommand() present in util.cpp and run.cpp"
 else
   fail "execCommand() missing from util.cpp or run.cpp"
 fi
 
-if grep -q 'execPipeline' "$BUILDDIR/util.cpp" && grep -q 'execPipeline' "$BUILDDIR/run.cpp"; then
+if grep -q 'execPipeline' "$BUILDDIR/util.cpp" && grep -q 'execPipeline' $RUN_ALL; then
   pass "execPipeline() present in util.cpp and run.cpp"
 else
   fail "execPipeline() missing from util.cpp or run.cpp"
@@ -692,7 +699,7 @@ else
 fi
 
 # Signal handling
-if grep -q 'sigaction' "$BUILDDIR/run.cpp" && grep -q 'g_signalReceived' "$BUILDDIR/run.cpp"; then
+if grep -q 'sigaction' $RUN_ALL && grep -q 'g_signalReceived' $RUN_ALL; then
   pass "run.cpp has SIGINT/SIGTERM signal handling"
 else
   fail "run.cpp missing signal handling (sigaction/g_signalReceived)"
@@ -706,7 +713,7 @@ else
 fi
 
 # Path safety validation
-if grep -q 'safePath' "$BUILDDIR/util.cpp" && grep -q 'safePath' "$BUILDDIR/run.cpp"; then
+if grep -q 'safePath' "$BUILDDIR/util.cpp" && grep -q 'safePath' $RUN_ALL; then
   pass "safePath() present in util.cpp and run.cpp"
 else
   fail "safePath() missing from util.cpp or run.cpp"
@@ -736,14 +743,14 @@ else
 fi
 
 # xzThreadsArg for exec-based pipelines
-if grep -q 'xzThreadsArg' "$BUILDDIR/cmd.cpp" && grep -q 'xzThreadsArg' "$BUILDDIR/run.cpp"; then
+if grep -q 'xzThreadsArg' "$BUILDDIR/cmd.cpp" && grep -q 'xzThreadsArg' $RUN_ALL; then
   pass "xzThreadsArg used for exec-based xz calls"
 else
   fail "xzThreadsArg missing from cmd.cpp or run.cpp"
 fi
 
 # Shell elimination: no system()/popen()/runCommand() in source files
-if ! grep -q 'system(' "$BUILDDIR/run.cpp"; then
+if ! grep -q 'system(' $RUN_ALL; then
   pass "run.cpp has no system() calls (fully exec-based)"
 else
   fail "run.cpp still uses system()"
@@ -755,7 +762,7 @@ else
   fail "util.cpp still uses popen()"
 fi
 
-if ! grep -q 'runCommand(' "$BUILDDIR/run.cpp" && ! grep -q 'runCommand(' "$BUILDDIR/create.cpp"; then
+if ! grep -q 'runCommand(' $RUN_ALL && ! grep -q 'runCommand(' "$BUILDDIR/create.cpp"; then
   pass "runCommand() removed from run.cpp and create.cpp"
 else
   fail "runCommand() still present in run.cpp or create.cpp"
@@ -786,7 +793,7 @@ fi
 section "T16: V4 — unpredictable jail directory names"
 
 # randomHex() in util.cpp and used in run.cpp/create.cpp
-if grep -q 'randomHex' "$BUILDDIR/util.cpp" && grep -q 'randomHex' "$BUILDDIR/run.cpp"; then
+if grep -q 'randomHex' "$BUILDDIR/util.cpp" && grep -q 'randomHex' $RUN_ALL; then
   pass "randomHex() present in util.cpp and used in run.cpp"
 else
   fail "randomHex() missing from util.cpp or run.cpp"
@@ -806,7 +813,7 @@ else
 fi
 
 # jail path construction must NOT use getpid
-if ! grep -q 'jailDirectoryPath.*getpid\|jailPath.*getpid' "$BUILDDIR/run.cpp"; then
+if ! grep -q 'jailDirectoryPath.*getpid\|jailPath.*getpid' $RUN_ALL; then
   pass "run.cpp jail path does not use predictable PID"
 else
   fail "run.cpp jail path still uses getpid()"
@@ -835,7 +842,7 @@ else
   fail "spec.h missing IPC control fields"
 fi
 
-if grep -q '"allow.sysvipc"' "$BUILDDIR/run.cpp"; then
+if grep -q '"allow.sysvipc"' $RUN_ALL; then
   pass "run.cpp passes allow.sysvipc to jail_setv"
 else
   fail "run.cpp missing allow.sysvipc in jail_setv"
@@ -848,7 +855,7 @@ else
   fail "spec.h missing ipcRawSocketsOverride"
 fi
 
-if grep -q 'optRawSockets' "$BUILDDIR/run.cpp"; then
+if grep -q 'optRawSockets' $RUN_ALL; then
   pass "run.cpp uses optRawSockets (overridable via ipc section)"
 else
   fail "run.cpp missing optRawSockets"
@@ -874,7 +881,7 @@ else
   fail "spec.h missing limits field"
 fi
 
-if grep -qE 'CRATE_PATH_RCTL|[Rr]ctl' "$BUILDDIR/run.cpp"; then
+if grep -qE 'CRATE_PATH_RCTL|[Rr]ctl' $RUN_ALL; then
   pass "run.cpp has RCTL support"
 else
   fail "run.cpp missing RCTL support"
@@ -894,7 +901,7 @@ else
 fi
 
 # RCTL cleanup
-if grep -q 'removeRctlRules' "$BUILDDIR/run.cpp"; then
+if grep -q 'removeRctlRules' $RUN_ALL; then
   pass "run.cpp has RCTL cleanup (removeRctlRules)"
 else
   fail "run.cpp missing RCTL cleanup"
@@ -1027,7 +1034,7 @@ else
   fail "spec.cpp missing AES cipher validation"
 fi
 
-if grep -q 'spec.encrypted' "$BUILDDIR/run.cpp"; then
+if grep -q 'spec.encrypted' $RUN_ALL; then
   pass "run.cpp checks spec.encrypted for ZFS encryption enforcement"
 else
   fail "run.cpp missing spec.encrypted check"
@@ -1046,13 +1053,13 @@ else
   fail "spec.cpp missing dns_filter parsing"
 fi
 
-if grep -q 'unbound' "$BUILDDIR/run.cpp"; then
+if grep -q 'unbound' $RUN_ALL; then
   pass "run.cpp has unbound DNS integration"
 else
   fail "run.cpp missing unbound integration"
 fi
 
-if grep -q 'always_nxdomain\|local-zone' "$BUILDDIR/run.cpp"; then
+if grep -q 'always_nxdomain\|local-zone' $RUN_ALL; then
   pass "run.cpp generates unbound blocking rules"
 else
   fail "run.cpp missing unbound blocking rules"
@@ -1083,25 +1090,25 @@ else
   fail "spec.cpp missing security parsing"
 fi
 
-if grep -q '"allow.quotas"' "$BUILDDIR/run.cpp"; then
+if grep -q '"allow.quotas"' $RUN_ALL; then
   pass "run.cpp passes allow.quotas to jail_setv"
 else
   fail "run.cpp missing allow.quotas in jail_setv"
 fi
 
-if grep -q '"allow.set_hostname"' "$BUILDDIR/run.cpp"; then
+if grep -q '"allow.set_hostname"' $RUN_ALL; then
   pass "run.cpp passes allow.set_hostname to jail_setv"
 else
   fail "run.cpp missing allow.set_hostname in jail_setv"
 fi
 
-if grep -q '"allow.chflags"' "$BUILDDIR/run.cpp"; then
+if grep -q '"allow.chflags"' $RUN_ALL; then
   pass "run.cpp passes allow.chflags to jail_setv"
 else
   fail "run.cpp missing allow.chflags in jail_setv"
 fi
 
-if grep -q '"allow.mlock"' "$BUILDDIR/run.cpp"; then
+if grep -q '"allow.mlock"' $RUN_ALL; then
   pass "run.cpp passes allow.mlock to jail_setv"
 else
   fail "run.cpp missing allow.mlock in jail_setv"
@@ -1142,19 +1149,19 @@ else
   fail "spec.cpp missing cow parsing"
 fi
 
-if grep -q 'cowOptions' "$BUILDDIR/run.cpp"; then
+if grep -q 'cowOptions' $RUN_ALL; then
   pass "run.cpp has COW clone logic"
 else
   fail "run.cpp missing COW logic"
 fi
 
-if grep -qE 'CRATE_PATH_ZFS.*snapshot.*snapName|"zfs".*snapshot.*snapName|CRATE_PATH_ZFS.*clone.*cloneName|"zfs".*clone.*cloneName' "$BUILDDIR/run.cpp"; then
+if grep -qE 'CRATE_PATH_ZFS.*snapshot.*snapName|"zfs".*snapshot.*snapName|CRATE_PATH_ZFS.*clone.*cloneName|"zfs".*clone.*cloneName' $RUN_ALL; then
   pass "run.cpp calls zfs snapshot/clone for COW"
 else
   fail "run.cpp missing zfs snapshot/clone call"
 fi
 
-if grep -q 'destroyCowClone' "$BUILDDIR/run.cpp"; then
+if grep -q 'destroyCowClone' $RUN_ALL; then
   pass "run.cpp destroys ephemeral COW clones"
 else
   fail "run.cpp missing COW cleanup"
@@ -1198,13 +1205,13 @@ else
   fail "spec.cpp missing x11 mode parsing"
 fi
 
-if grep -q 'Xephyr' "$BUILDDIR/run.cpp"; then
+if grep -q 'Xephyr' $RUN_ALL; then
   pass "run.cpp has Xephyr nested X11 support"
 else
   fail "run.cpp missing Xephyr support"
 fi
 
-if grep -q 'mode.*none.*no X11\|x11.*none' "$BUILDDIR/run.cpp"; then
+if grep -q 'mode.*none.*no X11\|x11.*none' $RUN_ALL; then
   pass "run.cpp handles x11 mode=none"
 else
   fail "run.cpp missing x11 mode=none handling"
@@ -1236,13 +1243,13 @@ else
   fail "spec.cpp missing dbus parsing"
 fi
 
-if grep -q 'DBUS_SESSION_BUS_ADDRESS' "$BUILDDIR/run.cpp"; then
+if grep -q 'DBUS_SESSION_BUS_ADDRESS' $RUN_ALL; then
   pass "run.cpp sets DBUS_SESSION_BUS_ADDRESS"
 else
   fail "run.cpp missing DBUS_SESSION_BUS_ADDRESS"
 fi
 
-if grep -q 'dbus-1.*session-local.conf\|session-local.conf' "$BUILDDIR/run.cpp"; then
+if grep -q 'dbus-1.*session-local.conf\|session-local.conf' $RUN_ALL; then
   pass "run.cpp generates D-Bus session policy"
 else
   fail "run.cpp missing D-Bus policy generation"
@@ -1261,13 +1268,13 @@ else
   fail "spec.cpp missing services/managed parsing"
 fi
 
-if grep -q 'managedServices' "$BUILDDIR/run.cpp" && grep -q 'rc.conf' "$BUILDDIR/run.cpp"; then
+if grep -q 'managedServices' $RUN_ALL && grep -q 'rc.conf' $RUN_ALL; then
   pass "run.cpp generates rc.conf entries for managed services"
 else
   fail "run.cpp missing managed services rc.conf"
 fi
 
-if grep -q 'managed.*onestart\|start managed service' "$BUILDDIR/run.cpp"; then
+if grep -q 'managed.*onestart\|start managed service' $RUN_ALL; then
   pass "run.cpp starts managed services with onestart"
 else
   fail "run.cpp missing managed service start"
@@ -1286,13 +1293,13 @@ else
   fail "spec.cpp missing socket_proxy parsing"
 fi
 
-if grep -q 'socketProxy' "$BUILDDIR/run.cpp" && grep -q 'nullfs' "$BUILDDIR/run.cpp"; then
+if grep -q 'socketProxy' $RUN_ALL && grep -q 'nullfs' $RUN_ALL; then
   pass "run.cpp shares sockets via nullfs"
 else
   fail "run.cpp missing socket nullfs sharing"
 fi
 
-if grep -q 'socat\|UNIX-LISTEN\|UNIX-CONNECT' "$BUILDDIR/run.cpp"; then
+if grep -q 'socat\|UNIX-LISTEN\|UNIX-CONNECT' $RUN_ALL; then
   pass "run.cpp has socat proxy support"
 else
   fail "run.cpp missing socat proxy"
@@ -1351,19 +1358,19 @@ else
   fail "spec.cpp missing firewall rule parsing"
 fi
 
-if grep -qi 'pfctl' "$BUILDDIR/run.cpp"; then
+if grep -qi 'pfctl' $RUN_ALL; then
   pass "run.cpp has pfctl calls for pf anchor management"
 else
   fail "run.cpp missing pfctl calls"
 fi
 
-if grep -q 'pf.*anchor\|anchorName\|crate/' "$BUILDDIR/run.cpp"; then
+if grep -q 'pf.*anchor\|anchorName\|crate/' $RUN_ALL; then
   pass "run.cpp creates pf anchors per container"
 else
   fail "run.cpp missing pf anchor logic"
 fi
 
-if grep -q 'destroyPfAnchor' "$BUILDDIR/run.cpp"; then
+if grep -q 'destroyPfAnchor' $RUN_ALL; then
   pass "run.cpp cleans up pf anchors on exit"
 else
   fail "run.cpp missing pf anchor cleanup"
@@ -1394,13 +1401,13 @@ else
   fail "spec.cpp missing mac_bsdextended parsing"
 fi
 
-if grep -q 'ugidfw' "$BUILDDIR/run.cpp"; then
+if grep -qi 'ugidfw' $RUN_ALL; then
   pass "run.cpp uses ugidfw for MAC bsdextended rules"
 else
   fail "run.cpp missing ugidfw calls"
 fi
 
-if grep -q 'mac_bsdextended\|removeMacRules' "$BUILDDIR/run.cpp"; then
+if grep -q 'mac_bsdextended\|removeMacRules' $RUN_ALL; then
   pass "run.cpp has MAC rule lifecycle management"
 else
   fail "run.cpp missing MAC rule management"
@@ -1470,19 +1477,19 @@ else
 fi
 
 # §12 Clipboard proxy daemon
-if grep -q 'clipPid\|killClipboardProxy\|clipboard.*proxy' "$BUILDDIR/run.cpp"; then
+if grep -q 'clipPid\|killClipboardProxy\|clipboard.*proxy' $RUN_ALL; then
   pass "run.cpp has clipboard proxy daemon logic"
 else
   fail "run.cpp missing clipboard proxy daemon"
 fi
 
-if grep -q 'xclip' "$BUILDDIR/run.cpp"; then
+if grep -q 'xclip' $RUN_ALL; then
   pass "run.cpp uses xclip for clipboard proxying"
 else
   fail "run.cpp missing xclip usage"
 fi
 
-if grep -q 'killClipboardProxy' "$BUILDDIR/run.cpp"; then
+if grep -q 'killClipboardProxy' $RUN_ALL; then
   pass "run.cpp cleans up clipboard proxy on exit"
 else
   fail "run.cpp missing clipboard proxy cleanup"
@@ -1513,7 +1520,7 @@ else
   fail "spec.cpp missing allow_raw_tty parsing"
 fi
 
-if grep -q 'devfs.*ruleset\|terminalOptions.*devfsRuleset' "$BUILDDIR/run.cpp"; then
+if grep -q 'devfs.*ruleset\|terminalOptions.*devfsRuleset' $RUN_ALL; then
   pass "run.cpp applies terminal devfs ruleset"
 else
   fail "run.cpp missing terminal devfs ruleset"
@@ -1570,49 +1577,49 @@ else
 fi
 
 # Container OS version marker read at run time
-if grep -q 'CRATE.OSVERSION' "$BUILDDIR/run.cpp"; then
+if grep -q 'CRATE.OSVERSION' $RUN_ALL; then
   pass "run.cpp reads +CRATE.OSVERSION for version-mismatch detection"
 else
   fail "run.cpp missing +CRATE.OSVERSION read"
 fi
 
 # Host-vs-container version comparison
-if grep -q 'hostMajor.*containerMajor\|containerMajor.*hostMajor' "$BUILDDIR/run.cpp"; then
+if grep -q 'hostMajor.*containerMajor\|containerMajor.*hostMajor' $RUN_ALL; then
   pass "run.cpp compares host vs container FreeBSD major version"
 else
   fail "run.cpp missing host-vs-container version comparison"
 fi
 
 # ipfw compat commit reference
-if grep -q '4a77657cbc01' "$BUILDDIR/run.cpp"; then
+if grep -q '4a77657cbc01' $RUN_ALL; then
   pass "run.cpp references ipfw compat removal commit (4a77657cbc01)"
 else
   fail "run.cpp missing ipfw compat commit reference"
 fi
 
 # epair checksum offload fix
-if grep -q 'txcsum.*txcsum6\|-txcsum' "$BUILDDIR/run.cpp"; then
+if grep -q 'txcsum.*txcsum6\|-txcsum' $RUN_ALL; then
   pass "run.cpp disables epair checksum offload (-txcsum -txcsum6)"
 else
   fail "run.cpp missing epair checksum offload fix"
 fi
 
 # VNET loader.conf documentation
-if grep -q 'loader.conf' "$BUILDDIR/run.cpp"; then
+if grep -q 'loader.conf' $RUN_ALL; then
   pass "run.cpp documents loader.conf for net.inet.ip.forwarding"
 else
   fail "run.cpp missing loader.conf documentation"
 fi
 
 # Jail descriptor API (JAIL_OWN_DESC)
-if grep -q 'JAIL_OWN_DESC' "$BUILDDIR/run.cpp"; then
+if grep -q 'JAIL_OWN_DESC' $RUN_ALL; then
   pass "run.cpp uses JAIL_OWN_DESC for race-free jail management"
 else
   fail "run.cpp missing JAIL_OWN_DESC"
 fi
 
 # sys/jail.h C++ safety workaround (bug #238928) in run.cpp
-if grep -q 'extern "C"' "$BUILDDIR/run.cpp" && grep -q 'sys/jail.h' "$BUILDDIR/run.cpp"; then
+if grep -q 'extern "C"' $RUN_ALL && grep -q 'sys/jail.h' $RUN_ALL; then
   pass "run.cpp wraps sys/jail.h in extern C for C++ safety (bug #238928)"
 else
   fail "run.cpp missing extern C workaround for sys/jail.h"
@@ -1670,14 +1677,14 @@ else
   fail "FwSlots missing garbage collection"
 fi
 
-if grep -q 'fwRuleRangeInBase\|fwRuleRangeOutBase' "$BUILDDIR/run.cpp"; then
+if grep -q 'fwRuleRangeInBase\|fwRuleRangeOutBase' $RUN_ALL; then
   pass "run.cpp uses dynamic rule range bases"
 else
   fail "run.cpp still uses hardcoded rule bases"
 fi
 
 # Verify old hardcoded values are gone
-if grep -q 'fwRuleBaseIn = 19000\|fwRuleBaseOut = 59000' "$BUILDDIR/run.cpp"; then
+if grep -q 'fwRuleBaseIn = 19000\|fwRuleBaseOut = 59000' $RUN_ALL; then
   fail "run.cpp still has hardcoded 19000/59000 rule bases"
 else
   pass "run.cpp no longer uses hardcoded 19000/59000"
@@ -1686,14 +1693,14 @@ fi
 # ---------------------------------------------------------------------------
 section "T22: IP address space expansion (§19)"
 
-if grep -q '1u << 24\|address space capacity' "$BUILDDIR/run.cpp"; then
+if grep -q '1u << 24\|address space capacity' $RUN_ALL; then
   pass "run.cpp has IP address space overflow detection"
 else
   fail "run.cpp missing IP overflow detection"
 fi
 
 # Verify the XXX comment is resolved
-if grep -q 'XXX use 10.0.0.0' "$BUILDDIR/run.cpp"; then
+if grep -q 'XXX use 10.0.0.0' $RUN_ALL; then
   fail "run.cpp still has XXX comment for IP allocation"
 else
   pass "run.cpp IP allocation XXX comment resolved"
@@ -1776,124 +1783,266 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-section "T27: UX improvements (NO_COLOR, --version, completions)"
+section "T27: export/import commands"
 
-# --- NO_COLOR support ---
+# --- Source structure ---
 
-# main.cpp preserves NO_COLOR through env sanitization
-if grep -q 'NO_COLOR' "$BUILDDIR/main.cpp"; then
-  pass "main.cpp handles NO_COLOR environment variable"
+# export.cpp exists
+if [ -f "$BUILDDIR/export.cpp" ]; then
+  pass "export.cpp exists"
 else
-  fail "main.cpp missing NO_COLOR handling"
+  fail "export.cpp missing"
 fi
 
-# main.cpp uses rang::setControlMode to disable colors
-if grep -q 'rang::setControlMode' "$BUILDDIR/main.cpp"; then
-  pass "main.cpp uses rang::setControlMode for color control"
+# import.cpp exists
+if [ -f "$BUILDDIR/import.cpp" ]; then
+  pass "import.cpp exists"
 else
-  fail "main.cpp missing rang::setControlMode"
+  fail "import.cpp missing"
 fi
 
-# main.cpp checks rang::control::Off
-if grep -q 'rang::control::Off' "$BUILDDIR/main.cpp"; then
-  pass "main.cpp disables colors with rang::control::Off"
+# export.cpp uses CRATE_PATH_JLS for container resolution
+if grep -q 'CRATE_PATH_JLS' "$BUILDDIR/export.cpp"; then
+  pass "export.cpp uses CRATE_PATH_JLS"
 else
-  fail "main.cpp missing rang::control::Off"
+  fail "export.cpp missing CRATE_PATH_JLS"
 fi
 
-# --- --no-color flag ---
-
-# args.h has noColor field
-if grep -q 'noColor' "$BUILDDIR/args.h"; then
-  pass "args.h has noColor field"
+# export.cpp uses exec-based tar+xz pipeline
+if grep -q 'CRATE_PATH_TAR' "$BUILDDIR/export.cpp" && grep -q 'CRATE_PATH_XZ' "$BUILDDIR/export.cpp"; then
+  pass "export.cpp uses exec-based tar+xz pipeline"
 else
-  fail "args.h missing noColor field"
+  fail "export.cpp missing tar/xz pipeline"
 fi
 
-# args.cpp recognizes --no-color
-if grep -q '\-\-no-color' "$BUILDDIR/args.cpp"; then
-  pass "args.cpp recognizes --no-color flag"
+# export.cpp generates SHA256 checksum
+if grep -q 'sha256' "$BUILDDIR/export.cpp"; then
+  pass "export.cpp generates SHA256 checksum"
 else
-  fail "args.cpp missing --no-color recognition"
+  fail "export.cpp missing SHA256 checksum"
 fi
 
-# --- --version flag ---
-
-# args.cpp has --version handling
-if grep -q '\-\-version' "$BUILDDIR/args.cpp"; then
-  pass "args.cpp has --version flag"
+# import.cpp validates directory traversal
+if grep -q '\.\.' "$BUILDDIR/import.cpp"; then
+  pass "import.cpp validates against directory traversal"
 else
-  fail "args.cpp missing --version flag"
+  fail "import.cpp missing directory traversal check"
 fi
 
-# args.cpp has -V short option
-if grep -q "'V'" "$BUILDDIR/args.cpp"; then
-  pass "args.cpp has -V short option for version"
+# import.cpp checks +CRATE.SPEC presence
+if grep -q 'CRATE.SPEC' "$BUILDDIR/import.cpp"; then
+  pass "import.cpp checks +CRATE.SPEC presence"
 else
-  fail "args.cpp missing -V short option"
+  fail "import.cpp missing +CRATE.SPEC check"
 fi
 
-# args.cpp outputs version string with crate
-if grep -q 'crate 0\.' "$BUILDDIR/args.cpp"; then
-  pass "args.cpp outputs crate version string"
+# import.cpp checks OS version compatibility
+if grep -q 'CRATE.OSVERSION' "$BUILDDIR/import.cpp"; then
+  pass "import.cpp checks OS version compatibility"
 else
-  fail "args.cpp missing version string"
+  fail "import.cpp missing OS version check"
 fi
 
-# --- Shell completions ---
-
-# completions file exists
-if [ -f "$BUILDDIR/completions/crate.sh" ]; then
-  pass "completions/crate.sh exists"
+# import.cpp supports --force flag
+if grep -q 'importForce' "$BUILDDIR/import.cpp"; then
+  pass "import.cpp supports --force flag"
 else
-  fail "completions/crate.sh missing"
+  fail "import.cpp missing --force support"
 fi
 
-# completions has bash support
-if grep -q 'BASH_VERSION' "$BUILDDIR/completions/crate.sh"; then
-  pass "completions/crate.sh has bash completion support"
+# import.cpp validates xz archive format
+if grep -q 'isXzArchive' "$BUILDDIR/import.cpp"; then
+  pass "import.cpp validates xz archive format"
 else
-  fail "completions/crate.sh missing bash support"
+  fail "import.cpp missing xz archive validation"
 fi
 
-# completions has zsh support
-if grep -q 'ZSH_VERSION' "$BUILDDIR/completions/crate.sh"; then
-  pass "completions/crate.sh has zsh completion support"
+# --- Args integration ---
+
+# args.h has CmdExport and CmdImport
+if grep -q 'CmdExport' "$BUILDDIR/args.h" && grep -q 'CmdImport' "$BUILDDIR/args.h"; then
+  pass "args.h has CmdExport and CmdImport"
 else
-  fail "completions/crate.sh missing zsh support"
+  fail "args.h missing CmdExport/CmdImport"
 fi
 
-# completions covers all commands
-if grep -q 'create' "$BUILDDIR/completions/crate.sh" && \
-   grep -q 'run' "$BUILDDIR/completions/crate.sh" && \
-   grep -q 'validate' "$BUILDDIR/completions/crate.sh" && \
-   grep -q 'snapshot' "$BUILDDIR/completions/crate.sh"; then
-  pass "completions/crate.sh covers all commands"
+# args.h has export/import fields
+if grep -q 'exportTarget' "$BUILDDIR/args.h" && grep -q 'importFile' "$BUILDDIR/args.h"; then
+  pass "args.h has export/import parameter fields"
 else
-  fail "completions/crate.sh missing some commands"
+  fail "args.h missing export/import fields"
 fi
 
-# completions has --no-color option
-if grep -q 'no-color' "$BUILDDIR/completions/crate.sh"; then
-  pass "completions/crate.sh includes --no-color option"
+# args.cpp has usage functions for export and import
+if grep -q 'usageExport' "$BUILDDIR/args.cpp" && grep -q 'usageImport' "$BUILDDIR/args.cpp"; then
+  pass "args.cpp has export/import usage functions"
 else
-  fail "completions/crate.sh missing --no-color"
+  fail "args.cpp missing export/import usage"
 fi
 
-# --- Makefile install-completions ---
-
-if grep -q 'install-completions' "$BUILDDIR/Makefile"; then
-  pass "Makefile has install-completions target"
+# args.cpp recognizes export/import commands
+if grep -q '"export"' "$BUILDDIR/args.cpp" && grep -q '"import"' "$BUILDDIR/args.cpp"; then
+  pass "args.cpp recognizes export/import commands"
 else
-  fail "Makefile missing install-completions target"
+  fail "args.cpp missing export/import command recognition"
 fi
 
-# --- usage shows --version and --no-color ---
+# --- commands.h integration ---
 
-if grep -q 'version' "$BUILDDIR/args.cpp" && grep -q 'no-color' "$BUILDDIR/args.cpp"; then
-  pass "usage text documents --version and --no-color"
+if grep -q 'exportCrate' "$BUILDDIR/commands.h" && grep -q 'importCrate' "$BUILDDIR/commands.h"; then
+  pass "commands.h declares exportCrate and importCrate"
 else
-  fail "usage text missing --version or --no-color documentation"
+  fail "commands.h missing exportCrate/importCrate declarations"
+fi
+
+# --- main.cpp dispatch ---
+
+if grep -q 'CmdExport' "$BUILDDIR/main.cpp" && grep -q 'CmdImport' "$BUILDDIR/main.cpp"; then
+  pass "main.cpp dispatches CmdExport and CmdImport"
+else
+  fail "main.cpp missing CmdExport/CmdImport dispatch"
+fi
+
+# --- Makefile ---
+
+if grep -q 'export.cpp' "$BUILDDIR/Makefile" && grep -q 'import.cpp' "$BUILDDIR/Makefile"; then
+  pass "Makefile includes export.cpp and import.cpp"
+else
+  fail "Makefile missing export.cpp/import.cpp"
+fi
+
+# --- Security: no shell usage ---
+
+if ! grep -q 'system(' "$BUILDDIR/export.cpp" && ! grep -q 'popen(' "$BUILDDIR/export.cpp"; then
+  pass "export.cpp has no shell-based execution (system/popen)"
+else
+  fail "export.cpp uses system() or popen()"
+fi
+
+if ! grep -q 'system(' "$BUILDDIR/import.cpp" && ! grep -q 'popen(' "$BUILDDIR/import.cpp"; then
+  pass "import.cpp has no shell-based execution (system/popen)"
+else
+  fail "import.cpp uses system() or popen()"
+fi
+
+# --- export uses absolute paths ---
+
+if grep -q 'CRATE_PATH_' "$BUILDDIR/export.cpp"; then
+  pass "export.cpp uses CRATE_PATH_ absolute path macros"
+else
+  fail "export.cpp missing absolute path macros"
+fi
+
+# --- import uses absolute paths ---
+
+if grep -q 'CRATE_PATH_' "$BUILDDIR/import.cpp"; then
+  pass "import.cpp uses CRATE_PATH_ absolute path macros"
+else
+  fail "import.cpp missing absolute path macros"
+fi
+
+# ===========================================================================
+#  Layer 10: Phase 4 — Security Hardening (securelevel, children.max, cpuset)
+# ===========================================================================
+
+section "T29: securelevel, children.max, cpuset"
+
+# securelevel in spec.h
+if grep -q 'securelevel' "$BUILDDIR/spec.h"; then
+  pass "spec.h has securelevel field"
+else
+  fail "spec.h missing securelevel"
+fi
+
+# children.max in spec.h
+if grep -q 'childrenMax' "$BUILDDIR/spec.h"; then
+  pass "spec.h has childrenMax field"
+else
+  fail "spec.h missing childrenMax"
+fi
+
+# cpuset in spec.h
+if grep -q 'cpuset' "$BUILDDIR/spec.h"; then
+  pass "spec.h has cpuset field"
+else
+  fail "spec.h missing cpuset"
+fi
+
+# spec.cpp parses securelevel
+if grep -q '"securelevel"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses security/securelevel"
+else
+  fail "spec.cpp missing securelevel parsing"
+fi
+
+# spec.cpp parses children_max
+if grep -q '"children_max"\|"children-max"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses security/children_max"
+else
+  fail "spec.cpp missing children_max parsing"
+fi
+
+# spec.cpp parses cpuset
+if grep -q '"cpuset"\|"cpu-set"' "$BUILDDIR/spec.cpp"; then
+  pass "spec.cpp parses security/cpuset"
+else
+  fail "spec.cpp missing cpuset parsing"
+fi
+
+# run.cpp applies securelevel to jail
+if grep -q 'securelevel' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp applies securelevel to jail"
+else
+  fail "run.cpp missing securelevel"
+fi
+
+# run.cpp applies children.max to jail
+if grep -q 'children.max' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp applies children.max to jail"
+else
+  fail "run.cpp missing children.max"
+fi
+
+# run.cpp applies cpuset
+if grep -q 'CRATE_PATH_CPUSET\|cpuset' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp applies cpuset restrictions"
+else
+  fail "run.cpp missing cpuset"
+fi
+
+# pathnames.h has CRATE_PATH_CPUSET
+if grep -q 'CRATE_PATH_CPUSET' "$BUILDDIR/pathnames.h"; then
+  pass "pathnames.h defines CRATE_PATH_CPUSET"
+else
+  fail "pathnames.h missing CRATE_PATH_CPUSET"
+fi
+
+# validate.cpp checks securelevel
+if grep -q 'securelevel' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp validates securelevel"
+else
+  fail "validate.cpp missing securelevel validation"
+fi
+
+# validate.cpp checks childrenMax
+if grep -q 'childrenMax\|children_max' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp validates children_max"
+else
+  fail "validate.cpp missing children_max validation"
+fi
+
+# validate.cpp checks cpuset
+if grep -q 'cpuset' "$BUILDDIR/validate.cpp"; then
+  pass "validate.cpp validates cpuset"
+else
+  fail "validate.cpp missing cpuset validation"
+fi
+
+# Uses exec-based CRATE_PATH_JAIL for securelevel/children.max
+if grep -q 'CRATE_PATH_JAIL.*securelevel\|CRATE_PATH_JAIL.*children' "$BUILDDIR/run.cpp"; then
+  pass "run.cpp uses exec-based jail -m for securelevel/children.max"
+else
+  fail "run.cpp missing exec-based jail -m"
 fi
 
 # ===========================================================================

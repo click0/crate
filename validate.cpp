@@ -37,6 +37,17 @@ bool validateCrateSpec(const Args &args) {
       warn("net/outbound includes LAN with tor enabled — traffic may bypass Tor");
   }
 
+  // IPv6 cross-checks
+  if (spec.optionExists("net")) {
+    auto optNet = spec.optionNet();
+    if (optNet && optNet->ipv6) {
+      if (!optNet->allowOutbound())
+        warn("net/ipv6=true but no outbound traffic allowed — IPv6 will have no effect");
+      if (spec.optionExists("tor"))
+        warn("net/ipv6=true with tor — Tor does not support IPv6 outbound by default");
+    }
+  }
+
   if (!spec.limits.empty() && spec.limits.find("maxproc") == spec.limits.end())
     warn("limits section present but maxproc not set — consider setting a process limit");
 
@@ -58,6 +69,22 @@ bool validateCrateSpec(const Args &args) {
 
   if (spec.allowMlock)
     warn("security/allow_mlock=true lets jail processes lock memory — may affect host performance");
+
+  if (spec.securelevel >= 0 && spec.securelevel < 2)
+    warn("security/securelevel=" + std::to_string(spec.securelevel) + " is less restrictive than bastille's default (2)");
+
+  if (spec.childrenMax > 0)
+    warn("security/children_max=" + std::to_string(spec.childrenMax) + " allows nested jails — ensure this is intended");
+
+  if (!spec.cpuset.empty()) {
+    // Basic validation: must contain only digits, commas, and hyphens
+    for (char c : spec.cpuset) {
+      if (!::isdigit(c) && c != ',' && c != '-') {
+        warn("security/cpuset contains invalid character '" + std::string(1, c) + "'");
+        break;
+      }
+    }
+  }
 
   // COW cross-checks (§6)
   if (spec.cowOptions) {
