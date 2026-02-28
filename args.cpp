@@ -25,10 +25,12 @@ static bool strEq(const char *s1, const char *s2) {
 }
 
 static void usage() {
-  std::cout << "usage: crate [-h|--help] COMMAND [...command arguments...]" << std::endl;
+  std::cout << "usage: crate [-h|--help] [--no-color] [--version] COMMAND [...command arguments...]" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Options:" << std::endl;
   std::cout << "  -h, --help                 show this help screen" << std::endl;
+  std::cout << "  -V, --version              show version information" << std::endl;
+  std::cout << "      --no-color             disable colored output (also honors NO_COLOR env)" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Commands:" << std::endl;
   std::cout << "  create                     creates a container (run 'crate create -h' for details)" << std::endl;
@@ -322,7 +324,13 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
   for (a = 1; !stop && a < argc; a++) {
     switch (loc) {
     case LocBeforeCmd:
-      if (auto argShort = isShort(argv[a])) {
+      if (strEq(argv[a], "--no-color")) {
+        args.noColor = true;
+        break;
+      } else if (strEq(argv[a], "--version")) {
+        std::cout << "crate 0.2.1" << std::endl;
+        exit(0);
+      } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
         case 'h':
           usage();
@@ -330,6 +338,9 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         case 'p':
           args.logProgress = true;
           break;
+        case 'V':
+          std::cout << "crate 0.2.1" << std::endl;
+          exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
         }

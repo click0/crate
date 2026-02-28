@@ -26,6 +26,10 @@ install-examples:
 		install examples/$$e $(DESTDIR)$(PREFIX)/share/examples/crate/$$e; \
 	done;
 
+install-completions:
+	@mkdir -p $(DESTDIR)$(PREFIX)/share/crate/completions
+	install -m 644 completions/crate.sh $(DESTDIR)$(PREFIX)/share/crate/completions/crate.sh
+
 crate.x: crate
 	sudo install -s -m 04755 -o 0 -g 0 crate crate.x
 
