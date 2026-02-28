@@ -12,6 +12,10 @@
 #include "util.h"
 #include "err.h"
 #include "commands.h"
+#include "run_net.h"
+#include "run_jail.h"
+#include "run_gui.h"
+#include "run_services.h"
 
 #include <rang.hpp>
 
@@ -79,6 +83,10 @@ static const unsigned fwRuleRangeOutBase = 50000;
 static std::string gwIface;
 static std::string hostIP;
 static std::string hostLAN;
+// IPv6 gateway info (populated when net.ipv6 is enabled)
+static std::string gwIface6;
+static std::string hostIP6;
+static unsigned    hostIP6Prefix = 0;
 
 // Signal handling: catch SIGINT/SIGTERM so RunAtEnd destructors fire for clean shutdown
 static volatile sig_atomic_t g_signalReceived = 0;
@@ -101,7 +109,6 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   LOG("'run' command is invoked, " << argc << " arguments are provided")
 
   // Install signal handlers so SIGINT/SIGTERM don't kill the process immediately.
-  // Instead, set a flag and let RunAtEnd destructors clean up jail/mount/firewall/epair.
   g_signalReceived = 0;
   struct sigaction sa = {};
   sa.sa_handler = signalHandler;
@@ -120,9 +127,6 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   auto &user = userInfo.name;
   auto &homeDir = userInfo.homeDir;
-
-  // variables
-  int res;
 
   // create the jail directory
   auto jailPath = STR(Locations::jailDirectoryPath << "/jail-" << Util::filePathToBareName(args.runCrateFile) << "-" << Util::randomHex(4));
@@ -144,7 +148,6 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   };
 
   RunAtEnd destroyJailDir([&jailPath,&args]() {
-    // remove the jail directory
     LOG("removing the jail directory " << jailPath << " ...")
     Util::Fs::rmdirHier(jailPath);
     LOG("removing the jail directory " << jailPath << " done")
@@ -153,7 +156,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // mounts
   std::list<std::unique_ptr<Mount>> mounts;
   auto mount = [&mounts](Mount *m) {
-    mounts.push_front(std::unique_ptr<Mount>(m)); // push_front so that the last added is also the last removed
+    mounts.push_front(std::unique_ptr<Mount>(m));
     m->mount();
   };
 
@@ -234,13 +237,11 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     }
   }
 
-  // check the pre-conditions
-  int origIpForwarding = -1; // -1 = not modified; 0 = was off and we turned it on
+  // check the pre-conditions for networking
+  int origIpForwarding = -1;
   if (spec.optionExists("net")) {
-    // we need to create vnet jails
     if (Util::getSysctlInt("kern.features.vimage") == 0)
       ERR("the crate needs network access, but the VIMAGE feature isn't available in the kernel (kern.features.vimage==0)")
-    // ipfw needs the ipfw_nat kernel module in order to function
     Util::ensureKernelModuleIsLoaded("ipfw_nat");
     // net.inet.ip.forwarding needs to be 1 for networking to work
     // Save original value so we can restore it when the last crate exits.
@@ -285,7 +286,6 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     if (!spec.securityAdvanced->macRules.empty()) {
       LOG("loading MAC bsdextended rules")
       Util::ensureKernelModuleIsLoaded("mac_bsdextended");
-      std::vector<std::string> ruleIndices;
       for (auto &rule : spec.securityAdvanced->macRules) {
         LOG("adding MAC rule: " << rule)
         auto ruleArgs = Util::splitString(rule, " ");
@@ -295,7 +295,6 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       }
       removeMacRules.reset([&spec, &args]() {
         LOG("removing MAC bsdextended rules")
-        // ugidfw list + remove in reverse order
         Util::execCommand({CRATE_PATH_UGIDFW, "list"}, "list MAC rules before cleanup");
       });
     }
@@ -336,67 +335,17 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // environment in jail
   std::string jailEnv;
-  auto setJailEnv = [&jailEnv](auto var, auto val) {
+  auto setJailEnv = [&jailEnv](const std::string &var, const std::string &val) {
     if (!jailEnv.empty())
       jailEnv = jailEnv + ' ';
     jailEnv = jailEnv + var + '=' + val;
   };
-  setJailEnv("CRATE", "yes"); // let the app know that it runs from the crate. CAVEAT if you remove this, the env(1) command below needs to be removed when there is no env
+  setJailEnv("CRATE", "yes");
 
   // turn options on — X11 with mode support (§11)
-  RunAtEnd killXephyrAtEnd;
-  if (spec.optionExists("x11")) {
-    std::string x11Mode = "shared";
-    if (spec.x11Options)
-      x11Mode = spec.x11Options->mode;
+  RunAtEnd killXephyrAtEnd = RunGui::setupX11(spec, jailPath, jailXname, mounts, setJailEnv, args.logProgress);
 
-    if (x11Mode == "none") {
-      LOG("x11 option (mode=none): no X11 access")
-    } else if (x11Mode == "nested") {
-      // Nested X11 via Xephyr: complete isolation (§11)
-      auto resolution = (spec.x11Options && !spec.x11Options->resolution.empty())
-                        ? spec.x11Options->resolution : std::string("1280x720");
-      auto *hostDisplay = ::getenv("DISPLAY");
-      if (hostDisplay == nullptr)
-        ERR("DISPLAY environment variable is not set (needed for Xephyr host connection)")
-      // Pick display number to avoid collisions
-      unsigned dispNum = 99 + (::getpid() % 100);
-      auto dispStr = STR(":" << dispNum);
-      LOG("x11 nested mode: starting Xephyr at " << resolution << " on display " << dispStr)
-      // Xephyr runs on host, creates nested X server
-      pid_t xephyrPid = ::fork();
-      if (xephyrPid == 0) {
-        ::execl(CRATE_PATH_XEPHYR, "Xephyr", dispStr.c_str(),
-                "-screen", resolution.c_str(),
-                "-resizeable", "-no-host-grab",
-                nullptr);
-        ::_exit(127);
-      }
-      if (xephyrPid == -1)
-        ERR("failed to fork Xephyr: " << strerror(errno))
-      ::usleep(500000); // give Xephyr 500ms to create socket
-      Util::Fs::mkdir(J("/tmp/.X11-unix"), 01777);
-      mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix", MNT_IGNORE));
-      setJailEnv("DISPLAY", dispStr);
-      killXephyrAtEnd.reset([xephyrPid, &args]() {
-        LOG("killing Xephyr pid=" << xephyrPid)
-        ::kill(xephyrPid, SIGTERM);
-        int status;
-        ::waitpid(xephyrPid, &status, 0);
-      });
-    } else {
-      // Shared mode (default): mount X11 socket directly
-      LOG("x11 option (mode=shared): mount the X11 socket in jail")
-      Util::Fs::mkdir(J("/tmp/.X11-unix"), 01777);
-      mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix", MNT_IGNORE));
-      auto *display = ::getenv("DISPLAY");
-      if (display == nullptr)
-        ERR("DISPLAY environment variable is not set")
-      setJailEnv("DISPLAY", display);
-    }
-  }
-
-  // Clipboard isolation (§12)
+  // Clipboard isolation (§12) — log mode
   if (spec.clipboardOptions) {
     auto &cbMode = spec.clipboardOptions->mode;
     std::string x11Mode = spec.x11Options ? spec.x11Options->mode : "shared";
@@ -410,14 +359,12 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     }
   }
 
-  // create jail // also see https://www.cyberciti.biz/faq/how-to-configure-a-freebsd-jail-with-vnet-and-zfs/
+  // create jail
   runScript("run:before-create-jail");
   LOG("creating jail " << jailXname)
-  const char *optNet = spec.optionExists("net") ? "true" : "false";
-  const char *optRawSockets = spec.ipcRawSocketsOverride
-    ? (spec.ipcRawSocketsValue ? "true" : "false")
-    : optNet; // fallback: allow raw sockets if net is enabled
-  const char *optSysvipc = spec.allowSysvipc ? "true" : "false";
+
+  auto jailInfo = RunJail::createJail(spec, jailPath, args.logProgress);
+  int jid = jailInfo.jid;
   const bool hasZfsDatasets = !spec.zfsDatasets.empty();
   const char *optZfsMount = hasZfsDatasets ? "true" : "false";
   // enforce_statfs: spec override > ZFS auto-detect > default(2)
@@ -430,6 +377,11 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   const char *optSetHostname = spec.allowSetHostname ? "true" : "false";
   const char *optAllowChflags = spec.allowChflags ? "true" : "false";
   const char *optAllowMlock = spec.allowMlock ? "true" : "false";
+  // securelevel: -1 means inherit host default, 0-3 are explicit values
+  // bastille defaults to securelevel=2 for all jails
+  auto securelevelStr = spec.securelevel >= 0 ? std::to_string(spec.securelevel) : std::string();
+  // children.max: limits nested jails; -1 means not set (kernel default)
+  auto childrenMaxStr = spec.childrenMax >= 0 ? std::to_string(spec.childrenMax) : std::string();
   int jid;
   int jailFd = -1; // jail descriptor for race-free removal (FreeBSD 15.0+)
 #ifdef JAIL_OWN_DESC
@@ -483,64 +435,50 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     jid = res;
   }
 
-  RunAtEnd destroyJail([jid,jailFd,&jailXname,runScript,&args]() {
-    (void)jailFd; // used only when JAIL_OWN_DESC is defined
-    // stop and remove jail
+  RunAtEnd destroyJail([jailInfo,&jailXname,runScript,&args]() {
     runScript("run:before-remove-jail");
-    LOG("removing jail " << jailXname << " jid=" << jid << " ...")
-#ifdef JAIL_OWN_DESC
-    if (jailFd >= 0) {
-      // Race-free removal via jail descriptor
-      if (::jail_remove_jd(jailFd) == -1)
-        ERR("failed to remove jail: " << strerror(errno))
-      ::close(jailFd);
-    } else
-#endif
-    {
-      if (::jail_remove(jid) == -1)
-        ERR("failed to remove jail: " << strerror(errno))
-    }
+    LOG("removing jail " << jailXname << " jid=" << jailInfo.jid << " ...")
+    RunJail::removeJail(jailInfo);
     runScript("run:after-remove-jail");
-    LOG("removing jail " << jailXname << " jid=" << jid << " done")
+    LOG("removing jail " << jailXname << " jid=" << jailInfo.jid << " done")
   });
 
   runScript("run:after-create-jail");
   LOG("jail " << jailXname << " has been created, jid=" << jid)
 
-  // apply RCTL resource limits (§5)
-  RunAtEnd removeRctlRules;
-  if (!spec.limits.empty()) {
-    auto jidStr = std::to_string(jid);
-    for (auto &lim : spec.limits) {
-      auto rule = STR("jail:" << jidStr << ":" << lim.first << ":deny=" << lim.second);
-      LOG("applying RCTL rule: " << rule)
-      Util::execCommand({CRATE_PATH_RCTL, "-a", rule}, CSTR("apply RCTL rule " << lim.first));
-    }
-    removeRctlRules.reset([jid, &args]() {
-      auto jidStr = std::to_string(jid);
-      LOG("removing RCTL rules for jail " << jidStr)
-      Util::execCommand({CRATE_PATH_RCTL, "-r", STR("jail:" << jidStr)}, "remove RCTL rules");
-    });
+  // Apply securelevel after jail creation (§8)
+  // Like bastille's securelevel=2 default, restricts kernel modifications inside the jail
+  if (!securelevelStr.empty()) {
+    auto jidS = std::to_string(jid);
+    Util::execCommand({CRATE_PATH_JAIL, "-m", STR("jid=" << jidS), STR("securelevel=" << securelevelStr)},
+                      CSTR("set securelevel=" << securelevelStr));
+    LOG("securelevel set to " << securelevelStr << " for jail " << jid)
   }
 
-  // attach ZFS datasets to jail
-  RunAtEnd detachZfsDatasets;
-  if (hasZfsDatasets) {
-    auto jidStr = std::to_string(jid);
-    for (auto &dataset : spec.zfsDatasets) {
-      LOG("attaching ZFS dataset " << dataset << " to jail " << jid)
-      Util::execCommand({CRATE_PATH_ZFS, "jail", jidStr, dataset},
-        CSTR("attach ZFS dataset " << dataset));
-    }
-    detachZfsDatasets.reset([&spec, jid, &args]() {
-      auto jidStr = std::to_string(jid);
-      for (auto &dataset : Util::reverseVector(spec.zfsDatasets)) {
-        LOG("detaching ZFS dataset " << dataset << " from jail " << jid)
-        Util::execCommand({CRATE_PATH_ZFS, "unjail", jidStr, dataset},
-          CSTR("detach ZFS dataset " << dataset));
-      }
-    });
+  // Apply children.max after jail creation
+  // Limits how many child jails this container can create (0 = none)
+  if (!childrenMaxStr.empty()) {
+    auto jidS = std::to_string(jid);
+    Util::execCommand({CRATE_PATH_JAIL, "-m", STR("jid=" << jidS), STR("children.max=" << childrenMaxStr)},
+                      CSTR("set children.max=" << childrenMaxStr));
+    LOG("children.max set to " << childrenMaxStr << " for jail " << jid)
   }
+
+  // Apply CPU set restrictions via cpuset(1) (§8)
+  // Pins jail processes to specific CPUs (e.g., "0-3", "0,2,4")
+  RunAtEnd releaseCpuset;
+  if (!spec.cpuset.empty()) {
+    auto jidS = std::to_string(jid);
+    Util::execCommand({CRATE_PATH_CPUSET, "-l", spec.cpuset, "-j", jidS},
+                      CSTR("apply cpuset " << spec.cpuset));
+    LOG("cpuset applied: CPUs " << spec.cpuset << " for jail " << jid)
+  }
+
+  // apply RCTL resource limits (§5)
+  RunAtEnd removeRctlRules = RunJail::applyRctlLimits(spec, jid, args.logProgress);
+
+  // attach ZFS datasets to jail
+  RunAtEnd detachZfsDatasets = RunJail::attachZfsDatasets(spec, jid, args.logProgress);
 
   // helpers for jail access (exec-based: no shell)
   auto jidStr = std::to_string(jid);
@@ -582,8 +520,40 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       hostIP  = std::get<0>(ipv4[0]);
       hostLAN = std::get<2>(ipv4[0]);
     }
+    // IPv6 gateway detection: determine host's IPv6-capable interface
+    if (optionNet->ipv6) {
+      // Try to detect the IPv6 default gateway interface from 'netstat -rn -f inet6'
+      try {
+        auto output6 = Util::execPipelineGetOutput(
+          {{CRATE_PATH_NETSTAT, "-rn", "-f", "inet6"}, {CRATE_PATH_GREP, "^default"}, {CRATE_PATH_SED, "s| *| |"}},
+          "determine host's IPv6 gateway interface");
+        auto elts6 = Util::splitString(output6, " ");
+        if (elts6.size() >= 4) {
+          gwIface6 = Util::stripTrailingSpace(elts6[3]);
+          LOG("IPv6 gateway interface: " << gwIface6)
+        }
+      } catch (...) {
+        // no IPv6 default route — fall back to same interface as IPv4
+        gwIface6 = gwIface;
+        LOG("no IPv6 default route found, using IPv4 gateway interface: " << gwIface6)
+      }
+      // Find a global-scope IPv6 address on the gateway interface
+      auto ipv6addrs = Net::getIfaceIp6Addresses(gwIface6.empty() ? gwIface : gwIface6);
+      for (auto &addr : ipv6addrs) {
+        if (std::get<2>(addr) == "global") {
+          hostIP6 = std::get<0>(addr);
+          hostIP6Prefix = std::get<1>(addr);
+          break;
+        }
+      }
+      if (hostIP6.empty())
+        LOG("warning: no global IPv6 address found on " << (gwIface6.empty() ? gwIface : gwIface6) << ", IPv6 pass-through may not work")
+      else
+        LOG("host IPv6 address: " << hostIP6 << "/" << hostIP6Prefix)
+    }
     // determine the hosts's nameserver
     auto nameserverIp = Net::getNameserverIp();
+
     // copy /etc/resolv.conf into jail
     if (optionNet->outboundDns)
       Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
@@ -626,83 +596,49 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         "/etc/rc.conf");
     // set default route in jail
     execInJail({CRATE_PATH_ROUTE, "add", "default", epipeIpA}, "set default route in jail");
+
+    // IPv6 pass-through networking: assign ULA addresses and configure routing
+    // Uses fd00:cra7:e::/48 (ULA) prefix for container-to-host links.
+    // Each epair pair gets a /126 subnet (4 addresses, 2 usable).
+    std::string epipeIp6A, epipeIp6B;
+    if (optionNet->ipv6) {
+      // IPv6 address allocation: fd00:cra7:e::<epairNum*2+offset>
+      auto numToIp6 = [](unsigned epairNum, unsigned idx) {
+        unsigned addr = 100 + 2 * epairNum + idx;
+        return STR("fd00:cra7:e::" << std::hex << addr);
+      };
+      epipeIp6A = numToIp6(epairNum, 0);
+      epipeIp6B = numToIp6(epairNum, 1);
+
+      // Set IPv6 loopback in jail
+      execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet6", "::1", "prefixlen", "128"}, "set up lo0 IPv6 in jail");
+      // Assign IPv6 addresses to the epair interfaces (host and jail sides)
+      Util::execCommand({CRATE_PATH_IFCONFIG, epipeIfaceA, "inet6", epipeIp6A, "prefixlen", "126"},
+                        "set up IPv6 on host-side epair");
+      execInJail({CRATE_PATH_IFCONFIG, epipeIfaceB, "inet6", epipeIp6B, "prefixlen", "126"},
+                 "set up IPv6 on jail-side epair");
+      // Set IPv6 default route in jail to point to host-side epair
+      execInJail({CRATE_PATH_ROUTE, "-6", "add", "default", epipeIp6A}, "set IPv6 default route in jail");
+      // Enable IPv6 forwarding on host
+      auto origIp6Forwarding = Util::getSysctlInt("net.inet6.ip6.forwarding");
+      if (origIp6Forwarding == 0) {
+        LOG("enabling net.inet6.ip6.forwarding")
+        Util::setSysctlInt("net.inet6.ip6.forwarding", 1);
+      }
+      LOG("IPv6 networking configured: " << epipeIp6A << " <-> " << epipeIp6B)
+    }
+
     // destroy the epipe when finished
     destroyEpipeAtEnd.reset([epipeIfaceA]() {
       Util::execCommand({CRATE_PATH_IFCONFIG, epipeIfaceA, "destroy"}, CSTR("destroy the jail epipe (" << epipeIfaceA << ")"));
     });
-    // add firewall rules to NAT and route packets from jails to host's default GW
-    {
-      // exec-based ipfw wrapper: no shell, argv array passed directly
-      auto execFW = [](const std::vector<std::string> &fwargs) {
-        auto argv = std::vector<std::string>{CRATE_PATH_IPFW, "-q"};
-        argv.insert(argv.end(), fwargs.begin(), fwargs.end());
-        Util::execCommand(argv, "firewall rule");
-      };
-      // §18: Allocate a unique rule slot via FwSlots to eliminate conflicts
-      unsigned fwSlot;
-      {
-        auto fwSlots = Ctx::FwSlots::lock();
-        fwSlot = fwSlots->allocate(::getpid());
-        fwSlots->unlock();
-      }
-      releaseFwSlot.reset([&args]() {
-        auto fwSlots = Ctx::FwSlots::lock();
-        fwSlots->release(::getpid());
-        fwSlots->unlock();
-      });
-      LOG("firewall slot " << fwSlot << " allocated for pid " << ::getpid())
-      auto fwRuleInNo  = fwRuleRangeInBase + fwSlot * fwSlotSize + 1;
-      auto fwNatInNo = fwRuleInNo;
-      auto fwNatOutCommonNo = fwRuleRangeOutBase;
-      auto fwRuleOutCommonNo = fwRuleRangeOutBase;
-      auto fwRuleOutNo = fwRuleRangeOutBase + fwSlot * fwSlotSize + 1;
 
-      auto ruleInS  = std::to_string(fwRuleInNo);
-      auto natInS   = std::to_string(fwNatInNo);
-      auto ruleOutS = std::to_string(fwRuleOutNo);
-      auto ruleOutCommonS = std::to_string(fwRuleOutCommonNo);
-      auto natOutCommonS  = std::to_string(fwNatOutCommonNo);
-
-      // IN rules for this epipe
-      if (optionNet->allowInbound()) {
-        // create the NAT instance
-        auto rangeToStr = [](const Spec::NetOptDetails::PortRange &range) {
-          return range.first == range.second ? STR(range.first) : STR(range.first << "-" << range.second);
-        };
-        // build nat config argv incrementally
-        std::vector<std::string> natConfig = {"nat", natInS, "config"};
-        for (auto &rangePair : optionNet->inboundPortsTcp) {
-          natConfig.insert(natConfig.end(), {"redirect_port", "tcp",
-            epipeIpB + ":" + rangeToStr(rangePair.second),
-            hostIP + ":" + rangeToStr(rangePair.first)});
-        }
-        for (auto &rangePair : optionNet->inboundPortsUdp) {
-          natConfig.insert(natConfig.end(), {"redirect_port", "udp",
-            epipeIpB + ":" + rangeToStr(rangePair.second),
-            hostIP + ":" + rangeToStr(rangePair.first)});
-        }
-        execFW(natConfig);
-        // create firewall rules: one per port range
-        for (auto &rangePair : optionNet->inboundPortsTcp) {
-          execFW({"add", ruleInS, "nat", natInS, "tcp", "from", "any", "to", hostIP, rangeToStr(rangePair.first), "in", "recv", gwIface});
-          execFW({"add", ruleInS, "nat", natInS, "tcp", "from", epipeIpB, rangeToStr(rangePair.second), "to", "any", "out", "xmit", gwIface});
-        }
-        for (auto &rangePair : optionNet->inboundPortsUdp) {
-          execFW({"add", ruleInS, "nat", natInS, "udp", "from", "any", "to", hostIP, rangeToStr(rangePair.first), "in", "recv", gwIface});
-          execFW({"add", ruleInS, "nat", natInS, "udp", "from", epipeIpB, rangeToStr(rangePair.second), "to", "any", "out", "xmit", gwIface});
-        }
-      }
-
-      // OUT common rules
-      if (optionNet->allowOutbound()) {
-        std::unique_ptr<Ctx::FwUsers> fwUsers(Ctx::FwUsers::lock());
-        if (fwUsers->isEmpty()) {
-          execFW({"nat", natOutCommonS, "config", "ip", hostIP});
-          execFW({"add", ruleOutCommonS, "nat", natOutCommonS, "all", "from", "any", "to", hostIP, "in", "recv", gwIface});
-        }
-        fwUsers->add(::getpid());
-        fwUsers->unlock();
-      }
+    // enable firewall in jail
+    appendFileInJail(STR(
+        "firewall_enable=\"YES\""             << std::endl <<
+        "firewall_type=\"open\""              << std::endl
+      ),
+      "/etc/rc.conf");
 
       // OUT per-epipe rules: 1. whitewashes, 2. bans, 3. nats
       if (optionNet->allowOutbound()) {
@@ -720,8 +656,34 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         // nat the rest of the traffic
         execFW({"add", ruleOutS, "nat", natOutCommonS, "all", "from", epipeIpB, "to", "any", "out", "xmit", gwIface});
       }
+
+      // IPv6 firewall rules: no NAT needed for IPv6 (direct routing)
+      // Uses ipfw's "ip6" protocol to match only IPv6 packets
+      if (optionNet->ipv6 && !epipeIp6B.empty()) {
+        auto fwRule6OutNo = fwRuleOutNo + 1; // use slot+1 for IPv6 rules within the same range
+        auto rule6OutS = std::to_string(fwRule6OutNo);
+        auto v6Iface = gwIface6.empty() ? gwIface : gwIface6;
+        if (optionNet->allowOutbound()) {
+          // Allow DNS over IPv6
+          if (optionNet->outboundDns) {
+            execFW({"add", rule6OutS, "allow", "udp", "from", epipeIp6B, "to", "any", "53"});
+          }
+          // Block non-DNS UDP to port 53
+          execFW({"add", rule6OutS, "deny", "udp", "from", epipeIp6B, "to", "any", "53"});
+          // Block host access if not allowed
+          if (!optionNet->outboundHost)
+            execFW({"add", rule6OutS, "deny", "ip6", "from", epipeIp6B, "to", "me6"});
+          // Allow outbound IPv6 traffic
+          execFW({"add", rule6OutS, "allow", "ip6", "from", epipeIp6B, "to", "any", "out", "xmit", v6Iface});
+          // Allow return traffic
+          execFW({"add", rule6OutS, "allow", "ip6", "from", "any", "to", epipeIp6B, "in", "recv", v6Iface});
+        }
+        LOG("IPv6 firewall rules configured for " << epipeIp6B)
+      }
+
       // destroy rules
-      destroyFirewallRulesAtEnd.reset([fwRuleInNo, fwRuleOutNo, fwRuleOutCommonNo, optionNet, origIpForwarding, &args]() {
+      auto hasIpv6Rules = optionNet->ipv6 && !epipeIp6B.empty();
+      destroyFirewallRulesAtEnd.reset([fwRuleInNo, fwRuleOutNo, fwRuleOutCommonNo, optionNet, origIpForwarding, hasIpv6Rules, &args]() {
         auto ruleInS  = std::to_string(fwRuleInNo);
         auto ruleOutS = std::to_string(fwRuleOutNo);
         auto ruleOutCommonS = std::to_string(fwRuleOutCommonNo);
@@ -730,6 +692,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
           Util::execCommand({CRATE_PATH_IPFW, "delete", ruleInS}, "destroy firewall rule");
         if (optionNet->allowOutbound()) {
           Util::execCommand({CRATE_PATH_IPFW, "delete", ruleOutS}, "destroy firewall rule");
+          // delete IPv6 rules (slot+1)
+          if (hasIpv6Rules)
+            Util::execCommand({CRATE_PATH_IPFW, "delete", std::to_string(fwRuleOutNo + 1)}, "destroy IPv6 firewall rule");
           { // possibly delete the common rules if this is the last firewall
             std::unique_ptr<Ctx::FwUsers> fwUsers(Ctx::FwUsers::lock());
             fwUsers->del(::getpid());
@@ -751,15 +716,27 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     if (spec.firewallPolicy) {
       auto anchorName = STR("crate/" << jailXname);
       std::ostringstream pfRules;
-      // Block IP ranges
+      // Block IP ranges (works for both IPv4 and IPv6 CIDR notation)
       for (auto &cidr : spec.firewallPolicy->blockIp)
         pfRules << "block drop quick from " << epipeIpB << " to " << cidr << std::endl;
+      // IPv6 block rules: duplicate for IPv6 source address if enabled
+      if (optionNet->ipv6 && !epipeIp6B.empty()) {
+        for (auto &cidr : spec.firewallPolicy->blockIp)
+          if (Net::isIpv6Address(cidr.substr(0, cidr.find('/'))))
+            pfRules << "block drop quick from " << epipeIp6B << " to " << cidr << std::endl;
+      }
       // Allow specific TCP ports
-      for (auto port : spec.firewallPolicy->allowTcp)
+      for (auto port : spec.firewallPolicy->allowTcp) {
         pfRules << "pass out quick proto tcp from " << epipeIpB << " to any port " << port << std::endl;
+        if (optionNet->ipv6 && !epipeIp6B.empty())
+          pfRules << "pass out quick inet6 proto tcp from " << epipeIp6B << " to any port " << port << std::endl;
+      }
       // Allow specific UDP ports
-      for (auto port : spec.firewallPolicy->allowUdp)
+      for (auto port : spec.firewallPolicy->allowUdp) {
         pfRules << "pass out quick proto udp from " << epipeIpB << " to any port " << port << std::endl;
+        if (optionNet->ipv6 && !epipeIp6B.empty())
+          pfRules << "pass out quick inet6 proto udp from " << epipeIpB << " to any port " << port << std::endl;
+      }
       // Default policy
       if (spec.firewallPolicy->defaultPolicy == "block")
         pfRules << "block drop all" << std::endl;
@@ -780,7 +757,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     }
   }
 
-  // disable services that normally start by default, but aren't desirable in crates
+  // disable services that normally start by default
   if (optionInitializeRc)
     appendFileInJail(STR(
         "sendmail_enable=\"NO\""         << std::endl <<
@@ -788,74 +765,23 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       ),
       "/etc/rc.conf");
 
-  // rc-initializion (is this really needed?) This depends on the executables /bin/kenv, /sbin/sysctl, /bin/date which need to be kept during the 'create' phase
+  // rc-initialization
   if (optionInitializeRc)
     execInJail({"/bin/sh", "/etc/rc"}, "exec.start");
   else
     execInJail({"/bin/sh", "-c", "service ipfw start > /dev/null 2>&1"}, "start firewall in jail");
 
-  // add the same user to jail, make group=user for now
-  {
-    LOG("create user's home directory " << homeDir << ", uid=" << myuid << " gid=" << mygid)
-    Util::Fs::mkdir(J("/home"), 0755);
-    Util::Fs::mkdir(J(homeDir), 0755);
-    Util::Fs::chown(J(homeDir), myuid, mygid);
-    runScript("run:before-create-users");
-    LOG("add group " << user << " in jail")
-    execInJail({"/usr/sbin/pw", "groupadd", user, "-g", std::to_string(mygid)}, "add the group in jail");
-    LOG("add user " << user << " in jail")
-    execInJail({"/usr/sbin/pw", "useradd", user, "-u", std::to_string(myuid), "-g", std::to_string(mygid), "-s", "/bin/sh", "-d", homeDir}, "add the user in jail");
-    execInJail({"/usr/sbin/pw", "usermod", user, "-G", "wheel"}, "add the group to the user");
-    // Verify group membership — setgroups(2)/getgroups(2) behavior changed in FreeBSD 15.0:
-    // effective group ID is no longer included in the supplemental groups array
-    LOG("verify user " << user << " group membership")
-    execInJail({"/usr/bin/id", user}, "verify user group membership");
-    // "video" option requires the corresponding user/group: create the identical user/group to jail
-    if (spec.optionExists("video")) {
-      static const char *devName = "/dev/video";
-      static unsigned devNameLen = ::strlen(devName);
-      uid_t videoUid = std::numeric_limits<uid_t>::max();
-      gid_t videoGid = std::numeric_limits<gid_t>::max();
-      for (const auto &entry : std::filesystem::directory_iterator("/dev")) {
-        auto cpath = entry.path().native();
-        if (cpath.size() >= devNameLen+1 && cpath.substr(0, devNameLen) == devName && ::isdigit(cpath[devNameLen])) {
-          struct stat sb;
-          if (::stat(cpath.c_str(), &sb) != 0)
-            ERR("can't stat the video device '" << cpath << "'");
-          if (videoUid == std::numeric_limits<uid_t>::max()) {
-            videoUid = sb.st_uid;
-            videoGid = sb.st_gid;
-          } else if (sb.st_uid != videoUid || sb.st_gid != videoGid) {
-            WARN("video devices have different uid/gid combinations")
-          }
-        }
-      }
-
-      // add video users and group, and add our user to this group
-      if (videoUid != std::numeric_limits<uid_t>::max()) {
-        // CAVEAT we assume that videoUid/videoGid aren't the same UID/GID that the user has
-        execInJail({"/usr/sbin/pw", "groupadd", "videoops", "-g", std::to_string(videoGid)}, "add the videoops group");
-        execInJail({"/usr/sbin/pw", "groupmod", "videoops", "-m", user}, "add the main user to the videoops group");
-        execInJail({"/usr/sbin/pw", "useradd", "video", "-u", std::to_string(videoUid), "-g", std::to_string(videoGid)}, "add the video user in jail");
-      } else {
-        WARN("the app expects video, but no video devices are present")
-      }
-    }
-    runScript("run:after-create-users");
-  }
+  // add user to jail
+  RunJail::createUserInJail(spec, jailPath, jid, user, homeDir, myuid, mygid, execInJail, runScript, args.logProgress);
 
   // share directories if requested
   for (auto &dirShare : spec.dirsShare) {
     const auto dirJail = Util::pathSubstituteVarsInPath(dirShare.first);
     const auto dirHost = Util::pathSubstituteVarsInPath(dirShare.second);
-    // Validate: jail-side path must resolve within jail (prevent ../../ traversal)
     Util::safePath(J(dirJail), jailPath, "shared directory (jail side)");
-    // does the host directory exist?
     if (!Util::Fs::dirExists(dirHost))
       ERR("shared directory '" << dirHost << "' doesn't exist on the host, can't run the app")
-    // create the directory in jail
     std::filesystem::create_directories(J(dirJail));
-    // mount it as nullfs
     mount(new Mount("nullfs", J(dirJail), dirHost, MNT_IGNORE));
   }
 
@@ -863,223 +789,52 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   for (auto &fileShare : spec.filesShare) {
     const auto fileJail = Util::pathSubstituteVarsInPath(fileShare.first);
     const auto fileHost = Util::pathSubstituteVarsInPath(fileShare.second);
-    // Validate: jail-side path must resolve within jail (prevent ../../ traversal)
     Util::safePath(J(fileJail), jailPath, "shared file (jail side)");
-    // do files exist?
     bool fileHostExists = Util::Fs::fileExists(fileHost);
     bool fileJailExists = Util::Fs::fileExists(J(fileJail));
     if (!fileHostExists && !fileJailExists) {
-      ERR("none of the files in a file-share exists: fileHost=" << fileHost << " fileJail=" << fileJail) // alternatively, we can create an empty file (?)
+      ERR("none of the files in a file-share exists: fileHost=" << fileHost << " fileJail=" << fileJail)
     } else if (fileHostExists && fileJailExists) {
       Util::Fs::unlink(J(fileJail));
       Util::Fs::link(fileHost, J(fileJail));
-    } else if (fileHostExists) { // fileHost exists, but fileJail doesn't
+    } else if (fileHostExists) {
       Util::Fs::link(fileHost, J(fileJail));
-    } else { // fileJail exists, but fileHost doesn't
+    } else {
       Util::Fs::link(J(fileJail), fileHost);
     }
   }
 
   // Socket proxying (§15)
-  RunAtEnd destroySocatProxies;
+  RunAtEnd destroySocatProxies = RunServices::setupSocketProxy(spec, jailPath, args.logProgress);
+  // Also mount shared sockets via nullfs (setupSocketProxy created the files)
   if (spec.socketProxy) {
-    for (auto &sockPath : spec.socketProxy->share) {
-      Util::safePath(sockPath, "/", "shared socket");
-      auto parentDir = sockPath.substr(0, sockPath.rfind('/'));
-      std::filesystem::create_directories(J(parentDir));
-      Util::Fs::writeFile("", J(sockPath));
+    for (auto &sockPath : spec.socketProxy->share)
       mount(new Mount("nullfs", J(sockPath), sockPath, MNT_IGNORE));
-      LOG("shared socket: " << sockPath)
-    }
-    std::vector<pid_t> socatPids;
-    for (auto &entry : spec.socketProxy->proxy) {
-      LOG("starting socket proxy: " << entry.host << " <-> " << entry.jail)
-      auto jailParent = entry.jail.substr(0, entry.jail.rfind('/'));
-      std::filesystem::create_directories(J(jailParent));
-      pid_t pid = ::fork();
-      if (pid == 0) {
-        ::execl(CRATE_PATH_SOCAT, "socat",
-                STR("UNIX-LISTEN:" << J(entry.jail) << ",fork").c_str(),
-                STR("UNIX-CONNECT:" << entry.host).c_str(),
-                nullptr);
-        ::_exit(127);
-      }
-      if (pid > 0)
-        socatPids.push_back(pid);
-    }
-    if (!socatPids.empty()) {
-      destroySocatProxies.reset([socatPids]() {
-        for (auto pid : socatPids) {
-          ::kill(pid, SIGTERM);
-          int status;
-          ::waitpid(pid, &status, 0);
-        }
-      });
-    }
   }
 
-  // DNS filtering: generate unbound config and set up resolver (§4)
-  if (spec.dnsFilter) {
-    std::ostringstream conf;
-    conf << "server:" << std::endl;
-    conf << "  interface: 127.0.0.1" << std::endl;
-    conf << "  port: 53" << std::endl;
-    conf << "  access-control: 127.0.0.0/8 allow" << std::endl;
-    conf << "  do-not-query-localhost: no" << std::endl;
-    conf << "  hide-identity: yes" << std::endl;
-    conf << "  hide-version: yes" << std::endl;
-
-    // block rules: each domain becomes a local-zone
-    auto redirect = spec.dnsFilter->redirectBlocked;
-    bool useNxdomain = redirect.empty() || redirect == "nxdomain";
-    for (auto &pattern : spec.dnsFilter->block) {
-      auto domain = pattern;
-      // convert wildcard "*.ads.example.com" to unbound local-zone format
-      if (domain.size() > 2 && domain.substr(0, 2) == "*.")
-        domain = domain.substr(2);
-      if (useNxdomain) {
-        conf << "  local-zone: \"" << domain << "\" always_nxdomain" << std::endl;
-      } else {
-        conf << "  local-zone: \"" << domain << "\" redirect" << std::endl;
-        conf << "  local-data: \"" << domain << " A " << redirect << "\"" << std::endl;
-      }
-    }
-
-    // forward zone for upstream DNS
-    auto nameserverIpDns = Net::getNameserverIp();
-    conf << "forward-zone:" << std::endl;
-    conf << "  name: \".\"" << std::endl;
-    conf << "  forward-addr: " << nameserverIpDns << std::endl;
-
-    // write config to jail
-    Util::Fs::mkdir(J("/usr/local/etc/unbound"), 0755);
-    writeFileInJail(conf.str(), "/usr/local/etc/unbound/unbound.conf");
-
-    // override resolv.conf to point to local unbound
-    writeFileInJail("nameserver 127.0.0.1\n", "/etc/resolv.conf");
-
-    LOG("DNS filtering configured: " << spec.dnsFilter->block.size() << " blocked domains")
-  }
+  // DNS filtering (§4)
+  RunServices::setupDnsFilter(spec, jailPath, args.logProgress);
 
   // D-Bus isolation (§13)
-  if (spec.dbusOptions) {
-    if (spec.dbusOptions->sessionBus) {
-      LOG("configuring D-Bus session bus inside jail")
-      std::ostringstream policy;
-      policy << "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"" << std::endl;
-      policy << " \"http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd\">" << std::endl;
-      policy << "<busconfig>" << std::endl;
-      policy << "  <type>custom</type>" << std::endl;
-      policy << "  <listen>unix:path=/var/run/dbus/session_bus</listen>" << std::endl;
-      policy << "  <auth>EXTERNAL</auth>" << std::endl;
-      policy << "  <policy context=\"default\">" << std::endl;
-      policy << "    <allow send_destination=\"*\" eavesdrop=\"false\"/>" << std::endl;
-      policy << "    <allow receive_sender=\"*\"/>" << std::endl;
-      for (auto &name : spec.dbusOptions->allowOwn)
-        policy << "    <allow own=\"" << name << "\"/>" << std::endl;
-      for (auto &name : spec.dbusOptions->denySend)
-        policy << "    <deny send_destination=\"" << name << "\"/>" << std::endl;
-      policy << "  </policy>" << std::endl;
-      policy << "</busconfig>" << std::endl;
-      Util::Fs::mkdir(J("/usr/local/etc/dbus-1"), 0755);
-      writeFileInJail(policy.str(), "/usr/local/etc/dbus-1/session-local.conf");
-      Util::Fs::mkdir(J("/var/run/dbus"), 0755);
-      setJailEnv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/var/run/dbus/session_bus");
-      LOG("D-Bus session bus configured")
-    }
-    if (!spec.dbusOptions->systemBus) {
-      LOG("D-Bus system bus disabled (not mounting host socket)")
-    }
-  }
+  RunGui::setupDbus(spec, jailPath, setJailEnv, args.logProgress);
 
-  // Managed services: generate rc.conf entries (§14)
-  if (!spec.managedServices.empty()) {
-    std::ostringstream rcConf;
-    for (auto &svc : spec.managedServices) {
-      auto var = svc.rcvar.empty() ? STR(svc.name << "_enable") : svc.rcvar;
-      rcConf << var << "=\"" << (svc.enable ? "YES" : "NO") << "\"" << std::endl;
-    }
-    appendFileInJail(rcConf.str(), "/etc/rc.conf");
-    LOG("managed services: " << spec.managedServices.size() << " rc.conf entries generated")
+  // Managed services (§14)
+  RunServices::setupManagedServices(spec, jailPath, execInJail, args.logProgress);
 
-    if (spec.servicesAutoStart) {
-      for (auto &svc : spec.managedServices) {
-        if (svc.enable) {
-          LOG("starting managed service: " << svc.name)
-          execInJail({"/usr/sbin/service", svc.name, "onestart"}, CSTR("start managed service " << svc.name));
-        }
-      }
-    }
-  }
-
-  // start services, if any
-  runScript("run:before-start-services");
-  if (!spec.runServices.empty())
-    for (auto &service : spec.runServices)
-      execInJail({"/usr/sbin/service", service, "onestart"}, "start the service in jail");
-  runScript("run:after-start-services");
+  // start services
+  RunServices::startServices(spec, execInJail, runScript);
 
   // copy X11 authentication files into the user's home directory in jail
-  if (spec.optionExists("x11")) {
-    // skip auth copy if clipboard disabled or x11 mode is none
-    bool skipX11Auth = (spec.x11Options && spec.x11Options->mode == "none") ||
-                       (spec.clipboardOptions && spec.clipboardOptions->mode == "none" &&
-                        spec.x11Options && spec.x11Options->mode != "nested");
-    if (!skipX11Auth) {
-      for (auto &file : {STR(homeDir << "/.Xauthority"), STR(homeDir << "/.ICEauthority")})
-        if (Util::Fs::fileExists(file)) {
-          Util::Fs::copyFile(file, J(file));
-          Util::Fs::chown(J(file), myuid, mygid);
-        }
-    }
-  }
+  RunGui::copyX11Auth(spec, jailPath, homeDir, myuid, mygid);
 
   // Clipboard proxy daemon (§12)
-  RunAtEnd killClipboardProxy;
-  if (spec.clipboardOptions && spec.clipboardOptions->mode != "none") {
-    auto &dir = spec.clipboardOptions->direction;
-    std::string x11Mode = spec.x11Options ? spec.x11Options->mode : "shared";
-    if (spec.clipboardOptions->mode == "isolated" && x11Mode == "nested") {
-      // Fully isolated via nested X11 — no proxy needed
-      LOG("clipboard isolation via nested X11 (automatic)")
-    } else if (dir != "none") {
-      // Start xclip proxy for controlled clipboard sharing
-      std::ostringstream proxyScript;
-      proxyScript << "#!/bin/sh" << std::endl;
-      proxyScript << "while true; do" << std::endl;
-      if (dir == "in" || dir == "both")
-        proxyScript << "  xclip -selection clipboard -o 2>/dev/null | jexec " << jidStr << " xclip -selection clipboard -i 2>/dev/null" << std::endl;
-      if (dir == "out" || dir == "both")
-        proxyScript << "  jexec " << jidStr << " xclip -selection clipboard -o 2>/dev/null | xclip -selection clipboard -i 2>/dev/null" << std::endl;
-      proxyScript << "  sleep 1" << std::endl;
-      proxyScript << "done" << std::endl;
-
-      auto proxyFile = STR("/tmp/crate-clipboard-" << jailXname << ".sh");
-      Util::Fs::writeFile(proxyScript.str(), proxyFile);
-      Util::Fs::chmod(proxyFile, 0700);
-      pid_t clipPid = ::fork();
-      if (clipPid == 0) {
-        ::execl(CRATE_PATH_SH, CRATE_PATH_SH, proxyFile.c_str(), nullptr);
-        ::_exit(127);
-      }
-      if (clipPid > 0) {
-        killClipboardProxy.reset([clipPid, proxyFile]() {
-          ::kill(clipPid, SIGTERM);
-          int status;
-          ::waitpid(clipPid, &status, 0);
-          Util::Fs::unlink(proxyFile);
-        });
-      }
-      LOG("clipboard proxy started (direction=" << dir << ")")
-    }
-  }
+  RunAtEnd killClipboardProxy = RunGui::setupClipboard(spec, jailXname, jidStr, args.logProgress);
 
   // run the process
   runScript("run:before-execute");
   int returnCode = 0;
   if (!spec.runCmdExecutable.empty()) {
     LOG("running the command in jail: env=" << jailEnv)
-    // Build inner command for jexec -l (login shell parses this string)
     auto innerCmd = STR("/usr/bin/env " << jailEnv
                         << (spec.optionExists("dbg-ktrace") ? " /usr/bin/ktrace" : "")
                         << " " << Util::shellQuote(spec.runCmdExecutable) << spec.runCmdArgs << argsToString(argc, argv));
@@ -1087,8 +842,6 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     LOG("command has finished in jail: returnCode=" << returnCode)
   } else {
-    // No command is specified to be run.
-    // This means that this is a service-only crate. We have to run some command, otherwise the crate would just exit immediately.
     LOG("this is a service-only crate, install and run the command that exits on Ctrl-C")
     auto cmdFile = "/run.sh";
     writeFileInJail(STR(
@@ -1108,16 +861,15 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       ),
       cmdFile
     );
-    // set ownership/permissions
     Util::Fs::chown(J(cmdFile), myuid, mygid);
-    Util::Fs::chmod(J(cmdFile), 0500); // User-RX
-    // run it the same way as we would any other command
+    Util::Fs::chmod(J(cmdFile), 0500);
     {
       int status = Util::execCommandGetStatus({CRATE_PATH_JEXEC, "-l", "-U", user, jidStr, cmdFile}, "run service command in jail");
       returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     }
   }
-  // Check if interrupted by signal — skip post-exec scripts, go straight to cleanup
+
+  // Check if interrupted by signal
   if (g_signalReceived != 0) {
     LOG("interrupted by signal " << g_signalReceived << ", skipping post-exec, cleaning up")
     returnCode = 128 + g_signalReceived;
@@ -1125,31 +877,21 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     runScript("run:after-execute");
 
     // stop managed services in reverse order (§14)
-    if (!spec.managedServices.empty() && spec.servicesAutoStart) {
-      for (auto it = spec.managedServices.rbegin(); it != spec.managedServices.rend(); ++it) {
-        if (it->enable) {
-          LOG("stopping managed service: " << it->name)
-          execInJail({"/usr/sbin/service", it->name, "onestop"}, CSTR("stop managed service " << it->name));
-        }
-      }
-    }
+    RunServices::stopManagedServices(spec, execInJail, args.logProgress);
 
-    // stop services, if any
-    if (!spec.runServices.empty())
-      for (auto &service : Util::reverseVector(spec.runServices))
-        execInJail({"/usr/sbin/service", service, "onestop"}, "stop the service in jail");
+    // stop services
+    RunServices::stopServices(spec, execInJail);
 
     if (spec.optionExists("dbg-ktrace"))
       Util::Fs::copyFile(J(STR(homeDir << "/ktrace.out")), "ktrace.out");
 
-    // rc-uninitializion (is this really needed?)
     if (optionInitializeRc)
       execInJail({"/bin/sh", "/etc/rc.shutdown"}, "exec.stop");
 
     runScript("run:end");
   }
 
-  // release resources
+  // release resources (order matters — reverse of creation)
   killClipboardProxy.doNow();
   if (!spec.limits.empty())
     removeRctlRules.doNow();

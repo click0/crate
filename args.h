@@ -33,14 +33,19 @@ public:
   std::string snapshotName;     // snapshot name (for create/restore/delete)
   std::string snapshotName2;    // second snapshot name (for diff)
 
-  // export parameters
-  std::string exportTarget;     // container name or JID to export
-  std::string exportOutput;     // output .crate file path (optional)
+  // list parameters
+  bool listJson = false;        // -j: output as JSON
 
-  // import parameters
-  std::string importFile;       // .crate or archive file to import
-  std::string importOutput;     // output .crate file path (optional)
-  bool        importForce = false; // --force: skip checksum/spec validation
+  // info parameters
+  std::string infoTarget;       // jail name or JID
+
+  // clean parameters
+  bool cleanDryRun = false;     // -n/--dry-run: show what would be cleaned
+
+  // console parameters
+  std::string consoleTarget;    // jail name or JID
+  std::string consoleUser;      // -u/--user: user to login as
+  std::string consoleCmd;       // optional command to run
 
   void validate();
 };

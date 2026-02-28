@@ -72,6 +72,9 @@
 #ifndef CRATE_PATH_ID
 #define CRATE_PATH_ID         "/usr/bin/id"
 #endif
+#ifndef CRATE_PATH_CPUSET
+#define CRATE_PATH_CPUSET     "/usr/bin/cpuset"
+#endif
 
 // --- FreeBSD base system: /usr/sbin ---
 
