@@ -1,0 +1,52 @@
+##
+## container for qBittorrent through the I2P anonymous network (via i2pd)
+## I2PD runs as a local service providing SOCKS proxy on port 4447.
+## qBittorrent is configured to route all traffic through this proxy.
+##
+
+---
+
+base:
+    keep:
+        - /bin/mkdir
+        - /usr/sbin/chown
+
+pkg:
+    install:
+        - qbittorrent
+        - i2pd
+
+run:
+    service: i2pd
+    command: /usr/local/bin/qbittorrent
+
+dirs:
+    share:  # share the ~/Downloads folder where torrents are downloaded
+        -
+            - $HOME/Downloads
+            - $HOME/Downloads
+
+options:
+    net:
+        outbound: wan
+    x11:
+
+scripts:
+    run:before-start-services:
+        - "mkdir -p /var/db/i2pd /var/log/i2pd /var/run/i2pd"
+        - "echo i2pd_enable=\"YES\" >> /etc/rc.conf"
+        ## Uncomment to limit i2pd bandwidth (L=32K O=256K P=2048K X=unlimited):
+        #- "sed -i '' 's/^# *bandwidth *=.*/bandwidth = O/' /usr/local/etc/i2pd/i2pd.conf"
+        - "chown -R i2pd:i2pd /var/db/i2pd /var/log/i2pd /var/run/i2pd"
+    run:before-execute:
+        - "mkdir -p $HOME/.config/qBittorrent"
+        - "echo [LegalNotice] >> $HOME/.config/qBittorrent/qBittorrent.conf"
+        - "echo Accepted=true >> $HOME/.config/qBittorrent/qBittorrent.conf"
+        - "echo [Preferences] >> $HOME/.config/qBittorrent/qBittorrent.conf"
+        - "echo 'Connection\\ProxyType=2' >> $HOME/.config/qBittorrent/qBittorrent.conf"
+        - "echo 'Connection\\Proxy\\IP=127.0.0.1' >> $HOME/.config/qBittorrent/qBittorrent.conf"
+        - "echo 'Connection\\Proxy\\Port=4447' >> $HOME/.config/qBittorrent/qBittorrent.conf"
+        - "echo 'Connection\\Proxy\\Authentication=false' >> $HOME/.config/qBittorrent/qBittorrent.conf"
+        - "echo 'Connection\\ProxyForce=true' >> $HOME/.config/qBittorrent/qBittorrent.conf"
+        - "echo 'Connection\\ProxyPeerConnections=true' >> $HOME/.config/qBittorrent/qBittorrent.conf"
+        - "chown -R $USER $HOME/.config"
