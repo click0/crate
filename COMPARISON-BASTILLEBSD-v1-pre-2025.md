@@ -6,7 +6,7 @@
 |---|---|---|
 | **Purpose** | FreeBSD containerizer — packages applications and services into isolated self-contained "crates" | System for automating deployment and management of containerized applications on FreeBSD |
 | **Language** | C++17 (~3,066 lines) | Shell scripts (POSIX sh) |
-| **License** | ISC | BSD |
+| **License** | BSD 3-Clause | BSD |
 | **Status** | Alpha (since June 2019) | Stable (v1.3.x, active development since 2018) |
 | **Philosophy** | Minimalist disposable application containers; focus on desktop applications and GUI | Full-featured jail manager for servers and infrastructure; DevOps-oriented |
 | **Dependencies** | yaml-cpp, libjail, librang | Only the FreeBSD base system (sh, jail, zfs, pkg) |
