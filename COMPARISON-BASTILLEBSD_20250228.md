@@ -1,6 +1,6 @@
 # Crate vs BastilleBSD — Detailed Comparison
 
-> Updated version (March 2026). Previous versions: [20250228](COMPARISON-BASTILLEBSD_20250228.md), [v1-pre-2025](COMPARISON-BASTILLEBSD-v1-pre-2025.md).
+> Updated version (2025). Previous version: [COMPARISON-BASTILLEBSD-v1-pre-2025.md](COMPARISON-BASTILLEBSD-v1-pre-2025.md).
 
 ## General Overview
 
@@ -30,7 +30,7 @@ spec.yml → [crate create] → myapp.crate (XZ archive)
               RAII cleanup (jail, mount, firewall, epair, ZFS)
 ```
 - **Ephemeral model**: jail is created at launch and destroyed after completion
-- 10 commands: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`
+- 4 commands: `create`, `run`, `validate`, `snapshot`
 - Aggressive optimization: ELF dependency analysis via ldd, removal of unnecessary files
 - Container is a self-contained XZ archive (`.crate`)
 - RAII patterns (RunAtEnd) guarantee cleanup even on errors and signals
@@ -43,7 +43,7 @@ bastille start/stop/restart myjail → lifecycle management
 bastille template myjail user/template → configuration automation
 ```
 - **Persistent model**: jails are long-lived, managed as services
-- 39 subcommands for full lifecycle management
+- ~40 subcommands for full lifecycle management
 - Jails are stored on disk (ZFS or UFS)
 - Support for thin and thick jails
 
@@ -51,7 +51,7 @@ bastille template myjail user/template → configuration automation
 
 ## CLI Commands
 
-### Crate (10 commands)
+### Crate (4 commands)
 | Command | Description |
 |---|---|
 | `crate create -s spec.yml -o app.crate` | Create a container from a specification |
@@ -60,26 +60,20 @@ bastille template myjail user/template → configuration automation
 | `crate run -f app.crate [-- args]` | Run a container |
 | `crate validate -s spec.yml` | Validate a specification |
 | `crate snapshot create\|list\|restore\|delete\|diff` | Manage ZFS snapshots |
-| `crate list [--json]` | List running containers (table or JSON) |
-| `crate info TARGET` | Information about a running container |
-| `crate console TARGET [--user USER]` | Interactive shell in a container |
-| `crate clean` | Clean up temporary files and jails |
-| `crate export TARGET [-o FILE]` | Export a running container to .crate (with SHA256) |
-| `crate import FILE [-o FILE] [--force]` | Import .crate with validation (SHA256, traversal, OS version) |
 
-### BastilleBSD (39 subcommands)
+### BastilleBSD (~40 subcommands)
 | Command | Description |
 |---|---|
-| `bastille bootstrap` | Download a FreeBSD/HardenedBSD/MidnightBSD/Linux release or template |
+| `bastille bootstrap` | Download a FreeBSD/Linux release or template |
 | `bastille create` | Create a jail (thin/thick/clone/empty/linux) |
 | `bastille start/stop/restart` | Startup management |
 | `bastille destroy` | Delete a jail or release |
 | `bastille console` | Enter a jail (interactive session) |
 | `bastille cmd` | Execute a command inside a jail |
-| `bastille clone` | Clone a jail (including live via ZFS, `-l`) |
+| `bastille clone` | Clone a jail |
 | `bastille rename` | Rename a jail |
-| `bastille migrate` | Migrate a jail to a remote server (live for ZFS, `-l`) |
-| `bastille export/import` | Export/import jails (7 formats: txz/tgz/tzst/raw/gz/xz/zst; compatible with iocage, ezjail) |
+| `bastille migrate` | Migrate a jail to a remote server (live for ZFS) |
+| `bastille export/import` | Export/import jails (compatible with iocage, ezjail) |
 | `bastille template` | Apply a template (Bastillefile) to a jail |
 | `bastille pkg` | Package management (pkg/apt for Linux) |
 | `bastille service` | Service management |
@@ -93,16 +87,16 @@ bastille template myjail user/template → configuration automation
 | `bastille tags` | Labels for jails (tags as TARGET) |
 | `bastille zfs` | ZFS management (snapshot/rollback/jail/unjail/df) |
 | `bastille top/htop` | Process monitoring |
-| `bastille monitor` | Service watchdog with auto-restart (cron-based, since v1.0) |
+| `bastille monitor` | Service watchdog with auto-restart (since v1.0) |
 | `bastille cp/jcp/rcp` | File copying (host↔jail, jail↔jail) |
 | `bastille convert` | Conversion thin↔thick |
 | `bastille etcupdate` | Update /etc |
 | `bastille verify` | Verify a release |
-| `bastille setup` | Host auto-configuration (loopback, bridge, vnet, netgraph, firewall, storage, linux) |
+| `bastille setup` | Auto-configuration (loopback, bridge, vnet, netgraph, firewall, storage) |
 | `bastille edit` | Edit jail configuration |
 | `bastille sysrc` | Safely edit rc files |
 
-**Conclusion**: BastilleBSD provides a significantly broader set of commands (39) for managing the full jail lifecycle. Crate has 10 commands covering build, run, validation, snapshot management, listing, inspection, interactive console, export/import, and cleanup.
+**Conclusion**: BastilleBSD provides a significantly broader set of commands for managing the full jail lifecycle. Crate focuses on 4 key operations: build, run, validate, and snapshot management.
 
 ---
 
@@ -112,10 +106,9 @@ bastille template myjail user/template → configuration automation
 |---|---|---|
 | Thin (shared base) | No — each .crate is fully self-contained | **Yes** (default) — shared base system via nullfs |
 | Thick (independent) | Effectively yes — each .crate contains a full copy | **Yes** (`-T` flag) |
-| Clone | **Yes** (ZFS COW clone at runtime) | **Yes** (`-C` flag, ZFS clone; `-l` for live clone) |
+| Clone | **Yes** (ZFS COW clone at runtime) | **Yes** (`-C` flag, ZFS clone) |
 | Empty | No | **Yes** (`-E` flag) — for custom builds |
 | Linux jails | No | **Yes** (`-L`, Ubuntu Noble/Focal/Bionic, Debian; without VNET) |
-| Multi-OS | FreeBSD only | **Yes** (FreeBSD, HardenedBSD, MidnightBSD, Linux) |
 
 ---
 
@@ -125,7 +118,7 @@ bastille template myjail user/template → configuration automation
 |---|---|---|
 | **Native ZFS integration** | **Yes** | **Yes** (`zfs` subcommand) |
 | **ZFS snapshots** | **Yes** (`crate snapshot create/list/restore/delete/diff`) | **Yes** |
-| **ZFS clone (COW)** | **Yes** (automatic with `cow/backend: zfs`) | **Yes** (for thin jails; live clone via `-l`) |
+| **ZFS clone (COW)** | **Yes** (automatic with `cow/backend: zfs`) | **Yes** (for thin jails) |
 | **ZFS encryption** | **Yes** (`encrypted: true` in spec, verified at runtime) | No (encryption at pool level) |
 | **ZFS datasets in jail** | **Yes** (`zfs-datasets:` in YAML, `allow.mount.zfs`) | **Yes** (`bastille zfs jail`, v1.0+) |
 | **ZFS send/recv** | No | **Yes** (live export without stopping jail, migrate) |
@@ -134,12 +127,11 @@ bastille template myjail user/template → configuration automation
 | **Shared dirs** | Yes (nullfs in YAML) | Yes (`bastille mount`) |
 | **Shared files** | Yes (hardlink + fallback mount) | Via mount |
 | **Container format** | `.crate` (XZ archive) | Directory on the filesystem |
-| **Export formats** | `.crate` (XZ) | 7 formats: `.txz`, `.tgz`, `.tzst`, `.raw`, `.gz`, `.xz`, `.zst` |
 | **Size optimization** | **Yes** (ELF analysis, stripping unnecessary files) | No (full system) |
 | **ZFS options on creation** | No | Yes (`-Z "compression=lz4,atime=off"`, v0.14+) |
 | **pkgbase (FreeBSD 16+)** | **Yes** (`--use-pkgbase` flag) | **Yes** (`bootstrap --pkgbase`) |
 
-**Conclusion**: Crate has full-featured ZFS integration, including snapshots, COW clones, encryption, and dataset attachment to jails. BastilleBSD leads in ZFS send/recv for migration and export format variety (7 formats).
+**Conclusion**: Crate now has full-featured ZFS integration, including snapshots, COW clones, encryption, and dataset attachment to jails. BastilleBSD still leads in ZFS send/recv for migration.
 
 ---
 
@@ -151,21 +143,20 @@ bastille template myjail user/template → configuration automation
 | **Physical interface** | No | Yes (`-V` — auto-create bridge + epair) |
 | **Bridge** | No | Yes (`-B` — connect to existing bridge) |
 | **Passthrough** | No | Yes (`-P` — direct interface passthrough, v1.1+) |
-| **Netgraph** | No | Yes (`bastille setup netgraph`, alternative VNET backend to if_bridge, v1.0+) |
+| **Netgraph** | No | Yes (`bastille setup netgraph`, alternative to if_bridge, v1.0+) |
 | **NAT** | Yes (ipfw NAT, automatic rules) | Via pf loopback NAT (`bastille rdr`) |
 | **Port forwarding** | Yes (inbound-tcp/udp in YAML) | Yes (`bastille rdr`, +IPv6 in v1.4) |
-| **IP addressing** | Automatic (10.0.0.0/8, up to ~8M containers) | Manual or DHCP (SYNCDHCP/SLAAC for VNET) |
+| **IP addressing** | Automatic (10.0.0.0/8, up to ~8M containers) | Manual or DHCP (SYNCDHCP for VNET) |
 | **DNS** | **Optional forwarding + DNS filtering** | Via `bastille edit resolv.conf` |
 | **Outbound control** | **Yes** (wan/lan/host/dns granularity) | Via firewall rules (pf/ipfw) |
 | **VLAN** | No | Yes (`--vlan ID`, v0.14+) |
 | **Static MAC** | No | Yes (`-M` flag) |
-| **IPv6** | **Yes** (epair IPv6 fd00:crate::/64, ipfw ip6, pf inet6, routing) | **Yes** (dual-stack `-D`, SLAAC, IPv6 rdr in v1.4) |
-| **Dynamic epair** | **Yes** (`ifconfig epair create`, auto-numbered) | **Yes** (`e0a_jailname`/`e0b_jailname`, v1.0+) |
-| **DHCP/SYNCDHCP** | No | **Yes** (for VNET jails, including SYNCDHCP) |
+| **IPv6** | No | **Yes** (dual-stack `-D`, SLAAC, IPv6 rdr in v1.4) |
+| **Dynamic epair** | No (static) | Yes (`e0a_jailname`/`e0b_jailname`, v1.0+) |
 | **Multiple interfaces** | No | Yes (`bastille network add/remove`, v0.14+) |
 | **Checksum offload workaround** | **Yes** (FreeBSD 15.0 epair bug) | No data |
 
-**Conclusion**: Crate provides convenient automatic network management with full IPv6 support (epair IPv6, ipfw ip6, pf inet6), granular outbound traffic control, and DNS filtering. BastilleBSD offers significantly more networking modes (5 types + netgraph), DHCP, VLAN, static MAC, and enterprise-level configurations.
+**Conclusion**: Crate provides convenient automatic network management with granular outbound traffic control and DNS filtering. BastilleBSD offers significantly more networking modes (5 types + netgraph), IPv6, DHCP, VLAN, and enterprise-level configurations.
 
 ---
 
@@ -173,15 +164,15 @@ bastille template myjail user/template → configuration automation
 
 | Feature | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **ipfw** | **Yes** (automatic NAT rules, IPv4 + IPv6) | Yes (manual configuration) |
-| **pf** | **Yes** (per-container pf anchor, §3, with inet6) | **Yes** (native integration) |
+| **ipfw** | **Yes** (automatic NAT rules) | Yes (manual configuration) |
+| **pf** | **Yes** (per-container pf anchor, §3) | **Yes** (native integration) |
 | **Per-container policy** | **Yes** (`firewall:` section in YAML: block_ip, allow_tcp/udp, default_policy) | Via pf rules |
 | **Dynamic slots** | **Yes** (FwSlots: unique rule numbers, no conflicts, §18) | pf rdr-anchor with tables |
 | **Port forwarding** | In YAML: `inbound-tcp: {3100: 3000}` | `bastille rdr TARGET tcp 80 8080` |
 | **Automatic rule cleanup** | **Yes** (RAII, ref-counting for shared rules) | `bastille rdr TARGET list/clear` |
-| **ip.forwarding** | Auto-save/restore of original value (IPv4 + IPv6) | Manual configuration |
+| **ip.forwarding** | Auto-save/restore of original value | Manual configuration |
 
-**Conclusion**: Crate supports both firewalls (ipfw and pf) with IPv4 and IPv6, per-container firewall policy via pf anchors, and automatic ipfw management through dynamic slots. BastilleBSD is oriented toward pf with full anchor and table control.
+**Conclusion**: Crate now supports both firewalls (ipfw and pf), with per-container firewall policy via pf anchors and automatic ipfw management through dynamic slots. BastilleBSD is oriented toward pf with full anchor and table control.
 
 ---
 
@@ -206,7 +197,7 @@ bastille template myjail user/template → configuration automation
 
 | Feature | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **securelevel** | **Configurable** (-1 auto/0-3, default=2 in config) | **securelevel = 2** by default |
+| **securelevel** | Not set | **securelevel = 2** by default |
 | **enforce_statfs** | **Configurable** (auto/0/1/2, auto-detection for ZFS) | **2** (fixed) |
 | **devfs_ruleset** | **Configurable** (§16, terminal isolation) | Ruleset 4 by default; 13 for VNET |
 | **RCTL resources** | **Yes** (any RCTL resources via `limits:` in YAML) | **Yes** (via `bastille limits`) |
@@ -219,8 +210,8 @@ bastille template myjail user/template → configuration automation
 | **allow.chflags** | Configurable | No data |
 | **allow.set_hostname** | Configurable | No data |
 | **allow.quotas** | Configurable | No data |
-| **children.max** | **Configurable** (default=0, same as BastilleBSD) | 0 (nested jails prohibited) |
-| **CPU pinning** | **Yes** (cpuset via `security:` in YAML, `/usr/bin/cpuset -l`) | **Yes** (cpuset via `bastille limits`) |
+| **children.max** | Not set | 0 (nested jails prohibited) |
+| **CPU pinning** | No | Yes (cpuset) |
 | **pathnames.h** | **Yes** (absolute paths to all commands, CWE-426, §pathnames) | Bare names (PATH-relative) |
 | **Environment sanitization** | **Yes** (environ=empty, restoring only TERM/DISPLAY/LANG) | No |
 | **execv vs execvp** | **Yes** (execv — no PATH search) | execvp/system (via shell) |
@@ -234,7 +225,7 @@ bastille template myjail user/template → configuration automation
 | **Terminal isolation** | **Yes** (devfs ruleset, TTY control, §16) | No data |
 | **Directory traversal protection** | **Yes** (Util::safePath check for shared dirs) | No data |
 
-**Conclusion**: Crate offers a significantly deeper multi-layered security model: securelevel (configurable, default=2), children.max (default=0), CPU pinning via cpuset, MAC bsdextended/portacl, Capsicum, DNS filtering, clipboard and D-Bus isolation, pathnames.h for CWE-426, environment sanitization, execv, lstat for symlink attacks, JAIL_OWN_DESC for race-free cleanup. BastilleBSD has good security defaults (securelevel=2) and resource limits.
+**Conclusion**: Crate offers a significantly deeper multi-layered security model: MAC bsdextended/portacl, Capsicum, DNS filtering, clipboard and D-Bus isolation, pathnames.h for CWE-426, environment sanitization, execv, lstat for symlink attacks, JAIL_OWN_DESC for race-free cleanup. BastilleBSD has good security defaults (securelevel=2) and resource limits, but fewer options for fine-grained control.
 
 ---
 
@@ -306,9 +297,6 @@ sockets:
 # Advanced security (§8)
 security:
     capsicum: true
-    cpuset: "0-3"
-    securelevel: 2
-    children_max: 0
     mac_rules: ["subject uid 1001 object not uid 1001 mode rsx"]
 
 # ZFS datasets
@@ -348,14 +336,14 @@ LIMITS memoryuse 1G
 RDR tcp 8080 80
 TAGS web db
 ```
-- Docker-like syntax with 17 hooks: ARG, ARG+, CMD, CONFIG, CP, INCLUDE, LIMITS, LINE_IN_FILE, MOUNT, PKG, RDR, RENDER, RESTART, SERVICE, SYSRC, TAGS, TEMPLATE
+- Docker-like syntax with 17 hooks: ARG, ARG+, CMD, CONFIG, CP, INCLUDE, LIMITS, LINE_IN_FILE, MOUNT, PKG, RDR, RENDER, RESTART, SERVICE, SYSRC, TAGS
 - Required arguments (`ARG+`, v1.4+) — abort if missing
 - Built-in variables: `${JAIL_NAME}`, `${JAIL_IP}`, `${JAIL_IP6}`
 - Templates in Git repositories with subdirectory support (v1.0+)
 - Applied to already created jails
 - Legacy multi-file format removed (since v1.2.2)
 
-**Conclusion**: Crate describes everything in a single YAML file with deep configuration for security (securelevel, cpuset, children.max, MAC, Capsicum), networking, ZFS, GUI, DNS, and IPC. Supports template inheritance. BastilleBSD uses a Docker-like Bastillefile, more familiar to DevOps practitioners.
+**Conclusion**: Crate describes everything in a single YAML file with deep configuration for security, networking, ZFS, GUI, DNS, and IPC. Supports template inheritance. BastilleBSD uses a Docker-like Bastillefile, more familiar to DevOps practitioners.
 
 ---
 
@@ -368,23 +356,19 @@ TAGS web db
 | **Stop** | Automatic on exit (RAII) | Yes (stop) |
 | **Restart** | No (re-creation) | Yes (restart) |
 | **ZFS snapshots** | **Yes** (create/list/restore/delete/diff) | **Yes** |
-| **Cloning** | **Yes** (COW at runtime) | **Yes** (clone, including live `-l`) |
+| **Cloning** | **Yes** (COW at runtime) | Yes (clone) |
 | **Renaming** | No | Yes (rename) |
-| **Migration** | No | **Yes** (migrate, including live via ZFS send/recv + SSH) |
+| **Migration** | No | **Yes** (migrate, including live via ZFS) |
 | **OS update** | Rebuild .crate | Yes (update, upgrade, etcupdate) |
-| **Export/Import** | **Yes** (`crate export/import` with SHA256, traversal validation, OS version check) | **Yes** (7 formats, compatible with iocage/ezjail) |
-| **Listing** | **Yes** (`crate list`, table + JSON output) | **Yes** (list, with priority sorting) |
-| **Inspection** | **Yes** (`crate info TARGET`) | Yes (`bastille list`, `bastille config`) |
-| **Console** | **Yes** (`crate console TARGET`, jexec-based) | **Yes** (`bastille console`) |
-| **Monitoring** | No | **Yes** (top, htop, monitor with auto-restart, cron-based, v1.0+) |
-| **Validation** | **Yes** (`crate validate`) | Yes (`bastille verify` for releases) |
-| **Cleanup** | **Yes** (`crate clean`) | Via `bastille destroy` |
+| **Export/Import** | .crate files | Yes (compatible with iocage/ezjail) |
+| **Listing** | No (ephemeral model) | Yes (list, with priority sorting) |
+| **Monitoring** | No | **Yes** (top, htop, monitor with auto-restart, v1.0+) |
+| **Validation** | **Yes** (`crate validate`) | No data |
 | **Tags** | No | Yes (tags) |
 | **Conversion** | No | Yes (thin↔thick, convert) |
-| **File copying** | Via shared dirs/files | **Yes** (cp/jcp/rcp: host↔jail, jail↔jail) |
 | **Version mismatch detect** | **Yes** (host vs container FreeBSD version) | No |
 
-**Conclusion**: Crate has a full-featured command set: list, info, console, export/import, clean, validate. BastilleBSD provides a complete jail management lifecycle, including live migration, live cloning, monitoring with auto-restart, and file copying between jails.
+**Conclusion**: BastilleBSD provides a complete jail management lifecycle, including live migration. Crate uses an ephemeral model with ZFS snapshots and COW clones. Crate adds validate and snapshot commands.
 
 ---
 
@@ -436,24 +420,7 @@ TAGS web db
 | **Tags** | No | Yes (`bastille tags TARGET tag1 tag2`) |
 | **Boot priorities** | No | Yes (`-p` — start/stop ordering) |
 | **Dependencies** | No | Yes (beta: dependent jail auto-starts) |
-| **JSON output** | **Yes** (`crate list --json`) | **Yes** (`bastille list -j`) |
-| **Parallel startup** | No | Yes (`bastille_parallel_limit` in config) |
-| **Startup delay** | No | Yes (`bastille_startup_delay`) |
-
----
-
-## Host Auto-Configuration
-
-| Feature | **Crate** | **BastilleBSD** |
-|---|---|---|
-| **Auto-configuration** | No (manual) | **Yes** (`bastille setup`: loopback, bridge, vnet, netgraph, firewall, storage, linux) |
-| **Loopback setup** | No | Yes (`bastille setup loopback`) |
-| **Bridge setup** | No | Yes (`bastille setup bridge`) |
-| **Netgraph setup** | No | Yes (`bastille setup netgraph`) |
-| **Firewall setup** | No | Yes (`bastille setup firewall`) |
-| **Linux setup** | No | Yes (`bastille setup linux`) |
-
-**Conclusion**: BastilleBSD has a unique `setup` command that auto-configures the host system for working with jails. Crate requires manual host configuration.
+| **JSON output** | No | Yes (`bastille list -j`) |
 
 ---
 
@@ -464,7 +431,7 @@ TAGS web db
 | **OCI images** | No | **No** |
 | **Docker Hub** | No | No |
 | **Dockerfile/Containerfile** | No | No (Bastillefile — proprietary system) |
-| **Export format** | `.crate` (XZ) | 7 formats (txz/tgz/tzst/raw/gz/xz/zst) |
+| **Export format** | `.crate` (XZ) | `.txz` / ZFS snapshot |
 
 Both systems operate exclusively within the FreeBSD jail ecosystem. For OCI containers on FreeBSD, **Podman + ocijail** is recommended.
 
@@ -501,25 +468,20 @@ Both systems operate exclusively within the FreeBSD jail ecosystem. For OCI cont
 | Jail model | Ephemeral (+ COW persistent) | Persistent |
 | GUI/Desktop | **Superior** (nested X11, clipboard, D-Bus) | Not supported |
 | Server management | Minimal | **Superior** |
-| ZFS integration | **Full** (snapshots, COW, encryption, datasets) | **Full** (+ send/recv, migrate, 7 formats) |
-| Security (depth) | **Superior** (securelevel, cpuset, children.max, pathnames.h, env, MAC, Capsicum, DNS, execv) | Good defaults (securelevel=2) |
-| Network modes | 1 (epair+NAT) + IPv6 + pf anchors | 5+ (VNET, bridge, passthrough, alias, inherit + netgraph) |
-| IPv6 | **Yes** (epair IPv6, ipfw ip6, pf inet6) | **Yes** (dual-stack, SLAAC, rdr) |
+| ZFS integration | **Full** (snapshots, COW, encryption, datasets) | **Full** (+ send/recv, migrate) |
+| Security (depth) | **Superior** (pathnames.h, env, MAC, Capsicum, DNS, execv) | Good defaults (securelevel=2) |
+| Network modes | 1 (epair+NAT) + pf anchors | 5+ (VNET, bridge, passthrough, alias, inherit + netgraph) |
 | Container size | **Optimized** (ELF analysis) | Full system |
 | Migration | No | **Yes (including live)** |
 | Templates | YAML specification with inheritance | Bastillefile (Docker-like) |
-| Number of commands | 10 (+snapshot subcommands) | 39 |
-| Linux jails | No | Yes (Ubuntu Noble/Focal/Bionic, Debian) |
-| Multi-OS | No | Yes (FreeBSD, HardenedBSD, MidnightBSD, Linux) |
-| Monitoring | No | Yes (monitor with auto-restart, cron-based) |
+| Number of commands | 4 (+snapshot subcommands) | ~40 |
+| Linux jails | No | Yes (Ubuntu Noble/Focal/Bionic, Debian, experimental) |
+| Monitoring | No | Yes (monitor with auto-restart) |
 | Resource limits (RCTL) | **Yes** | **Yes** |
-| CPU pinning (cpuset) | **Yes** | **Yes** |
 | DNS filtering | **Yes** | No |
 | Clipboard/D-Bus/Socket | **Yes** | No |
 | Tor | Yes | Via templates |
 | API/Web UI | No | **Yes** (bastille-api + bastille-ui) |
-| JSON output | **Yes** (`crate list --json`) | **Yes** (`bastille list -j`) |
-| Host auto-config | No | **Yes** (`bastille setup`) |
 | Ecosystem | Examples (Firefox, Kodi...) | Template repository + bastille-ui |
 | FreeBSD 15.0+ ready | **Yes** (JAIL_OWN_DESC, epair fix) | No data |
 | pkgbase (FreeBSD 16+) | **Yes** | **Yes** |
@@ -536,47 +498,35 @@ Both systems operate exclusively within the FreeBSD jail ecosystem. For OCI cont
 - Scenarios requiring **X11/OpenGL/video** with isolation
 - Applications with **ZFS encryption** at-rest requirements
 - Per-container **DNS filtering** (blocking ad/tracking domains)
-- Scenarios with high **security** requirements (securelevel, cpuset, CWE-426, CWE-59, MAC)
-- **Inspecting and exporting** running containers (`list`, `info`, `console`, `export`)
+- Scenarios with high **security** requirements (CWE-426, CWE-59, MAC)
 
 ### BastilleBSD is better suited for:
 - **Server infrastructure** and DevOps
-- Managing **multiple** long-lived jails (tags, priorities, dependencies)
+- Managing **multiple** long-lived jails
 - **Migrating** jails between servers (including live)
 - Automation via **templates** (CI/CD)
-- Granular **resource** control (CPU pinning, rctl)
+- Granular **resource** control (CPU pinning via cpuset)
 - Compatibility with other jail managers (iocage, ezjail import)
-- Working with **Linux jails** and multiple operating systems
+- Working with **Linux jails**
 - Scenarios requiring a **REST API** and programmatic management
-- Multiple **networking modes** (bridge, passthrough, VLAN, DHCP, netgraph)
-- **Host auto-configuration** (`bastille setup`)
-- **Monitoring** with automatic service restart
+- Multiple **networking modes** (bridge, passthrough, VLAN, IPv6)
 
 ---
 
 ## What Crate Could Borrow from BastilleBSD
 
 1. ~~**ZFS integration**~~ ✅ Implemented (snapshots, COW, encryption, datasets)
-2. ~~**Resource limits**~~ ✅ Implemented (RCTL via `limits:` in YAML)
-3. ~~**Container listing**~~ ✅ Implemented (`crate list` with table/JSON output)
-4. ~~**Export/Import**~~ ✅ Implemented (`crate export/import` with SHA256, traversal validation)
-5. ~~**IPv6**~~ ✅ Implemented (epair IPv6, ipfw ip6, pf inet6)
-6. ~~**CPU pinning**~~ ✅ Implemented (cpuset via `security:` in YAML)
-7. **Persistent mode** — option to preserve a jail between runs (COW persistent is a step in this direction)
-8. **Thin jails** — saving space through a shared base system
-9. **Bridge/Passthrough/Netgraph** — additional networking modes
-10. **VLAN support** — `--vlan ID` for network segmentation
-11. **Static MAC** — fixed MAC addresses for DHCP stability
-12. **Multiple network interfaces** — `network add/remove`
-13. **DHCP/SYNCDHCP** — automatic IP addressing for VNET jails
-14. **Live migration** — transferring a running container to another host (ZFS send/recv + SSH)
-15. **Tags/labels** — grouping containers by tags
-16. **Batch operations** — `ALL`, tags as TARGET, multiple targets
-17. **Boot priorities** — start/stop ordering for jails
-18. **Monitoring with auto-restart** — service watchdog with cron
-19. **Host auto-configuration** — `setup`-like command
-20. **REST API** — programmatic interface for integration
-21. **File copying** — cp/jcp/rcp for runtime file transfer
+2. **Persistent mode** — option to preserve a jail between runs (COW persistent is a step in this direction)
+3. **Listing/monitoring** — command to view running containers
+4. ~~**Resource limits**~~ ✅ Implemented (RCTL via `limits:` in YAML)
+5. **Cloning** — creating copies of existing .crate files (export/import)
+6. **Thin jails** — saving space through a shared base system
+7. **IPv6** — IPv6 support in the networking stack
+8. **Bridge/Passthrough** — additional networking modes
+9. **List command** — viewing available .crate files and running containers
+10. **Live migration** — transferring a running container to another host
+11. **REST API** — programmatic interface for integration
+12. **CPU pinning** — binding a jail to specific CPU cores
 
 ## What BastilleBSD Could Borrow from Crate
 
@@ -592,5 +542,3 @@ Both systems operate exclusively within the FreeBSD jail ecosystem. For OCI cont
 10. **Archive traversal validation** — checking `..` before extraction
 11. **JAIL_OWN_DESC** — race-free jail removal via owning descriptor
 12. **ELF optimization** — aggressive container size reduction
-13. **Signal-safe RAII cleanup** — guaranteed cleanup on SIGINT/SIGTERM
-14. **Automatic IPv6 configuration** — fully automatic IPv6 epair setup
