@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# PROVIDE: crated
+# REQUIRE: DAEMON NETWORKING
+# KEYWORD: shutdown
+#
+# Add the following lines to /etc/rc.conf to enable crated:
+#
+#   crated_enable="YES"
+#   crated_config="/usr/local/etc/crated.conf"  # optional
+#
+
+. /etc/rc.subr
+
+name=crated
+rcvar=crated_enable
+
+load_rc_config $name
+
+: ${crated_enable:="NO"}
+: ${crated_config:="/usr/local/etc/crated.conf"}
+: ${crated_pidfile:="/var/run/crate/crated.pid"}
+
+pidfile="${crated_pidfile}"
+command="/usr/local/sbin/crated"
+command_args="-c ${crated_config}"
+
+run_rc_command "$1"

@@ -1,0 +1,32 @@
+##
+## crated configuration — REST API daemon for crate container management
+## Install to: /usr/local/etc/crated.conf
+##
+
+listen:
+    unix: /var/run/crate/crated.sock
+    tcp_port: 9800
+    tcp_bind: 0.0.0.0
+
+## TLS configuration (required for remote access)
+## Generate certs: openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.pem -days 365
+# tls:
+#     cert: /usr/local/etc/crate/tls/server.pem
+#     key: /usr/local/etc/crate/tls/server.key
+#     ca: /usr/local/etc/crate/tls/ca.pem
+#     require_client_cert: true
+
+## API token authentication
+## Generate hash: echo -n "your-token" | sha256
+# auth:
+#     tokens:
+#         - name: ansible
+#           token_hash: "sha256:..."
+#           role: admin
+#         - name: grafana
+#           token_hash: "sha256:..."
+#           role: viewer
+
+log:
+    file: /var/log/crated.log
+    level: info
