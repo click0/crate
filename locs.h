@@ -11,6 +11,7 @@ extern const char *jailDirectoryPath;
 extern const char *jailSubDirectoryIfaces;
 extern const char *cacheDirectoryPath;
 extern const std::string ctxFwUsersFilePath;
+extern const std::string ctxGuiRegistryFilePath;
 extern const std::string baseArchive;
 extern const std::string baseArchiveUrl;
 

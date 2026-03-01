@@ -108,6 +108,27 @@
 #ifndef CRATE_PATH_XEPHYR
 #define CRATE_PATH_XEPHYR     "/usr/local/bin/Xephyr"
 #endif
+#ifndef CRATE_PATH_XVFB
+#define CRATE_PATH_XVFB       "/usr/local/bin/Xvfb"
+#endif
+#ifndef CRATE_PATH_X11VNC
+#define CRATE_PATH_X11VNC     "/usr/local/bin/x11vnc"
+#endif
+#ifndef CRATE_PATH_XDOTOOL
+#define CRATE_PATH_XDOTOOL    "/usr/local/bin/xdotool"
+#endif
+#ifndef CRATE_PATH_XWD
+#define CRATE_PATH_XWD        "/usr/local/bin/xwd"
+#endif
+#ifndef CRATE_PATH_XWDTOPNM
+#define CRATE_PATH_XWDTOPNM   "/usr/local/bin/xwdtopnm"
+#endif
+#ifndef CRATE_PATH_PNMTOPNG
+#define CRATE_PATH_PNMTOPNG   "/usr/local/bin/pnmtopng"
+#endif
+#ifndef CRATE_PATH_WEBSOCKIFY
+#define CRATE_PATH_WEBSOCKIFY "/usr/local/bin/websockify"
+#endif
 #ifndef CRATE_PATH_SOCAT
 #define CRATE_PATH_SOCAT      "/usr/local/bin/socat"
 #endif

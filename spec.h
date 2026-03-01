@@ -166,6 +166,17 @@ public:
   };
   std::unique_ptr<TerminalOptions>                   terminalOptions;
 
+  // GUI session management (§19)
+  struct GuiOptions {
+    std::string mode = "nested";           // "nested" (Xephyr), "headless" (Xvfb), "auto"
+    std::string resolution = "1280x720";   // display resolution
+    bool vnc = false;                      // start x11vnc for headless mode
+    unsigned vncPort = 0;                  // VNC port (0=auto-assign from 5900+displayNum)
+    bool novnc = false;                    // start websockify+noVNC
+    std::string vncPassword;               // optional VNC password
+  };
+  std::unique_ptr<GuiOptions>                        guiOptions;
+
   std::map<std::string, std::map<std::string, std::string>> scripts;          // by section, by script name
 
   Spec preprocess() const;

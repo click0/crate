@@ -9,7 +9,7 @@ if [ -n "$BASH_VERSION" ]; then
     local cur prev words cword
     _init_completion || return
 
-    local commands="create run validate snapshot export import"
+    local commands="create run list info console clean validate snapshot export import gui"
     local global_opts="-h --help -V --version --no-color -p --log-progress"
 
     case "$prev" in
@@ -39,6 +39,26 @@ if [ -n "$BASH_VERSION" ]; then
         ;;
       import)
         COMPREPLY=( $(compgen -W "-o --output -f --force -h --help" -- "$cur") )
+        return
+        ;;
+      list|ls)
+        COMPREPLY=( $(compgen -W "-j -h --help" -- "$cur") )
+        return
+        ;;
+      info)
+        COMPREPLY=( $(compgen -W "-h --help" -- "$cur") )
+        return
+        ;;
+      console)
+        COMPREPLY=( $(compgen -W "-u --user -h --help --" -- "$cur") )
+        return
+        ;;
+      clean)
+        COMPREPLY=( $(compgen -W "-n --dry-run -h --help" -- "$cur") )
+        return
+        ;;
+      gui)
+        COMPREPLY=( $(compgen -W "list focus attach url tile screenshot resize -h --help" -- "$cur") )
         return
         ;;
       -s|--spec)
@@ -78,10 +98,15 @@ if [ -n "$ZSH_VERSION" ]; then
     local -a commands=(
       'create:create a container from a spec file'
       'run:run a containerized application'
+      'list:list running crate containers'
+      'info:show detailed container info'
+      'console:open a shell in a running container'
+      'clean:clean up orphaned resources'
       'validate:validate a crate spec file'
       'snapshot:manage ZFS snapshots'
       'export:export a running container'
       'import:import a crate archive'
+      'gui:manage GUI sessions'
     )
 
     _arguments -C \
@@ -136,6 +161,35 @@ if [ -n "$ZSH_VERSION" ]; then
               '(-f --force)'{-f,--force}'[skip validation]' \
               '(-h --help)'{-h,--help}'[show help]' \
               '1:archive:_files -g "*.crate"'
+            ;;
+          list|ls)
+            _arguments \
+              '-j[output as JSON]' \
+              '(-h --help)'{-h,--help}'[show help]'
+            ;;
+          info)
+            _arguments \
+              '(-h --help)'{-h,--help}'[show help]' \
+              '1:container:'
+            ;;
+          console)
+            _arguments \
+              '(-u --user)'{-u,--user}'[user to login as]:user:_users' \
+              '(-h --help)'{-h,--help}'[show help]' \
+              '1:container:'
+            ;;
+          clean)
+            _arguments \
+              '(-n --dry-run)'{-n,--dry-run}'[show what would be cleaned]' \
+              '(-h --help)'{-h,--help}'[show help]'
+            ;;
+          gui)
+            _arguments \
+              '1:subcommand:(list focus attach url tile screenshot resize)' \
+              '-j[output as JSON]' \
+              '(-o --output)'{-o,--output}'[output file]:file:_files' \
+              '(-h --help)'{-h,--help}'[show help]' \
+              '2:target:'
             ;;
         esac
         ;;

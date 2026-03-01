@@ -44,6 +44,7 @@ static void usage() {
   std::cout << "  snapshot                   manage ZFS snapshots (run 'crate snapshot -h' for details)" << std::endl;
   std::cout << "  export                     export a running container to a .crate archive" << std::endl;
   std::cout << "  import                     import and validate a .crate archive" << std::endl;
+  std::cout << "  gui                        manage GUI sessions (run 'crate gui -h' for details)" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -176,6 +177,36 @@ static void usageConsole() {
   std::cout << "" << std::endl;
 }
 
+static void usageGui() {
+  std::cout << "usage: crate gui <subcommand> [options] [target]" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Manage GUI sessions for running crate containers." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Subcommands:" << std::endl;
+  std::cout << "  list [-j]                  list active GUI sessions" << std::endl;
+  std::cout << "  focus <target>             raise container's X window (desktop mode)" << std::endl;
+  std::cout << "  attach <target>            open VNC viewer to headless container" << std::endl;
+  std::cout << "  url <target>               print noVNC URL for headless container" << std::endl;
+  std::cout << "  tile                       tile all Xephyr windows on screen" << std::endl;
+  std::cout << "  screenshot <target> [-o f] capture screenshot of container display" << std::endl;
+  std::cout << "  resize <target> <WxH>      resize container display" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Options:" << std::endl;
+  std::cout << "  -j                         output as JSON (for list)" << std::endl;
+  std::cout << "  -o, --output <file>        output file (for screenshot)" << std::endl;
+  std::cout << "  -h, --help                 show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Target can be a jail name, JID, or display number." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Examples:" << std::endl;
+  std::cout << "  crate gui list             list all GUI sessions" << std::endl;
+  std::cout << "  crate gui focus firefox    raise firefox container window" << std::endl;
+  std::cout << "  crate gui attach myapp     connect VNC viewer to myapp" << std::endl;
+  std::cout << "  crate gui url myapp        print noVNC URL for myapp" << std::endl;
+  std::cout << "  crate gui screenshot firefox -o shot.png" << std::endl;
+  std::cout << "" << std::endl;
+}
+
 static void err(const char *msg) {
   fprintf(stderr, "failed to parse arguments: %s\n", msg);
   std::cout << "" << std::endl;
@@ -230,6 +261,8 @@ static Command isCommand(const char* arg) {
     return CmdExport;
   if (strEq(arg, "import"))
     return CmdImport;
+  if (strEq(arg, "gui"))
+    return CmdGui;
 
   return CmdNone;
 }
@@ -298,6 +331,15 @@ void Args::validate() {
   case CmdConsole:
     if (consoleTarget.empty())
       ERR("the 'console' command requires a container name or JID")
+    break;
+  case CmdGui:
+    if (guiSubcmd.empty())
+      ERR("the 'gui' command requires a subcommand (list, focus, attach, url, tile, screenshot, resize)")
+    if ((guiSubcmd == "focus" || guiSubcmd == "attach" || guiSubcmd == "url" ||
+         guiSubcmd == "screenshot" || guiSubcmd == "resize") && guiTarget.empty())
+      ERR("the 'gui " << guiSubcmd << "' command requires a target")
+    if (guiSubcmd == "resize" && guiResolution.empty())
+      ERR("the 'gui resize' command requires a resolution (e.g. 1920x1080)")
     break;
   default:
     err("no command was given");
@@ -660,6 +702,46 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           // Append extra args to consoleCmd
           args.consoleCmd += " ";
           args.consoleCmd += argv[a];
+        }
+        break;
+      case CmdGui:
+        if (auto argShort = isShort(argv[a])) {
+          switch (argShort) {
+          case 'h':
+            usageGui();
+            exit(0);
+          case 'j':
+            args.guiJson = true;
+            break;
+          case 'o':
+            args.guiOutput = getArgParam(++a, argc, argv);
+            break;
+          default:
+            err("unsupported short option '%s'", argv[a]);
+          }
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) {
+            usageGui();
+            exit(0);
+          } else if (strEq(argLong, "output")) {
+            args.guiOutput = getArgParam(++a, argc, argv);
+            break;
+          } else {
+            err("unsupported long option '%s'", argv[a]);
+          }
+        } else if (args.guiSubcmd.empty()) {
+          args.guiSubcmd = argv[a];
+          if (args.guiSubcmd != "list" && args.guiSubcmd != "focus" &&
+              args.guiSubcmd != "attach" && args.guiSubcmd != "url" &&
+              args.guiSubcmd != "tile" && args.guiSubcmd != "screenshot" &&
+              args.guiSubcmd != "resize")
+            err("unknown gui subcommand '%s'", argv[a]);
+        } else if (args.guiTarget.empty()) {
+          args.guiTarget = argv[a];
+        } else if (args.guiSubcmd == "resize" && args.guiResolution.empty()) {
+          args.guiResolution = argv[a];
+        } else {
+          err("too many arguments for 'gui' command");
         }
         break;
       }

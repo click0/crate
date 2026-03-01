@@ -141,6 +141,9 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdImport: {
     succ = importCrate(args);
     break;
+  } case CmdGui: {
+    succ = guiCommand(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}
