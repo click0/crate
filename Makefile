@@ -14,9 +14,12 @@ CLI_SRCS = cli/main.cpp cli/args.cpp
 DAEMON_SRCS = daemon/main.cpp daemon/config.cpp daemon/server.cpp \
               daemon/routes.cpp daemon/auth.cpp daemon/metrics.cpp
 
+SNMPD_SRCS = snmpd/main.cpp snmpd/collector.cpp snmpd/mib.cpp
+
 LIB_OBJS = $(LIB_SRCS:.cpp=.o)
 CLI_OBJS = $(CLI_SRCS:.cpp=.o)
 DAEMON_OBJS = $(DAEMON_SRCS:.cpp=.o)
+SNMPD_OBJS = $(SNMPD_SRCS:.cpp=.o)
 
 # --- Flags ---
 
@@ -28,6 +31,7 @@ LIBS     += -ljail
 CXXFLAGS += -Wall -std=c++17
 CXXFLAGS += -Ilib             # lib/ headers visible to all
 CXXFLAGS += -Idaemon          # daemon/ headers for daemon build
+CXXFLAGS += -Isnmpd           # snmpd/ headers for snmpd build
 
 LIBS_DAEMON = $(LIBS) -lssl -lcrypto -lpthread
 
@@ -37,6 +41,8 @@ all: crate
 
 all-daemon: crate crated
 
+all-snmpd: crate crate-snmpd
+
 libcrate.a: $(LIB_OBJS)
 	$(AR) rcs $@ $^
 
@@ -45,6 +51,9 @@ crate: libcrate.a $(CLI_OBJS)
 
 crated: libcrate.a $(DAEMON_OBJS)
 	$(CXX) $(LDFLAGS) -o $@ $(DAEMON_OBJS) libcrate.a $(LIBS_DAEMON)
+
+crate-snmpd: libcrate.a $(SNMPD_OBJS)
+	$(CXX) $(LDFLAGS) -o $@ $(SNMPD_OBJS) libcrate.a $(LIBS) -lpthread
 
 install: crate
 	install -s -m 04755 crate $(DESTDIR)$(PREFIX)/bin
@@ -72,8 +81,13 @@ install-completions:
 crate.x: crate
 	sudo install -s -m 04755 -o 0 -g 0 crate crate.x
 
+install-snmpd: crate-snmpd
+	install -s -m 0755 crate-snmpd $(DESTDIR)$(PREFIX)/sbin/crate-snmpd
+	@mkdir -p $(DESTDIR)$(PREFIX)/share/snmp/mibs
+	install -m 0644 snmpd/CRATE-MIB.txt $(DESTDIR)$(PREFIX)/share/snmp/mibs/CRATE-MIB.txt
+
 clean:
-	rm -f $(LIB_OBJS) $(CLI_OBJS) $(DAEMON_OBJS) libcrate.a crate crated lib/lst-all-script-sections.h
+	rm -f $(LIB_OBJS) $(CLI_OBJS) $(DAEMON_OBJS) $(SNMPD_OBJS) libcrate.a crate crated crate-snmpd lib/lst-all-script-sections.h
 
 # --- Generated sources ---
 
@@ -92,3 +106,4 @@ c: clean
 d: all-daemon
 l: install-local
 e: install-examples
+s: all-snmpd

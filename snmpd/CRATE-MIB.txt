@@ -1,0 +1,201 @@
+CRATE-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    MODULE-IDENTITY, OBJECT-TYPE, Integer32, Counter64,
+    TimeTicks, enterprises
+        FROM SNMPv2-SMI
+    DisplayString
+        FROM SNMPv2-TC
+    MODULE-COMPLIANCE, OBJECT-GROUP
+        FROM SNMPv2-CONF
+    NOTIFICATION-TYPE
+        FROM SNMPv2-SMI;
+
+-- Private Enterprise Number: 60117 (crate project)
+-- Register at: https://pen.iana.org/pen/PenApplication.page
+
+crate MODULE-IDENTITY
+    LAST-UPDATED "202603010000Z"
+    ORGANIZATION "crate project"
+    CONTACT-INFO "https://github.com/click0/crate"
+    DESCRIPTION  "MIB for crate FreeBSD container manager"
+    REVISION     "202603010000Z"
+    DESCRIPTION  "Initial version"
+    ::= { enterprises 60117 }
+
+crateObjects     OBJECT IDENTIFIER ::= { crate 1 }
+crateTraps       OBJECT IDENTIFIER ::= { crate 2 }
+
+-- ====================================================================
+-- Scalar objects
+-- ====================================================================
+
+crateVersion OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE(0..32))
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "crate software version"
+    ::= { crateObjects 1 }
+
+crateHostname OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE(0..255))
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Host name running crate"
+    ::= { crateObjects 2 }
+
+crateContainerCount OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Total number of crate containers (running + stopped)"
+    ::= { crateObjects 3 }
+
+crateContainerRunning OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Number of currently running containers"
+    ::= { crateObjects 4 }
+
+-- ====================================================================
+-- Container table
+-- ====================================================================
+
+crateContainerTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF CrateContainerEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Table of crate containers"
+    ::= { crateObjects 10 }
+
+crateContainerEntry OBJECT-TYPE
+    SYNTAX      CrateContainerEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "A single crate container"
+    INDEX       { crateContainerIndex }
+    ::= { crateContainerTable 1 }
+
+CrateContainerEntry ::= SEQUENCE {
+    crateContainerIndex     Integer32,
+    crateContainerName      DisplayString,
+    crateContainerJID       Integer32,
+    crateContainerState     INTEGER,
+    crateContainerCpuPct    Integer32,
+    crateContainerMemKB     Counter64,
+    crateContainerNetRx     Counter64,
+    crateContainerNetTx     Counter64,
+    crateContainerUptime    TimeTicks,
+    crateContainerVncPort   Integer32,
+    crateContainerWsPort    Integer32,
+    crateContainerGuiMode   DisplayString
+}
+
+crateContainerIndex OBJECT-TYPE
+    SYNTAX      Integer32 (1..2147483647)
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION "Unique index for this container entry"
+    ::= { crateContainerEntry 1 }
+
+crateContainerName OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE(0..64))
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Container/jail name"
+    ::= { crateContainerEntry 2 }
+
+crateContainerJID OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "FreeBSD jail ID (0 = not running)"
+    ::= { crateContainerEntry 3 }
+
+crateContainerState OBJECT-TYPE
+    SYNTAX      INTEGER { stopped(0), running(1), starting(2), dying(3) }
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Container operational state"
+    ::= { crateContainerEntry 4 }
+
+crateContainerCpuPct OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "CPU usage percentage times 100 (e.g. 1250 = 12.50%)"
+    ::= { crateContainerEntry 5 }
+
+crateContainerMemKB OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Resident memory in kilobytes"
+    ::= { crateContainerEntry 6 }
+
+crateContainerNetRx OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Network bytes received"
+    ::= { crateContainerEntry 7 }
+
+crateContainerNetTx OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Network bytes transmitted"
+    ::= { crateContainerEntry 8 }
+
+crateContainerUptime OBJECT-TYPE
+    SYNTAX      TimeTicks
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "Container uptime in hundredths of a second"
+    ::= { crateContainerEntry 9 }
+
+crateContainerVncPort OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "VNC port (0 = no VNC server)"
+    ::= { crateContainerEntry 10 }
+
+crateContainerWsPort OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "websockify/noVNC port (0 = no noVNC)"
+    ::= { crateContainerEntry 11 }
+
+crateContainerGuiMode OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE(0..16))
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION "GUI mode: nested, headless, gpu, shared, or empty"
+    ::= { crateContainerEntry 12 }
+
+-- ====================================================================
+-- Notifications (traps)
+-- ====================================================================
+
+crateContainerStarted NOTIFICATION-TYPE
+    OBJECTS { crateContainerName, crateContainerJID }
+    STATUS  current
+    DESCRIPTION "A container has started"
+    ::= { crateTraps 1 }
+
+crateContainerStopped NOTIFICATION-TYPE
+    OBJECTS { crateContainerName, crateContainerJID }
+    STATUS  current
+    DESCRIPTION "A container has stopped"
+    ::= { crateTraps 2 }
+
+crateContainerOOM NOTIFICATION-TYPE
+    OBJECTS { crateContainerName, crateContainerMemKB }
+    STATUS  current
+    DESCRIPTION "A container hit its memory limit"
+    ::= { crateTraps 3 }
+
+END
