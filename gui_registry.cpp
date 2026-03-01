@@ -88,25 +88,24 @@ std::vector<GuiEntry> GuiRegistry::getEntries() {
 }
 
 const GuiEntry* GuiRegistry::findByTarget(const std::string &target) const {
-  for (auto &kv : entries) {
-    auto &e = kv.second;
-    // match by display number
-    try {
-      if (std::stoi(target) == (int)e.displayNum)
-        return &e;
-    } catch (...) {}
-    // match by jail name (exact)
-    if (e.jailName == target)
-      return &e;
-    // match by partial jail name (jail-TARGET-*)
-    if (e.jailName.find("jail-" + target) == 0)
-      return &e;
-    // match by owner PID
-    try {
-      if (std::stoi(target) == (int)e.ownerPid)
-        return &e;
-    } catch (...) {}
-  }
+  // Priority: exact jail name > partial jail name > display number > owner PID.
+  // Multi-pass to avoid numeric ambiguity (a PID could collide with a display number).
+  for (auto &kv : entries)
+    if (kv.second.jailName == target)
+      return &kv.second;
+  for (auto &kv : entries)
+    if (kv.second.jailName.find("jail-" + target) == 0)
+      return &kv.second;
+  // Numeric lookup: try display number first, then PID
+  try {
+    int num = std::stoi(target);
+    for (auto &kv : entries)
+      if ((int)kv.second.displayNum == num)
+        return &kv.second;
+    for (auto &kv : entries)
+      if ((int)kv.second.ownerPid == num)
+        return &kv.second;
+  } catch (...) {}
   return nullptr;
 }
 
@@ -115,11 +114,12 @@ std::string GuiRegistry::file() {
 }
 
 void GuiRegistry::readIntoMemory() {
-  // format: "ownerPid displayNum xServerPid vncPort mode jailName\n"
+  // format: "ownerPid displayNum xServerPid vncPort wsPort mode jailName\n"
   for (auto const &line : Util::Fs::readFileLines(fd)) {
     std::istringstream is(line);
     GuiEntry e;
-    if (is >> e.ownerPid >> e.displayNum >> e.xServerPid >> e.vncPort >> e.mode >> e.jailName)
+    e.wsPort = 0;
+    if (is >> e.ownerPid >> e.displayNum >> e.xServerPid >> e.vncPort >> e.wsPort >> e.mode >> e.jailName)
       entries[e.ownerPid] = e;
   }
   inMemory = true;
@@ -130,7 +130,7 @@ void GuiRegistry::writeToFile() const {
   for (auto &kv : entries) {
     auto &e = kv.second;
     ss << e.ownerPid << " " << e.displayNum << " " << e.xServerPid
-       << " " << e.vncPort << " " << e.mode << " " << e.jailName << std::endl;
+       << " " << e.vncPort << " " << e.wsPort << " " << e.mode << " " << e.jailName << std::endl;
   }
   if (::ftruncate(fd, 0) == -1)
     ERR("failed to truncate file " << file() << ": " << strerror(errno) << " (fd=" << fd << ")")
@@ -142,10 +142,12 @@ void GuiRegistry::writeToFile() const {
 void GuiRegistry::garbageCollect() {
   auto it = entries.begin();
   while (it != entries.end()) {
-    if (::kill(it->first, 0) == -1 && errno == ESRCH)
+    if (::kill(it->first, 0) == -1 && errno == ESRCH) {
       it = entries.erase(it); // owner PID doesn't exist
-    else
+      changed = true;
+    } else {
       ++it;
+    }
   }
 }
 

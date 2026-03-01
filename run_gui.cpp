@@ -55,7 +55,10 @@ static bool isPortAvailable(unsigned port) {
   int sock = ::socket(AF_INET, SOCK_STREAM, 0);
   if (sock < 0)
     return false;
+  int one = 1;
+  ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
   struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
   addr.sin_port = htons(port);
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -204,11 +207,15 @@ static RunAtEnd startVnc(unsigned displayNum, unsigned &vncPort,
     "-nopw"
   };
 
-  // Add password if configured
+  // Add password if configured (use -passwdfile to avoid leaking password in ps output)
+  std::string passwdFile;
   if (spec.guiOptions && !spec.guiOptions->vncPassword.empty()) {
     vncArgs.pop_back(); // remove -nopw
-    vncArgs.push_back("-passwd");
-    vncArgs.push_back(spec.guiOptions->vncPassword);
+    passwdFile = STR("/tmp/crate-vncpw-" << displayNum);
+    Util::Fs::writeFile(spec.guiOptions->vncPassword, passwdFile);
+    Util::Fs::chmod(passwdFile, 0600);
+    vncArgs.push_back("-passwdfile");
+    vncArgs.push_back(passwdFile);
   }
 
   if (logProgress)
@@ -234,21 +241,24 @@ static RunAtEnd startVnc(unsigned displayNum, unsigned &vncPort,
     ERR("failed to fork x11vnc: " << strerror(errno))
 
   vncPort = port;
-  return RunAtEnd([vncPid, logProgress]() {
+  return RunAtEnd([vncPid, logProgress, passwdFile]() {
     if (logProgress)
       std::cerr << rang::fg::gray << "killing x11vnc pid=" << vncPid << rang::style::reset << std::endl;
     ::kill(vncPid, SIGTERM);
     int status;
     ::waitpid(vncPid, &status, 0);
+    if (!passwdFile.empty())
+      Util::Fs::unlink(passwdFile);
   });
 }
 
-// Start websockify for noVNC
-static RunAtEnd startWebsockify(unsigned vncPort, bool logProgress) {
+// Start websockify for noVNC, sets actualWsPort to the allocated port
+static RunAtEnd startWebsockify(unsigned vncPort, unsigned &actualWsPort, bool logProgress) {
   requireTool(CRATE_PATH_WEBSOCKIFY, "py311-websockify");
 
   unsigned wsPort = vncPort + 100; // e.g. 5910 -> 6010
   wsPort = findAvailablePort(wsPort);
+  actualWsPort = wsPort;
   auto target = STR("localhost:" << vncPort);
 
   // Detect noVNC web directory
@@ -320,6 +330,7 @@ static RunAtEnd setupVncAndRegister(unsigned dispNum, pid_t xServerPid,
   setJailEnv("DISPLAY", dispStr);
 
   unsigned vncPort = 0;
+  unsigned wsPort = 0;
   RunAtEnd vncCleanup;
   RunAtEnd wsCleanup;
   bool wantVnc = spec.guiOptions && spec.guiOptions->vnc;
@@ -332,8 +343,13 @@ static RunAtEnd setupVncAndRegister(unsigned dispNum, pid_t xServerPid,
     vncCleanup = startVnc(dispNum, vncPort, spec, logProgress);
   }
   if (wantNoVnc && vncPort != 0) {
-    ::usleep(200000); // x11vnc needs a moment to bind its port
-    wsCleanup = startWebsockify(vncPort, logProgress);
+    // Wait for x11vnc to bind its port (up to 2s) instead of fixed sleep
+    for (int i = 0; i < 40; i++) {
+      if (!isPortAvailable(vncPort))
+        break; // port is now in use by x11vnc
+      ::usleep(50000); // 50ms
+    }
+    wsCleanup = startWebsockify(vncPort, wsPort, logProgress);
   }
 
   // Register in GUI registry
@@ -344,6 +360,7 @@ static RunAtEnd setupVncAndRegister(unsigned dispNum, pid_t xServerPid,
     entry.displayNum = dispNum;
     entry.xServerPid = xServerPid;
     entry.vncPort = vncPort;
+    entry.wsPort = wsPort;
     entry.mode = mode;
     entry.jailName = jailXname;
     regW->registerEntry(entry);
@@ -352,8 +369,8 @@ static RunAtEnd setupVncAndRegister(unsigned dispNum, pid_t xServerPid,
 
   if (vncPort != 0) {
     std::cerr << rang::fg::cyan << "VNC available on port " << vncPort;
-    if (wantNoVnc)
-      std::cerr << ", noVNC on port " << (vncPort + 100);
+    if (wsPort != 0)
+      std::cerr << ", noVNC on port " << wsPort;
     std::cerr << rang::style::reset << std::endl;
   }
 
@@ -545,38 +562,8 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
       ERR("Xephyr failed to start within 5s on display " << dispStr)
     }
 
-    Util::Fs::mkdir(J("/tmp/.X11-unix"), 01777);
-    mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix", MNT_IGNORE));
-    setJailEnv("DISPLAY", dispStr);
-
-    // Register in GUI registry
-    {
-      auto regW = Ctx::GuiRegistry::lock();
-      Ctx::GuiEntry entry;
-      entry.ownerPid = ::getpid();
-      entry.displayNum = dispNum;
-      entry.xServerPid = xephyrPid;
-      entry.vncPort = 0;
-      entry.mode = "nested";
-      entry.jailName = jailXname;
-      regW->registerEntry(entry);
-      regW->unlock();
-    }
-
-    auto ownerPid = ::getpid();
-    return RunAtEnd([xephyrPid, ownerPid, logProgress]() {
-      try {
-        auto reg = Ctx::GuiRegistry::lock();
-        reg->unregisterEntry(ownerPid);
-        reg->unlock();
-      } catch (...) {}
-
-      if (logProgress)
-        std::cerr << rang::fg::gray << "killing Xephyr pid=" << xephyrPid << rang::style::reset << std::endl;
-      ::kill(xephyrPid, SIGTERM);
-      int status;
-      ::waitpid(xephyrPid, &status, 0);
-    });
+    return setupVncAndRegister(dispNum, xephyrPid, "nested", jailXname,
+                                jailPath, mounts, setJailEnv, spec, logProgress);
   }
 
   // Shared mode (default): mount host X11 socket into jail
@@ -597,6 +584,7 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
     entry.displayNum = 0;
     entry.xServerPid = 0;
     entry.vncPort = 0;
+    entry.wsPort = 0;
     entry.mode = "shared";
     entry.jailName = jailXname;
     regW->registerEntry(entry);
