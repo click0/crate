@@ -30,7 +30,7 @@ spec.yml → [crate create] → myapp.crate (XZ archive)
               RAII cleanup (jail, mount, firewall, epair, ZFS)
 ```
 - **Ephemeral model**: jail is created at launch and destroyed after completion
-- 10 commands: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`
+- 11 commands: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`, `gui`
 - Aggressive optimization: ELF dependency analysis via ldd, removal of unnecessary files
 - Container is a self-contained XZ archive (`.crate`)
 - RAII patterns (RunAtEnd) guarantee cleanup even on errors and signals
@@ -51,7 +51,7 @@ bastille template myjail user/template → configuration automation
 
 ## CLI Commands
 
-### Crate (10 commands)
+### Crate (11 commands)
 | Command | Description |
 |---|---|
 | `crate create -s spec.yml -o app.crate` | Create a container from a specification |
@@ -60,12 +60,13 @@ bastille template myjail user/template → configuration automation
 | `crate run -f app.crate [-- args]` | Run a container |
 | `crate validate -s spec.yml` | Validate a specification |
 | `crate snapshot create\|list\|restore\|delete\|diff` | Manage ZFS snapshots |
-| `crate list [--json]` | List running containers (table or JSON) |
+| `crate list [-j]` | List running containers (table or JSON) |
 | `crate info TARGET` | Information about a running container |
 | `crate console TARGET [--user USER]` | Interactive shell in a container |
 | `crate clean` | Clean up temporary files and jails |
 | `crate export TARGET [-o FILE]` | Export a running container to .crate (with SHA256) |
 | `crate import FILE [-o FILE] [--force]` | Import .crate with validation (SHA256, traversal, OS version) |
+| `crate gui list\|focus\|attach\|url\|tile\|screenshot\|resize` | GUI session manager (switching, tiling, screenshots) |
 
 ### BastilleBSD (39 subcommands)
 | Command | Description |
@@ -102,7 +103,7 @@ bastille template myjail user/template → configuration automation
 | `bastille edit` | Edit jail configuration |
 | `bastille sysrc` | Safely edit rc files |
 
-**Conclusion**: BastilleBSD provides a significantly broader set of commands (39) for managing the full jail lifecycle. Crate has 10 commands covering build, run, validation, snapshot management, listing, inspection, interactive console, export/import, and cleanup.
+**Conclusion**: BastilleBSD provides a significantly broader set of commands (39) for managing the full jail lifecycle. Crate has 11 commands covering build, run, validation, snapshot management, listing, inspection, interactive console, export/import, cleanup, and GUI session management.
 
 ---
 
@@ -191,14 +192,19 @@ bastille template myjail user/template → configuration automation
 |---|---|---|
 | **X11 (shared)** | **Yes** (X11 socket + Xauthority passthrough) | No (not a target use case) |
 | **X11 (nested/Xephyr)** | **Yes** (isolated nested X server, §11) | No |
+| **X11 (headless/Xvfb)** | **Yes** (virtual framebuffer without physical display) | No |
+| **X11 (GPU headless)** | **Yes** (DRM leasing, Xorg with real GPU without monitor) | No |
 | **X11 (disabled)** | **Yes** (`mode: none`) | — |
+| **VNC** | **Yes** (x11vnc with password, auto-port, §gui) | No |
+| **noVNC/WebSocket** | **Yes** (websockify + noVNC for browser access) | No |
+| **GUI session manager** | **Yes** (`crate gui`: list/focus/attach/url/tile/screenshot/resize) | No |
 | **Clipboard isolation** | **Yes** (modes: isolated/shared/none, direction: in/out/both, §12) | No |
 | **D-Bus isolation** | **Yes** (system/session bus control, allow_own/deny_send, §13) | No |
 | **OpenGL/GPU** | **Yes** (hardware acceleration) | No |
 | **Video devices** | **Yes** (/dev/videoN passthrough) | No |
 | **GUI applications** | **Yes** (Firefox, Chromium, Kodi, etc.) | No (server-oriented) |
 
-**Conclusion**: Crate is uniquely positioned for running desktop GUI applications in jails with full isolation: nested X11, clipboard filtering, D-Bus control. BastilleBSD is oriented exclusively toward server workloads.
+**Conclusion**: Crate is uniquely positioned for running desktop GUI applications in jails: 5 X11 modes (shared, nested, headless, gpu, none), VNC with password, noVNC via browser, GUI session manager with tiling and screenshots, clipboard filtering, D-Bus control. BastilleBSD is oriented exclusively toward server workloads.
 
 ---
 
@@ -436,7 +442,7 @@ TAGS web db
 | **Tags** | No | Yes (`bastille tags TARGET tag1 tag2`) |
 | **Boot priorities** | No | Yes (`-p` — start/stop ordering) |
 | **Dependencies** | No | Yes (beta: dependent jail auto-starts) |
-| **JSON output** | **Yes** (`crate list --json`) | **Yes** (`bastille list -j`) |
+| **JSON output** | **Yes** (`crate list -j`) | **Yes** (`bastille list -j`) |
 | **Parallel startup** | No | Yes (`bastille_parallel_limit` in config) |
 | **Startup delay** | No | Yes (`bastille_startup_delay`) |
 
@@ -499,7 +505,7 @@ Both systems operate exclusively within the FreeBSD jail ecosystem. For OCI cont
 |---|---|---|
 | Maturity | Alpha (active development) | Stable (v1.4.0, February 2026) |
 | Jail model | Ephemeral (+ COW persistent) | Persistent |
-| GUI/Desktop | **Superior** (nested X11, clipboard, D-Bus) | Not supported |
+| GUI/Desktop | **Superior** (5 X11 modes, VNC, noVNC, GUI manager, clipboard, D-Bus) | Not supported |
 | Server management | Minimal | **Superior** |
 | ZFS integration | **Full** (snapshots, COW, encryption, datasets) | **Full** (+ send/recv, migrate, 7 formats) |
 | Security (depth) | **Superior** (securelevel, cpuset, children.max, pathnames.h, env, MAC, Capsicum, DNS, execv) | Good defaults (securelevel=2) |
@@ -508,7 +514,7 @@ Both systems operate exclusively within the FreeBSD jail ecosystem. For OCI cont
 | Container size | **Optimized** (ELF analysis) | Full system |
 | Migration | No | **Yes (including live)** |
 | Templates | YAML specification with inheritance | Bastillefile (Docker-like) |
-| Number of commands | 10 (+snapshot subcommands) | 39 |
+| Number of commands | 11 (+snapshot, gui subcommands) | 39 |
 | Linux jails | No | Yes (Ubuntu Noble/Focal/Bionic, Debian) |
 | Multi-OS | No | Yes (FreeBSD, HardenedBSD, MidnightBSD, Linux) |
 | Monitoring | No | Yes (monitor with auto-restart, cron-based) |
@@ -518,7 +524,7 @@ Both systems operate exclusively within the FreeBSD jail ecosystem. For OCI cont
 | Clipboard/D-Bus/Socket | **Yes** | No |
 | Tor | Yes | Via templates |
 | API/Web UI | No | **Yes** (bastille-api + bastille-ui) |
-| JSON output | **Yes** (`crate list --json`) | **Yes** (`bastille list -j`) |
+| JSON output | **Yes** (`crate list -j`) | **Yes** (`bastille list -j`) |
 | Host auto-config | No | **Yes** (`bastille setup`) |
 | Ecosystem | Examples (Firefox, Kodi...) | Template repository + bastille-ui |
 | FreeBSD 15.0+ ready | **Yes** (JAIL_OWN_DESC, epair fix) | No data |
@@ -533,7 +539,9 @@ Both systems operate exclusively within the FreeBSD jail ecosystem. For OCI cont
 - **Sandboxing** with deep isolation (clipboard, D-Bus, DNS, MAC, Capsicum)
 - **Disposable** isolated execution environments
 - Minimizing container size (ELF dependency optimization)
-- Scenarios requiring **X11/OpenGL/video** with isolation
+- Scenarios requiring **X11/OpenGL/video** with isolation (5 modes: shared, nested, headless, gpu, none)
+- **Remote access** to GUI via VNC/noVNC (browser-based access)
+- Managing **multiple GUI sessions** (tiling, focus, screenshots)
 - Applications with **ZFS encryption** at-rest requirements
 - Per-container **DNS filtering** (blocking ad/tracking domains)
 - Scenarios with high **security** requirements (securelevel, cpuset, CWE-426, CWE-59, MAC)

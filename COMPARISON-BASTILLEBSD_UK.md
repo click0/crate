@@ -30,7 +30,7 @@ spec.yml → [crate create] → myapp.crate (XZ-архів)
               RAII-очищення (jail, mount, firewall, epair, ZFS)
 ```
 - **Ефемерна модель**: jail створюється під час запуску та знищується після завершення
-- 10 команд: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`
+- 11 команд: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`, `gui`
 - Агресивна оптимізація: аналіз ELF-залежностей через ldd, видалення непотрібних файлів
 - Контейнер — самодостатній XZ-архів (`.crate`)
 - RAII-патерни (RunAtEnd) гарантують очищення навіть при помилках та сигналах
@@ -51,7 +51,7 @@ bastille template myjail user/template → автоматизація налаш
 
 ## CLI-команди
 
-### Crate (10 команд)
+### Crate (11 команд)
 | Команда | Опис |
 |---|---|
 | `crate create -s spec.yml -o app.crate` | Створити контейнер зі специфікації |
@@ -60,12 +60,13 @@ bastille template myjail user/template → автоматизація налаш
 | `crate run -f app.crate [-- args]` | Запустити контейнер |
 | `crate validate -s spec.yml` | Перевірити специфікацію |
 | `crate snapshot create\|list\|restore\|delete\|diff` | Керування ZFS-знімками |
-| `crate list [--json]` | Перелік запущених контейнерів (таблиця або JSON) |
+| `crate list [-j]` | Перелік запущених контейнерів (таблиця або JSON) |
 | `crate info TARGET` | Інформація про запущений контейнер |
 | `crate console TARGET [--user USER]` | Інтерактивна оболонка в контейнері |
 | `crate clean` | Очищення тимчасових файлів та jail-ів |
 | `crate export TARGET [-o FILE]` | Експорт запущеного контейнера в .crate (з SHA256) |
 | `crate import FILE [-o FILE] [--force]` | Імпорт .crate з валідацією (SHA256, traversal, OS version) |
+| `crate gui list\|focus\|attach\|url\|tile\|screenshot\|resize` | Менеджер GUI-сесій (перемикання, тайлінг, скріншоти) |
 
 ### BastilleBSD (39 підкоманд)
 | Команда | Опис |
@@ -102,7 +103,7 @@ bastille template myjail user/template → автоматизація налаш
 | `bastille edit` | Редагування конфігурації jail-у |
 | `bastille sysrc` | Безпечне редагування rc-файлів |
 
-**Висновок**: BastilleBSD надає значно ширший набір команд (39) для керування повним життєвим циклом jail-ів. Crate має 10 команд, що охоплюють збирання, запуск, перевірку, керування знімками, перелік, інспекцію, інтерактивну консоль, експорт/імпорт та очищення.
+**Висновок**: BastilleBSD надає значно ширший набір команд (39) для керування повним життєвим циклом jail-ів. Crate має 11 команд, що охоплюють збирання, запуск, перевірку, керування знімками, перелік, інспекцію, інтерактивну консоль, експорт/імпорт, очищення та керування GUI-сесіями.
 
 ---
 
@@ -191,14 +192,19 @@ bastille template myjail user/template → автоматизація налаш
 |---|---|---|
 | **X11 (shared)** | **Так** (проброс X11-сокета + Xauthority) | Ні (не цільовий сценарій) |
 | **X11 (nested/Xephyr)** | **Так** (ізольований вкладений X-сервер, §11) | Ні |
+| **X11 (headless/Xvfb)** | **Так** (віртуальний фреймбуфер без фізичного дисплея) | Ні |
+| **X11 (GPU headless)** | **Так** (DRM leasing, Xorg з реальним GPU без монітора) | Ні |
 | **X11 (disabled)** | **Так** (`mode: none`) | — |
+| **VNC** | **Так** (x11vnc з паролем, авто-порт, §gui) | Ні |
+| **noVNC/WebSocket** | **Так** (websockify + noVNC для доступу через браузер) | Ні |
+| **GUI-менеджер сесій** | **Так** (`crate gui`: list/focus/attach/url/tile/screenshot/resize) | Ні |
 | **Ізоляція буфера обміну** | **Так** (режими: isolated/shared/none, напрямок: in/out/both, §12) | Ні |
 | **Ізоляція D-Bus** | **Так** (контроль system/session bus, allow_own/deny_send, §13) | Ні |
 | **OpenGL/GPU** | **Так** (апаратне прискорення) | Ні |
 | **Відеопристрої** | **Так** (проброс /dev/videoN) | Ні |
 | **GUI-застосунки** | **Так** (Firefox, Chromium, Kodi тощо) | Ні (серверна орієнтація) |
 
-**Висновок**: Crate унікально позиціонований для запуску десктопних GUI-застосунків у jail-ах з повною ізоляцією: вкладений X11, фільтрація буфера обміну, контроль D-Bus. BastilleBSD орієнтований виключно на серверні навантаження.
+**Висновок**: Crate унікально позиціонований для запуску десктопних GUI-застосунків у jail-ах: 5 режимів X11 (shared, nested, headless, gpu, none), VNC з паролем, noVNC через браузер, менеджер GUI-сесій з тайлінгом та скріншотами, фільтрація буфера обміну, контроль D-Bus. BastilleBSD орієнтований виключно на серверні навантаження.
 
 ---
 
@@ -436,7 +442,7 @@ TAGS web db
 | **Теги** | Ні | Так (`bastille tags TARGET tag1 tag2`) |
 | **Пріоритети завантаження** | Ні | Так (`-p` — порядок старту/зупинки) |
 | **Залежності** | Ні | Так (бета: залежний jail автостартує) |
-| **JSON вивід** | **Так** (`crate list --json`) | **Так** (`bastille list -j`) |
+| **JSON вивід** | **Так** (`crate list -j`) | **Так** (`bastille list -j`) |
 | **Паралельний запуск** | Ні | Так (`bastille_parallel_limit` у конфігурації) |
 | **Затримка запуску** | Ні | Так (`bastille_startup_delay`) |
 
@@ -499,7 +505,7 @@ TAGS web db
 |---|---|---|
 | Зрілість | Alpha (активна розробка) | Стабільний (v1.4.0, лютий 2026) |
 | Модель jail-у | Ефемерний (+ COW persistent) | Персистентний |
-| GUI/Робочий стіл | **Перевершує** (nested X11, clipboard, D-Bus) | Не підтримує |
+| GUI/Робочий стіл | **Перевершує** (5 режимів X11, VNC, noVNC, GUI-менеджер, clipboard, D-Bus) | Не підтримує |
 | Серверне керування | Мінімальне | **Перевершує** |
 | Інтеграція з ZFS | **Повна** (snapshots, COW, шифрування, datasets) | **Повна** (+ send/recv, migrate, 7 форматів) |
 | Безпека (глибина) | **Перевершує** (securelevel, cpuset, children.max, pathnames.h, env, MAC, Capsicum, DNS, execv) | Добрі типові налаштування (securelevel=2) |
@@ -508,7 +514,7 @@ TAGS web db
 | Розмір контейнера | **Оптимізований** (ELF-аналіз) | Повна система |
 | Міграція | Ні | **Так (включно з live)** |
 | Шаблони | YAML-специфікація з успадкуванням | Bastillefile (Docker-подібний) |
-| Кількість команд | 10 (+підкоманди snapshot) | 39 |
+| Кількість команд | 11 (+підкоманди snapshot, gui) | 39 |
 | Linux jail-и | Ні | Так (Ubuntu Noble/Focal/Bionic, Debian) |
 | Multi-OS | Ні | Так (FreeBSD, HardenedBSD, MidnightBSD, Linux) |
 | Моніторинг | Ні | Так (monitor з auto-restart, cron-based) |
@@ -518,7 +524,7 @@ TAGS web db
 | Clipboard/D-Bus/Socket | **Так** | Ні |
 | Tor | Так | Через шаблони |
 | API/Web UI | Ні | **Так** (bastille-api + bastille-ui) |
-| JSON вивід | **Так** (`crate list --json`) | **Так** (`bastille list -j`) |
+| JSON вивід | **Так** (`crate list -j`) | **Так** (`bastille list -j`) |
 | Автоналаштування хоста | Ні | **Так** (`bastille setup`) |
 | Екосистема | Приклади (Firefox, Kodi...) | Репозиторій шаблонів + bastille-ui |
 | Готовність до FreeBSD 15.0+ | **Так** (JAIL_OWN_DESC, epair fix) | Немає даних |
@@ -533,7 +539,9 @@ TAGS web db
 - **Sandboxing** з глибокою ізоляцією (clipboard, D-Bus, DNS, MAC, Capsicum)
 - **Одноразових** ізольованих середовищ виконання
 - Мінімізації розміру контейнера (оптимізація ELF-залежностей)
-- Сценаріїв, що потребують **X11/OpenGL/відео** з ізоляцією
+- Сценаріїв, що потребують **X11/OpenGL/відео** з ізоляцією (5 режимів: shared, nested, headless, gpu, none)
+- **Віддаленого доступу** до GUI через VNC/noVNC (браузерний доступ)
+- Керування **множинними GUI-сесіями** (тайлінг, фокус, скріншоти)
 - Застосунків з вимогами до **ZFS-шифрування** at-rest
 - Per-container **DNS-фільтрації** (блокування ad/tracking доменів)
 - Сценаріїв з високими вимогами до **безпеки** (securelevel, cpuset, CWE-426, CWE-59, MAC)
