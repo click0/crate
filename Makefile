@@ -11,8 +11,12 @@ LIB_SRCS = lib/spec.cpp lib/create.cpp lib/run.cpp lib/list.cpp lib/info.cpp \
 
 CLI_SRCS = cli/main.cpp cli/args.cpp
 
+DAEMON_SRCS = daemon/main.cpp daemon/config.cpp daemon/server.cpp \
+              daemon/routes.cpp daemon/auth.cpp daemon/metrics.cpp
+
 LIB_OBJS = $(LIB_SRCS:.cpp=.o)
 CLI_OBJS = $(CLI_SRCS:.cpp=.o)
+DAEMON_OBJS = $(DAEMON_SRCS:.cpp=.o)
 
 # --- Flags ---
 
@@ -23,10 +27,15 @@ LIBS     += -ljail
 
 CXXFLAGS += -Wall -std=c++17
 CXXFLAGS += -Ilib             # lib/ headers visible to all
+CXXFLAGS += -Idaemon          # daemon/ headers for daemon build
+
+LIBS_DAEMON = $(LIBS) -lssl -lcrypto -lpthread
 
 # --- Targets ---
 
 all: crate
+
+all-daemon: crate crated
 
 libcrate.a: $(LIB_OBJS)
 	$(AR) rcs $@ $^
@@ -34,9 +43,19 @@ libcrate.a: $(LIB_OBJS)
 crate: libcrate.a $(CLI_OBJS)
 	$(CXX) $(LDFLAGS) -o $@ $(CLI_OBJS) libcrate.a $(LIBS)
 
+crated: libcrate.a $(DAEMON_OBJS)
+	$(CXX) $(LDFLAGS) -o $@ $(DAEMON_OBJS) libcrate.a $(LIBS_DAEMON)
+
 install: crate
 	install -s -m 04755 crate $(DESTDIR)$(PREFIX)/bin
 	gzip -9 < crate.5 > $(DESTDIR)$(PREFIX)/man/man5/crate.5.gz
+
+install-daemon: crated
+	install -s -m 0755 crated $(DESTDIR)$(PREFIX)/sbin/crated
+	install -m 0555 daemon/crated.rc $(DESTDIR)$(PREFIX)/etc/rc.d/crated
+	@if [ ! -f $(DESTDIR)$(PREFIX)/etc/crated.conf ]; then \
+		install -m 0640 daemon/crated.conf.sample $(DESTDIR)$(PREFIX)/etc/crated.conf; \
+	fi
 
 install-local: crate.x
 
@@ -54,7 +73,7 @@ crate.x: crate
 	sudo install -s -m 04755 -o 0 -g 0 crate crate.x
 
 clean:
-	rm -f $(LIB_OBJS) $(CLI_OBJS) libcrate.a crate lib/lst-all-script-sections.h
+	rm -f $(LIB_OBJS) $(CLI_OBJS) $(DAEMON_OBJS) libcrate.a crate crated lib/lst-all-script-sections.h
 
 # --- Generated sources ---
 
@@ -70,5 +89,6 @@ lib/spec.cpp: lib/lst-all-script-sections.h
 # --- Shortcuts ---
 a: all
 c: clean
+d: all-daemon
 l: install-local
 e: install-examples
