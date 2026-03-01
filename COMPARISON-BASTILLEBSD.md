@@ -129,7 +129,7 @@ bastille template myjail user/template → configuration automation
 | **ZFS clone (COW)** | **Yes** (automatic with `cow/backend: zfs`) | **Yes** (for thin jails; live clone via `-l`) |
 | **ZFS encryption** | **Yes** (`encrypted: true` in spec, verified at runtime) | No (encryption at pool level) |
 | **ZFS datasets in jail** | **Yes** (`zfs-datasets:` in YAML, `allow.mount.zfs`) | **Yes** (`bastille zfs jail`, v1.0+) |
-| **ZFS send/recv** | No | **Yes** (live export without stopping jail, migrate) |
+| **ZFS send/recv** | No | **Yes** (ZFS snapshot → export → scp to remote; jail runs during snapshot but not during transfer) |
 | **Copy-on-Write (COW)** | **Yes** (ZFS clone or unionfs, ephemeral/persistent modes) | Via ZFS clone |
 | **UFS** | Yes (default) | **Yes** |
 | **Shared dirs** | Yes (nullfs in YAML) | Yes (`bastille mount`) |
@@ -376,7 +376,7 @@ TAGS web db
 | **ZFS snapshots** | **Yes** (create/list/restore/delete/diff) | **Yes** |
 | **Cloning** | **Yes** (COW at runtime) | **Yes** (clone, including live `-l`) |
 | **Renaming** | No | Yes (rename) |
-| **Migration** | No | **Yes** (migrate, including live via ZFS send/recv + SSH) |
+| **Migration** | No | **Yes** (`bastille migrate`: ZFS snapshot → export → scp → import via SSH; `-l` allows exporting a running jail, but there is a downtime window at stop/start switchover) |
 | **OS update** | Rebuild .crate | Yes (update, upgrade, etcupdate) |
 | **Export/Import** | **Yes** (`crate export/import` with SHA256, traversal validation, OS version check) | **Yes** (7 formats, compatible with iocage/ezjail) |
 | **Listing** | **Yes** (`crate list`, table + JSON output) | **Yes** (list, with priority sorting) |
@@ -512,7 +512,7 @@ Both systems operate exclusively within the FreeBSD jail ecosystem. For OCI cont
 | Network modes | 1 (epair+NAT) + IPv6 + pf anchors | 5+ (VNET, bridge, passthrough, alias, inherit + netgraph) |
 | IPv6 | **Yes** (epair IPv6, ipfw ip6, pf inet6) | **Yes** (dual-stack, SLAAC, rdr) |
 | Container size | **Optimized** (ELF analysis) | Full system |
-| Migration | No | **Yes (including live)** |
+| Migration | No | **Yes** (export → scp → import; live = jail runs during snapshot) |
 | Templates | YAML specification with inheritance | Bastillefile (Docker-like) |
 | Number of commands | 11 (+snapshot, gui subcommands) | 39 |
 | Linux jails | No | Yes (Ubuntu Noble/Focal/Bionic, Debian) |
@@ -577,7 +577,7 @@ Both systems operate exclusively within the FreeBSD jail ecosystem. For OCI cont
 11. **Static MAC** — fixed MAC addresses for DHCP stability
 12. **Multiple network interfaces** — `network add/remove`
 13. **DHCP/SYNCDHCP** — automatic IP addressing for VNET jails
-14. **Live migration** — transferring a running container to another host (ZFS send/recv + SSH)
+14. **Live migration** — transferring a running container to another host (ZFS snapshot → export → scp → import via SSH; jail runs during snapshot but there is a downtime window at switchover)
 15. **Tags/labels** — grouping containers by tags
 16. **Batch operations** — `ALL`, tags as TARGET, multiple targets
 17. **Boot priorities** — start/stop ordering for jails

@@ -132,6 +132,7 @@ Configuration files (YAML, higher priority wins):
 | File | Scope |
 |---|---|
 | `/usr/local/etc/crate.yml` | System-wide |
+| `/usr/local/etc/crate.d/*.yml` | Drop-in fragments (alphabetical order) |
 | `~/.config/crate/crate.yml` | Per-user |
 
 Key options: `prefix`, `cache`, `logs`, `zfs_enable`, `zfs_zpool`, `network_interface`, `securelevel`, `children_max`, `search_path`, `compress_xz_options`.
