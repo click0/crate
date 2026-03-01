@@ -1,0 +1,32 @@
+##
+## container for Blender 3D with GPU-accelerated rendering
+## For headless GPU rendering and remote 3D modeling via VNC.
+## Requires: nvidia-driver or amdgpu kernel module loaded.
+##
+## Use: crate create -s blender-gpu.yml
+## After running: crate gui list ; crate gui url blender
+##
+
+---
+
+pkg:
+    install:
+        - blender
+
+run:
+    command: /usr/local/bin/blender
+
+dirs:
+    share:
+        - [$HOME/Projects, $HOME/Projects]
+
+options:
+    - x11
+    - gl
+    - video
+
+gui:
+    mode: gpu
+    resolution: 1920x1080
+    vnc: true
+    novnc: true

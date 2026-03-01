@@ -1,0 +1,35 @@
+##
+## container for the Chromium browser with GPU-accelerated headless rendering
+## For servers with a GPU but no physical monitor (IP-KVM style access).
+## Requires: nvidia-driver or amdgpu kernel module loaded.
+##
+## Use: crate create -s chromium-gpu.yml
+## After running: crate gui list ; crate gui url chromium
+##
+
+---
+
+base:
+    keep:
+        - /sbin/sysctl
+
+pkg:
+    install:
+        - chromium
+
+run:
+    command: /usr/local/bin/chrome
+
+options:
+    - net
+    - x11
+    - gl
+    - video
+
+gui:
+    mode: gpu
+    resolution: 1920x1080
+    vnc: true
+    novnc: true
+    # gpu_driver: nvidia       # auto-detected if omitted
+    # gpu_device: "PCI:1:0:0"  # auto-detected if omitted
