@@ -132,6 +132,7 @@ crate gui url firefox    # виведе noVNC URL для доступу чере
 | Файл | Область |
 |---|---|
 | `/usr/local/etc/crate.yml` | Системна |
+| `/usr/local/etc/crate.d/*.yml` | Drop-in фрагменти (за алфавітом) |
 | `~/.config/crate/crate.yml` | Користувацька |
 
 Основні параметри: `prefix`, `cache`, `logs`, `zfs_enable`, `zfs_zpool`, `network_interface`, `securelevel`, `children_max`, `search_path`, `compress_xz_options`.

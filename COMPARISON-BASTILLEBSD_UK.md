@@ -129,7 +129,7 @@ bastille template myjail user/template → автоматизація налаш
 | **ZFS clone (COW)** | **Так** (автоматичний при `cow/backend: zfs`) | **Так** (для тонких jail-ів; live clone через `-l`) |
 | **ZFS шифрування** | **Так** (`encrypted: true` в spec, перевірка під час запуску) | Ні (шифрування на рівні пулу) |
 | **ZFS datasets в jail** | **Так** (`zfs-datasets:` в YAML, `allow.mount.zfs`) | **Так** (`bastille zfs jail`, v1.0+) |
-| **ZFS send/recv** | Ні | **Так** (live експорт без зупинки jail, migrate) |
+| **ZFS send/recv** | Ні | **Так** (ZFS snapshot → export → scp на remote; jail працює під час snapshot, але не під час transfer) |
 | **Copy-on-Write (COW)** | **Так** (ZFS clone або unionfs, ephemeral/persistent режими) | Через ZFS clone |
 | **UFS** | Так (типово) | **Так** |
 | **Shared dirs** | Так (nullfs в YAML) | Так (`bastille mount`) |
@@ -376,7 +376,7 @@ TAGS web db
 | **ZFS snapshots** | **Так** (create/list/restore/delete/diff) | **Так** |
 | **Клонування** | **Так** (COW під час запуску) | **Так** (clone, включно з live `-l`) |
 | **Перейменування** | Ні | Так (rename) |
-| **Міграція** | Ні | **Так** (migrate, включно з live через ZFS send/recv + SSH) |
+| **Міграція** | Ні | **Так** (`bastille migrate`: ZFS snapshot → export → scp → import через SSH; `-l` дозволяє export працюючого jail, але є вікно даунтайму при stop/start) |
 | **Оновлення ОС** | Перезбирання .crate | Так (update, upgrade, etcupdate) |
 | **Експорт/Імпорт** | **Так** (`crate export/import` з SHA256, traversal-валідацією, перевіркою версії ОС) | **Так** (7 форматів, сумісність з iocage/ezjail) |
 | **Перелік** | **Так** (`crate list`, таблиця + JSON вивід) | **Так** (list, з пріоритетним сортуванням) |
@@ -512,7 +512,7 @@ TAGS web db
 | Мережеві режими | 1 (epair+NAT) + IPv6 + pf anchors | 5+ (VNET, bridge, passthrough, alias, inherit + netgraph) |
 | IPv6 | **Так** (epair IPv6, ipfw ip6, pf inet6) | **Так** (dual-stack, SLAAC, rdr) |
 | Розмір контейнера | **Оптимізований** (ELF-аналіз) | Повна система |
-| Міграція | Ні | **Так (включно з live)** |
+| Міграція | Ні | **Так** (export → scp → import; jail працює під час snapshot, даунтайм при switchover) |
 | Шаблони | YAML-специфікація з успадкуванням | Bastillefile (Docker-подібний) |
 | Кількість команд | 11 (+підкоманди snapshot, gui) | 39 |
 | Linux jail-и | Ні | Так (Ubuntu Noble/Focal/Bionic, Debian) |
@@ -577,7 +577,7 @@ TAGS web db
 11. **Static MAC** — фіксовані MAC-адреси для стабільності DHCP
 12. **Кілька мережевих інтерфейсів** — `network add/remove`
 13. **DHCP/SYNCDHCP** — автоматична IP-адресація для VNET jail-ів
-14. **Live-міграція** — перенесення працюючого контейнера на інший хост (ZFS send/recv + SSH)
+14. **Live-міграція** — перенесення контейнера на інший хост (ZFS snapshot → export → scp → import через SSH; jail працює під час snapshot, але є даунтайм при stop/start switchover)
 15. **Теги/мітки** — групування контейнерів за тегами
 16. **Пакетні операції** — `ALL`, теги як TARGET, множинні цілі
 17. **Пріоритети завантаження** — порядок старту/зупинки jail-ів

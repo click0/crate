@@ -6,6 +6,8 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
+#include <dirent.h>
 #include <string>
 #include <vector>
 
@@ -74,7 +76,30 @@ const Settings& load() {
     }
   }
 
-  // Load user config (overrides system)
+  // Load drop-in config fragments (override system config, alphabetical order)
+  const std::string confDir = "/usr/local/etc/crate.d";
+  DIR *dir = opendir(confDir.c_str());
+  if (dir) {
+    std::vector<std::string> fragments;
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != nullptr) {
+      std::string name = ent->d_name;
+      if (name.size() > 4 && name.substr(name.size() - 4) == ".yml")
+        fragments.push_back(name);
+    }
+    closedir(dir);
+    std::sort(fragments.begin(), fragments.end());
+    for (auto &f : fragments) {
+      try {
+        auto cfg = YAML::LoadFile(STR(confDir << "/" << f));
+        applyYaml(g_settings, cfg);
+      } catch (...) {
+        // ignore malformed fragment
+      }
+    }
+  }
+
+  // Load user config (highest priority, overrides everything)
   auto userConfig = STR(Util::Fs::getUserHomeDir() << "/.config/crate/crate.yml");
   if (Util::Fs::fileExists(userConfig)) {
     try {
