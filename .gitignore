@@ -1,0 +1,5 @@
+*.o
+*.a
+crate
+crate.x
+lib/lst-all-script-sections.h

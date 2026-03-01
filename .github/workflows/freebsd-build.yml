@@ -38,8 +38,8 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Compile changed components"
-          CXXFLAGS="-Wall -std=c++17 $(pkg-config --cflags yaml-cpp)"
-          for f in run.cpp util.cpp create.cpp locs.cpp mount.cpp; do
+          CXXFLAGS="-Wall -std=c++17 -Ilib $(pkg-config --cflags yaml-cpp)"
+          for f in lib/run.cpp lib/util.cpp lib/create.cpp lib/locs.cpp lib/mount.cpp; do
             echo "  Compiling $f ..."
             c++ $CXXFLAGS -c "$f" -o "${f%.cpp}.o"
           done

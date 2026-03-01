@@ -1,18 +1,38 @@
 
-SRCS=   main.cpp args.cpp spec.cpp create.cpp run.cpp list.cpp info.cpp clean.cpp console.cpp export.cpp import.cpp gui.cpp run_net.cpp run_jail.cpp run_gui.cpp run_services.cpp locs.cpp cmd.cpp mount.cpp net.cpp ctx.cpp gui_registry.cpp scripts.cpp misc.cpp util.cpp err.cpp validate.cpp snapshot.cpp
-OBJS=   $(SRCS:.cpp=.o)
+# --- Source files ---
 
-PREFIX   ?=  /usr/local
-CXXFLAGS +=  `pkg-config --cflags yaml-cpp`
-LDFLAGS  +=  `pkg-config --libs yaml-cpp`
-LIBS     +=  -ljail
+LIB_SRCS = lib/spec.cpp lib/create.cpp lib/run.cpp lib/list.cpp lib/info.cpp \
+           lib/clean.cpp lib/console.cpp lib/export.cpp lib/import.cpp \
+           lib/gui.cpp lib/run_net.cpp lib/run_jail.cpp lib/run_gui.cpp \
+           lib/run_services.cpp lib/locs.cpp lib/cmd.cpp lib/mount.cpp \
+           lib/net.cpp lib/ctx.cpp lib/gui_registry.cpp lib/scripts.cpp \
+           lib/misc.cpp lib/util.cpp lib/err.cpp lib/validate.cpp \
+           lib/snapshot.cpp lib/config.cpp
 
-CXXFLAGS+=  -Wall -std=c++17
+CLI_SRCS = cli/main.cpp cli/args.cpp
+
+LIB_OBJS = $(LIB_SRCS:.cpp=.o)
+CLI_OBJS = $(CLI_SRCS:.cpp=.o)
+
+# --- Flags ---
+
+PREFIX   ?= /usr/local
+CXXFLAGS += `pkg-config --cflags yaml-cpp`
+LDFLAGS  += `pkg-config --libs yaml-cpp`
+LIBS     += -ljail
+
+CXXFLAGS += -Wall -std=c++17
+CXXFLAGS += -Ilib             # lib/ headers visible to all
+
+# --- Targets ---
 
 all: crate
 
-crate: $(OBJS)
-	$(CXX) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
+libcrate.a: $(LIB_OBJS)
+	$(AR) rcs $@ $^
+
+crate: libcrate.a $(CLI_OBJS)
+	$(CXX) $(LDFLAGS) -o $@ $(CLI_OBJS) libcrate.a $(LIBS)
 
 install: crate
 	install -s -m 04755 crate $(DESTDIR)$(PREFIX)/bin
@@ -34,19 +54,20 @@ crate.x: crate
 	sudo install -s -m 04755 -o 0 -g 0 crate crate.x
 
 clean:
-	rm -f $(OBJS) crate lst-all-script-sections.h
+	rm -f $(LIB_OBJS) $(CLI_OBJS) libcrate.a crate lib/lst-all-script-sections.h
 
-# generated sources
-lst-all-script-sections.h: create.cpp run.cpp run_net.cpp run_jail.cpp run_gui.cpp run_services.cpp
+# --- Generated sources ---
+
+lib/lst-all-script-sections.h: lib/create.cpp lib/run.cpp lib/run_net.cpp lib/run_jail.cpp lib/run_gui.cpp lib/run_services.cpp
 	@(echo "static std::set<std::string> allScriptSections = {\"\"" && \
-	  grep -h "runScript(" create.cpp run.cpp run_net.cpp run_jail.cpp run_gui.cpp run_services.cpp | sed -e 's|.*runScript(|, |; s|);||' && \
+	  grep -h "runScript(" lib/create.cpp lib/run.cpp lib/run_net.cpp lib/run_jail.cpp lib/run_gui.cpp lib/run_services.cpp | sed -e 's|.*runScript(|, |; s|);||' && \
 	  echo "};" \
 	 ) > $@
-	@touch spec.cpp
+	@touch lib/spec.cpp
 	@echo "generate $@"
-spec.cpp: lst-all-script-sections.h
+lib/spec.cpp: lib/lst-all-script-sections.h
 
-# shortcuts
+# --- Shortcuts ---
 a: all
 c: clean
 l: install-local

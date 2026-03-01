@@ -6,13 +6,14 @@
 
 BUILDDIR="${1:-.}"
 CRATE_BIN="${BUILDDIR}/crate"
+LIBDIR="${BUILDDIR}/lib"
 # Module files extracted from the monolithic run.cpp
-RUN_NET="${BUILDDIR}/run_net.cpp"
-RUN_JAIL="${BUILDDIR}/run_jail.cpp"
-RUN_GUI="${BUILDDIR}/run_gui.cpp"
-RUN_SERVICES="${BUILDDIR}/run_services.cpp"
+RUN_NET="${LIBDIR}/run_net.cpp"
+RUN_JAIL="${LIBDIR}/run_jail.cpp"
+RUN_GUI="${LIBDIR}/run_gui.cpp"
+RUN_SERVICES="${LIBDIR}/run_services.cpp"
 # All run-related source files (for grep checks)
-RUN_ALL="${BUILDDIR}/run.cpp ${BUILDDIR}/run_net.cpp ${BUILDDIR}/run_jail.cpp ${BUILDDIR}/run_gui.cpp ${BUILDDIR}/run_services.cpp"
+RUN_ALL="${LIBDIR}/run.cpp ${LIBDIR}/run_net.cpp ${LIBDIR}/run_jail.cpp ${LIBDIR}/run_gui.cpp ${LIBDIR}/run_services.cpp"
 PASS_COUNT=0
 FAIL_COUNT=0
 SKIP_COUNT=0
@@ -123,13 +124,13 @@ rm -f /tmp/_ci_test_ver /tmp/_ci_test_ver.cpp
 # ---------------------------------------------------------------------------
 section "T03: HTTPS URL and releases/snapshots logic"
 
-if grep -q 'https://download.freebsd.org/' "$BUILDDIR/locs.cpp"; then
+if grep -q 'https://download.freebsd.org/' "$LIBDIR/locs.cpp"; then
   pass "locs.cpp uses HTTPS URL (not FTP)"
 else
   fail "locs.cpp does not contain https://download.freebsd.org/"
 fi
 
-if grep -q '"releases"' "$BUILDDIR/locs.cpp" && grep -q '"snapshots"' "$BUILDDIR/locs.cpp"; then
+if grep -q '"releases"' "$LIBDIR/locs.cpp" && grep -q '"snapshots"' "$LIBDIR/locs.cpp"; then
   pass "locs.cpp contains releases/snapshots branching"
 else
   fail "locs.cpp missing releases/snapshots detection logic"
@@ -347,7 +348,7 @@ fi
 # ---------------------------------------------------------------------------
 section "T10: kldload fix"
 
-if grep -q 'kldload(name)' "$BUILDDIR/util.cpp"; then
+if grep -q 'kldload(name)' "$LIBDIR/util.cpp"; then
   pass "util.cpp kldload() uses 'name' parameter (not hardcoded)"
 else
   fail "util.cpp kldload() may still have hardcoded module name"
@@ -434,7 +435,7 @@ else
   fi
   skip "epair runtime test (compile-only CI)"
   section "T10: kldload fix"
-  if grep -q 'kldload(name)' "$BUILDDIR/util.cpp"; then
+  if grep -q 'kldload(name)' "$LIBDIR/util.cpp"; then
     pass "util.cpp kldload() uses 'name' parameter (not hardcoded)"
   else
     fail "util.cpp kldload() may still have hardcoded module name"
@@ -487,14 +488,14 @@ fi
 section "T13: ZFS support"
 
 # Source-level: ZFS detection functions in util.cpp
-if grep -q 'isOnZfs\|getZfsDataset\|isZfsEncrypted' "$BUILDDIR/util.cpp"; then
+if grep -q 'isOnZfs\|getZfsDataset\|isZfsEncrypted' "$LIBDIR/util.cpp"; then
   pass "util.cpp has ZFS detection functions"
 else
   fail "util.cpp missing ZFS detection functions"
 fi
 
 # Source-level: spec parser supports zfs/datasets
-if grep -q 'zfsDatasets' "$BUILDDIR/spec.cpp"; then
+if grep -q 'zfsDatasets' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp supports zfs/datasets parsing"
 else
   fail "spec.cpp missing zfs/datasets support"
@@ -629,7 +630,7 @@ else
   fail "run.cpp: service names not passed via exec"
 fi
 
-if grep -q 'execPipeline' "$BUILDDIR/create.cpp"; then
+if grep -q 'execPipeline' "$LIBDIR/create.cpp"; then
   pass "create.cpp uses execPipeline for tar/xz (no shell for jailPath/crateFileName)"
 else
   fail "create.cpp: jailPath/crateFileName not exec-based"
@@ -656,7 +657,7 @@ else
 fi
 
 # O_NOFOLLOW on file writes
-if grep -q 'O_NOFOLLOW' "$BUILDDIR/util.cpp"; then
+if grep -q 'O_NOFOLLOW' "$LIBDIR/util.cpp"; then
   pass "util.cpp uses O_NOFOLLOW on file writes"
 else
   fail "util.cpp missing O_NOFOLLOW protection"
@@ -680,19 +681,19 @@ fi
 section "T15: architectural security hardening"
 
 # exec-based execution in source files
-if grep -q 'execCommand' "$BUILDDIR/util.cpp" && grep -q 'execCommand' $RUN_ALL; then
+if grep -q 'execCommand' "$LIBDIR/util.cpp" && grep -q 'execCommand' $RUN_ALL; then
   pass "execCommand() present in util.cpp and run.cpp"
 else
   fail "execCommand() missing from util.cpp or run.cpp"
 fi
 
-if grep -q 'execPipeline' "$BUILDDIR/util.cpp" && grep -q 'execPipeline' $RUN_ALL; then
+if grep -q 'execPipeline' "$LIBDIR/util.cpp" && grep -q 'execPipeline' $RUN_ALL; then
   pass "execPipeline() present in util.cpp and run.cpp"
 else
   fail "execPipeline() missing from util.cpp or run.cpp"
 fi
 
-if grep -q 'execPipeline' "$BUILDDIR/create.cpp"; then
+if grep -q 'execPipeline' "$LIBDIR/create.cpp"; then
   pass "create.cpp uses execPipeline (no shell for tar/xz)"
 else
   fail "create.cpp missing execPipeline"
@@ -706,29 +707,29 @@ else
 fi
 
 # RAII file descriptors
-if grep -q 'UniqueFd' "$BUILDDIR/util.h"; then
+if grep -q 'UniqueFd' "$LIBDIR/util.h"; then
   pass "util.h has UniqueFd RAII wrapper for file descriptors"
 else
   fail "util.h missing UniqueFd RAII wrapper"
 fi
 
 # Path safety validation
-if grep -q 'safePath' "$BUILDDIR/util.cpp" && grep -q 'safePath' $RUN_ALL; then
+if grep -q 'safePath' "$LIBDIR/util.cpp" && grep -q 'safePath' $RUN_ALL; then
   pass "safePath() present in util.cpp and run.cpp"
 else
   fail "safePath() missing from util.cpp or run.cpp"
 fi
 
 # Resource leak fixes
-if grep -q 'make_unique<FwUsers>' "$BUILDDIR/ctx.cpp"; then
+if grep -q 'make_unique<FwUsers>' "$LIBDIR/ctx.cpp"; then
   pass "ctx.cpp uses make_unique (prevents pointer leak)"
 else
   fail "ctx.cpp missing make_unique in FwUsers::lock()"
 fi
 
 # mount.cpp: free before error check
-MOUNT_FREE_LINE=$(grep -n '::free(iov' "$BUILDDIR/mount.cpp" | head -1 | cut -d: -f1)
-MOUNT_ERR_LINE=$(grep -n '    ERR("nmount' "$BUILDDIR/mount.cpp" | head -1 | cut -d: -f1)
+MOUNT_FREE_LINE=$(grep -n '::free(iov' "$LIBDIR/mount.cpp" | head -1 | cut -d: -f1)
+MOUNT_ERR_LINE=$(grep -n '    ERR("nmount' "$LIBDIR/mount.cpp" | head -1 | cut -d: -f1)
 if [ -n "$MOUNT_FREE_LINE" ] && [ -n "$MOUNT_ERR_LINE" ] && [ "$MOUNT_FREE_LINE" -lt "$MOUNT_ERR_LINE" ]; then
   pass "mount.cpp frees strdup'd names before ERR check"
 else
@@ -736,14 +737,14 @@ else
 fi
 
 # resolv.conf parsed directly (no grep pipeline)
-if grep -q 'ifstream.*resolv' "$BUILDDIR/net.cpp"; then
+if grep -q 'ifstream.*resolv' "$LIBDIR/net.cpp"; then
   pass "net.cpp parses /etc/resolv.conf directly (no shell pipeline)"
 else
   fail "net.cpp missing direct resolv.conf parsing"
 fi
 
 # xzThreadsArg for exec-based pipelines
-if grep -q 'xzThreadsArg' "$BUILDDIR/cmd.cpp" && grep -q 'xzThreadsArg' $RUN_ALL; then
+if grep -q 'xzThreadsArg' "$LIBDIR/cmd.cpp" && grep -q 'xzThreadsArg' $RUN_ALL; then
   pass "xzThreadsArg used for exec-based xz calls"
 else
   fail "xzThreadsArg missing from cmd.cpp or run.cpp"
@@ -756,34 +757,34 @@ else
   fail "run.cpp still uses system()"
 fi
 
-if ! grep -q 'popen(' "$BUILDDIR/util.cpp"; then
+if ! grep -q 'popen(' "$LIBDIR/util.cpp"; then
   pass "util.cpp has no popen() calls (fully exec-based)"
 else
   fail "util.cpp still uses popen()"
 fi
 
-if ! grep -q 'runCommand(' $RUN_ALL && ! grep -q 'runCommand(' "$BUILDDIR/create.cpp"; then
+if ! grep -q 'runCommand(' $RUN_ALL && ! grep -q 'runCommand(' "$LIBDIR/create.cpp"; then
   pass "runCommand() removed from run.cpp and create.cpp"
 else
   fail "runCommand() still present in run.cpp or create.cpp"
 fi
 
 # fnmatch-based wildcard expansion (no shell)
-if grep -q 'fnmatch' "$BUILDDIR/util.cpp"; then
+if grep -q 'fnmatch' "$LIBDIR/util.cpp"; then
   pass "util.cpp uses fnmatch for wildcard expansion (no shell)"
 else
   fail "util.cpp missing fnmatch-based wildcard expansion"
 fi
 
 # make_shared for factory methods
-if grep -q 'make_shared' "$BUILDDIR/spec.cpp"; then
+if grep -q 'make_shared' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp uses make_shared for factory methods"
 else
   fail "spec.cpp missing make_shared usage"
 fi
 
 # execCommandGetStatus for status-returning exec
-if grep -q 'execCommandGetStatus' "$BUILDDIR/util.cpp"; then
+if grep -q 'execCommandGetStatus' "$LIBDIR/util.cpp"; then
   pass "util.cpp implements execCommandGetStatus"
 else
   fail "util.cpp missing execCommandGetStatus implementation"
@@ -793,20 +794,20 @@ fi
 section "T16: V4 — unpredictable jail directory names"
 
 # randomHex() in util.cpp and used in run.cpp/create.cpp
-if grep -q 'randomHex' "$BUILDDIR/util.cpp" && grep -q 'randomHex' $RUN_ALL; then
+if grep -q 'randomHex' "$LIBDIR/util.cpp" && grep -q 'randomHex' $RUN_ALL; then
   pass "randomHex() present in util.cpp and used in run.cpp"
 else
   fail "randomHex() missing from util.cpp or run.cpp"
 fi
 
-if grep -q 'randomHex' "$BUILDDIR/create.cpp"; then
+if grep -q 'randomHex' "$LIBDIR/create.cpp"; then
   pass "create.cpp uses randomHex for jail directory names"
 else
   fail "create.cpp missing randomHex for jail directory names"
 fi
 
 # arc4random_buf for cryptographic randomness
-if grep -q 'arc4random_buf' "$BUILDDIR/util.cpp"; then
+if grep -q 'arc4random_buf' "$LIBDIR/util.cpp"; then
   pass "util.cpp uses arc4random_buf for cryptographic randomness"
 else
   fail "util.cpp missing arc4random_buf"
@@ -819,14 +820,14 @@ else
   fail "run.cpp jail path still uses getpid()"
 fi
 
-if ! grep -q 'jailDirectoryPath.*getpid\|jailPath.*getpid' "$BUILDDIR/create.cpp"; then
+if ! grep -q 'jailDirectoryPath.*getpid\|jailPath.*getpid' "$LIBDIR/create.cpp"; then
   pass "create.cpp jail path does not use predictable PID"
 else
   fail "create.cpp jail path still uses getpid()"
 fi
 
 # copyFile error message should reference actual filenames
-if ! grep -q 'file1\.txt' "$BUILDDIR/util.cpp"; then
+if ! grep -q 'file1\.txt' "$LIBDIR/util.cpp"; then
   pass "util.cpp copyFile has proper error message (no hardcoded filename)"
 else
   fail "util.cpp copyFile still has hardcoded 'file1.txt' in error message"
@@ -836,7 +837,7 @@ fi
 section "T17: Phase 1 features (RCTL, IPC, validate)"
 
 # IPC controls in spec parser
-if grep -q 'allowSysvipc' "$BUILDDIR/spec.h"; then
+if grep -q 'allowSysvipc' "$LIBDIR/spec.h"; then
   pass "spec.h has IPC control fields"
 else
   fail "spec.h missing IPC control fields"
@@ -849,7 +850,7 @@ else
 fi
 
 # IPC raw_sockets override
-if grep -q 'ipcRawSocketsOverride' "$BUILDDIR/spec.h"; then
+if grep -q 'ipcRawSocketsOverride' "$LIBDIR/spec.h"; then
   pass "spec.h has ipcRawSocketsOverride field"
 else
   fail "spec.h missing ipcRawSocketsOverride"
@@ -862,20 +863,20 @@ else
 fi
 
 # IPC parsing in spec.cpp
-if grep -q '"ipc"' "$BUILDDIR/spec.cpp" && grep -q '"sysvipc"' "$BUILDDIR/spec.cpp"; then
+if grep -q '"ipc"' "$LIBDIR/spec.cpp" && grep -q '"sysvipc"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses ipc/sysvipc section"
 else
   fail "spec.cpp missing ipc/sysvipc parsing"
 fi
 
-if grep -q '"mqueue"' "$BUILDDIR/spec.cpp"; then
+if grep -q '"mqueue"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses ipc/mqueue"
 else
   fail "spec.cpp missing ipc/mqueue parsing"
 fi
 
 # RCTL resource limits
-if grep -q 'limits' "$BUILDDIR/spec.h"; then
+if grep -q 'limits' "$LIBDIR/spec.h"; then
   pass "spec.h has limits field"
 else
   fail "spec.h missing limits field"
@@ -887,14 +888,14 @@ else
   fail "run.cpp missing RCTL support"
 fi
 
-if grep -q '"limits"' "$BUILDDIR/spec.cpp"; then
+if grep -q '"limits"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses limits section"
 else
   fail "spec.cpp missing limits parsing"
 fi
 
 # RCTL limit name validation
-if grep -q 'validLimits' "$BUILDDIR/spec.cpp" && grep -q '"maxproc"' "$BUILDDIR/spec.cpp"; then
+if grep -q 'validLimits' "$LIBDIR/spec.cpp" && grep -q '"maxproc"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp validates RCTL limit names"
 else
   fail "spec.cpp missing RCTL limit name validation"
@@ -908,31 +909,31 @@ else
 fi
 
 # Validate command
-if grep -q 'CmdValidate' "$BUILDDIR/args.h"; then
+if grep -q 'CmdValidate' "$LIBDIR/args.h"; then
   pass "args.h has CmdValidate command"
 else
   fail "args.h missing CmdValidate"
 fi
 
-if grep -q 'validate' "$BUILDDIR/args.cpp"; then
+if grep -q 'validate' "$BUILDDIR/cli/args.cpp"; then
   pass "args.cpp handles validate command"
 else
   fail "args.cpp missing validate command handling"
 fi
 
-if [ -f "$BUILDDIR/validate.cpp" ]; then
+if [ -f "$LIBDIR/validate.cpp" ]; then
   pass "validate.cpp exists"
 else
   fail "validate.cpp not found"
 fi
 
-if grep -q 'validateCrateSpec' "$BUILDDIR/commands.h"; then
+if grep -q 'validateCrateSpec' "$LIBDIR/commands.h"; then
   pass "commands.h declares validateCrateSpec"
 else
   fail "commands.h missing validateCrateSpec declaration"
 fi
 
-if grep -q 'validateCrateSpec' "$BUILDDIR/main.cpp"; then
+if grep -q 'validateCrateSpec' "$BUILDDIR/cli/main.cpp"; then
   pass "main.cpp dispatches CmdValidate to validateCrateSpec"
 else
   fail "main.cpp missing CmdValidate dispatch"
@@ -948,43 +949,43 @@ fi
 section "T18: Phase 2 features (snapshots, encryption, DNS filter, security)"
 
 # Snapshot command
-if grep -q 'CmdSnapshot' "$BUILDDIR/args.h"; then
+if grep -q 'CmdSnapshot' "$LIBDIR/args.h"; then
   pass "args.h has CmdSnapshot command"
 else
   fail "args.h missing CmdSnapshot"
 fi
 
-if [ -f "$BUILDDIR/snapshot.cpp" ]; then
+if [ -f "$LIBDIR/snapshot.cpp" ]; then
   pass "snapshot.cpp exists"
 else
   fail "snapshot.cpp not found"
 fi
 
-if grep -q 'snapshotCrate' "$BUILDDIR/commands.h"; then
+if grep -q 'snapshotCrate' "$LIBDIR/commands.h"; then
   pass "commands.h declares snapshotCrate"
 else
   fail "commands.h missing snapshotCrate"
 fi
 
-if grep -q 'snapshotCrate' "$BUILDDIR/main.cpp"; then
+if grep -q 'snapshotCrate' "$BUILDDIR/cli/main.cpp"; then
   pass "main.cpp dispatches CmdSnapshot to snapshotCrate"
 else
   fail "main.cpp missing CmdSnapshot dispatch"
 fi
 
-if grep -qE 'CRATE_PATH_ZFS.*"snapshot"|"zfs".*"snapshot"' "$BUILDDIR/snapshot.cpp"; then
+if grep -qE 'CRATE_PATH_ZFS.*"snapshot"|"zfs".*"snapshot"' "$LIBDIR/snapshot.cpp"; then
   pass "snapshot.cpp calls zfs snapshot"
 else
   fail "snapshot.cpp missing zfs snapshot call"
 fi
 
-if grep -qE 'CRATE_PATH_ZFS.*"rollback"|"zfs".*"rollback"' "$BUILDDIR/snapshot.cpp"; then
+if grep -qE 'CRATE_PATH_ZFS.*"rollback"|"zfs".*"rollback"' "$LIBDIR/snapshot.cpp"; then
   pass "snapshot.cpp calls zfs rollback"
 else
   fail "snapshot.cpp missing zfs rollback call"
 fi
 
-if grep -qE 'CRATE_PATH_ZFS.*"diff"|"zfs".*"diff"' "$BUILDDIR/snapshot.cpp"; then
+if grep -qE 'CRATE_PATH_ZFS.*"diff"|"zfs".*"diff"' "$LIBDIR/snapshot.cpp"; then
   pass "snapshot.cpp calls zfs diff"
 else
   fail "snapshot.cpp missing zfs diff call"
@@ -997,38 +998,38 @@ else
 fi
 
 # Snapshot arg parsing
-if grep -q 'snapshotSubcmd' "$BUILDDIR/args.h" && grep -q 'snapshotDataset' "$BUILDDIR/args.h"; then
+if grep -q 'snapshotSubcmd' "$LIBDIR/args.h" && grep -q 'snapshotDataset' "$LIBDIR/args.h"; then
   pass "args.h has snapshot parameter fields"
 else
   fail "args.h missing snapshot parameter fields"
 fi
 
-if grep -q 'snapshotSubcmd.*"create"' "$BUILDDIR/args.cpp" && grep -q 'snapshotSubcmd.*"diff"' "$BUILDDIR/args.cpp"; then
+if grep -q 'snapshotSubcmd.*"create"' "$BUILDDIR/cli/args.cpp" && grep -q 'snapshotSubcmd.*"diff"' "$BUILDDIR/cli/args.cpp"; then
   pass "args.cpp validates snapshot subcommands"
 else
   fail "args.cpp missing snapshot subcommand validation"
 fi
 
 # Encrypted containers
-if grep -q 'encrypted' "$BUILDDIR/spec.h"; then
+if grep -q 'encrypted' "$LIBDIR/spec.h"; then
   pass "spec.h has encrypted field"
 else
   fail "spec.h missing encrypted field"
 fi
 
-if grep -q '"encrypted"' "$BUILDDIR/spec.cpp"; then
+if grep -q '"encrypted"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses encrypted section"
 else
   fail "spec.cpp missing encrypted parsing"
 fi
 
-if grep -q 'encryptionMethod\|encryptionCipher' "$BUILDDIR/spec.h"; then
+if grep -q 'encryptionMethod\|encryptionCipher' "$LIBDIR/spec.h"; then
   pass "spec.h has encryption method/cipher fields"
 else
   fail "spec.h missing encryption method/cipher fields"
 fi
 
-if grep -q 'aes-256-gcm' "$BUILDDIR/spec.cpp"; then
+if grep -q 'aes-256-gcm' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp validates AES encryption ciphers"
 else
   fail "spec.cpp missing AES cipher validation"
@@ -1041,13 +1042,13 @@ else
 fi
 
 # DNS filtering
-if grep -q 'DnsFilter\|dnsFilter' "$BUILDDIR/spec.h"; then
+if grep -q 'DnsFilter\|dnsFilter' "$LIBDIR/spec.h"; then
   pass "spec.h has DnsFilter struct"
 else
   fail "spec.h missing DnsFilter"
 fi
 
-if grep -q '"dns_filter"\|"dns-filter"' "$BUILDDIR/spec.cpp"; then
+if grep -q '"dns_filter"\|"dns-filter"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses dns_filter section"
 else
   fail "spec.cpp missing dns_filter parsing"
@@ -1065,26 +1066,26 @@ else
   fail "run.cpp missing unbound blocking rules"
 fi
 
-if grep -q 'redirect_blocked\|redirect-blocked' "$BUILDDIR/spec.cpp"; then
+if grep -q 'redirect_blocked\|redirect-blocked' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses redirect_blocked option"
 else
   fail "spec.cpp missing redirect_blocked parsing"
 fi
 
 # Security hardening
-if grep -q 'enforceStatfs' "$BUILDDIR/spec.h"; then
+if grep -q 'enforceStatfs' "$LIBDIR/spec.h"; then
   pass "spec.h has enforceStatfs field"
 else
   fail "spec.h missing enforceStatfs"
 fi
 
-if grep -q 'allowChflags\|allowMlock' "$BUILDDIR/spec.h"; then
+if grep -q 'allowChflags\|allowMlock' "$LIBDIR/spec.h"; then
   pass "spec.h has allowChflags/allowMlock fields"
 else
   fail "spec.h missing allowChflags/allowMlock"
 fi
 
-if grep -q '"security"' "$BUILDDIR/spec.cpp"; then
+if grep -q '"security"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses security section"
 else
   fail "spec.cpp missing security parsing"
@@ -1115,19 +1116,19 @@ else
 fi
 
 # Validate cross-checks for new features
-if grep -q 'dnsFilter\|dns_filter' "$BUILDDIR/validate.cpp"; then
+if grep -q 'dnsFilter\|dns_filter' "$LIBDIR/validate.cpp"; then
   pass "validate.cpp checks dns_filter configuration"
 else
   fail "validate.cpp missing dns_filter checks"
 fi
 
-if grep -q 'encrypted' "$BUILDDIR/validate.cpp"; then
+if grep -q 'encrypted' "$LIBDIR/validate.cpp"; then
   pass "validate.cpp checks encryption configuration"
 else
   fail "validate.cpp missing encryption checks"
 fi
 
-if grep -q 'allowChflags\|allow_chflags' "$BUILDDIR/validate.cpp"; then
+if grep -q 'allowChflags\|allow_chflags' "$LIBDIR/validate.cpp"; then
   pass "validate.cpp warns about chflags/mlock security implications"
 else
   fail "validate.cpp missing chflags/mlock warnings"
@@ -1137,13 +1138,13 @@ fi
 section "T19: Phase 3 features (COW, templates, X11 modes, clipboard, dbus, managed services, socket_proxy)"
 
 # §6 COW
-if grep -q 'CowOptions' "$BUILDDIR/spec.h"; then
+if grep -q 'CowOptions' "$LIBDIR/spec.h"; then
   pass "spec.h has CowOptions struct"
 else
   fail "spec.h missing CowOptions struct"
 fi
 
-if grep -q '"cow"' "$BUILDDIR/spec.cpp"; then
+if grep -q '"cow"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses cow section"
 else
   fail "spec.cpp missing cow parsing"
@@ -1167,39 +1168,39 @@ else
   fail "run.cpp missing COW cleanup"
 fi
 
-if grep -q 'ephemeral.*persistent' "$BUILDDIR/spec.cpp"; then
+if grep -q 'ephemeral.*persistent' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp validates cow mode values"
 else
   fail "spec.cpp missing cow mode validation"
 fi
 
 # §10 Templates
-if grep -q 'createTemplate' "$BUILDDIR/args.h"; then
+if grep -q 'createTemplate' "$LIBDIR/args.h"; then
   pass "args.h has createTemplate field"
 else
   fail "args.h missing createTemplate field"
 fi
 
-if grep -q 'template' "$BUILDDIR/args.cpp"; then
+if grep -q 'template' "$BUILDDIR/cli/args.cpp"; then
   pass "args.cpp handles --template flag"
 else
   fail "args.cpp missing --template handling"
 fi
 
-if grep -q 'crate/templates' "$BUILDDIR/args.cpp"; then
+if grep -q 'crate/templates' "$BUILDDIR/cli/args.cpp"; then
   pass "args.cpp searches template paths"
 else
   fail "args.cpp missing template path search"
 fi
 
 # §11 X11 modes
-if grep -q 'X11Options' "$BUILDDIR/spec.h"; then
+if grep -q 'X11Options' "$LIBDIR/spec.h"; then
   pass "spec.h has X11Options struct"
 else
   fail "spec.h missing X11Options struct"
 fi
 
-if grep -q '"x11"' "$BUILDDIR/spec.cpp" && grep -q 'x11.*mode' "$BUILDDIR/spec.cpp"; then
+if grep -q '"x11"' "$LIBDIR/spec.cpp" && grep -q 'x11.*mode' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses x11 mode/resolution"
 else
   fail "spec.cpp missing x11 mode parsing"
@@ -1218,26 +1219,26 @@ else
 fi
 
 # §12 Clipboard
-if grep -q 'ClipboardOptions' "$BUILDDIR/spec.h"; then
+if grep -q 'ClipboardOptions' "$LIBDIR/spec.h"; then
   pass "spec.h has ClipboardOptions struct"
 else
   fail "spec.h missing ClipboardOptions struct"
 fi
 
-if grep -q '"clipboard"' "$BUILDDIR/spec.cpp"; then
+if grep -q '"clipboard"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses clipboard section"
 else
   fail "spec.cpp missing clipboard parsing"
 fi
 
 # §13 D-Bus
-if grep -q 'DbusOptions' "$BUILDDIR/spec.h"; then
+if grep -q 'DbusOptions' "$LIBDIR/spec.h"; then
   pass "spec.h has DbusOptions struct"
 else
   fail "spec.h missing DbusOptions struct"
 fi
 
-if grep -q '"dbus"' "$BUILDDIR/spec.cpp"; then
+if grep -q '"dbus"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses dbus section"
 else
   fail "spec.cpp missing dbus parsing"
@@ -1256,13 +1257,13 @@ else
 fi
 
 # §14 Managed services
-if grep -q 'ManagedService' "$BUILDDIR/spec.h"; then
+if grep -q 'ManagedService' "$LIBDIR/spec.h"; then
   pass "spec.h has ManagedService struct"
 else
   fail "spec.h missing ManagedService struct"
 fi
 
-if grep -q '"services"' "$BUILDDIR/spec.cpp" && grep -q '"managed"' "$BUILDDIR/spec.cpp"; then
+if grep -q '"services"' "$LIBDIR/spec.cpp" && grep -q '"managed"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses services/managed section"
 else
   fail "spec.cpp missing services/managed parsing"
@@ -1281,13 +1282,13 @@ else
 fi
 
 # §15 Socket proxy
-if grep -q 'SocketProxy' "$BUILDDIR/spec.h"; then
+if grep -q 'SocketProxy' "$LIBDIR/spec.h"; then
   pass "spec.h has SocketProxy struct"
 else
   fail "spec.h missing SocketProxy struct"
 fi
 
-if grep -q '"socket_proxy"\|"socket-proxy"' "$BUILDDIR/spec.cpp"; then
+if grep -q '"socket_proxy"\|"socket-proxy"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses socket_proxy section"
 else
   fail "spec.cpp missing socket_proxy parsing"
@@ -1306,31 +1307,31 @@ else
 fi
 
 # Validate cross-checks
-if grep -q 'cowOptions' "$BUILDDIR/validate.cpp"; then
+if grep -q 'cowOptions' "$LIBDIR/validate.cpp"; then
   pass "validate.cpp checks COW configuration"
 else
   fail "validate.cpp missing COW checks"
 fi
 
-if grep -q 'x11Options.*nested\|nested.*Xephyr' "$BUILDDIR/validate.cpp"; then
+if grep -q 'x11Options.*nested\|nested.*Xephyr' "$LIBDIR/validate.cpp"; then
   pass "validate.cpp checks nested X11 requirements"
 else
   fail "validate.cpp missing X11 checks"
 fi
 
-if grep -q 'clipboardOptions' "$BUILDDIR/validate.cpp"; then
+if grep -q 'clipboardOptions' "$LIBDIR/validate.cpp"; then
   pass "validate.cpp checks clipboard isolation"
 else
   fail "validate.cpp missing clipboard checks"
 fi
 
-if grep -q 'dbusOptions' "$BUILDDIR/validate.cpp"; then
+if grep -q 'dbusOptions' "$LIBDIR/validate.cpp"; then
   pass "validate.cpp checks D-Bus requirements"
 else
   fail "validate.cpp missing D-Bus checks"
 fi
 
-if grep -q 'socketProxy' "$BUILDDIR/validate.cpp"; then
+if grep -q 'socketProxy' "$LIBDIR/validate.cpp"; then
   pass "validate.cpp checks socket proxy configuration"
 else
   fail "validate.cpp missing socket proxy checks"
@@ -1340,19 +1341,19 @@ fi
 section "T20: Phase 4 features (pf firewall, Capsicum/MAC, template merge, clipboard proxy, terminal)"
 
 # §3 Per-container firewall policy
-if grep -q 'FirewallPolicy' "$BUILDDIR/spec.h"; then
+if grep -q 'FirewallPolicy' "$LIBDIR/spec.h"; then
   pass "spec.h has FirewallPolicy struct"
 else
   fail "spec.h missing FirewallPolicy struct"
 fi
 
-if grep -q '"firewall"' "$BUILDDIR/spec.cpp"; then
+if grep -q '"firewall"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses firewall section"
 else
   fail "spec.cpp missing firewall parsing"
 fi
 
-if grep -q 'firewallPolicy' "$BUILDDIR/spec.cpp" && grep -q 'block-ip\|block_ip' "$BUILDDIR/spec.cpp"; then
+if grep -q 'firewallPolicy' "$LIBDIR/spec.cpp" && grep -q 'block-ip\|block_ip' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses firewall block-ip and allow rules"
 else
   fail "spec.cpp missing firewall rule parsing"
@@ -1377,25 +1378,25 @@ else
 fi
 
 # §8 Capsicum + MAC
-if grep -q 'SecurityAdvanced' "$BUILDDIR/spec.h"; then
+if grep -q 'SecurityAdvanced' "$LIBDIR/spec.h"; then
   pass "spec.h has SecurityAdvanced struct"
 else
   fail "spec.h missing SecurityAdvanced struct"
 fi
 
-if grep -q '"security_advanced"\|"security-advanced"' "$BUILDDIR/spec.cpp"; then
+if grep -q '"security_advanced"\|"security-advanced"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses security_advanced section"
 else
   fail "spec.cpp missing security_advanced parsing"
 fi
 
-if grep -q 'capsicum' "$BUILDDIR/spec.cpp"; then
+if grep -q 'capsicum' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses capsicum option"
 else
   fail "spec.cpp missing capsicum parsing"
 fi
 
-if grep -q 'mac_bsdextended\|mac-bsdextended' "$BUILDDIR/spec.cpp"; then
+if grep -q 'mac_bsdextended\|mac-bsdextended' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses mac_bsdextended rules"
 else
   fail "spec.cpp missing mac_bsdextended parsing"
@@ -1413,38 +1414,38 @@ else
   fail "run.cpp missing MAC rule management"
 fi
 
-if grep -q 'mac_portacl\|mac-portacl' "$BUILDDIR/spec.cpp"; then
+if grep -q 'mac_portacl\|mac-portacl' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses mac_portacl section"
 else
   fail "spec.cpp missing mac_portacl parsing"
 fi
 
-if grep -q 'hideOtherJails\|hide_other_jails\|hide-other-jails' "$BUILDDIR/spec.cpp"; then
+if grep -q 'hideOtherJails\|hide_other_jails\|hide-other-jails' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses hide_other_jails option"
 else
   fail "spec.cpp missing hide_other_jails parsing"
 fi
 
 # §10 Template merging
-if grep -q 'mergeSpecs' "$BUILDDIR/spec.h"; then
+if grep -q 'mergeSpecs' "$LIBDIR/spec.h"; then
   pass "spec.h declares mergeSpecs()"
 else
   fail "spec.h missing mergeSpecs declaration"
 fi
 
-if grep -q 'mergeSpecs' "$BUILDDIR/spec.cpp"; then
+if grep -q 'mergeSpecs' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp implements mergeSpecs()"
 else
   fail "spec.cpp missing mergeSpecs implementation"
 fi
 
-if grep -q 'mergeSpecs' "$BUILDDIR/main.cpp"; then
+if grep -q 'mergeSpecs' "$BUILDDIR/cli/main.cpp"; then
   pass "main.cpp calls mergeSpecs for template merging"
 else
   fail "main.cpp missing mergeSpecs call"
 fi
 
-if grep -q 'createTemplate' "$BUILDDIR/main.cpp"; then
+if grep -q 'createTemplate' "$BUILDDIR/cli/main.cpp"; then
   pass "main.cpp checks createTemplate for merge dispatch"
 else
   fail "main.cpp missing createTemplate check"
@@ -1496,25 +1497,25 @@ else
 fi
 
 # §16 Terminal isolation
-if grep -q 'TerminalOptions' "$BUILDDIR/spec.h"; then
+if grep -q 'TerminalOptions' "$LIBDIR/spec.h"; then
   pass "spec.h has TerminalOptions struct"
 else
   fail "spec.h missing TerminalOptions struct"
 fi
 
-if grep -q '"terminal"' "$BUILDDIR/spec.cpp"; then
+if grep -q '"terminal"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses terminal section"
 else
   fail "spec.cpp missing terminal parsing"
 fi
 
-if grep -q 'devfsRuleset\|devfs_ruleset\|devfs-ruleset' "$BUILDDIR/spec.cpp"; then
+if grep -q 'devfsRuleset\|devfs_ruleset\|devfs-ruleset' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses devfs_ruleset option"
 else
   fail "spec.cpp missing devfs_ruleset parsing"
 fi
 
-if grep -q 'allowRawTty\|allow_raw_tty\|allow-raw-tty' "$BUILDDIR/spec.cpp"; then
+if grep -q 'allowRawTty\|allow_raw_tty\|allow-raw-tty' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses allow_raw_tty option"
 else
   fail "spec.cpp missing allow_raw_tty parsing"
@@ -1527,19 +1528,19 @@ else
 fi
 
 # Validate cross-checks for Phase 4
-if grep -q 'firewallPolicy' "$BUILDDIR/validate.cpp"; then
+if grep -q 'firewallPolicy' "$LIBDIR/validate.cpp"; then
   pass "validate.cpp checks firewall policy configuration"
 else
   fail "validate.cpp missing firewall checks"
 fi
 
-if grep -q 'securityAdvanced\|capsicum' "$BUILDDIR/validate.cpp"; then
+if grep -q 'securityAdvanced\|capsicum' "$LIBDIR/validate.cpp"; then
   pass "validate.cpp checks capsicum/MAC configuration"
 else
   fail "validate.cpp missing capsicum/MAC checks"
 fi
 
-if grep -q 'terminalOptions\|devfs_ruleset' "$BUILDDIR/validate.cpp"; then
+if grep -q 'terminalOptions\|devfs_ruleset' "$LIBDIR/validate.cpp"; then
   pass "validate.cpp checks terminal configuration"
 else
   fail "validate.cpp missing terminal checks"
@@ -1549,28 +1550,28 @@ fi
 section "T21: Phase 5 — FreeBSD 15.0 compatibility fixes"
 
 # HTTPS URL for base archive download
-if grep -q 'https://download.freebsd.org' "$BUILDDIR/locs.cpp"; then
+if grep -q 'https://download.freebsd.org' "$LIBDIR/locs.cpp"; then
   pass "locs.cpp uses HTTPS URL for base archive"
 else
   fail "locs.cpp missing HTTPS URL (still using FTP?)"
 fi
 
 # Release vs snapshot detection
-if grep -q 'releases.*snapshots\|RELEASE' "$BUILDDIR/locs.cpp"; then
+if grep -q 'releases.*snapshots\|RELEASE' "$LIBDIR/locs.cpp"; then
   pass "locs.cpp detects release vs snapshot URL"
 else
   fail "locs.cpp missing release/snapshot detection"
 fi
 
 # _WITH_GETLINE removed
-if ! grep -q '_WITH_GETLINE' "$BUILDDIR/util.cpp"; then
+if ! grep -q '_WITH_GETLINE' "$LIBDIR/util.cpp"; then
   pass "util.cpp has no _WITH_GETLINE (dead code removed)"
 else
   fail "util.cpp still has _WITH_GETLINE"
 fi
 
 # Container OS version marker written at create time
-if grep -q 'CRATE.OSVERSION' "$BUILDDIR/create.cpp"; then
+if grep -q 'CRATE.OSVERSION' "$LIBDIR/create.cpp"; then
   pass "create.cpp writes +CRATE.OSVERSION version marker"
 else
   fail "create.cpp missing +CRATE.OSVERSION write"
@@ -1632,25 +1633,25 @@ fi
 section "T20: pkgbase support (§17)"
 
 # --use-pkgbase flag recognized by args parser
-if grep -q 'use-pkgbase\|usePkgbase' "$BUILDDIR/args.h"; then
+if grep -q 'use-pkgbase\|usePkgbase' "$LIBDIR/args.h"; then
   pass "args.h declares usePkgbase field"
 else
   fail "args.h missing usePkgbase field"
 fi
 
-if grep -q 'use-pkgbase' "$BUILDDIR/args.cpp"; then
+if grep -q 'use-pkgbase' "$BUILDDIR/cli/args.cpp"; then
   pass "args.cpp handles --use-pkgbase flag"
 else
   fail "args.cpp missing --use-pkgbase handling"
 fi
 
-if grep -q 'bootstrapJailViaPkgbase\|pkgbase' "$BUILDDIR/create.cpp"; then
+if grep -q 'bootstrapJailViaPkgbase\|pkgbase' "$LIBDIR/create.cpp"; then
   pass "create.cpp has pkgbase bootstrap path"
 else
   fail "create.cpp missing pkgbase bootstrap"
 fi
 
-if grep -q 'CRATE.BOOTSTRAP' "$BUILDDIR/create.cpp"; then
+if grep -q 'CRATE.BOOTSTRAP' "$LIBDIR/create.cpp"; then
   pass "create.cpp records bootstrap method in +CRATE.BOOTSTRAP"
 else
   fail "create.cpp missing +CRATE.BOOTSTRAP metadata"
@@ -1659,19 +1660,19 @@ fi
 # ---------------------------------------------------------------------------
 section "T21: dynamic ipfw rule allocation (§18)"
 
-if grep -q 'FwSlots' "$BUILDDIR/ctx.h"; then
+if grep -q 'FwSlots' "$LIBDIR/ctx.h"; then
   pass "ctx.h declares FwSlots class"
 else
   fail "ctx.h missing FwSlots class"
 fi
 
-if grep -q 'FwSlots' "$BUILDDIR/ctx.cpp"; then
+if grep -q 'FwSlots' "$LIBDIR/ctx.cpp"; then
   pass "ctx.cpp implements FwSlots"
 else
   fail "ctx.cpp missing FwSlots implementation"
 fi
 
-if grep -q 'garbageCollect' "$BUILDDIR/ctx.cpp"; then
+if grep -q 'garbageCollect' "$LIBDIR/ctx.cpp"; then
   pass "FwSlots has garbage collection for dead PIDs"
 else
   fail "FwSlots missing garbage collection"
@@ -1709,20 +1710,20 @@ fi
 # ---------------------------------------------------------------------------
 section "T23: jail directory permission check (§20)"
 
-if grep -q 'st_uid.*0\|owned by.*uid' "$BUILDDIR/misc.cpp"; then
+if grep -q 'st_uid.*0\|owned by.*uid' "$LIBDIR/misc.cpp"; then
   pass "misc.cpp checks jail directory ownership"
 else
   fail "misc.cpp missing ownership check"
 fi
 
-if grep -q 'chmod.*0700\|st_mode.*0777' "$BUILDDIR/misc.cpp"; then
+if grep -q 'chmod.*0700\|st_mode.*0777' "$LIBDIR/misc.cpp"; then
   pass "misc.cpp checks/fixes jail directory permissions"
 else
   fail "misc.cpp missing permission check"
 fi
 
 # Verify the TODO is resolved
-if grep -q 'TODO check that permissions' "$BUILDDIR/misc.cpp"; then
+if grep -q 'TODO check that permissions' "$LIBDIR/misc.cpp"; then
   fail "misc.cpp still has TODO for permission check"
 else
   pass "misc.cpp permission check TODO resolved"
@@ -1732,19 +1733,19 @@ fi
 section "T24: exception handling cleanup (§21)"
 
 # Old FIXME/XXX markers should be gone
-if grep -q 'FIXME(EXCEPTION' "$BUILDDIR/main.cpp"; then
+if grep -q 'FIXME(EXCEPTION' "$BUILDDIR/cli/main.cpp"; then
   fail "main.cpp still has FIXME(EXCEPTION marker"
 else
   pass "main.cpp FIXME(EXCEPTION resolved"
 fi
 
-if grep -q 'XXX UNKNOWN EXCEPTION' "$BUILDDIR/main.cpp"; then
+if grep -q 'XXX UNKNOWN EXCEPTION' "$BUILDDIR/cli/main.cpp"; then
   fail "main.cpp still has XXX UNKNOWN EXCEPTION marker"
 else
   pass "main.cpp XXX UNKNOWN EXCEPTION resolved"
 fi
 
-if grep -q 'internal error' "$BUILDDIR/main.cpp"; then
+if grep -q 'internal error' "$BUILDDIR/cli/main.cpp"; then
   pass "main.cpp uses clean 'internal error' messages"
 else
   fail "main.cpp missing clean error messages"
@@ -1753,21 +1754,21 @@ fi
 # ---------------------------------------------------------------------------
 section "T25: GL GPU vendor detection (§22)"
 
-if grep -q 'pciconf\|vendor=0x10de\|vendor=0x1002\|vendor=0x8086' "$BUILDDIR/spec.cpp"; then
+if grep -q 'pciconf\|vendor=0x10de\|vendor=0x1002\|vendor=0x8086' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp detects GPU vendor via pciconf"
 else
   fail "spec.cpp missing GPU vendor detection"
 fi
 
 # Old nvidia-only XXX should be resolved
-if grep -q 'XXX for now it only works on nvidia' "$BUILDDIR/spec.cpp"; then
+if grep -q 'XXX for now it only works on nvidia' "$LIBDIR/spec.cpp"; then
   fail "spec.cpp still has nvidia-only XXX comment"
 else
   pass "spec.cpp nvidia-only XXX resolved"
 fi
 
 # drm-kmod for AMD/Intel
-if grep -q 'drm-kmod' "$BUILDDIR/spec.cpp"; then
+if grep -q 'drm-kmod' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp supports AMD/Intel GPUs via drm-kmod"
 else
   fail "spec.cpp missing drm-kmod for AMD/Intel"
@@ -1776,7 +1777,7 @@ fi
 # ---------------------------------------------------------------------------
 section "T26: tor csh comment cleanup"
 
-if grep -q 'XXX not sure why csh' "$BUILDDIR/spec.cpp"; then
+if grep -q 'XXX not sure why csh' "$LIBDIR/spec.cpp"; then
   fail "spec.cpp still has XXX csh comment"
 else
   pass "spec.cpp csh XXX comment resolved"
@@ -1788,70 +1789,70 @@ section "T27: export/import commands"
 # --- Source structure ---
 
 # export.cpp exists
-if [ -f "$BUILDDIR/export.cpp" ]; then
+if [ -f "$LIBDIR/export.cpp" ]; then
   pass "export.cpp exists"
 else
   fail "export.cpp missing"
 fi
 
 # import.cpp exists
-if [ -f "$BUILDDIR/import.cpp" ]; then
+if [ -f "$LIBDIR/import.cpp" ]; then
   pass "import.cpp exists"
 else
   fail "import.cpp missing"
 fi
 
 # export.cpp uses CRATE_PATH_JLS for container resolution
-if grep -q 'CRATE_PATH_JLS' "$BUILDDIR/export.cpp"; then
+if grep -q 'CRATE_PATH_JLS' "$LIBDIR/export.cpp"; then
   pass "export.cpp uses CRATE_PATH_JLS"
 else
   fail "export.cpp missing CRATE_PATH_JLS"
 fi
 
 # export.cpp uses exec-based tar+xz pipeline
-if grep -q 'CRATE_PATH_TAR' "$BUILDDIR/export.cpp" && grep -q 'CRATE_PATH_XZ' "$BUILDDIR/export.cpp"; then
+if grep -q 'CRATE_PATH_TAR' "$LIBDIR/export.cpp" && grep -q 'CRATE_PATH_XZ' "$LIBDIR/export.cpp"; then
   pass "export.cpp uses exec-based tar+xz pipeline"
 else
   fail "export.cpp missing tar/xz pipeline"
 fi
 
 # export.cpp generates SHA256 checksum
-if grep -q 'sha256' "$BUILDDIR/export.cpp"; then
+if grep -q 'sha256' "$LIBDIR/export.cpp"; then
   pass "export.cpp generates SHA256 checksum"
 else
   fail "export.cpp missing SHA256 checksum"
 fi
 
 # import.cpp validates directory traversal
-if grep -q '\.\.' "$BUILDDIR/import.cpp"; then
+if grep -q '\.\.' "$LIBDIR/import.cpp"; then
   pass "import.cpp validates against directory traversal"
 else
   fail "import.cpp missing directory traversal check"
 fi
 
 # import.cpp checks +CRATE.SPEC presence
-if grep -q 'CRATE.SPEC' "$BUILDDIR/import.cpp"; then
+if grep -q 'CRATE.SPEC' "$LIBDIR/import.cpp"; then
   pass "import.cpp checks +CRATE.SPEC presence"
 else
   fail "import.cpp missing +CRATE.SPEC check"
 fi
 
 # import.cpp checks OS version compatibility
-if grep -q 'CRATE.OSVERSION' "$BUILDDIR/import.cpp"; then
+if grep -q 'CRATE.OSVERSION' "$LIBDIR/import.cpp"; then
   pass "import.cpp checks OS version compatibility"
 else
   fail "import.cpp missing OS version check"
 fi
 
 # import.cpp supports --force flag
-if grep -q 'importForce' "$BUILDDIR/import.cpp"; then
+if grep -q 'importForce' "$LIBDIR/import.cpp"; then
   pass "import.cpp supports --force flag"
 else
   fail "import.cpp missing --force support"
 fi
 
 # import.cpp validates xz archive format
-if grep -q 'isXzArchive' "$BUILDDIR/import.cpp"; then
+if grep -q 'isXzArchive' "$LIBDIR/import.cpp"; then
   pass "import.cpp validates xz archive format"
 else
   fail "import.cpp missing xz archive validation"
@@ -1860,28 +1861,28 @@ fi
 # --- Args integration ---
 
 # args.h has CmdExport and CmdImport
-if grep -q 'CmdExport' "$BUILDDIR/args.h" && grep -q 'CmdImport' "$BUILDDIR/args.h"; then
+if grep -q 'CmdExport' "$LIBDIR/args.h" && grep -q 'CmdImport' "$LIBDIR/args.h"; then
   pass "args.h has CmdExport and CmdImport"
 else
   fail "args.h missing CmdExport/CmdImport"
 fi
 
 # args.h has export/import fields
-if grep -q 'exportTarget' "$BUILDDIR/args.h" && grep -q 'importFile' "$BUILDDIR/args.h"; then
+if grep -q 'exportTarget' "$LIBDIR/args.h" && grep -q 'importFile' "$LIBDIR/args.h"; then
   pass "args.h has export/import parameter fields"
 else
   fail "args.h missing export/import fields"
 fi
 
 # args.cpp has usage functions for export and import
-if grep -q 'usageExport' "$BUILDDIR/args.cpp" && grep -q 'usageImport' "$BUILDDIR/args.cpp"; then
+if grep -q 'usageExport' "$BUILDDIR/cli/args.cpp" && grep -q 'usageImport' "$BUILDDIR/cli/args.cpp"; then
   pass "args.cpp has export/import usage functions"
 else
   fail "args.cpp missing export/import usage"
 fi
 
 # args.cpp recognizes export/import commands
-if grep -q '"export"' "$BUILDDIR/args.cpp" && grep -q '"import"' "$BUILDDIR/args.cpp"; then
+if grep -q '"export"' "$BUILDDIR/cli/args.cpp" && grep -q '"import"' "$BUILDDIR/cli/args.cpp"; then
   pass "args.cpp recognizes export/import commands"
 else
   fail "args.cpp missing export/import command recognition"
@@ -1889,7 +1890,7 @@ fi
 
 # --- commands.h integration ---
 
-if grep -q 'exportCrate' "$BUILDDIR/commands.h" && grep -q 'importCrate' "$BUILDDIR/commands.h"; then
+if grep -q 'exportCrate' "$LIBDIR/commands.h" && grep -q 'importCrate' "$LIBDIR/commands.h"; then
   pass "commands.h declares exportCrate and importCrate"
 else
   fail "commands.h missing exportCrate/importCrate declarations"
@@ -1897,7 +1898,7 @@ fi
 
 # --- main.cpp dispatch ---
 
-if grep -q 'CmdExport' "$BUILDDIR/main.cpp" && grep -q 'CmdImport' "$BUILDDIR/main.cpp"; then
+if grep -q 'CmdExport' "$BUILDDIR/cli/main.cpp" && grep -q 'CmdImport' "$BUILDDIR/cli/main.cpp"; then
   pass "main.cpp dispatches CmdExport and CmdImport"
 else
   fail "main.cpp missing CmdExport/CmdImport dispatch"
@@ -1913,13 +1914,13 @@ fi
 
 # --- Security: no shell usage ---
 
-if ! grep -q 'system(' "$BUILDDIR/export.cpp" && ! grep -q 'popen(' "$BUILDDIR/export.cpp"; then
+if ! grep -q 'system(' "$LIBDIR/export.cpp" && ! grep -q 'popen(' "$LIBDIR/export.cpp"; then
   pass "export.cpp has no shell-based execution (system/popen)"
 else
   fail "export.cpp uses system() or popen()"
 fi
 
-if ! grep -q 'system(' "$BUILDDIR/import.cpp" && ! grep -q 'popen(' "$BUILDDIR/import.cpp"; then
+if ! grep -q 'system(' "$LIBDIR/import.cpp" && ! grep -q 'popen(' "$LIBDIR/import.cpp"; then
   pass "import.cpp has no shell-based execution (system/popen)"
 else
   fail "import.cpp uses system() or popen()"
@@ -1927,7 +1928,7 @@ fi
 
 # --- export uses absolute paths ---
 
-if grep -q 'CRATE_PATH_' "$BUILDDIR/export.cpp"; then
+if grep -q 'CRATE_PATH_' "$LIBDIR/export.cpp"; then
   pass "export.cpp uses CRATE_PATH_ absolute path macros"
 else
   fail "export.cpp missing absolute path macros"
@@ -1935,7 +1936,7 @@ fi
 
 # --- import uses absolute paths ---
 
-if grep -q 'CRATE_PATH_' "$BUILDDIR/import.cpp"; then
+if grep -q 'CRATE_PATH_' "$LIBDIR/import.cpp"; then
   pass "import.cpp uses CRATE_PATH_ absolute path macros"
 else
   fail "import.cpp missing absolute path macros"
@@ -1948,98 +1949,98 @@ fi
 section "T29: securelevel, children.max, cpuset"
 
 # securelevel in spec.h
-if grep -q 'securelevel' "$BUILDDIR/spec.h"; then
+if grep -q 'securelevel' "$LIBDIR/spec.h"; then
   pass "spec.h has securelevel field"
 else
   fail "spec.h missing securelevel"
 fi
 
 # children.max in spec.h
-if grep -q 'childrenMax' "$BUILDDIR/spec.h"; then
+if grep -q 'childrenMax' "$LIBDIR/spec.h"; then
   pass "spec.h has childrenMax field"
 else
   fail "spec.h missing childrenMax"
 fi
 
 # cpuset in spec.h
-if grep -q 'cpuset' "$BUILDDIR/spec.h"; then
+if grep -q 'cpuset' "$LIBDIR/spec.h"; then
   pass "spec.h has cpuset field"
 else
   fail "spec.h missing cpuset"
 fi
 
 # spec.cpp parses securelevel
-if grep -q '"securelevel"' "$BUILDDIR/spec.cpp"; then
+if grep -q '"securelevel"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses security/securelevel"
 else
   fail "spec.cpp missing securelevel parsing"
 fi
 
 # spec.cpp parses children_max
-if grep -q '"children_max"\|"children-max"' "$BUILDDIR/spec.cpp"; then
+if grep -q '"children_max"\|"children-max"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses security/children_max"
 else
   fail "spec.cpp missing children_max parsing"
 fi
 
 # spec.cpp parses cpuset
-if grep -q '"cpuset"\|"cpu-set"' "$BUILDDIR/spec.cpp"; then
+if grep -q '"cpuset"\|"cpu-set"' "$LIBDIR/spec.cpp"; then
   pass "spec.cpp parses security/cpuset"
 else
   fail "spec.cpp missing cpuset parsing"
 fi
 
 # run.cpp applies securelevel to jail
-if grep -q 'securelevel' "$BUILDDIR/run.cpp"; then
+if grep -q 'securelevel' "$LIBDIR/run.cpp"; then
   pass "run.cpp applies securelevel to jail"
 else
   fail "run.cpp missing securelevel"
 fi
 
 # run.cpp applies children.max to jail
-if grep -q 'children.max' "$BUILDDIR/run.cpp"; then
+if grep -q 'children.max' "$LIBDIR/run.cpp"; then
   pass "run.cpp applies children.max to jail"
 else
   fail "run.cpp missing children.max"
 fi
 
 # run.cpp applies cpuset
-if grep -q 'CRATE_PATH_CPUSET\|cpuset' "$BUILDDIR/run.cpp"; then
+if grep -q 'CRATE_PATH_CPUSET\|cpuset' "$LIBDIR/run.cpp"; then
   pass "run.cpp applies cpuset restrictions"
 else
   fail "run.cpp missing cpuset"
 fi
 
 # pathnames.h has CRATE_PATH_CPUSET
-if grep -q 'CRATE_PATH_CPUSET' "$BUILDDIR/pathnames.h"; then
+if grep -q 'CRATE_PATH_CPUSET' "$LIBDIR/pathnames.h"; then
   pass "pathnames.h defines CRATE_PATH_CPUSET"
 else
   fail "pathnames.h missing CRATE_PATH_CPUSET"
 fi
 
 # validate.cpp checks securelevel
-if grep -q 'securelevel' "$BUILDDIR/validate.cpp"; then
+if grep -q 'securelevel' "$LIBDIR/validate.cpp"; then
   pass "validate.cpp validates securelevel"
 else
   fail "validate.cpp missing securelevel validation"
 fi
 
 # validate.cpp checks childrenMax
-if grep -q 'childrenMax\|children_max' "$BUILDDIR/validate.cpp"; then
+if grep -q 'childrenMax\|children_max' "$LIBDIR/validate.cpp"; then
   pass "validate.cpp validates children_max"
 else
   fail "validate.cpp missing children_max validation"
 fi
 
 # validate.cpp checks cpuset
-if grep -q 'cpuset' "$BUILDDIR/validate.cpp"; then
+if grep -q 'cpuset' "$LIBDIR/validate.cpp"; then
   pass "validate.cpp validates cpuset"
 else
   fail "validate.cpp missing cpuset validation"
 fi
 
 # Uses exec-based CRATE_PATH_JAIL for securelevel/children.max
-if grep -q 'CRATE_PATH_JAIL.*securelevel\|CRATE_PATH_JAIL.*children' "$BUILDDIR/run.cpp"; then
+if grep -q 'CRATE_PATH_JAIL.*securelevel\|CRATE_PATH_JAIL.*children' "$LIBDIR/run.cpp"; then
   pass "run.cpp uses exec-based jail -m for securelevel/children.max"
 else
   fail "run.cpp missing exec-based jail -m"
