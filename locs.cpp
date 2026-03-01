@@ -12,6 +12,7 @@ const char *jailDirectoryPath = "/var/run/crate";
 const char *jailSubDirectoryIfaces = "/ifaces";
 const char *cacheDirectoryPath = "/var/cache/crate";
 const std::string ctxFwUsersFilePath = std::string(jailDirectoryPath) + "/ctx-firewall-users";
+const std::string ctxGuiRegistryFilePath = std::string(jailDirectoryPath) + "/ctx-gui-registry";
 const std::string baseArchive = std::string(Locations::cacheDirectoryPath) + "/base.txz";
 // Use "releases/" for release versions, "snapshots/" for CURRENT/STABLE
 const std::string baseArchiveUrl = STRg("https://download.freebsd.org/"

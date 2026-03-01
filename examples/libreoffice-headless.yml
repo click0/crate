@@ -1,0 +1,31 @@
+##
+## container for LibreOffice with headless VNC access
+## Remote office suite via browser, password-protected VNC.
+##
+## Use: crate create -s libreoffice-headless.yml
+## After running: crate gui list ; crate gui url libreoffice
+##
+
+---
+
+pkg:
+    install:
+        - libreoffice
+
+run:
+    command: /usr/local/bin/libreoffice
+
+dirs:
+    share:
+        - [$HOME/Documents, $HOME/Documents]
+
+options:
+    - x11
+    - gl
+
+gui:
+    mode: headless
+    resolution: 1920x1080
+    vnc: true
+    novnc: true
+    vnc_password: "changeme"

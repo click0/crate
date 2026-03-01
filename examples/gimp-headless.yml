@@ -1,0 +1,30 @@
+##
+## container for GIMP with headless VNC access
+## Useful for remote image editing via browser.
+##
+## Use: crate create -s gimp-headless.yml
+## After running: crate gui list ; crate gui url gimp
+##
+
+---
+
+pkg:
+    install:
+        - gimp
+
+run:
+    command: /usr/local/bin/gimp
+
+dirs:
+    share:
+        - [$HOME/Pictures, $HOME/Pictures]
+
+options:
+    - x11
+    - gl
+
+gui:
+    mode: headless
+    resolution: 1920x1080
+    vnc: true
+    novnc: true

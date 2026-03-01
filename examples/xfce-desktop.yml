@@ -1,0 +1,31 @@
+##
+## Full XFCE4 desktop environment in a container
+## Provides a complete desktop session via VNC/noVNC.
+## Useful for remote development workstations.
+##
+## Use: crate create -s xfce-desktop.yml
+## After running: crate gui list ; crate gui url xfce-desktop
+##
+
+---
+
+pkg:
+    install:
+        - xfce
+        - xfce4-terminal
+        - dbus
+
+run:
+    command: /usr/local/bin/startxfce4
+
+options:
+    - net
+    - x11
+    - gl
+    - video
+
+gui:
+    mode: auto
+    resolution: 1920x1080
+    vnc: true
+    novnc: true

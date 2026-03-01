@@ -1,0 +1,27 @@
+##
+## GPU benchmark: glxgears with hardware-accelerated rendering
+## Quick test to verify GPU passthrough is working.
+## Requires: nvidia-driver or amdgpu kernel module loaded.
+##
+## Use: crate create -s glxgears-gpu.yml
+## After running: crate gui list ; crate gui url glxgears
+##
+
+---
+
+pkg:
+    install:
+        - mesa-demos
+
+run:
+    command: /usr/local/bin/glxgears
+
+options:
+    - x11
+    - gl
+
+gui:
+    mode: gpu
+    resolution: 1280x720
+    vnc: true
+    novnc: true

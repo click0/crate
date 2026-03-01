@@ -5,7 +5,7 @@
 
 #include <string>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui};
 
 class Args {
 public:
@@ -57,6 +57,13 @@ public:
   std::string consoleTarget;    // jail name or JID
   std::string consoleUser;      // -u/--user: user to login as
   std::string consoleCmd;       // optional command to run
+
+  // gui parameters
+  std::string guiSubcmd;        // "list", "focus", "attach", "url", "tile", "screenshot", "resize"
+  std::string guiTarget;        // container name, JID, or display number
+  std::string guiOutput;        // -o/--output: output file (for screenshot)
+  std::string guiResolution;    // WxH (for resize)
+  bool guiJson = false;         // -j: output as JSON (for gui list)
 
   void validate();
 };

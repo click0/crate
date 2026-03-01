@@ -1,5 +1,5 @@
 
-SRCS=   main.cpp args.cpp spec.cpp create.cpp run.cpp list.cpp info.cpp clean.cpp console.cpp export.cpp import.cpp run_net.cpp run_jail.cpp run_gui.cpp run_services.cpp locs.cpp cmd.cpp mount.cpp net.cpp ctx.cpp scripts.cpp misc.cpp util.cpp err.cpp validate.cpp snapshot.cpp
+SRCS=   main.cpp args.cpp spec.cpp create.cpp run.cpp list.cpp info.cpp clean.cpp console.cpp export.cpp import.cpp gui.cpp run_net.cpp run_jail.cpp run_gui.cpp run_services.cpp locs.cpp cmd.cpp mount.cpp net.cpp ctx.cpp gui_registry.cpp scripts.cpp misc.cpp util.cpp err.cpp validate.cpp snapshot.cpp
 OBJS=   $(SRCS:.cpp=.o)
 
 PREFIX   ?=  /usr/local

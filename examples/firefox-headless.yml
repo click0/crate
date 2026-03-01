@@ -1,0 +1,31 @@
+##
+## container for the Firefox browser in headless mode with VNC access
+## Use: crate create -s firefox-headless.yml
+## After running: crate gui list ; crate gui url firefox
+##
+
+---
+
+pkg:
+    install:
+        - firefox
+
+run:
+    command: /usr/local/bin/firefox
+
+options:
+    - net
+    - x11
+    - gl
+    - video
+
+# GUI session management:
+#   mode: nested    - Xephyr (desktop, requires DISPLAY)
+#   mode: headless  - Xvfb (software rendering, no GPU)
+#   mode: gpu       - Xorg with real GPU driver (GPU acceleration, no monitor needed)
+#   mode: auto      - auto-detect: gpu if GPU present + no DISPLAY, nested if DISPLAY, else headless
+gui:
+    mode: headless
+    resolution: 1920x1080
+    vnc: true
+    novnc: true

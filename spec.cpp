@@ -987,6 +987,41 @@ Spec parseSpec(const std::string &fname) {
           ERR("unknown element terminal/" << b.first << " in spec")
         }
       }
+    } else if (isKey(k, "gui")) {
+      // GUI session management (§19)
+      if (!k.second.IsMap())
+        ERR("gui must be a map")
+      spec.guiOptions = std::make_unique<Spec::GuiOptions>();
+      for (auto b : k.second) {
+        if (isKey(b, "mode")) {
+          scalar(b.second, spec.guiOptions->mode, "gui/mode");
+          if (spec.guiOptions->mode != "nested" && spec.guiOptions->mode != "headless"
+              && spec.guiOptions->mode != "gpu" && spec.guiOptions->mode != "auto")
+            ERR("gui/mode must be 'nested', 'headless', 'gpu', or 'auto'")
+        } else if (isKey(b, "resolution")) {
+          scalar(b.second, spec.guiOptions->resolution, "gui/resolution");
+        } else if (isKey(b, "vnc")) {
+          if (!YAML::convert<bool>::decode(b.second, spec.guiOptions->vnc))
+            ERR("gui/vnc must be a boolean")
+        } else if (isKey(b, "vnc_port") || isKey(b, "vnc-port")) {
+          spec.guiOptions->vncPort = Util::toUInt(AsString(b.second));
+        } else if (isKey(b, "novnc")) {
+          if (!YAML::convert<bool>::decode(b.second, spec.guiOptions->novnc))
+            ERR("gui/novnc must be a boolean")
+        } else if (isKey(b, "vnc_password") || isKey(b, "vnc-password")) {
+          scalar(b.second, spec.guiOptions->vncPassword, "gui/vnc_password");
+        } else if (isKey(b, "gpu_device") || isKey(b, "gpu-device")) {
+          scalar(b.second, spec.guiOptions->gpuDevice, "gui/gpu_device");
+        } else if (isKey(b, "gpu_driver") || isKey(b, "gpu-driver")) {
+          scalar(b.second, spec.guiOptions->gpuDriver, "gui/gpu_driver");
+          if (!spec.guiOptions->gpuDriver.empty() &&
+              spec.guiOptions->gpuDriver != "nvidia" && spec.guiOptions->gpuDriver != "amdgpu"
+              && spec.guiOptions->gpuDriver != "intel" && spec.guiOptions->gpuDriver != "dummy")
+            ERR("gui/gpu_driver must be 'nvidia', 'amdgpu', 'intel', or 'dummy'")
+        } else {
+          ERR("unknown element gui/" << b.first << " in spec")
+        }
+      }
     } else if (isKey(k, "scripts")) {
       if (!k.second.IsMap())
         ERR("scripts must be a map")
@@ -1085,6 +1120,10 @@ Spec mergeSpecs(const Spec &base, const Spec &overlay) {
   if (overlay.terminalOptions) {
     result.terminalOptions = std::make_unique<Spec::TerminalOptions>();
     *result.terminalOptions = *overlay.terminalOptions;
+  }
+  if (overlay.guiOptions) {
+    result.guiOptions = std::make_unique<Spec::GuiOptions>();
+    *result.guiOptions = *overlay.guiOptions;
   }
 
   return result;
