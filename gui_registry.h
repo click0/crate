@@ -17,6 +17,7 @@ struct GuiEntry {
   unsigned displayNum;  // X display number (:10, :11, ...)
   pid_t xServerPid;     // Xephyr or Xvfb PID
   unsigned vncPort;     // VNC port (0 = no VNC), e.g. 5910
+  unsigned wsPort;      // websockify port (0 = no noVNC), e.g. 6010
   std::string mode;     // "nested" (Xephyr), "headless" (Xvfb), "shared"
   std::string jailName; // jail name (e.g. "jail-firefox-abc123")
 };

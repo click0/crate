@@ -23,6 +23,30 @@
 
 // --- gui list ---
 
+// Escape a string for JSON output (handles \, ", and control characters)
+static std::string jsonEscape(const std::string &s) {
+  std::string out;
+  out.reserve(s.size());
+  for (char c : s) {
+    switch (c) {
+    case '\\': out += "\\\\"; break;
+    case '"':  out += "\\\""; break;
+    case '\n': out += "\\n";  break;
+    case '\r': out += "\\r";  break;
+    case '\t': out += "\\t";  break;
+    default:
+      if (static_cast<unsigned char>(c) < 0x20) {
+        char buf[8];
+        snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
+        out += buf;
+      } else {
+        out += c;
+      }
+    }
+  }
+  return out;
+}
+
 static void guiListJson(const std::vector<Ctx::GuiEntry> &entries) {
   std::cout << "[" << std::endl;
   for (size_t i = 0; i < entries.size(); i++) {
@@ -32,8 +56,9 @@ static void guiListJson(const std::vector<Ctx::GuiEntry> &entries) {
     std::cout << ",\"pid\":" << e.ownerPid;
     std::cout << ",\"xpid\":" << e.xServerPid;
     std::cout << ",\"vnc_port\":" << e.vncPort;
-    std::cout << ",\"mode\":\"" << e.mode << "\"";
-    std::cout << ",\"jail\":\"" << e.jailName << "\"";
+    std::cout << ",\"ws_port\":" << e.wsPort;
+    std::cout << ",\"mode\":\"" << jsonEscape(e.mode) << "\"";
+    std::cout << ",\"jail\":\"" << jsonEscape(e.jailName) << "\"";
     std::cout << "}";
     if (i + 1 < entries.size()) std::cout << ",";
     std::cout << std::endl;
@@ -191,10 +216,11 @@ static bool guiUrl(const Args &args) {
   if (e.vncPort == 0)
     ERR("no VNC server running for '" << e.jailName << "'")
 
-  // noVNC default: websockify on vncPort + 100 (e.g. 5910 -> 6010)
-  unsigned wsPort = e.vncPort + 100;
   std::cout << "VNC:   vnc://localhost:" << e.vncPort << std::endl;
-  std::cout << "noVNC: http://localhost:" << wsPort << "/vnc.html?autoconnect=true&port=" << wsPort << std::endl;
+  if (e.wsPort != 0)
+    std::cout << "noVNC: http://localhost:" << e.wsPort << "/vnc.html?autoconnect=true&port=" << e.wsPort << std::endl;
+  else
+    std::cout << "noVNC: not running (enable with gui/novnc: true)" << std::endl;
 
   return true;
 }
