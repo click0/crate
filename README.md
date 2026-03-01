@@ -4,7 +4,7 @@ Crate is a containerizer for FreeBSD. It packages applications and services into
 
 Crate containers contain everything needed to run the containerized software — only the `crate` executable and the FreeBSD kernel are required at runtime.
 
-**Language:** C++17 | **License:** ISC | **Status:** Alpha (active development since 2019)
+**Language:** C++17 | **License:** BSD 3-Clause | **Status:** Alpha (active development since 2019)
 
 [Українська версія](README_UK.md) | [Порівняння з BastilleBSD](COMPARISON-BASTILLEBSD.md)
 
