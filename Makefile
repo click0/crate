@@ -11,8 +11,11 @@ LIB_SRCS = lib/spec.cpp lib/create.cpp lib/run.cpp lib/list.cpp lib/info.cpp \
 
 CLI_SRCS = cli/main.cpp cli/args.cpp
 
+SNMPD_SRCS = snmpd/main.cpp snmpd/collector.cpp snmpd/mib.cpp
+
 LIB_OBJS = $(LIB_SRCS:.cpp=.o)
 CLI_OBJS = $(CLI_SRCS:.cpp=.o)
+SNMPD_OBJS = $(SNMPD_SRCS:.cpp=.o)
 
 # --- Flags ---
 
@@ -23,16 +26,22 @@ LIBS     += -ljail
 
 CXXFLAGS += -Wall -std=c++17
 CXXFLAGS += -Ilib             # lib/ headers visible to all
+CXXFLAGS += -Isnmpd           # snmpd/ headers for snmpd build
 
 # --- Targets ---
 
 all: crate
+
+all-snmpd: crate crate-snmpd
 
 libcrate.a: $(LIB_OBJS)
 	$(AR) rcs $@ $^
 
 crate: libcrate.a $(CLI_OBJS)
 	$(CXX) $(LDFLAGS) -o $@ $(CLI_OBJS) libcrate.a $(LIBS)
+
+crate-snmpd: libcrate.a $(SNMPD_OBJS)
+	$(CXX) $(LDFLAGS) -o $@ $(SNMPD_OBJS) libcrate.a $(LIBS) -lpthread
 
 install: crate
 	install -s -m 04755 crate $(DESTDIR)$(PREFIX)/bin
@@ -53,8 +62,13 @@ install-completions:
 crate.x: crate
 	sudo install -s -m 04755 -o 0 -g 0 crate crate.x
 
+install-snmpd: crate-snmpd
+	install -s -m 0755 crate-snmpd $(DESTDIR)$(PREFIX)/sbin/crate-snmpd
+	@mkdir -p $(DESTDIR)$(PREFIX)/share/snmp/mibs
+	install -m 0644 snmpd/CRATE-MIB.txt $(DESTDIR)$(PREFIX)/share/snmp/mibs/CRATE-MIB.txt
+
 clean:
-	rm -f $(LIB_OBJS) $(CLI_OBJS) libcrate.a crate lib/lst-all-script-sections.h
+	rm -f $(LIB_OBJS) $(CLI_OBJS) $(SNMPD_OBJS) libcrate.a crate crate-snmpd lib/lst-all-script-sections.h
 
 # --- Generated sources ---
 
