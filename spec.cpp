@@ -995,8 +995,9 @@ Spec parseSpec(const std::string &fname) {
       for (auto b : k.second) {
         if (isKey(b, "mode")) {
           scalar(b.second, spec.guiOptions->mode, "gui/mode");
-          if (spec.guiOptions->mode != "nested" && spec.guiOptions->mode != "headless" && spec.guiOptions->mode != "auto")
-            ERR("gui/mode must be 'nested', 'headless', or 'auto'")
+          if (spec.guiOptions->mode != "nested" && spec.guiOptions->mode != "headless"
+              && spec.guiOptions->mode != "gpu" && spec.guiOptions->mode != "auto")
+            ERR("gui/mode must be 'nested', 'headless', 'gpu', or 'auto'")
         } else if (isKey(b, "resolution")) {
           scalar(b.second, spec.guiOptions->resolution, "gui/resolution");
         } else if (isKey(b, "vnc")) {
@@ -1009,6 +1010,14 @@ Spec parseSpec(const std::string &fname) {
             ERR("gui/novnc must be a boolean")
         } else if (isKey(b, "vnc_password") || isKey(b, "vnc-password")) {
           scalar(b.second, spec.guiOptions->vncPassword, "gui/vnc_password");
+        } else if (isKey(b, "gpu_device") || isKey(b, "gpu-device")) {
+          scalar(b.second, spec.guiOptions->gpuDevice, "gui/gpu_device");
+        } else if (isKey(b, "gpu_driver") || isKey(b, "gpu-driver")) {
+          scalar(b.second, spec.guiOptions->gpuDriver, "gui/gpu_driver");
+          if (!spec.guiOptions->gpuDriver.empty() &&
+              spec.guiOptions->gpuDriver != "nvidia" && spec.guiOptions->gpuDriver != "amdgpu"
+              && spec.guiOptions->gpuDriver != "intel" && spec.guiOptions->gpuDriver != "dummy")
+            ERR("gui/gpu_driver must be 'nvidia', 'amdgpu', 'intel', or 'dummy'")
         } else {
           ERR("unknown element gui/" << b.first << " in spec")
         }

@@ -105,6 +105,9 @@
 
 // --- Ports/packages: /usr/local ---
 
+#ifndef CRATE_PATH_XORG
+#define CRATE_PATH_XORG       "/usr/local/bin/Xorg"
+#endif
 #ifndef CRATE_PATH_XEPHYR
 #define CRATE_PATH_XEPHYR     "/usr/local/bin/Xephyr"
 #endif

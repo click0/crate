@@ -1,0 +1,31 @@
+##
+## container for the Firefox browser with GPU-accelerated headless rendering
+## For servers with a GPU but no physical monitor (IP-KVM style access).
+## Requires: nvidia-driver or amdgpu kernel module loaded.
+##
+## Use: crate create -s firefox-gpu.yml
+## After running: crate gui list ; crate gui url firefox
+##
+
+---
+
+pkg:
+    install:
+        - firefox
+
+run:
+    command: /usr/local/bin/firefox
+
+options:
+    - net
+    - x11
+    - gl
+    - video
+
+gui:
+    mode: gpu
+    resolution: 1920x1080
+    vnc: true
+    novnc: true
+    # gpu_driver: nvidia       # auto-detected if omitted
+    # gpu_device: "PCI:1:0:0"  # auto-detected if omitted

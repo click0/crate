@@ -19,6 +19,11 @@ options:
     - gl
     - video
 
+# GUI session management:
+#   mode: nested    - Xephyr (desktop, requires DISPLAY)
+#   mode: headless  - Xvfb (software rendering, no GPU)
+#   mode: gpu       - Xorg with real GPU driver (GPU acceleration, no monitor needed)
+#   mode: auto      - auto-detect: gpu if GPU present + no DISPLAY, nested if DISPLAY, else headless
 gui:
     mode: headless
     resolution: 1920x1080

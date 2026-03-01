@@ -157,12 +157,21 @@ static bool guiAttach(const Args &args) {
   std::cout << "Connecting VNC viewer to :" << e.displayNum
             << " (port " << e.vncPort << ")..." << std::endl;
 
-  // Try to launch a VNC viewer (vncviewer or xvnc4viewer)
+  // Try known absolute paths for VNC viewers (CWE-426: no PATH search in setuid binary)
   auto host = STR("localhost:" << e.vncPort);
-  // exec replaces the process — this is intentional for interactive use
-  ::execlp("vncviewer", "vncviewer", host.c_str(), nullptr);
-  // if execlp returns, it failed
-  ERR("failed to launch vncviewer (install tigervnc-viewer or tightvnc)")
+  struct stat st;
+  const char *viewers[] = {
+    "/usr/local/bin/vncviewer",    // tigervnc-viewer or tightvnc
+    "/usr/local/bin/xvncviewer",   // xvncviewer
+    nullptr
+  };
+  for (auto *v = viewers; *v; v++) {
+    if (::stat(*v, &st) == 0) {
+      ::execl(*v, *v, host.c_str(), nullptr);
+      // execl only returns on error
+    }
+  }
+  ERR("no VNC viewer found (install: pkg install tigervnc-viewer)")
   return false;
 }
 

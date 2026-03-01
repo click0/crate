@@ -168,12 +168,14 @@ public:
 
   // GUI session management (§19)
   struct GuiOptions {
-    std::string mode = "nested";           // "nested" (Xephyr), "headless" (Xvfb), "auto"
+    std::string mode = "nested";           // "nested" (Xephyr), "headless" (Xvfb), "gpu" (Xorg+GPU), "auto"
     std::string resolution = "1280x720";   // display resolution
-    bool vnc = false;                      // start x11vnc for headless mode
+    bool vnc = false;                      // start x11vnc for headless/gpu mode
     unsigned vncPort = 0;                  // VNC port (0=auto-assign from 5900+displayNum)
     bool novnc = false;                    // start websockify+noVNC
     std::string vncPassword;               // optional VNC password
+    std::string gpuDevice;                 // PCI BusID for GPU mode (e.g. "PCI:1:0:0"), empty=auto-detect
+    std::string gpuDriver;                 // GPU driver name: "nvidia", "amdgpu", "intel", "dummy" (default: auto)
   };
   std::unique_ptr<GuiOptions>                        guiOptions;
 
