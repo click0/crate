@@ -361,6 +361,11 @@ void Spec::validate() const {
       ERR("options/net/vlan is only valid with bridge, passthrough, or netgraph mode")
     if (optNet->staticMac && optNet->mode == Mode::Nat)
       ERR("options/net/static-mac is only valid with bridge, passthrough, or netgraph mode")
+    // IPv6 SLAAC/static only valid for non-NAT modes (NAT uses ipv6: true/false for ULA pass-through)
+    if (optNet->ip6Mode != Spec::NetOptDetails::Ip6Mode::None && optNet->mode == Mode::Nat)
+      ERR("options/net/ip6 (slaac/static) is only valid with bridge, passthrough, or netgraph mode; use ipv6: true for NAT mode")
+    if (optNet->ip6Mode == Spec::NetOptDetails::Ip6Mode::Static && optNet->staticIp6.empty())
+      ERR("options/net/ip6 with static address requires an IPv6 address (e.g. fd00::50/64)")
   }
 
   // ZFS dataset names must be valid

@@ -496,6 +496,15 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       LOG("bridge mode: DHCP (auto) on " << bridgeInfo.ifaceB)
     }
 
+    // IPv6 configuration
+    if (optionNet->ip6Mode == Spec::NetOptDetails::Ip6Mode::Slaac) {
+      RunNet::configureSlaac(bridgeInfo.ifaceB, jailPath, jid, jidStr, execInJail);
+      LOG("bridge mode: IPv6 SLAAC on " << bridgeInfo.ifaceB)
+    } else if (optionNet->ip6Mode == Spec::NetOptDetails::Ip6Mode::Static) {
+      RunNet::configureStaticIp6(bridgeInfo.ifaceB, optionNet->staticIp6, jid, execInJail);
+      LOG("bridge mode: static IPv6 " << optionNet->staticIp6 << " on " << bridgeInfo.ifaceB)
+    }
+
   } else if (optionNet && optionNet->mode == Spec::NetOptDetails::Mode::Passthrough) {
     //
     // Passthrough mode: physical interface directly into jail
@@ -538,6 +547,15 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       LOG("passthrough mode: DHCP (auto) on " << ptInfo.iface)
     }
 
+    // IPv6 configuration
+    if (optionNet->ip6Mode == Spec::NetOptDetails::Ip6Mode::Slaac) {
+      RunNet::configureSlaac(ptInfo.iface, jailPath, jid, jidStr, execInJail);
+      LOG("passthrough mode: IPv6 SLAAC on " << ptInfo.iface)
+    } else if (optionNet->ip6Mode == Spec::NetOptDetails::Ip6Mode::Static) {
+      RunNet::configureStaticIp6(ptInfo.iface, optionNet->staticIp6, jid, execInJail);
+      LOG("passthrough mode: static IPv6 " << optionNet->staticIp6)
+    }
+
   } else if (optionNet && optionNet->mode == Spec::NetOptDetails::Mode::Netgraph) {
     //
     // Netgraph mode: ng_bridge + eiface, alternative to if_bridge
@@ -577,6 +595,15 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     } else if (optionNet->ipMode != Spec::NetOptDetails::IpMode::None) {
       RunNet::configureDhcp(ngInfo.ngIface, jailPath, jid, jidStr, execInJail);
       LOG("netgraph mode: DHCP (auto) on " << ngInfo.ngIface)
+    }
+
+    // IPv6 configuration
+    if (optionNet->ip6Mode == Spec::NetOptDetails::Ip6Mode::Slaac) {
+      RunNet::configureSlaac(ngInfo.ngIface, jailPath, jid, jidStr, execInJail);
+      LOG("netgraph mode: IPv6 SLAAC on " << ngInfo.ngIface)
+    } else if (optionNet->ip6Mode == Spec::NetOptDetails::Ip6Mode::Static) {
+      RunNet::configureStaticIp6(ngInfo.ngIface, optionNet->staticIp6, jid, execInJail);
+      LOG("netgraph mode: static IPv6 " << optionNet->staticIp6)
     }
 
   } else if (optionNet && (optionNet->allowOutbound() || optionNet->allowInbound())) {

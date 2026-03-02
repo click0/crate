@@ -435,6 +435,48 @@ void configureStaticIp(const std::string &jailSideIface,
 }
 
 //
+// IPv6 SLAAC configuration
+//
+
+void configureSlaac(const std::string &jailSideIface,
+    const std::string &jailPath, int jid, const std::string &jidStr,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail) {
+  // Write SLAAC config to jail's rc.conf
+  Util::Fs::appendFile(
+    STR("ifconfig_" << jailSideIface << "_ipv6=\"inet6 -ifdisabled accept_rtadv\"" << std::endl),
+    STR(jailPath << "/etc/rc.conf"));
+
+  // Enable IPv6 and accept router advertisements on the interface
+  execInJail({CRATE_PATH_IFCONFIG, jailSideIface, "inet6", "-ifdisabled", "accept_rtadv"},
+    "enable IPv6 SLAAC on jail interface");
+
+  // Solicit router advertisements (one-shot)
+  execInJail({CRATE_PATH_RTSOL, jailSideIface}, "solicit IPv6 router advertisements");
+}
+
+//
+// Static IPv6 configuration
+//
+
+void configureStaticIp6(const std::string &jailSideIface,
+    const std::string &ip6, int jid,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail) {
+  // Parse address and prefix length from CIDR notation (e.g. "fd00::50/64")
+  auto slashPos = ip6.find('/');
+  std::string addr;
+  std::string prefixLen = "64"; // default
+  if (slashPos != std::string::npos) {
+    addr = ip6.substr(0, slashPos);
+    prefixLen = ip6.substr(slashPos + 1);
+  } else {
+    addr = ip6;
+  }
+
+  execInJail({CRATE_PATH_IFCONFIG, jailSideIface, "inet6", addr, "prefixlen", prefixLen},
+    "configure static IPv6 on jail interface");
+}
+
+//
 // Static MAC address generation (inspired by BastilleBSD generate_static_mac)
 //
 

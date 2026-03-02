@@ -107,6 +107,16 @@ void configureStaticIp(const std::string &jailSideIface,
     const std::string &ip, const std::string &gateway, int jid,
     const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail);
 
+// Configure IPv6 SLAAC on jail-side interface (accept_rtadv + rtsol)
+void configureSlaac(const std::string &jailSideIface,
+    const std::string &jailPath, int jid, const std::string &jidStr,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail);
+
+// Configure static IPv6 address on jail-side interface
+void configureStaticIp6(const std::string &jailSideIface,
+    const std::string &ip6, int jid,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail);
+
 // Generate deterministic MAC address pair from jail name + interface name
 // Returns {hostSideMac, jailSideMac}. Prefix: 58:9c:fc (FreeBSD vendor OUI).
 std::pair<std::string,std::string> generateStaticMac(
