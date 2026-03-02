@@ -254,4 +254,97 @@ RunAtEnd setupPfAnchor(const Spec &spec, const EpairInfo &epair,
   });
 }
 
+//
+// Bridge mode
+//
+
+void ensureBridgeModule() {
+  Util::ensureKernelModuleIsLoaded("if_bridge");
+}
+
+BridgeInfo createBridgeEpair(int jid, const std::string &jidStr,
+    const std::string &bridgeIface,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail) {
+  BridgeInfo info;
+  info.bridgeIface = bridgeIface;
+
+  // set the lo0 IP address
+  execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet", "127.0.0.1"}, "set up the lo0 interface in jail");
+
+  // create epair
+  info.ifaceA = Util::stripTrailingSpace(
+    Util::execCommandGetOutput({CRATE_PATH_IFCONFIG, "epair", "create"}, "create bridge epair"));
+  info.ifaceB = STR(info.ifaceA.substr(0, info.ifaceA.size()-1) << "b");
+  info.num = std::stoul(info.ifaceA.substr(5, info.ifaceA.size()-5-1));
+
+  // disable checksum offload (FreeBSD 15 workaround)
+  Util::execCommand({CRATE_PATH_IFCONFIG, info.ifaceA, "-txcsum", "-txcsum6"},
+    "disable checksum offload on epair (host side)");
+  Util::execCommand({CRATE_PATH_IFCONFIG, info.ifaceB, "-txcsum", "-txcsum6"},
+    "disable checksum offload on epair (jail side)");
+
+  // bring host-side up and add to bridge
+  Util::execCommand({CRATE_PATH_IFCONFIG, info.ifaceA, "up"},
+    CSTR("bring up " << info.ifaceA));
+  Util::execCommand({CRATE_PATH_IFCONFIG, bridgeIface, "addm", info.ifaceA},
+    CSTR("add " << info.ifaceA << " to bridge " << bridgeIface));
+
+  // move jail-side into jail
+  Util::execCommand({CRATE_PATH_IFCONFIG, info.ifaceB, "vnet", jidStr},
+    "transfer bridge epair into jail");
+
+  return info;
+}
+
+void destroyBridgeEpair(const BridgeInfo &info) {
+  // remove from bridge first, then destroy
+  Util::execCommand({CRATE_PATH_IFCONFIG, info.bridgeIface, "deletem", info.ifaceA},
+    CSTR("remove " << info.ifaceA << " from bridge " << info.bridgeIface));
+  Util::execCommand({CRATE_PATH_IFCONFIG, info.ifaceA, "destroy"},
+    CSTR("destroy bridge epair (" << info.ifaceA << ")"));
+}
+
+//
+// IP configuration for bridge/passthrough/netgraph modes
+//
+
+void configureDhcp(const std::string &jailSideIface,
+    const std::string &jailPath, int jid, const std::string &jidStr,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail) {
+  // Write SYNCDHCP config to jail's rc.conf
+  Util::Fs::appendFile(
+    STR("ifconfig_" << jailSideIface << "=\"SYNCDHCP\"" << std::endl),
+    STR(jailPath << "/etc/rc.conf"));
+
+  // Bring interface up
+  execInJail({CRATE_PATH_IFCONFIG, jailSideIface, "up"}, "bring up jail interface for DHCP");
+
+  // Run dhclient with timeout (SYNCDHCP semantics: wait for lease)
+  execInJail({CRATE_PATH_DHCLIENT, "-T", "10", jailSideIface}, "acquire DHCP lease");
+}
+
+void configureStaticIp(const std::string &jailSideIface,
+    const std::string &ip, const std::string &gateway, int jid,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail) {
+  // Parse IP and netmask from CIDR notation (e.g. "192.168.1.50/24")
+  auto slashPos = ip.find('/');
+  std::string addr, netmask;
+  if (slashPos != std::string::npos) {
+    addr = ip.substr(0, slashPos);
+    auto prefixLen = std::stoul(ip.substr(slashPos + 1));
+    // Convert prefix length to hex netmask
+    uint32_t mask = prefixLen > 0 ? ~((1u << (32 - prefixLen)) - 1) : 0;
+    netmask = STR("0x" << std::hex << mask);
+  } else {
+    addr = ip;
+    netmask = "0xffffff00"; // default /24
+  }
+
+  execInJail({CRATE_PATH_IFCONFIG, jailSideIface, "inet", addr, "netmask", netmask},
+    "configure static IP on jail interface");
+
+  if (!gateway.empty())
+    execInJail({CRATE_PATH_ROUTE, "add", "default", gateway}, "set default route in jail");
+}
+
 }
