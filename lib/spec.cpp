@@ -366,6 +366,24 @@ void Spec::validate() const {
       ERR("options/net/ip6 (slaac/static) is only valid with bridge, passthrough, or netgraph mode; use ipv6: true for NAT mode")
     if (optNet->ip6Mode == Spec::NetOptDetails::Ip6Mode::Static && optNet->staticIp6.empty())
       ERR("options/net/ip6 with static address requires an IPv6 address (e.g. fd00::50/64)")
+    // Extra interfaces can only be used with non-NAT primary mode
+    if (!optNet->extraInterfaces.empty() && optNet->mode == Mode::Nat)
+      ERR("options/net/extra interfaces are only valid with bridge, passthrough, or netgraph primary mode")
+    for (size_t i = 0; i < optNet->extraInterfaces.size(); i++) {
+      auto &ex = optNet->extraInterfaces[i];
+      if (ex.mode == Mode::Bridge && ex.bridgeIface.empty())
+        ERR("options/net/extra[" << i << "]/mode=bridge requires 'bridge' field")
+      if (ex.mode == Mode::Passthrough && ex.passthroughIface.empty())
+        ERR("options/net/extra[" << i << "]/mode=passthrough requires 'interface' field")
+      if (ex.mode == Mode::Netgraph && ex.netgraphIface.empty())
+        ERR("options/net/extra[" << i << "]/mode=netgraph requires 'interface' field")
+      if (ex.mode == Mode::Nat)
+        ERR("options/net/extra[" << i << "]/mode=nat is not allowed for extra interfaces")
+      if (!ex.gateway.empty() && ex.ipMode != Spec::NetOptDetails::IpMode::Static)
+        ERR("options/net/extra[" << i << "]/gateway is only valid with static IP")
+      if (ex.ip6Mode == Spec::NetOptDetails::Ip6Mode::Static && ex.staticIp6.empty())
+        ERR("options/net/extra[" << i << "]/ip6 with static address requires an IPv6 address")
+    }
   }
 
   // ZFS dataset names must be valid
@@ -722,6 +740,51 @@ Spec parseSpec(const std::string &fname) {
                     optNetDetails->vlanId = netOpt.second.as<int>();
                     if (optNetDetails->vlanId < 1 || optNetDetails->vlanId > 4094)
                       ERR("options/net/vlan must be 1-4094")
+                  } else if (AsString(netOpt.first) == "extra") {
+                    if (!netOpt.second.IsSequence())
+                      ERR("options/net/extra must be a list of interface configurations")
+                    for (auto extraNode : netOpt.second) {
+                      if (!extraNode.IsMap())
+                        ERR("each entry in options/net/extra must be a map")
+                      Spec::NetOptDetails::ExtraInterface extra;
+                      for (auto e : extraNode) {
+                        auto eKey = AsString(e.first);
+                        if (eKey == "mode") {
+                          auto m = AsString(e.second);
+                          if (m == "bridge") extra.mode = Spec::NetOptDetails::Mode::Bridge;
+                          else if (m == "passthrough") extra.mode = Spec::NetOptDetails::Mode::Passthrough;
+                          else if (m == "netgraph") extra.mode = Spec::NetOptDetails::Mode::Netgraph;
+                          else ERR("options/net/extra[]/mode must be 'bridge', 'passthrough', or 'netgraph'")
+                        } else if (eKey == "bridge") {
+                          extra.bridgeIface = AsString(e.second);
+                        } else if (eKey == "interface") {
+                          extra.passthroughIface = AsString(e.second);
+                          extra.netgraphIface = AsString(e.second);
+                        } else if (eKey == "ip") {
+                          auto ipStr = AsString(e.second);
+                          if (ipStr == "dhcp") extra.ipMode = Spec::NetOptDetails::IpMode::Dhcp;
+                          else if (ipStr == "none") extra.ipMode = Spec::NetOptDetails::IpMode::None;
+                          else { extra.ipMode = Spec::NetOptDetails::IpMode::Static; extra.staticIp = ipStr; }
+                        } else if (eKey == "gateway") {
+                          extra.gateway = AsString(e.second);
+                        } else if (eKey == "ip6") {
+                          auto v6 = AsString(e.second);
+                          if (v6 == "slaac") extra.ip6Mode = Spec::NetOptDetails::Ip6Mode::Slaac;
+                          else if (v6 == "none") extra.ip6Mode = Spec::NetOptDetails::Ip6Mode::None;
+                          else { extra.ip6Mode = Spec::NetOptDetails::Ip6Mode::Static; extra.staticIp6 = v6; }
+                        } else if (eKey == "static-mac") {
+                          if (!YAML::convert<bool>::decode(e.second, extra.staticMac))
+                            ERR("options/net/extra[]/static-mac must be a boolean")
+                        } else if (eKey == "vlan") {
+                          extra.vlanId = e.second.as<int>();
+                          if (extra.vlanId < 1 || extra.vlanId > 4094)
+                            ERR("options/net/extra[]/vlan must be 1-4094")
+                        } else {
+                          ERR("unknown field options/net/extra[]/" << eKey)
+                        }
+                      }
+                      optNetDetails->extraInterfaces.push_back(std::move(extra));
+                    }
                   } else
                     ERR("the invalid value options/net/" << netOpt.first << " supplied")
                 }

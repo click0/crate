@@ -57,6 +57,22 @@ public:
     bool staticMac = false;
     int vlanId = -1;                  // -1 = no VLAN
 
+    // Extra interfaces (for multi-interface containers)
+    struct ExtraInterface {
+      Mode mode = Mode::Bridge;
+      std::string bridgeIface;          // for bridge mode
+      std::string passthroughIface;     // for passthrough mode
+      std::string netgraphIface;        // for netgraph mode
+      IpMode ipMode = IpMode::Auto;
+      std::string staticIp;
+      std::string gateway;
+      Ip6Mode ip6Mode = Ip6Mode::None;
+      std::string staticIp6;
+      bool staticMac = false;
+      int vlanId = -1;
+    };
+    std::vector<ExtraInterface> extraInterfaces;
+
     bool allowOutbound() const;
     bool allowInbound() const;
     bool isNatMode() const;

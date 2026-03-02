@@ -445,6 +445,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   RunAtEnd destroyBridgeEpairAtEnd;
   RunAtEnd reclaimPassthroughAtEnd;
   RunAtEnd destroyNetgraphAtEnd;
+  std::vector<RunAtEnd> destroyExtraInterfaces;
   RunAtEnd destroyFirewallRulesAtEnd;
   RunAtEnd destroyIpv6FwRules;
   RunAtEnd destroyPfAnchor;
@@ -763,6 +764,70 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     }
   }
 
+  // Set up extra interfaces (multi-interface containers)
+  if (optionNet && !optionNet->extraInterfaces.empty()) {
+    for (size_t i = 0; i < optionNet->extraInterfaces.size(); i++) {
+      auto &ex = optionNet->extraInterfaces[i];
+      std::string extraIface; // jail-side interface for this extra
+
+      if (ex.mode == Spec::NetOptDetails::Mode::Bridge) {
+        RunNet::ensureBridgeModule();
+        auto bi = RunNet::createBridgeEpair(jid, jidStr, ex.bridgeIface, execInJail);
+        extraIface = bi.ifaceB;
+        if (ex.staticMac) {
+          auto [macA, macB] = RunNet::generateStaticMac(jailXname, bi.ifaceA);
+          RunNet::setMacAddress(bi.ifaceA, macA);
+          execInJail({CRATE_PATH_IFCONFIG, bi.ifaceB, "ether", macB}, "set static MAC on extra bridge epair");
+        }
+        if (ex.vlanId >= 0)
+          RunNet::createVlanInJail(jid, bi.ifaceB, ex.vlanId, execInJail);
+        destroyExtraInterfaces.emplace_back([bi]() { RunNet::destroyBridgeEpair(bi); });
+        LOG("extra[" << i << "]: bridge " << ex.bridgeIface << " via " << bi.ifaceB)
+
+      } else if (ex.mode == Spec::NetOptDetails::Mode::Passthrough) {
+        auto pi = RunNet::passthroughInterface(jid, jidStr, ex.passthroughIface, execInJail);
+        extraIface = pi.iface;
+        if (ex.staticMac) {
+          auto [macA, macB] = RunNet::generateStaticMac(jailXname, pi.iface);
+          execInJail({CRATE_PATH_IFCONFIG, pi.iface, "ether", macB}, "set static MAC on extra passthrough");
+        }
+        if (ex.vlanId >= 0)
+          RunNet::createVlanInJail(jid, pi.iface, ex.vlanId, execInJail);
+        destroyExtraInterfaces.emplace_back([pi, jailXname]() { RunNet::reclaimPassthroughInterface(pi, jailXname); });
+        LOG("extra[" << i << "]: passthrough " << pi.iface)
+
+      } else if (ex.mode == Spec::NetOptDetails::Mode::Netgraph) {
+        RunNet::ensureNetgraphModules();
+        auto ni = RunNet::createNetgraphInterface(jid, jidStr, ex.netgraphIface, jailXname, execInJail);
+        extraIface = ni.ngIface;
+        if (ex.staticMac) {
+          auto [macA, macB] = RunNet::generateStaticMac(jailXname, ni.ngIface);
+          execInJail({CRATE_PATH_IFCONFIG, ni.ngIface, "ether", macB}, "set static MAC on extra netgraph");
+        }
+        if (ex.vlanId >= 0)
+          RunNet::createVlanInJail(jid, ni.ngIface, ex.vlanId, execInJail);
+        destroyExtraInterfaces.emplace_back([ni]() { RunNet::destroyNetgraphInterface(ni); });
+        LOG("extra[" << i << "]: netgraph via " << ni.ngIface)
+      }
+
+      // Configure IPv4
+      if (ex.ipMode == Spec::NetOptDetails::IpMode::Dhcp) {
+        RunNet::configureDhcp(extraIface, jailPath, jid, jidStr, execInJail);
+      } else if (ex.ipMode == Spec::NetOptDetails::IpMode::Static) {
+        RunNet::configureStaticIp(extraIface, ex.staticIp, ex.gateway, jid, execInJail);
+      } else if (ex.ipMode != Spec::NetOptDetails::IpMode::None) {
+        RunNet::configureDhcp(extraIface, jailPath, jid, jidStr, execInJail);
+      }
+
+      // Configure IPv6
+      if (ex.ip6Mode == Spec::NetOptDetails::Ip6Mode::Slaac) {
+        RunNet::configureSlaac(extraIface, jailPath, jid, jidStr, execInJail);
+      } else if (ex.ip6Mode == Spec::NetOptDetails::Ip6Mode::Static) {
+        RunNet::configureStaticIp6(extraIface, ex.staticIp6, jid, execInJail);
+      }
+    }
+  }
+
   // disable services that normally start by default
   if (optionInitializeRc)
     appendFileInJail(STR(
@@ -906,6 +971,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // Passthrough: reclaim physical NIC BEFORE jail destruction (or NIC is lost until reboot)
   if (optionNet && optionNet->mode == Spec::NetOptDetails::Mode::Passthrough)
     reclaimPassthroughAtEnd.doNow();
+  // Reclaim extra passthrough interfaces before jail destruction (reverse order)
+  for (auto it = destroyExtraInterfaces.rbegin(); it != destroyExtraInterfaces.rend(); ++it)
+    it->doNow();
+  destroyExtraInterfaces.clear();
   destroyJail.doNow();
   killXephyrAtEnd.doNow();
   destroySocatProxies.doNow();
