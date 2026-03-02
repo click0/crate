@@ -25,6 +25,8 @@ static Settings defaults() {
   s.zfsZpool = "";
   s.zfsOptions = "-o compress=lz4 -o atime=off";
   s.networkInterface = "";
+  s.defaultBridge = "";
+  s.staticMacDefault = false;
   s.bootstrapMethod = "base_txz";
   s.securelevel = 2;
   s.childrenMax = 0;
@@ -47,6 +49,8 @@ static void applyYaml(Settings &s, const YAML::Node &cfg) {
   if (cfg["zfs_options"])      s.zfsOptions = cfg["zfs_options"].as<std::string>();
 
   if (cfg["network_interface"]) s.networkInterface = cfg["network_interface"].as<std::string>();
+  if (cfg["default_bridge"])    s.defaultBridge = cfg["default_bridge"].as<std::string>();
+  if (cfg["static_mac_default"]) s.staticMacDefault = cfg["static_mac_default"].as<bool>();
 
   if (cfg["bootstrap_method"]) s.bootstrapMethod = cfg["bootstrap_method"].as<std::string>();
 

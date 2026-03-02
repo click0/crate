@@ -1,0 +1,12 @@
+# Passthrough template: dedicated physical NIC for the container
+# The interface is moved directly into the jail (no bridge needed).
+# WARNING: the NIC becomes unavailable to the host while the container runs.
+# Usage: crate create --template passthrough -s myapp.yml -o myapp.crate
+# Note: edit interface name to match your system
+
+options:
+  net:
+    mode: passthrough
+    interface: vtnet1
+    ip: dhcp
+    ipv6: slaac

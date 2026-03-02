@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "spec.h"
+#include "config.h"
 #include "util.h"
 #include "err.h"
 
@@ -275,6 +276,17 @@ Spec Spec::preprocess() const {
   // dbg-ktrace option => keep the ktrace executable
   if (O("dbg-ktrace", true))
     spec.baseKeep.push_back("/usr/bin/ktrace");
+
+  // Apply system config defaults to networking options
+  if (auto optNet = spec.optionNetWr()) {
+    auto &cfg = Config::get();
+    // Use default bridge from config if bridge mode but no bridge specified
+    if (optNet->mode == NetOptDetails::Mode::Bridge && optNet->bridgeIface.empty() && !cfg.defaultBridge.empty())
+      optNet->bridgeIface = cfg.defaultBridge;
+    // Apply system-wide static MAC default if not explicitly configured in spec
+    if (optNet->mode != NetOptDetails::Mode::Nat && !optNet->staticMac && cfg.staticMacDefault)
+      optNet->staticMac = true;
+  }
 
   return spec;
 }

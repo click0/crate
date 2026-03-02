@@ -21,6 +21,8 @@ struct Settings {
 
   // Networking
   std::string networkInterface;   // default: "" (auto-detect)
+  std::string defaultBridge;      // default: "" (no default bridge for bridge mode)
+  bool staticMacDefault;          // default: false (deterministic MAC for bridge/passthrough/netgraph)
 
   // Base system
   std::string bootstrapMethod;    // default: "base_txz"
