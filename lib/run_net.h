@@ -59,6 +59,12 @@ struct PassthroughInfo {
   std::string iface;  // e.g. "vtnet1" — MUST reclaim before jail destruction
 };
 
+struct NetgraphInfo {
+  std::string ngIface;    // eiface name inside jail, e.g. "ngeth0"
+  std::string physIface;  // physical interface, e.g. "em0"
+  std::string bridgeNode; // ng_bridge node name for cleanup
+};
+
 // Bridge mode: create epair, add to existing bridge, move b-side into jail
 BridgeInfo createBridgeEpair(int jid, const std::string &jidStr,
     const std::string &bridgeIface,
@@ -79,6 +85,17 @@ void reclaimPassthroughInterface(const PassthroughInfo &info,
 
 // Ensure if_bridge kernel module is loaded
 void ensureBridgeModule();
+
+// Ensure netgraph kernel modules are loaded (ng_ether, ng_bridge, ng_eiface)
+void ensureNetgraphModules();
+
+// Netgraph mode: create ng_bridge + eiface, move into jail
+NetgraphInfo createNetgraphInterface(int jid, const std::string &jidStr,
+    const std::string &physIface, const std::string &jailName,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail);
+
+// Netgraph mode: destroy ng_bridge node
+void destroyNetgraphInterface(const NetgraphInfo &info);
 
 // Configure DHCP on jail-side interface (runs dhclient inside jail)
 void configureDhcp(const std::string &jailSideIface,

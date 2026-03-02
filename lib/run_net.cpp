@@ -290,6 +290,65 @@ void ensureBridgeModule() {
   Util::ensureKernelModuleIsLoaded("if_bridge");
 }
 
+void ensureNetgraphModules() {
+  Util::ensureKernelModuleIsLoaded("ng_ether");
+  Util::ensureKernelModuleIsLoaded("ng_bridge");
+  Util::ensureKernelModuleIsLoaded("ng_eiface");
+}
+
+NetgraphInfo createNetgraphInterface(int jid, const std::string &jidStr,
+    const std::string &physIface, const std::string &jailName,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail) {
+  NetgraphInfo info;
+  info.physIface = physIface;
+  info.bridgeNode = STR("crate_br_" << jailName);
+
+  // set the lo0 IP address
+  execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet", "127.0.0.1"}, "set up the lo0 interface in jail");
+
+  // Create ng_bridge node attached to the physical interface's lower hook
+  // ngctl mkpeer <physIface>: bridge lower link0
+  Util::execCommand({CRATE_PATH_NGCTL, "mkpeer", STR(physIface << ":"), "bridge", "lower", "link0"},
+    CSTR("create ng_bridge on " << physIface));
+
+  // Name the bridge node for easier management
+  Util::execCommand({CRATE_PATH_NGCTL, "name", STR(physIface << ":lower"), info.bridgeNode},
+    CSTR("name ng_bridge node " << info.bridgeNode));
+
+  // Connect the upper hook of the physical interface to the bridge
+  Util::execCommand({CRATE_PATH_NGCTL, "connect", STR(physIface << ":"), STR(info.bridgeNode << ":"), "upper", "link1"},
+    CSTR("connect " << physIface << " upper to ng_bridge"));
+
+  // Create an eiface for the jail
+  Util::execCommand({CRATE_PATH_NGCTL, "mkpeer", STR(info.bridgeNode << ":"), "eiface", "link2", "ether"},
+    "create ng_eiface for jail");
+
+  // Get the eiface name
+  info.ngIface = Util::stripTrailingSpace(
+    Util::execCommandGetOutput({CRATE_PATH_NGCTL, "show", "-n", STR(info.bridgeNode << ":link2")},
+      "get ng_eiface name"));
+  // Parse the interface name from ngctl output (format: "Name: ngeth0  ...")
+  auto namePos = info.ngIface.find("Name: ");
+  if (namePos != std::string::npos) {
+    info.ngIface = info.ngIface.substr(namePos + 6);
+    auto spacePos = info.ngIface.find(' ');
+    if (spacePos != std::string::npos)
+      info.ngIface = info.ngIface.substr(0, spacePos);
+  }
+
+  // Move eiface into jail
+  Util::execCommand({CRATE_PATH_IFCONFIG, info.ngIface, "vnet", jidStr},
+    CSTR("move " << info.ngIface << " into jail"));
+
+  return info;
+}
+
+void destroyNetgraphInterface(const NetgraphInfo &info) {
+  // Shutdown the bridge node — this cleans up all connected peers
+  Util::execCommand({CRATE_PATH_NGCTL, "shutdown", STR(info.bridgeNode << ":")},
+    CSTR("shutdown ng_bridge " << info.bridgeNode));
+}
+
 BridgeInfo createBridgeEpair(int jid, const std::string &jidStr,
     const std::string &bridgeIface,
     const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail) {

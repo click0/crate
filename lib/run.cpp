@@ -444,6 +444,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   RunAtEnd destroyEpipeAtEnd;
   RunAtEnd destroyBridgeEpairAtEnd;
   RunAtEnd reclaimPassthroughAtEnd;
+  RunAtEnd destroyNetgraphAtEnd;
   RunAtEnd destroyFirewallRulesAtEnd;
   RunAtEnd destroyIpv6FwRules;
   RunAtEnd destroyPfAnchor;
@@ -535,6 +536,47 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     } else if (optionNet->ipMode != Spec::NetOptDetails::IpMode::None) {
       RunNet::configureDhcp(ptInfo.iface, jailPath, jid, jidStr, execInJail);
       LOG("passthrough mode: DHCP (auto) on " << ptInfo.iface)
+    }
+
+  } else if (optionNet && optionNet->mode == Spec::NetOptDetails::Mode::Netgraph) {
+    //
+    // Netgraph mode: ng_bridge + eiface, alternative to if_bridge
+    //
+    LOG("netgraph mode: using interface " << optionNet->netgraphIface)
+    RunNet::ensureNetgraphModules();
+
+    auto ngInfo = RunNet::createNetgraphInterface(jid, jidStr, optionNet->netgraphIface, jailXname, execInJail);
+    jailSideIface = ngInfo.ngIface;
+
+    // Static MAC
+    if (optionNet->staticMac) {
+      auto [macA, macB] = RunNet::generateStaticMac(jailXname, ngInfo.ngIface);
+      execInJail({CRATE_PATH_IFCONFIG, ngInfo.ngIface, "ether", macB},
+        "set static MAC on netgraph eiface");
+      LOG("netgraph mode: static MAC " << macB)
+    }
+
+    // VLAN
+    if (optionNet->vlanId >= 0) {
+      RunNet::createVlanInJail(jid, ngInfo.ngIface, optionNet->vlanId, execInJail);
+      LOG("netgraph mode: VLAN " << optionNet->vlanId)
+    }
+
+    destroyNetgraphAtEnd.reset([ngInfo]() {
+      RunNet::destroyNetgraphInterface(ngInfo);
+    });
+
+    // Configure IP addressing
+    if (optionNet->ipMode == Spec::NetOptDetails::IpMode::Dhcp) {
+      RunNet::configureDhcp(ngInfo.ngIface, jailPath, jid, jidStr, execInJail);
+      LOG("netgraph mode: DHCP lease acquired on " << ngInfo.ngIface)
+    } else if (optionNet->ipMode == Spec::NetOptDetails::IpMode::Static) {
+      RunNet::configureStaticIp(ngInfo.ngIface, optionNet->staticIp, optionNet->gateway, jid, execInJail);
+      Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
+      LOG("netgraph mode: static IP " << optionNet->staticIp)
+    } else if (optionNet->ipMode != Spec::NetOptDetails::IpMode::None) {
+      RunNet::configureDhcp(ngInfo.ngIface, jailPath, jid, jidStr, execInJail);
+      LOG("netgraph mode: DHCP (auto) on " << ngInfo.ngIface)
     }
 
   } else if (optionNet && (optionNet->allowOutbound() || optionNet->allowInbound())) {
@@ -848,6 +890,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   } else if (optionNet && optionNet->mode == Spec::NetOptDetails::Mode::Passthrough) {
     destroyPfAnchor.doNow();
     // reclaimPassthroughAtEnd already done above (before jail destroy)
+  } else if (optionNet && optionNet->mode == Spec::NetOptDetails::Mode::Netgraph) {
+    destroyPfAnchor.doNow();
+    destroyNetgraphAtEnd.doNow();
   } else if (optionNet && (optionNet->allowOutbound() || optionNet->allowInbound())) {
     destroyPfAnchor.doNow();
     destroyIpv6FwRules.doNow();

@@ -102,6 +102,9 @@
 #ifndef CRATE_PATH_SERVICE
 #define CRATE_PATH_SERVICE    "/usr/sbin/service"
 #endif
+#ifndef CRATE_PATH_NGCTL
+#define CRATE_PATH_NGCTL      "/usr/sbin/ngctl"
+#endif
 #ifndef CRATE_PATH_PKG
 #define CRATE_PATH_PKG        "/usr/sbin/pkg"
 #endif
