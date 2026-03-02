@@ -255,6 +255,34 @@ RunAtEnd setupPfAnchor(const Spec &spec, const EpairInfo &epair,
 }
 
 //
+// Passthrough mode
+//
+
+PassthroughInfo passthroughInterface(int jid, const std::string &jidStr,
+    const std::string &iface,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail) {
+  PassthroughInfo info;
+  info.iface = iface;
+
+  // set the lo0 IP address
+  execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet", "127.0.0.1"}, "set up the lo0 interface in jail");
+
+  // pass the physical interface directly into the jail
+  Util::execCommand({CRATE_PATH_IFCONFIG, iface, "vnet", jidStr},
+    CSTR("pass interface " << iface << " into jail"));
+
+  return info;
+}
+
+void reclaimPassthroughInterface(const PassthroughInfo &info,
+    const std::string &jailName) {
+  // Reclaim the interface from the jail back to the host.
+  // Uses -vnet with the jail name. MUST be called before jail destruction.
+  Util::execCommand({CRATE_PATH_IFCONFIG, info.iface, "-vnet", jailName},
+    CSTR("reclaim interface " << info.iface << " from jail " << jailName));
+}
+
+//
 // Bridge mode
 //
 

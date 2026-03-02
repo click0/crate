@@ -55,6 +55,10 @@ RunAtEnd setupFirewallRules(const class Spec &spec, const EpairInfo &epair,
 RunAtEnd setupPfAnchor(const class Spec &spec, const EpairInfo &epair,
                        const std::string &jailXname, bool logProgress);
 
+struct PassthroughInfo {
+  std::string iface;  // e.g. "vtnet1" — MUST reclaim before jail destruction
+};
+
 // Bridge mode: create epair, add to existing bridge, move b-side into jail
 BridgeInfo createBridgeEpair(int jid, const std::string &jidStr,
     const std::string &bridgeIface,
@@ -62,6 +66,16 @@ BridgeInfo createBridgeEpair(int jid, const std::string &jidStr,
 
 // Bridge mode: remove epair from bridge and destroy it
 void destroyBridgeEpair(const BridgeInfo &info);
+
+// Passthrough mode: pass a physical interface directly into jail
+PassthroughInfo passthroughInterface(int jid, const std::string &jidStr,
+    const std::string &iface,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail);
+
+// Passthrough mode: reclaim interface from jail back to host
+// CRITICAL: must be called BEFORE jail is destroyed, or the NIC is lost until reboot
+void reclaimPassthroughInterface(const PassthroughInfo &info,
+    const std::string &jailName);
 
 // Ensure if_bridge kernel module is loaded
 void ensureBridgeModule();

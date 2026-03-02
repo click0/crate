@@ -443,6 +443,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // set up networking
   RunAtEnd destroyEpipeAtEnd;
   RunAtEnd destroyBridgeEpairAtEnd;
+  RunAtEnd reclaimPassthroughAtEnd;
   RunAtEnd destroyFirewallRulesAtEnd;
   RunAtEnd destroyIpv6FwRules;
   RunAtEnd destroyPfAnchor;
@@ -492,6 +493,48 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       // Auto or unspecified — default to DHCP for bridge mode
       RunNet::configureDhcp(bridgeInfo.ifaceB, jailPath, jid, jidStr, execInJail);
       LOG("bridge mode: DHCP (auto) on " << bridgeInfo.ifaceB)
+    }
+
+  } else if (optionNet && optionNet->mode == Spec::NetOptDetails::Mode::Passthrough) {
+    //
+    // Passthrough mode: physical interface directly into jail
+    //
+    LOG("passthrough mode: using interface " << optionNet->passthroughIface)
+
+    auto ptInfo = RunNet::passthroughInterface(jid, jidStr, optionNet->passthroughIface, execInJail);
+    jailSideIface = ptInfo.iface;
+
+    // Static MAC
+    if (optionNet->staticMac) {
+      auto [macA, macB] = RunNet::generateStaticMac(jailXname, ptInfo.iface);
+      // For passthrough, there's only one interface — set MAC inside jail
+      execInJail({CRATE_PATH_IFCONFIG, ptInfo.iface, "ether", macB},
+        "set static MAC on passthrough interface");
+      LOG("passthrough mode: static MAC " << macB)
+    }
+
+    // VLAN
+    if (optionNet->vlanId >= 0) {
+      RunNet::createVlanInJail(jid, ptInfo.iface, optionNet->vlanId, execInJail);
+      LOG("passthrough mode: VLAN " << optionNet->vlanId << " on " << ptInfo.iface)
+    }
+
+    // CRITICAL: reclaim MUST happen before jail destruction
+    reclaimPassthroughAtEnd.reset([ptInfo, jailXname]() {
+      RunNet::reclaimPassthroughInterface(ptInfo, jailXname);
+    });
+
+    // Configure IP addressing
+    if (optionNet->ipMode == Spec::NetOptDetails::IpMode::Dhcp) {
+      RunNet::configureDhcp(ptInfo.iface, jailPath, jid, jidStr, execInJail);
+      LOG("passthrough mode: DHCP lease acquired on " << ptInfo.iface)
+    } else if (optionNet->ipMode == Spec::NetOptDetails::IpMode::Static) {
+      RunNet::configureStaticIp(ptInfo.iface, optionNet->staticIp, optionNet->gateway, jid, execInJail);
+      Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
+      LOG("passthrough mode: static IP " << optionNet->staticIp)
+    } else if (optionNet->ipMode != Spec::NetOptDetails::IpMode::None) {
+      RunNet::configureDhcp(ptInfo.iface, jailPath, jid, jidStr, execInJail);
+      LOG("passthrough mode: DHCP (auto) on " << ptInfo.iface)
     }
 
   } else if (optionNet && (optionNet->allowOutbound() || optionNet->allowInbound())) {
@@ -791,6 +834,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     removeRctlRules.doNow();
   if (!spec.zfsDatasets.empty())
     detachZfsDatasets.doNow();
+  // Passthrough: reclaim physical NIC BEFORE jail destruction (or NIC is lost until reboot)
+  if (optionNet && optionNet->mode == Spec::NetOptDetails::Mode::Passthrough)
+    reclaimPassthroughAtEnd.doNow();
   destroyJail.doNow();
   killXephyrAtEnd.doNow();
   destroySocatProxies.doNow();
@@ -799,6 +845,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   if (optionNet && optionNet->mode == Spec::NetOptDetails::Mode::Bridge) {
     destroyPfAnchor.doNow();
     destroyBridgeEpairAtEnd.doNow();
+  } else if (optionNet && optionNet->mode == Spec::NetOptDetails::Mode::Passthrough) {
+    destroyPfAnchor.doNow();
+    // reclaimPassthroughAtEnd already done above (before jail destroy)
   } else if (optionNet && (optionNet->allowOutbound() || optionNet->allowInbound())) {
     destroyPfAnchor.doNow();
     destroyIpv6FwRules.doNow();
