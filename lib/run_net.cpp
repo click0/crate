@@ -347,4 +347,43 @@ void configureStaticIp(const std::string &jailSideIface,
     execInJail({CRATE_PATH_ROUTE, "add", "default", gateway}, "set default route in jail");
 }
 
+//
+// Static MAC address generation (inspired by BastilleBSD generate_static_mac)
+//
+
+std::pair<std::string,std::string> generateStaticMac(
+    const std::string &jailName, const std::string &ifaceName) {
+  // OUI prefix: 58:9c:fc (locally administered, FreeBSD convention)
+  auto hash = Util::sha256hex(ifaceName + jailName);
+  // Take 5 hex chars from the hash for the last 2.5 octets
+  auto suffix = hash.substr(0, 5);
+  // Build base MAC: 58:9c:fc:XX:XX:X
+  auto base = STR("58:9c:fc:"
+    << suffix[0] << suffix[1] << ":"
+    << suffix[2] << suffix[3] << ":"
+    << suffix[4]);
+  return {base + "a", base + "b"};
+}
+
+void setMacAddress(const std::string &iface, const std::string &mac) {
+  Util::execCommand({CRATE_PATH_IFCONFIG, iface, "ether", mac},
+    CSTR("set MAC address " << mac << " on " << iface));
+}
+
+//
+// VLAN interface creation inside jail
+//
+
+void createVlanInJail(int jid, const std::string &parentIface, int vlanId,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail) {
+  Util::ensureKernelModuleIsLoaded("if_vlan");
+  auto vlanIface = STR("vlan" << vlanId);
+  execInJail({CRATE_PATH_IFCONFIG, vlanIface, "create"},
+    CSTR("create VLAN interface " << vlanIface));
+  execInJail({CRATE_PATH_IFCONFIG, vlanIface, "vlan", std::to_string(vlanId), "vlandev", parentIface},
+    CSTR("configure VLAN " << vlanId << " on " << parentIface));
+  execInJail({CRATE_PATH_IFCONFIG, vlanIface, "up"},
+    CSTR("bring up " << vlanIface));
+}
+
 }

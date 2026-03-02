@@ -459,6 +459,21 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     auto bridgeInfo = RunNet::createBridgeEpair(jid, jidStr, optionNet->bridgeIface, execInJail);
     jailSideIface = bridgeInfo.ifaceB;
 
+    // Static MAC address (deterministic based on jail name + interface)
+    if (optionNet->staticMac) {
+      auto [macA, macB] = RunNet::generateStaticMac(jailXname, bridgeInfo.ifaceA);
+      RunNet::setMacAddress(bridgeInfo.ifaceA, macA);
+      execInJail({CRATE_PATH_IFCONFIG, bridgeInfo.ifaceB, "ether", macB},
+        "set static MAC on jail-side epair");
+      LOG("bridge mode: static MAC " << macA << " / " << macB)
+    }
+
+    // VLAN interface inside jail
+    if (optionNet->vlanId >= 0) {
+      RunNet::createVlanInJail(jid, bridgeInfo.ifaceB, optionNet->vlanId, execInJail);
+      LOG("bridge mode: VLAN " << optionNet->vlanId << " on " << bridgeInfo.ifaceB)
+    }
+
     destroyBridgeEpairAtEnd.reset([bridgeInfo]() {
       RunNet::destroyBridgeEpair(bridgeInfo);
     });

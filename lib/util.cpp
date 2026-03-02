@@ -28,6 +28,9 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/sysctl.h>
+#include <sha256.h>
+#include <net/if.h>
+#include <ifaddrs.h>
 #include <sys/param.h>
 #include <sys/mount.h>
 #include <sys/linker.h>
@@ -475,6 +478,27 @@ std::string randomHex(int bytes) {
   for (auto b : buf)
     ss << std::setw(2) << static_cast<int>(b);
   return ss.str();
+}
+
+std::string sha256hex(const std::string &input) {
+  char hex[SHA256_DIGEST_STRING_LENGTH];
+  SHA256_Data(reinterpret_cast<const uint8_t*>(input.data()), input.size(), hex);
+  return std::string(hex);
+}
+
+bool interfaceExists(const std::string &ifaceName) {
+  struct ifaddrs *ifap;
+  if (::getifaddrs(&ifap) == -1)
+    return false;
+  bool found = false;
+  for (struct ifaddrs *a = ifap; a; a = a->ifa_next) {
+    if (ifaceName == a->ifa_name) {
+      found = true;
+      break;
+    }
+  }
+  ::freeifaddrs(ifap);
+  return found;
 }
 
 namespace Fs {

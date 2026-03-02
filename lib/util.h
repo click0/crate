@@ -130,6 +130,8 @@ std::vector<std::string> reverseVector(const std::vector<std::string> &v);
 std::string shellQuote(const std::string &arg);
 std::string safePath(const std::string &path, const std::string &requiredPrefix, const std::string &what);
 std::string randomHex(int bytes);
+std::string sha256hex(const std::string &input);
+bool interfaceExists(const std::string &ifaceName);
 
 namespace Fs {
 

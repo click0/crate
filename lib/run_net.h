@@ -76,4 +76,16 @@ void configureStaticIp(const std::string &jailSideIface,
     const std::string &ip, const std::string &gateway, int jid,
     const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail);
 
+// Generate deterministic MAC address pair from jail name + interface name
+// Returns {hostSideMac, jailSideMac}. Prefix: 58:9c:fc (FreeBSD vendor OUI).
+std::pair<std::string,std::string> generateStaticMac(
+    const std::string &jailName, const std::string &ifaceName);
+
+// Set MAC address on an interface
+void setMacAddress(const std::string &iface, const std::string &mac);
+
+// Create a VLAN interface inside the jail on top of a parent interface
+void createVlanInJail(int jid, const std::string &parentIface, int vlanId,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail);
+
 }
