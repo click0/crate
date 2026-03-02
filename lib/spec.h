@@ -20,6 +20,9 @@ public:
     static std::shared_ptr<NetOptDetails> createDefault();
     typedef std::pair<unsigned,unsigned> PortRange;
 
+    // Reference to named network from system config (crate.yml)
+    std::string networkName;
+
     // Network mode: nat (default), bridge, passthrough, netgraph
     enum class Mode { Nat, Bridge, Passthrough, Netgraph };
     Mode mode = Mode::Nat;
@@ -59,6 +62,7 @@ public:
 
     // Extra interfaces (for multi-interface containers)
     struct ExtraInterface {
+      std::string networkName;            // reference to named network
       Mode mode = Mode::Bridge;
       std::string bridgeIface;          // for bridge mode
       std::string passthroughIface;     // for passthrough mode

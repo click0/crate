@@ -280,6 +280,80 @@ Spec Spec::preprocess() const {
   // Apply system config defaults to networking options
   if (auto optNet = spec.optionNetWr()) {
     auto &cfg = Config::get();
+
+    // Resolve named network for primary interface
+    if (!optNet->networkName.empty()) {
+      auto it = cfg.networks.find(optNet->networkName);
+      if (it != cfg.networks.end()) {
+        auto &def = it->second;
+        // Apply named network fields only where spec doesn't override
+        if (optNet->mode == NetOptDetails::Mode::Nat && !def.mode.empty()) {
+          // Mode still at default (Nat) — apply from named network
+          if (def.mode == "bridge")            optNet->mode = NetOptDetails::Mode::Bridge;
+          else if (def.mode == "passthrough")  optNet->mode = NetOptDetails::Mode::Passthrough;
+          else if (def.mode == "netgraph")     optNet->mode = NetOptDetails::Mode::Netgraph;
+        }
+        if (optNet->bridgeIface.empty() && !def.bridge.empty())
+          optNet->bridgeIface = def.bridge;
+        if (optNet->passthroughIface.empty() && !def.interface.empty())
+          optNet->passthroughIface = def.interface;
+        if (optNet->netgraphIface.empty() && !def.interface.empty())
+          optNet->netgraphIface = def.interface;
+        if (optNet->gateway.empty() && !def.gateway.empty())
+          optNet->gateway = def.gateway;
+        if (optNet->vlanId < 0 && def.vlan >= 0)
+          optNet->vlanId = def.vlan;
+        if (!optNet->staticMac && def.staticMac)
+          optNet->staticMac = true;
+        if (optNet->ip6Mode == NetOptDetails::Ip6Mode::None && !def.ip6.empty()) {
+          if (def.ip6 == "slaac")
+            optNet->ip6Mode = NetOptDetails::Ip6Mode::Slaac;
+          else if (def.ip6 != "none") {
+            optNet->ip6Mode = NetOptDetails::Ip6Mode::Static;
+            optNet->staticIp6 = def.ip6;
+          }
+        }
+      }
+    }
+
+    // Resolve named networks for extra interfaces
+    for (auto &ex : optNet->extraInterfaces) {
+      if (ex.networkName.empty())
+        continue;
+      auto it = cfg.networks.find(ex.networkName);
+      if (it == cfg.networks.end())
+        continue;
+      auto &def = it->second;
+      if (!def.mode.empty()) {
+        if (def.mode == "bridge" && ex.bridgeIface.empty())
+          ex.mode = NetOptDetails::Mode::Bridge;
+        else if (def.mode == "passthrough" && ex.passthroughIface.empty())
+          ex.mode = NetOptDetails::Mode::Passthrough;
+        else if (def.mode == "netgraph" && ex.netgraphIface.empty())
+          ex.mode = NetOptDetails::Mode::Netgraph;
+      }
+      if (ex.bridgeIface.empty() && !def.bridge.empty())
+        ex.bridgeIface = def.bridge;
+      if (ex.passthroughIface.empty() && !def.interface.empty())
+        ex.passthroughIface = def.interface;
+      if (ex.netgraphIface.empty() && !def.interface.empty())
+        ex.netgraphIface = def.interface;
+      if (ex.gateway.empty() && !def.gateway.empty())
+        ex.gateway = def.gateway;
+      if (ex.vlanId < 0 && def.vlan >= 0)
+        ex.vlanId = def.vlan;
+      if (!ex.staticMac && def.staticMac)
+        ex.staticMac = true;
+      if (ex.ip6Mode == NetOptDetails::Ip6Mode::None && !def.ip6.empty()) {
+        if (def.ip6 == "slaac")
+          ex.ip6Mode = NetOptDetails::Ip6Mode::Slaac;
+        else if (def.ip6 != "none") {
+          ex.ip6Mode = NetOptDetails::Ip6Mode::Static;
+          ex.staticIp6 = def.ip6;
+        }
+      }
+    }
+
     // Use default bridge from config if bridge mode but no bridge specified
     if (optNet->mode == NetOptDetails::Mode::Bridge && optNet->bridgeIface.empty() && !cfg.defaultBridge.empty())
       optNet->bridgeIface = cfg.defaultBridge;
@@ -345,6 +419,26 @@ void Spec::validate() const {
             << rangePair.first.first << "-" << rangePair.first.second
             << " and "
             << rangePair.second.first << "-" << rangePair.second.second)
+
+    // validate named network references
+    if (!optNet->networkName.empty()) {
+      auto &cfg = Config::get();
+      if (cfg.networks.find(optNet->networkName) == cfg.networks.end()) {
+        std::ostringstream avail;
+        for (auto &n : cfg.networks)
+          avail << " " << n.first;
+        ERR("options/net/network '" << optNet->networkName << "' not found in system config"
+            << (cfg.networks.empty() ? "; no networks defined in crate.yml" : "; available:" + avail.str()))
+      }
+    }
+    for (size_t i = 0; i < optNet->extraInterfaces.size(); i++) {
+      auto &ex = optNet->extraInterfaces[i];
+      if (!ex.networkName.empty()) {
+        auto &cfg = Config::get();
+        if (cfg.networks.find(ex.networkName) == cfg.networks.end())
+          ERR("options/net/extra[" << i << "]/network '" << ex.networkName << "' not found in system config")
+      }
+    }
 
     // mode-specific validation
     using Mode = Spec::NetOptDetails::Mode;
@@ -705,6 +799,8 @@ Spec parseSpec(const std::string &fname) {
                       }
                     } else if (!YAML::convert<bool>::decode(netOpt.second, optNetDetails->ipv6))
                       ERR("options/net/ipv6 value must be a boolean, 'slaac', 'none', or an IPv6 address")
+                  } else if (AsString(netOpt.first) == "network") {
+                    optNetDetails->networkName = AsString(netOpt.second);
                   } else if (AsString(netOpt.first) == "mode") {
                     auto modeStr = AsString(netOpt.second);
                     if (modeStr == "nat")
@@ -761,7 +857,9 @@ Spec parseSpec(const std::string &fname) {
                       Spec::NetOptDetails::ExtraInterface extra;
                       for (auto e : extraNode) {
                         auto eKey = AsString(e.first);
-                        if (eKey == "mode") {
+                        if (eKey == "network") {
+                          extra.networkName = AsString(e.second);
+                        } else if (eKey == "mode") {
                           auto m = AsString(e.second);
                           if (m == "bridge") extra.mode = Spec::NetOptDetails::Mode::Bridge;
                           else if (m == "passthrough") extra.mode = Spec::NetOptDetails::Mode::Passthrough;
