@@ -20,6 +20,9 @@ public:
     static std::shared_ptr<NetOptDetails> createDefault();
     typedef std::pair<unsigned,unsigned> PortRange;
 
+    // Reference to named network from system config (crate.yml)
+    std::string networkName;
+
     // Network mode: nat (default), bridge, passthrough, netgraph
     enum class Mode { Nat, Bridge, Passthrough, Netgraph };
     Mode mode = Mode::Nat;
@@ -56,6 +59,23 @@ public:
     // Cross-mode features
     bool staticMac = false;
     int vlanId = -1;                  // -1 = no VLAN
+
+    // Extra interfaces (for multi-interface containers)
+    struct ExtraInterface {
+      std::string networkName;            // reference to named network
+      Mode mode = Mode::Bridge;
+      std::string bridgeIface;          // for bridge mode
+      std::string passthroughIface;     // for passthrough mode
+      std::string netgraphIface;        // for netgraph mode
+      IpMode ipMode = IpMode::Auto;
+      std::string staticIp;
+      std::string gateway;
+      Ip6Mode ip6Mode = Ip6Mode::None;
+      std::string staticIp6;
+      bool staticMac = false;
+      int vlanId = -1;
+    };
+    std::vector<ExtraInterface> extraInterfaces;
 
     bool allowOutbound() const;
     bool allowInbound() const;

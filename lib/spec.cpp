@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "spec.h"
+#include "config.h"
 #include "util.h"
 #include "err.h"
 
@@ -276,6 +277,91 @@ Spec Spec::preprocess() const {
   if (O("dbg-ktrace", true))
     spec.baseKeep.push_back("/usr/bin/ktrace");
 
+  // Apply system config defaults to networking options
+  if (auto optNet = spec.optionNetWr()) {
+    auto &cfg = Config::get();
+
+    // Resolve named network for primary interface
+    if (!optNet->networkName.empty()) {
+      auto it = cfg.networks.find(optNet->networkName);
+      if (it != cfg.networks.end()) {
+        auto &def = it->second;
+        // Apply named network fields only where spec doesn't override
+        if (optNet->mode == NetOptDetails::Mode::Nat && !def.mode.empty()) {
+          // Mode still at default (Nat) — apply from named network
+          if (def.mode == "bridge")            optNet->mode = NetOptDetails::Mode::Bridge;
+          else if (def.mode == "passthrough")  optNet->mode = NetOptDetails::Mode::Passthrough;
+          else if (def.mode == "netgraph")     optNet->mode = NetOptDetails::Mode::Netgraph;
+        }
+        if (optNet->bridgeIface.empty() && !def.bridge.empty())
+          optNet->bridgeIface = def.bridge;
+        if (optNet->passthroughIface.empty() && !def.interface.empty())
+          optNet->passthroughIface = def.interface;
+        if (optNet->netgraphIface.empty() && !def.interface.empty())
+          optNet->netgraphIface = def.interface;
+        if (optNet->gateway.empty() && !def.gateway.empty())
+          optNet->gateway = def.gateway;
+        if (optNet->vlanId < 0 && def.vlan >= 0)
+          optNet->vlanId = def.vlan;
+        if (!optNet->staticMac && def.staticMac)
+          optNet->staticMac = true;
+        if (optNet->ip6Mode == NetOptDetails::Ip6Mode::None && !def.ip6.empty()) {
+          if (def.ip6 == "slaac")
+            optNet->ip6Mode = NetOptDetails::Ip6Mode::Slaac;
+          else if (def.ip6 != "none") {
+            optNet->ip6Mode = NetOptDetails::Ip6Mode::Static;
+            optNet->staticIp6 = def.ip6;
+          }
+        }
+      }
+    }
+
+    // Resolve named networks for extra interfaces
+    for (auto &ex : optNet->extraInterfaces) {
+      if (ex.networkName.empty())
+        continue;
+      auto it = cfg.networks.find(ex.networkName);
+      if (it == cfg.networks.end())
+        continue;
+      auto &def = it->second;
+      if (!def.mode.empty()) {
+        if (def.mode == "bridge" && ex.bridgeIface.empty())
+          ex.mode = NetOptDetails::Mode::Bridge;
+        else if (def.mode == "passthrough" && ex.passthroughIface.empty())
+          ex.mode = NetOptDetails::Mode::Passthrough;
+        else if (def.mode == "netgraph" && ex.netgraphIface.empty())
+          ex.mode = NetOptDetails::Mode::Netgraph;
+      }
+      if (ex.bridgeIface.empty() && !def.bridge.empty())
+        ex.bridgeIface = def.bridge;
+      if (ex.passthroughIface.empty() && !def.interface.empty())
+        ex.passthroughIface = def.interface;
+      if (ex.netgraphIface.empty() && !def.interface.empty())
+        ex.netgraphIface = def.interface;
+      if (ex.gateway.empty() && !def.gateway.empty())
+        ex.gateway = def.gateway;
+      if (ex.vlanId < 0 && def.vlan >= 0)
+        ex.vlanId = def.vlan;
+      if (!ex.staticMac && def.staticMac)
+        ex.staticMac = true;
+      if (ex.ip6Mode == NetOptDetails::Ip6Mode::None && !def.ip6.empty()) {
+        if (def.ip6 == "slaac")
+          ex.ip6Mode = NetOptDetails::Ip6Mode::Slaac;
+        else if (def.ip6 != "none") {
+          ex.ip6Mode = NetOptDetails::Ip6Mode::Static;
+          ex.staticIp6 = def.ip6;
+        }
+      }
+    }
+
+    // Use default bridge from config if bridge mode but no bridge specified
+    if (optNet->mode == NetOptDetails::Mode::Bridge && optNet->bridgeIface.empty() && !cfg.defaultBridge.empty())
+      optNet->bridgeIface = cfg.defaultBridge;
+    // Apply system-wide static MAC default if not explicitly configured in spec
+    if (optNet->mode != NetOptDetails::Mode::Nat && !optNet->staticMac && cfg.staticMacDefault)
+      optNet->staticMac = true;
+  }
+
   return spec;
 }
 
@@ -334,6 +420,26 @@ void Spec::validate() const {
             << " and "
             << rangePair.second.first << "-" << rangePair.second.second)
 
+    // validate named network references
+    if (!optNet->networkName.empty()) {
+      auto &cfg = Config::get();
+      if (cfg.networks.find(optNet->networkName) == cfg.networks.end()) {
+        std::ostringstream avail;
+        for (auto &n : cfg.networks)
+          avail << " " << n.first;
+        ERR("options/net/network '" << optNet->networkName << "' not found in system config"
+            << (cfg.networks.empty() ? "; no networks defined in crate.yml" : "; available:" + avail.str()))
+      }
+    }
+    for (size_t i = 0; i < optNet->extraInterfaces.size(); i++) {
+      auto &ex = optNet->extraInterfaces[i];
+      if (!ex.networkName.empty()) {
+        auto &cfg = Config::get();
+        if (cfg.networks.find(ex.networkName) == cfg.networks.end())
+          ERR("options/net/extra[" << i << "]/network '" << ex.networkName << "' not found in system config")
+      }
+    }
+
     // mode-specific validation
     using Mode = Spec::NetOptDetails::Mode;
     if (optNet->mode == Mode::Bridge && optNet->bridgeIface.empty())
@@ -361,6 +467,29 @@ void Spec::validate() const {
       ERR("options/net/vlan is only valid with bridge, passthrough, or netgraph mode")
     if (optNet->staticMac && optNet->mode == Mode::Nat)
       ERR("options/net/static-mac is only valid with bridge, passthrough, or netgraph mode")
+    // IPv6 SLAAC/static only valid for non-NAT modes (NAT uses ipv6: true/false for ULA pass-through)
+    if (optNet->ip6Mode != Spec::NetOptDetails::Ip6Mode::None && optNet->mode == Mode::Nat)
+      ERR("options/net/ip6 (slaac/static) is only valid with bridge, passthrough, or netgraph mode; use ipv6: true for NAT mode")
+    if (optNet->ip6Mode == Spec::NetOptDetails::Ip6Mode::Static && optNet->staticIp6.empty())
+      ERR("options/net/ip6 with static address requires an IPv6 address (e.g. fd00::50/64)")
+    // Extra interfaces can only be used with non-NAT primary mode
+    if (!optNet->extraInterfaces.empty() && optNet->mode == Mode::Nat)
+      ERR("options/net/extra interfaces are only valid with bridge, passthrough, or netgraph primary mode")
+    for (size_t i = 0; i < optNet->extraInterfaces.size(); i++) {
+      auto &ex = optNet->extraInterfaces[i];
+      if (ex.mode == Mode::Bridge && ex.bridgeIface.empty())
+        ERR("options/net/extra[" << i << "]/mode=bridge requires 'bridge' field")
+      if (ex.mode == Mode::Passthrough && ex.passthroughIface.empty())
+        ERR("options/net/extra[" << i << "]/mode=passthrough requires 'interface' field")
+      if (ex.mode == Mode::Netgraph && ex.netgraphIface.empty())
+        ERR("options/net/extra[" << i << "]/mode=netgraph requires 'interface' field")
+      if (ex.mode == Mode::Nat)
+        ERR("options/net/extra[" << i << "]/mode=nat is not allowed for extra interfaces")
+      if (!ex.gateway.empty() && ex.ipMode != Spec::NetOptDetails::IpMode::Static)
+        ERR("options/net/extra[" << i << "]/gateway is only valid with static IP")
+      if (ex.ip6Mode == Spec::NetOptDetails::Ip6Mode::Static && ex.staticIp6.empty())
+        ERR("options/net/extra[" << i << "]/ip6 with static address requires an IPv6 address")
+    }
   }
 
   // ZFS dataset names must be valid
@@ -670,6 +799,8 @@ Spec parseSpec(const std::string &fname) {
                       }
                     } else if (!YAML::convert<bool>::decode(netOpt.second, optNetDetails->ipv6))
                       ERR("options/net/ipv6 value must be a boolean, 'slaac', 'none', or an IPv6 address")
+                  } else if (AsString(netOpt.first) == "network") {
+                    optNetDetails->networkName = AsString(netOpt.second);
                   } else if (AsString(netOpt.first) == "mode") {
                     auto modeStr = AsString(netOpt.second);
                     if (modeStr == "nat")
@@ -717,6 +848,53 @@ Spec parseSpec(const std::string &fname) {
                     optNetDetails->vlanId = netOpt.second.as<int>();
                     if (optNetDetails->vlanId < 1 || optNetDetails->vlanId > 4094)
                       ERR("options/net/vlan must be 1-4094")
+                  } else if (AsString(netOpt.first) == "extra") {
+                    if (!netOpt.second.IsSequence())
+                      ERR("options/net/extra must be a list of interface configurations")
+                    for (auto extraNode : netOpt.second) {
+                      if (!extraNode.IsMap())
+                        ERR("each entry in options/net/extra must be a map")
+                      Spec::NetOptDetails::ExtraInterface extra;
+                      for (auto e : extraNode) {
+                        auto eKey = AsString(e.first);
+                        if (eKey == "network") {
+                          extra.networkName = AsString(e.second);
+                        } else if (eKey == "mode") {
+                          auto m = AsString(e.second);
+                          if (m == "bridge") extra.mode = Spec::NetOptDetails::Mode::Bridge;
+                          else if (m == "passthrough") extra.mode = Spec::NetOptDetails::Mode::Passthrough;
+                          else if (m == "netgraph") extra.mode = Spec::NetOptDetails::Mode::Netgraph;
+                          else ERR("options/net/extra[]/mode must be 'bridge', 'passthrough', or 'netgraph'")
+                        } else if (eKey == "bridge") {
+                          extra.bridgeIface = AsString(e.second);
+                        } else if (eKey == "interface") {
+                          extra.passthroughIface = AsString(e.second);
+                          extra.netgraphIface = AsString(e.second);
+                        } else if (eKey == "ip") {
+                          auto ipStr = AsString(e.second);
+                          if (ipStr == "dhcp") extra.ipMode = Spec::NetOptDetails::IpMode::Dhcp;
+                          else if (ipStr == "none") extra.ipMode = Spec::NetOptDetails::IpMode::None;
+                          else { extra.ipMode = Spec::NetOptDetails::IpMode::Static; extra.staticIp = ipStr; }
+                        } else if (eKey == "gateway") {
+                          extra.gateway = AsString(e.second);
+                        } else if (eKey == "ip6") {
+                          auto v6 = AsString(e.second);
+                          if (v6 == "slaac") extra.ip6Mode = Spec::NetOptDetails::Ip6Mode::Slaac;
+                          else if (v6 == "none") extra.ip6Mode = Spec::NetOptDetails::Ip6Mode::None;
+                          else { extra.ip6Mode = Spec::NetOptDetails::Ip6Mode::Static; extra.staticIp6 = v6; }
+                        } else if (eKey == "static-mac") {
+                          if (!YAML::convert<bool>::decode(e.second, extra.staticMac))
+                            ERR("options/net/extra[]/static-mac must be a boolean")
+                        } else if (eKey == "vlan") {
+                          extra.vlanId = e.second.as<int>();
+                          if (extra.vlanId < 1 || extra.vlanId > 4094)
+                            ERR("options/net/extra[]/vlan must be 1-4094")
+                        } else {
+                          ERR("unknown field options/net/extra[]/" << eKey)
+                        }
+                      }
+                      optNetDetails->extraInterfaces.push_back(std::move(extra));
+                    }
                   } else
                     ERR("the invalid value options/net/" << netOpt.first << " supplied")
                 }

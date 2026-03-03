@@ -25,6 +25,8 @@ static Settings defaults() {
   s.zfsZpool = "";
   s.zfsOptions = "-o compress=lz4 -o atime=off";
   s.networkInterface = "";
+  s.defaultBridge = "";
+  s.staticMacDefault = false;
   s.bootstrapMethod = "base_txz";
   s.securelevel = 2;
   s.childrenMax = 0;
@@ -47,6 +49,8 @@ static void applyYaml(Settings &s, const YAML::Node &cfg) {
   if (cfg["zfs_options"])      s.zfsOptions = cfg["zfs_options"].as<std::string>();
 
   if (cfg["network_interface"]) s.networkInterface = cfg["network_interface"].as<std::string>();
+  if (cfg["default_bridge"])    s.defaultBridge = cfg["default_bridge"].as<std::string>();
+  if (cfg["static_mac_default"]) s.staticMacDefault = cfg["static_mac_default"].as<bool>();
 
   if (cfg["bootstrap_method"]) s.bootstrapMethod = cfg["bootstrap_method"].as<std::string>();
 
@@ -60,6 +64,25 @@ static void applyYaml(Settings &s, const YAML::Node &cfg) {
   }
 
   if (cfg["compress_xz_options"]) s.compressXzOptions = cfg["compress_xz_options"].as<std::string>();
+
+  // Named networks: map of name -> network definition
+  if (cfg["networks"] && cfg["networks"].IsMap()) {
+    for (auto net : cfg["networks"]) {
+      auto name = net.first.as<std::string>();
+      if (!net.second.IsMap())
+        continue;
+      NetworkDef def;
+      auto &n = net.second;
+      if (n["mode"])       def.mode = n["mode"].as<std::string>();
+      if (n["bridge"])     def.bridge = n["bridge"].as<std::string>();
+      if (n["interface"])  def.interface = n["interface"].as<std::string>();
+      if (n["gateway"])    def.gateway = n["gateway"].as<std::string>();
+      if (n["vlan"])       def.vlan = n["vlan"].as<int>();
+      if (n["static-mac"]) def.staticMac = n["static-mac"].as<bool>();
+      if (n["ip6"])        def.ip6 = n["ip6"].as<std::string>();
+      s.networks[name] = std::move(def);
+    }
+  }
 }
 
 const Settings& load() {

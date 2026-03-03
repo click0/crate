@@ -1,0 +1,17 @@
+# Bridge + DHCP template: container on physical network via bridge
+# Prerequisites: create bridge first:
+#   ifconfig bridge0 create
+#   ifconfig bridge0 addm em0
+#   ifconfig bridge0 up
+# Usage: crate create --template bridge-dhcp -s myapp.yml -o myapp.crate
+
+options:
+  net:
+    mode: bridge
+    bridge: bridge0
+    ip: dhcp
+    static-mac: true
+
+dirs:
+  share:
+    - [$HOME/Downloads, $HOME/Downloads]

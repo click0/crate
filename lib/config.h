@@ -5,8 +5,20 @@
 
 #include <string>
 #include <vector>
+#include <map>
 
 namespace Config {
+
+// Named network definition for use in jail specs via "network: <name>"
+struct NetworkDef {
+  std::string mode;           // "bridge", "passthrough", "netgraph"
+  std::string bridge;         // for bridge mode (e.g. "bridge0")
+  std::string interface;      // for passthrough/netgraph (e.g. "vtnet1", "em0")
+  std::string gateway;        // gateway IP (e.g. "192.168.1.1")
+  int vlan = -1;              // VLAN ID (1-4094), -1 = no VLAN
+  bool staticMac = false;     // deterministic MAC address
+  std::string ip6;            // "slaac", "none", or static IPv6 address
+};
 
 struct Settings {
   // Paths
@@ -21,6 +33,8 @@ struct Settings {
 
   // Networking
   std::string networkInterface;   // default: "" (auto-detect)
+  std::string defaultBridge;      // default: "" (no default bridge for bridge mode)
+  bool staticMacDefault;          // default: false (deterministic MAC for bridge/passthrough/netgraph)
 
   // Base system
   std::string bootstrapMethod;    // default: "base_txz"
@@ -34,6 +48,9 @@ struct Settings {
 
   // Compression
   std::string compressXzOptions;  // default: "-T0"
+
+  // Named networks (referenced by "network: <name>" in jail specs)
+  std::map<std::string, NetworkDef> networks;
 };
 
 // Load configuration, merging system + user files

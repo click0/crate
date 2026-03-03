@@ -255,11 +255,98 @@ RunAtEnd setupPfAnchor(const Spec &spec, const EpairInfo &epair,
 }
 
 //
+// Passthrough mode
+//
+
+PassthroughInfo passthroughInterface(int jid, const std::string &jidStr,
+    const std::string &iface,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail) {
+  PassthroughInfo info;
+  info.iface = iface;
+
+  // set the lo0 IP address
+  execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet", "127.0.0.1"}, "set up the lo0 interface in jail");
+
+  // pass the physical interface directly into the jail
+  Util::execCommand({CRATE_PATH_IFCONFIG, iface, "vnet", jidStr},
+    CSTR("pass interface " << iface << " into jail"));
+
+  return info;
+}
+
+void reclaimPassthroughInterface(const PassthroughInfo &info,
+    const std::string &jailName) {
+  // Reclaim the interface from the jail back to the host.
+  // Uses -vnet with the jail name. MUST be called before jail destruction.
+  Util::execCommand({CRATE_PATH_IFCONFIG, info.iface, "-vnet", jailName},
+    CSTR("reclaim interface " << info.iface << " from jail " << jailName));
+}
+
+//
 // Bridge mode
 //
 
 void ensureBridgeModule() {
   Util::ensureKernelModuleIsLoaded("if_bridge");
+}
+
+void ensureNetgraphModules() {
+  Util::ensureKernelModuleIsLoaded("ng_ether");
+  Util::ensureKernelModuleIsLoaded("ng_bridge");
+  Util::ensureKernelModuleIsLoaded("ng_eiface");
+}
+
+NetgraphInfo createNetgraphInterface(int jid, const std::string &jidStr,
+    const std::string &physIface, const std::string &jailName,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail) {
+  NetgraphInfo info;
+  info.physIface = physIface;
+  info.bridgeNode = STR("crate_br_" << jailName);
+
+  // set the lo0 IP address
+  execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet", "127.0.0.1"}, "set up the lo0 interface in jail");
+
+  // Create ng_bridge node attached to the physical interface's lower hook
+  // ngctl mkpeer <physIface>: bridge lower link0
+  Util::execCommand({CRATE_PATH_NGCTL, "mkpeer", STR(physIface << ":"), "bridge", "lower", "link0"},
+    CSTR("create ng_bridge on " << physIface));
+
+  // Name the bridge node for easier management
+  Util::execCommand({CRATE_PATH_NGCTL, "name", STR(physIface << ":lower"), info.bridgeNode},
+    CSTR("name ng_bridge node " << info.bridgeNode));
+
+  // Connect the upper hook of the physical interface to the bridge
+  Util::execCommand({CRATE_PATH_NGCTL, "connect", STR(physIface << ":"), STR(info.bridgeNode << ":"), "upper", "link1"},
+    CSTR("connect " << physIface << " upper to ng_bridge"));
+
+  // Create an eiface for the jail
+  Util::execCommand({CRATE_PATH_NGCTL, "mkpeer", STR(info.bridgeNode << ":"), "eiface", "link2", "ether"},
+    "create ng_eiface for jail");
+
+  // Get the eiface name
+  info.ngIface = Util::stripTrailingSpace(
+    Util::execCommandGetOutput({CRATE_PATH_NGCTL, "show", "-n", STR(info.bridgeNode << ":link2")},
+      "get ng_eiface name"));
+  // Parse the interface name from ngctl output (format: "Name: ngeth0  ...")
+  auto namePos = info.ngIface.find("Name: ");
+  if (namePos != std::string::npos) {
+    info.ngIface = info.ngIface.substr(namePos + 6);
+    auto spacePos = info.ngIface.find(' ');
+    if (spacePos != std::string::npos)
+      info.ngIface = info.ngIface.substr(0, spacePos);
+  }
+
+  // Move eiface into jail
+  Util::execCommand({CRATE_PATH_IFCONFIG, info.ngIface, "vnet", jidStr},
+    CSTR("move " << info.ngIface << " into jail"));
+
+  return info;
+}
+
+void destroyNetgraphInterface(const NetgraphInfo &info) {
+  // Shutdown the bridge node — this cleans up all connected peers
+  Util::execCommand({CRATE_PATH_NGCTL, "shutdown", STR(info.bridgeNode << ":")},
+    CSTR("shutdown ng_bridge " << info.bridgeNode));
 }
 
 BridgeInfo createBridgeEpair(int jid, const std::string &jidStr,
@@ -345,6 +432,87 @@ void configureStaticIp(const std::string &jailSideIface,
 
   if (!gateway.empty())
     execInJail({CRATE_PATH_ROUTE, "add", "default", gateway}, "set default route in jail");
+}
+
+//
+// IPv6 SLAAC configuration
+//
+
+void configureSlaac(const std::string &jailSideIface,
+    const std::string &jailPath, int jid, const std::string &jidStr,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail) {
+  // Write SLAAC config to jail's rc.conf
+  Util::Fs::appendFile(
+    STR("ifconfig_" << jailSideIface << "_ipv6=\"inet6 -ifdisabled accept_rtadv\"" << std::endl),
+    STR(jailPath << "/etc/rc.conf"));
+
+  // Enable IPv6 and accept router advertisements on the interface
+  execInJail({CRATE_PATH_IFCONFIG, jailSideIface, "inet6", "-ifdisabled", "accept_rtadv"},
+    "enable IPv6 SLAAC on jail interface");
+
+  // Solicit router advertisements (one-shot)
+  execInJail({CRATE_PATH_RTSOL, jailSideIface}, "solicit IPv6 router advertisements");
+}
+
+//
+// Static IPv6 configuration
+//
+
+void configureStaticIp6(const std::string &jailSideIface,
+    const std::string &ip6, int jid,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail) {
+  // Parse address and prefix length from CIDR notation (e.g. "fd00::50/64")
+  auto slashPos = ip6.find('/');
+  std::string addr;
+  std::string prefixLen = "64"; // default
+  if (slashPos != std::string::npos) {
+    addr = ip6.substr(0, slashPos);
+    prefixLen = ip6.substr(slashPos + 1);
+  } else {
+    addr = ip6;
+  }
+
+  execInJail({CRATE_PATH_IFCONFIG, jailSideIface, "inet6", addr, "prefixlen", prefixLen},
+    "configure static IPv6 on jail interface");
+}
+
+//
+// Static MAC address generation (inspired by BastilleBSD generate_static_mac)
+//
+
+std::pair<std::string,std::string> generateStaticMac(
+    const std::string &jailName, const std::string &ifaceName) {
+  // OUI prefix: 58:9c:fc (locally administered, FreeBSD convention)
+  auto hash = Util::sha256hex(ifaceName + jailName);
+  // Take 5 hex chars from the hash for the last 2.5 octets
+  auto suffix = hash.substr(0, 5);
+  // Build base MAC: 58:9c:fc:XX:XX:X
+  auto base = STR("58:9c:fc:"
+    << suffix[0] << suffix[1] << ":"
+    << suffix[2] << suffix[3] << ":"
+    << suffix[4]);
+  return {base + "a", base + "b"};
+}
+
+void setMacAddress(const std::string &iface, const std::string &mac) {
+  Util::execCommand({CRATE_PATH_IFCONFIG, iface, "ether", mac},
+    CSTR("set MAC address " << mac << " on " << iface));
+}
+
+//
+// VLAN interface creation inside jail
+//
+
+void createVlanInJail(int jid, const std::string &parentIface, int vlanId,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail) {
+  Util::ensureKernelModuleIsLoaded("if_vlan");
+  auto vlanIface = STR("vlan" << vlanId);
+  execInJail({CRATE_PATH_IFCONFIG, vlanIface, "create"},
+    CSTR("create VLAN interface " << vlanIface));
+  execInJail({CRATE_PATH_IFCONFIG, vlanIface, "vlan", std::to_string(vlanId), "vlandev", parentIface},
+    CSTR("configure VLAN " << vlanId << " on " << parentIface));
+  execInJail({CRATE_PATH_IFCONFIG, vlanIface, "up"},
+    CSTR("bring up " << vlanIface));
 }
 
 }

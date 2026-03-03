@@ -1,0 +1,12 @@
+# Netgraph template: ng_bridge-based networking (alternative to if_bridge)
+# Uses netgraph subsystem instead of if_bridge. Useful when if_bridge conflicts
+# with other networking features or when ng_bridge is preferred.
+# Usage: crate create --template netgraph -s myapp.yml -o myapp.crate
+# Note: edit interface name to match your system
+
+options:
+  net:
+    mode: netgraph
+    interface: em0
+    ip: dhcp
+    static-mac: true
