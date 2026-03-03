@@ -1,5 +1,7 @@
 .\" Copyright (c) 2019
 .\"     Yuri Victorovich.  All rights reserved.
+.\" Copyright (c) 2026
+.\"     Vladyslav V. Prodan.  All rights reserved.
 .\"
 .\" Redistribution and use in source and binary forms, with or without
 .\" modification, are permitted provided that the following conditions
@@ -14,7 +16,7 @@
 .\"    without specific prior written permission.
 .\"
 .\"
-.Dd August 8, 2019
+.Dd March 3, 2026
 .Dt CRATE 5
 .Os
 .Sh NAME
@@ -22,36 +24,689 @@
 .Nd containerizer for FreeBSD
 .Sh SYNOPSIS
 .Nm
-.Ar crate-specification.yml
-.Oc
-.Nm
-.Ar crate-file.crate
-.Oc
+.Ar command
+.Op Ar options
+.Op Ar arguments
 .Sh DESCRIPTION
 The
 .Nm
-utility is a containerizer program that is able to create containers from
-container definition files, and then run containers as processes that have no
-dependencies besides system functions in the kernel.
-.Ss Mechanism of action
+utility is a containerizer for FreeBSD that packages applications and services
+into isolated, self-contained containers
+.Pq Pa .crate No files
+and runs them in dedicated FreeBSD jails with automatic networking, firewall,
+and resource cleanup.
+Containers contain everything needed to run the containerized software \(em
+only the
 .Nm
-uses FreeBSD jails to run containerized applications. It also uses ipfw(8)-based
-firewall rules to route network traffic in and out of containers.
-.Ss Invocation
-There are two basic operations that
+executable and the FreeBSD kernel are required at runtime.
+.Ss Commands
+.Bl -tag -width "snapshot"
+.It Cm create Fl s Ar spec.yml Fl o Ar output.crate
+Create a container from a YAML specification.
+Optionally use
+.Fl -template Ar name
+for template inheritance.
+Use
+.Fl -use-pkgbase
+for FreeBSD 16+ pkgbase bootstrap.
+.It Cm run Fl f Ar file.crate Op Fl - Ar args
+Run a container.
+Arguments after
+.Fl -
+are passed to the containerized application.
+.It Cm validate Fl s Ar spec.yml
+Validate a specification file for syntax and logical consistency.
+.It Cm snapshot Ar subcommand
+Manage ZFS snapshots:
+.Cm create , list , restore , delete , diff .
+.It Cm list Op Fl j
+List running containers in table or JSON format.
+.It Cm info Ar target
+Show detailed information about a running container.
+.It Cm console Ar target Op Fl u Ar user
+Open an interactive shell in a running container.
+.It Cm clean Op Fl n
+Clean up orphaned resources.
+Use
+.Fl n
+for dry-run.
+.It Cm export Ar target Op Fl o Ar file
+Export a running container to a
+.Pa .crate
+archive with SHA256 validation.
+.It Cm import Ar file Op Fl o Ar file Op Fl -force
+Import a
+.Pa .crate
+archive with integrity validation.
+.It Cm gui Ar subcommand
+GUI session manager:
+.Cm list , focus , attach , url , tile , screenshot , resize .
+.El
+.Ss Global options
+.Bl -tag -width "--log-progress"
+.It Fl h , -help
+Show usage information.
+.It Fl V , -version
+Show version.
+.It Fl -no-color
+Disable colored output.
+Also respects the
+.Ev NO_COLOR
+environment variable.
+.It Fl p , -log-progress
+Log progress with timestamps.
+.El
+.Sh SPECIFICATION FORMAT
+Container specifications are YAML files with the following top-level keys:
+.Ss Base system
+.Bl -tag -width "keep-wildcard"
+.It Sy base/keep
+Files and directories to keep from the base system.
+.It Sy base/keep-wildcard
+Glob patterns to keep.
+.It Sy base/remove
+Files and directories to remove.
+.El
+.Ss Packages
+.Bl -tag -width "local-override"
+.It Sy pkg/install
+Packages to install from the repository.
+.It Sy pkg/local-override
+Map of package name to local
+.Pa .pkg
+file path.
+.It Sy pkg/nuke
+Packages to forcefully remove.
+.El
+.Ss Runtime
+.Bl -tag -width "command"
+.It Sy run/command
+Executable path with optional arguments.
+.It Sy run/service
+Services to run (list or scalar).
+.El
+.Ss Shared resources
+.Bl -tag -width "files/share"
+.It Sy dirs/share
+Directories shared between host and jail.
+Each entry is a path (same on both sides) or a pair
+.Pq from, to .
+.It Sy files/share
+Files shared between host and jail.
+Same format as
+.Sy dirs/share .
+.El
+.Ss Options
+The
+.Sy options
+key accepts a list
+.Pq simplified format
+or a map
+.Pq extended format .
+Supported options:
+.Cm net , x11 , ssl-certs , tor , video , gl , no-rm-static-libs , dbg-ktrace .
+.Pp
+See
+.Sx NETWORKING
+for details on the
+.Cm net
+option.
+.Ss Security
+.Bl -tag -width "enforce_statfs"
+.It Sy security/securelevel
+Jail securelevel, \-1 to 3
+.Pq default: 2 .
+.It Sy security/children_max
+Maximum child jails
+.Pq default: 0 .
+.It Sy security/cpuset
+CPU pinning
+.Pq e.g., \(dq0-3\(dq, \(dq0,2,4\(dq .
+.It Sy security/enforce_statfs
+Filesystem visibility: 0, 1, or 2.
+.It Sy security/allow_quotas
+Allow filesystem quotas.
+.It Sy security/allow_set_hostname
+Allow changing hostname.
+.It Sy security/allow_chflags
+Allow changing file flags.
+.It Sy security/allow_mlock
+Allow memory locking.
+.El
+.Ss Resource limits
+The
+.Sy limits
+key is a map of RCTL resource names to values.
+Supported resources:
+.Cm cputime , datasize , stacksize , coredumpsize , memoryuse ,
+.Cm memorylocked , maxproc , openfiles , vmemoryuse , pseudoterminals ,
+.Cm swapuse , nthr , msgqqueued , msgqsize , nmsgq , nsem ,
+.Cm nsemop , nshm , shmsize , wallclock , pcpu , readbps ,
+.Cm writebps , readiops , writeiops .
+.Ss IPC
+.Bl -tag -width "raw_sockets"
+.It Sy ipc/sysvipc
+Enable System V IPC (shared memory, semaphores, message queues).
+.It Sy ipc/mqueue
+Enable POSIX message queues.
+.It Sy ipc/raw_sockets
+Control raw socket access.
+.El
+.Ss Encryption
+.Bl -tag -width "keyformat"
+.It Sy encrypted
+Boolean or map.
+When a map:
+.It Sy encrypted/method
+Encryption method
+.Pq only \(dqzfs\(dq supported .
+.It Sy encrypted/keyformat
+Key format:
+.Cm passphrase , hex , raw .
+.It Sy encrypted/cipher
+Cipher:
+.Cm aes-256-gcm , aes-256-ccm , aes-128-gcm , aes-128-ccm .
+.El
+.Ss Copy-on-Write
+.Bl -tag -width "backend"
+.It Sy cow/mode
+.Cm ephemeral
+.Pq rollback on exit
+or
+.Cm persistent
+.Pq retain changes .
+.It Sy cow/backend
+.Cm zfs
+.Pq default
+or
+.Cm unionfs .
+.El
+.Ss DNS filtering
+.Bl -tag -width "redirect_blocked"
+.It Sy dns_filter/allow
+Whitelist patterns.
+.It Sy dns_filter/block
+Blacklist patterns (wildcard).
+.It Sy dns_filter/redirect_blocked
+IP address or
+.Dq nxdomain .
+.El
+.Ss Firewall policy
+.Bl -tag -width "default"
+.It Sy firewall/block-ip
+CIDR ranges to block.
+.It Sy firewall/allow-tcp
+TCP ports to allow.
+.It Sy firewall/allow-udp
+UDP ports to allow.
+.It Sy firewall/default
+Default policy:
+.Cm allow
+or
+.Cm block .
+.El
+.Ss GUI
+.Bl -tag -width "vnc_password"
+.It Sy gui/mode
+.Cm nested , headless , gpu ,
+or
+.Cm auto .
+.It Sy gui/resolution
+Display resolution
+.Pq e.g., \(dq1920x1080\(dq .
+.It Sy gui/vnc
+Enable x11vnc.
+.It Sy gui/vnc_port
+VNC port number.
+.It Sy gui/novnc
+Enable noVNC/websockify.
+.It Sy gui/vnc_password
+VNC password.
+.It Sy gui/gpu_device
+PCI Bus ID for GPU mode.
+.It Sy gui/gpu_driver
+Driver:
+.Cm nvidia , amdgpu , intel ,
+or
+.Cm dummy .
+.El
+.Ss Clipboard
+.Bl -tag -width "direction"
+.It Sy clipboard/mode
+.Cm isolated , shared ,
+or
+.Cm none .
+.It Sy clipboard/direction
+.Cm in , out , both ,
+or
+.Cm none .
+.El
+.Ss D-Bus
+.Bl -tag -width "policy"
+.It Sy dbus/system
+Enable system bus.
+.It Sy dbus/session
+Enable session bus.
+.It Sy dbus/policy/allow_own
+Service names to allow owning.
+.It Sy dbus/policy/deny_send
+Service names to deny sending to.
+.El
+.Ss Managed services
+.Bl -tag -width "auto_start"
+.It Sy services/managed
+List of services (each with
+.Sy name , enable , rcvar
+fields).
+.It Sy services/auto_start
+Auto-start on container run.
+.El
+.Ss Socket proxying
+.Bl -tag -width "proxy"
+.It Sy socket_proxy/share
+Host socket paths to share via nullfs.
+.It Sy socket_proxy/proxy
+List of proxy entries with
+.Sy host , jail , direction
+fields.
+.El
+.Ss Terminal
+.Bl -tag -width "allow_raw_tty"
+.It Sy terminal/devfs_ruleset
+Devfs ruleset number (0-65535).
+.It Sy terminal/allow_raw_tty
+Allow raw TTY access.
+.El
+.Ss Advanced security
+.Bl -tag -width "mac_bsdextended"
+.It Sy security_advanced/capsicum
+Enable Capsicum capability mode.
+.It Sy security_advanced/mac_bsdextended
+List of ugidfw rules.
+.It Sy security_advanced/mac_portacl/allow_ports
+Port binding restrictions.
+.It Sy security_advanced/hide_other_jails
+Prevent enumeration of other jails.
+.El
+.Ss Lifecycle hooks
+.Bl -tag -width "run:before-start-services"
+.It Sy scripts/create:begin
+Before container creation.
+.It Sy scripts/create:end
+After container creation.
+.It Sy scripts/run:begin
+Before container execution.
+.It Sy scripts/run:after-create-jail
+After jail is created.
+.It Sy scripts/run:before-start-services
+Before services start.
+.It Sy scripts/run:before-execute
+Before main command execution.
+.It Sy scripts/run:after-execute
+After main command exits.
+.It Sy scripts/run:end
+After container shutdown.
+.El
+.Sh NETWORKING
 .Nm
-supports:
-.Ic create
-and
-.Ic run .
-When
+supports four network modes for containers, configured via the
+.Sy mode
+field in
+.Sy options/net .
+All modes use VNET
+.Pq Xr vnet 9
+for network virtualization.
+.Ss Network modes
+.Bl -tag -width "passthrough"
+.It Cm nat
+.Pq default
+Epair virtual interface with ipfw NAT.
+Automatic 10.0.0.0/8 IP assignment, outbound traffic control
+.Pq wan/lan/host/dns ,
+and inbound port forwarding.
+IPv6 ULA (fd00:cra7:e::/48) pass-through via
+.Sy ipv6: true .
+.It Cm bridge
+Epair attached to an existing
+.Xr if_bridge 4
+interface.
+Supports DHCP
+.Pq Sy ip: dhcp ,
+static IP
+.Pq Sy ip: 192.168.1.50/24 ,
+VLAN tagging, static MAC, and IPv6 SLAAC.
+Requires the
+.Sy bridge
+field
+.Pq e.g., bridge: bridge0 .
+.It Cm passthrough
+Physical network interface passed directly into the jail via
+.Xr vnet 9 .
+The interface is reclaimed when the container exits.
+Supports DHCP, static IP, VLAN, static MAC, and IPv6 SLAAC.
+Requires the
+.Sy interface
+field.
+.It Cm netgraph
+.Xr ng_bridge 4
+with
+.Xr ng_eiface 4 .
+Alternative to
+.Cm bridge
+mode for L2 networking.
+Requires the
+.Sy interface
+field for the physical interface.
+.El
+.Ss Network option fields
+.Bl -tag -width "static-mac"
+.It Sy network
+Reference to a named network defined in the system configuration.
+See
+.Sx NAMED NETWORKS .
+.It Sy mode
+.Cm nat , bridge , passthrough ,
+or
+.Cm netgraph .
+Default:
+.Cm nat .
+.It Sy bridge
+Bridge interface name for
+.Cm bridge
+mode
+.Pq e.g., bridge0 .
+.It Sy interface
+Physical interface for
+.Cm passthrough
+or
+.Cm netgraph
+modes.
+.It Sy ip
+IP addressing:
+.Cm dhcp , none ,
+or a static address in CIDR notation
+.Pq e.g., 192.168.1.50/24 .
+.It Sy gateway
+Gateway IP address (only with static IP).
+.It Sy ip6
+IPv6 addressing:
+.Cm slaac , none ,
+or a static IPv6 address.
+.It Sy static-mac
+Generate deterministic MAC address using SHA-256
+.Pq vendor OUI 58:9c:fc .
+.It Sy vlan
+802.1Q VLAN ID, 1-4094.
+Only valid with
+.Cm bridge , passthrough ,
+or
+.Cm netgraph
+modes.
+.It Sy outbound
+.Pq NAT mode only
+List of allowed outbound targets:
+.Cm wan , lan , host , dns , all , none .
+.It Sy inbound-tcp , inbound-udp
+.Pq NAT mode only
+Port forwarding rules.
+Map of external port/range to internal port/range.
+.It Sy ipv6
+.Pq NAT mode only
+Enable IPv6 ULA pass-through
+.Pq boolean .
+.It Sy extra
+List of additional interfaces, each with the same fields as above
+.Pq except Sy outbound No and Sy inbound .
+.El
+.Sh NAMED NETWORKS
+Reusable network profiles can be defined in the system configuration file
+under the
+.Sy networks
+key.
+Container specifications reference them via
+.Sy network: Ar name
+in the
+.Sy options/net
+section.
+Named network fields serve as defaults \(em explicit values in the container
+specification always override.
+.Pp
+Example system configuration:
+.Bd -literal -offset indent
+# /usr/local/etc/crate.yml
+networks:
+    external:
+        mode: bridge
+        bridge: bridge0
+        gateway: 192.168.1.1
+        static-mac: true
+    internal:
+        mode: bridge
+        bridge: bridge1
+        gateway: 10.0.0.1
+        vlan: 100
+.Ed
+.Pp
+Example container specification using named networks:
+.Bd -literal -offset indent
+options:
+    net:
+        network: external
+        ip: 192.168.1.50/24
+        extra:
+            - network: internal
+              ip: 10.0.0.50/24
+.Ed
+.Pp
+Named network definition fields:
+.Bl -tag -width "static-mac"
+.It Sy mode
+.Cm bridge , passthrough ,
+or
+.Cm netgraph .
+.It Sy bridge
+Bridge interface name.
+.It Sy interface
+Physical interface.
+.It Sy gateway
+Gateway IP address.
+.It Sy vlan
+VLAN ID (1-4094).
+.It Sy static-mac
+Deterministic MAC generation.
+.It Sy ip6
+IPv6 mode:
+.Cm slaac , none ,
+or static address.
+.El
+.Sh CONFIGURATION
 .Nm
-is invoked with a crate definition file (having the .yml extension), this
-triggers the
-.Ic create
-mode. When
+reads configuration from YAML files in the following order
+.Pq higher priority wins :
+.Bl -enum
+.It
+.Pa /usr/local/etc/crate.yml
+\(em system-wide configuration.
+.It
+.Pa /usr/local/etc/crate.d/*.yml
+\(em drop-in fragments, loaded in alphabetical order.
+.It
+.Pa ~/.config/crate/crate.yml
+\(em per-user overrides (highest priority).
+.El
+.Ss Configuration keys
+.Bl -tag -width "compress_xz_options"
+.It Sy prefix
+Jail directory root.
+Default:
+.Pa /var/run/crate .
+.It Sy cache
+Cache directory.
+Default:
+.Pa /var/cache/crate .
+.It Sy logs
+Log directory.
+Default:
+.Pa /var/log/crate .
+.It Sy zfs_enable
+Enable ZFS integration.
+Default: false.
+.It Sy zfs_zpool
+ZFS pool name.
+.It Sy zfs_options
+ZFS dataset creation options.
+Default:
+.Dq -o compress=lz4 -o atime=off .
+.It Sy network_interface
+Default network interface for gateway detection.
+Auto-detected if empty.
+.It Sy default_bridge
+Default bridge interface for
+.Cm bridge
+mode when not specified in spec.
+.It Sy static_mac_default
+Enable deterministic MAC by default for non-NAT modes.
+Default: false.
+.It Sy bootstrap_method
+Base system bootstrap method.
+Default:
+.Dq base_txz .
+.It Sy securelevel
+Default securelevel.
+Default: 2.
+.It Sy children_max
+Default maximum child jails.
+Default: 0.
+.It Sy search_path
+List of directories to search for
+.Pa .crate
+files.
+Default:
+.Dq \&. ,
+.Pa ~/.local/share/crate ,
+.Pa /usr/local/share/crate .
+.It Sy compress_xz_options
+XZ compression options.
+Default:
+.Dq -T0 .
+.It Sy networks
+Named network definitions.
+See
+.Sx NAMED NETWORKS .
+.El
+.Sh TEMPLATES
+Built-in templates in
+.Pa templates/ :
+.Bl -tag -width "network-isolated"
+.It Pa standard.yml
+NAT with WAN and DNS access, shared Downloads directory.
+.It Pa development.yml
+NAT with full outbound, shared home directory, SysV IPC, allow_mlock.
+.It Pa minimal.yml
+Bare jail with no network or X11.
+.It Pa privacy.yml
+Tor proxy, ZFS encryption, ephemeral COW, DNS filtering.
+.It Pa network-isolated.yml
+No network, nested X11 at 1280x720.
+.It Pa bridge-dhcp.yml
+Bridge mode with DHCP and static MAC.
+.It Pa bridge-static.yml
+Bridge mode with static IP and gateway.
+.It Pa passthrough.yml
+Passthrough mode with DHCP and IPv6 SLAAC.
+.It Pa netgraph.yml
+Netgraph mode with DHCP and static MAC.
+.El
+.Sh FILES
+.Bl -tag -width "/usr/local/etc/crate.d/*.yml"
+.It Pa /usr/local/etc/crate.yml
+System-wide configuration.
+.It Pa /usr/local/etc/crate.d/*.yml
+Drop-in configuration fragments.
+.It Pa ~/.config/crate/crate.yml
+Per-user configuration.
+.It Pa /var/run/crate/
+Runtime jail directories and context files.
+.It Pa /var/cache/crate/
+Cache directory.
+.It Pa /var/log/crate/
+Log directory.
+.El
+.Sh EXAMPLES
+Create and run a container:
+.Bd -literal -offset indent
+crate create -s examples/firefox.yml -o firefox.crate
+crate run -f firefox.crate
+.Ed
+.Pp
+Create with template inheritance:
+.Bd -literal -offset indent
+crate create -s app.yml --template development.yml -o app.crate
+.Ed
+.Pp
+List running containers:
+.Bd -literal -offset indent
+crate list
+crate list -j    # JSON output
+.Ed
+.Pp
+Container with bridge networking:
+.Bd -literal -offset indent
+# spec.yml
+options:
+    net:
+        mode: bridge
+        bridge: bridge0
+        ip: dhcp
+        static-mac: true
+.Ed
+.Pp
+Container with multiple interfaces using named networks:
+.Bd -literal -offset indent
+# spec.yml
+options:
+    net:
+        network: external
+        ip: 192.168.1.50/24
+        extra:
+            - network: internal
+              ip: 10.0.0.50/24
+.Ed
+.Sh COMPATIBILITY
 .Nm
-is invoked with a crate file (having the .create extension), this triggers
-the
-.Ic run
-mode.
+supports FreeBSD 13.0 and later.
+FreeBSD 15.0+ specific features:
+.Bl -bullet
+.It
+JAIL_OWN_DESC \(em race-free jail removal via owning descriptor.
+.It
+Epair checksum offload fix (txcsum/txcsum6 disabled).
+.It
+OS version mismatch detection between host and container.
+.It
+ipfw compatibility warning for removed legacy code.
+.El
+.Pp
+All network modes require VIMAGE support in the kernel
+.Pq Sy kern.features.vimage=1 .
+This is a
+.Xr loader.conf 5
+tunable.
+.Sh SEE ALSO
+.Xr jail 8 ,
+.Xr ipfw 8 ,
+.Xr pf 4 ,
+.Xr vnet 9 ,
+.Xr if_bridge 4 ,
+.Xr ng_bridge 4 ,
+.Xr rctl 8 ,
+.Xr zfs 8 ,
+.Xr loader.conf 5
+.Sh BUGS
+Inbound network ports cannot be accessed from the host running the container
+due to a FreeBSD bug
+.Pq PR 239590 .
+They can only be accessed from other hosts.
+.Sh AUTHORS
+.An Yuri Victorovich
+.An Vladyslav V. Prodan

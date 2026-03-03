@@ -13,7 +13,7 @@ Crate — контейнеризатор для FreeBSD. Пакує застос
 ### Керування контейнерами
 * **11 команд**: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`, `gui`
 * **YAML-специфікація** з успадкуванням шаблонів (`--template`)
-* **Інтеграція з ZFS**: знімки (create/list/restore/delete/diff), COW-клони, шифрування, підключення datasets
+* **Інтеграція з ZFS**: знімки (create/list/restore/delete/diff), COW-клони, шифрування (AES-256-GCM/CCM, AES-128), підключення datasets
 * **Copy-on-Write**: ефемерний або персистентний режим через ZFS clone або unionfs
 * **Експорт/Імпорт**: запущені контейнери в `.crate` архіви з SHA256-валідацією, захистом від traversal, перевіркою версії ОС
 * **Перелік контейнерів** у таблиці або JSON (`crate list -j`)
@@ -31,17 +31,24 @@ Crate — контейнеризатор для FreeBSD. Пакує застос
 * **Відеопристрої**: проброс V4L `/dev/videoN`
 
 ### Мережа
-* **VNET**: автоматичне створення epair з IPv4 та IPv6
-* **NAT**: ipfw з автоматичним керуванням правилами
-* **IPv6**: повна підтримка (fd00:cra7:e::/48 ULA, ipfw ip6, pf inet6, маршрутизація)
-* **Проброс портів**: вхідний TCP/UDP через YAML
+* **4 мережеві режими**: NAT (за замовчуванням), bridge (`if_bridge`), passthrough (прямий NIC), netgraph (`ng_bridge`)
+* **NAT режим**: ipfw з автоматичною адресацією 10.0.0.0/8, контроль вихідного трафіку (wan/lan/host/dns), проброс портів (TCP/UDP)
+* **Bridge режим**: контейнер на фізичній мережі через `if_bridge` з DHCP або статичним IP
+* **Passthrough режим**: виділений фізичний NIC передається безпосередньо контейнеру через VNET
+* **Netgraph режим**: `ng_bridge` + `eiface` як альтернатива `if_bridge`
+* **DHCP**: синхронне отримання lease (`SYNCDHCP`-семантика)
+* **Статичний IP**: CIDR-нотація (напр. `192.168.1.50/24`) з gateway
+* **IPv6**: NAT ULA (fd00:cra7:e::/48), SLAAC для bridge/passthrough/netgraph, статичні IPv6-адреси
+* **Статичний MAC**: детерміністична генерація MAC-адрес (SHA-256, vendor OUI `58:9c:fc`)
+* **VLAN**: 802.1Q тегування (ID 1-4094) для bridge/passthrough/netgraph режимів
+* **Декілька інтерфейсів**: основний + додаткові інтерфейси, кожен з незалежними mode/IP/VLAN
+* **Іменовані мережі**: визначення мережевих профілів у системному конфігу, посилання за іменем у специфікаціях контейнерів
 * **pf anchors**: per-container файрвол (block_ip, allow_tcp/udp, default_policy)
-* **Контроль вихідного трафіку**: гранулярний доступ — wan/lan/host/dns
 * **DNS-фільтрація**: per-jail unbound з блокуванням доменів (wildcard-патерни, nxdomain/redirect)
 * **Динамічні слоти файрволу**: унікальні номери правил, без конфліктів, RAII-очищення
 
 ### Безпека
-* **securelevel**: налаштовуваний (-1 auto / 0–3, default=2)
+* **securelevel**: налаштовуваний (-1 auto / 0-3, default=2)
 * **children.max**: налаштовуваний (default=0 — без вкладених jail)
 * **CPU pinning**: cpuset через `security:` в YAML
 * **RCTL ресурсні обмеження**: memoryuse, pcpu, maxproc, openfiles та 20+ інших ресурсів
@@ -59,9 +66,9 @@ Crate — контейнеризатор для FreeBSD. Пакує застос
 
 ### Сервіси та IPC
 * **Керовані сервіси**: авто-старт/стоп у порядку, генерація rc.conf
-* **Socket proxying**: socat-проксі host↔jail сокетів
+* **Socket proxying**: socat-проксі host<->jail сокетів
 * **SysV IPC / POSIX mqueue**: налаштовуваний per container
-* **Tor інтеграція**: вбудована опція tor проксі
+* **Tor інтеграція**: вбудована опція tor проксі з опціональним control port
 
 ### Хуки життєвого циклу
 * `run:begin`, `run:after-create-jail`, `run:before-start-services`, `run:before-execute`, `run:after-execute`, `run:end`
@@ -125,6 +132,74 @@ crate run -f firefox-headless.crate &
 crate gui url firefox    # виведе noVNC URL для доступу через браузер
 ```
 
+### Мережеві режими
+
+```yaml
+# NAT (за замовчуванням) — автоматичний IP, ipfw NAT, контроль вихідного трафіку
+options:
+    net:
+        outbound: [wan, dns]
+        inbound-tcp:
+            8080: 80
+
+# Bridge — контейнер на фізичній мережі через if_bridge
+options:
+    net:
+        mode: bridge
+        bridge: bridge0
+        ip: dhcp
+        static-mac: true
+
+# Bridge зі статичним IP та VLAN
+options:
+    net:
+        mode: bridge
+        bridge: bridge0
+        ip: 192.168.1.100/24
+        gateway: 192.168.1.1
+        vlan: 100
+        ip6: slaac
+
+# Passthrough — виділений NIC безпосередньо контейнеру
+options:
+    net:
+        mode: passthrough
+        interface: vtnet1
+        ip: dhcp
+        ip6: slaac
+
+# Netgraph — альтернатива if_bridge через ng_bridge
+options:
+    net:
+        mode: netgraph
+        interface: em0
+        ip: 192.168.1.100/24
+        gateway: 192.168.1.1
+        static-mac: true
+
+# Декілька інтерфейсів
+options:
+    net:
+        mode: bridge
+        bridge: bridge0
+        ip: dhcp
+        extra:
+            - mode: bridge
+              bridge: bridge1
+              ip: 10.0.0.50/24
+              gateway: 10.0.0.1
+              vlan: 100
+
+# Використання іменованих мереж (визначених у crate.yml)
+options:
+    net:
+        network: external
+        ip: 192.168.1.50/24
+        extra:
+            - network: internal
+              ip: 10.0.0.50/24
+```
+
 ## Конфігурація
 
 Файли конфігурації (YAML, вищий пріоритет перемагає):
@@ -135,17 +210,69 @@ crate gui url firefox    # виведе noVNC URL для доступу чере
 | `/usr/local/etc/crate.d/*.yml` | Drop-in фрагменти (за алфавітом) |
 | `~/.config/crate/crate.yml` | Користувацька |
 
-Основні параметри: `prefix`, `cache`, `logs`, `zfs_enable`, `zfs_zpool`, `network_interface`, `securelevel`, `children_max`, `search_path`, `compress_xz_options`.
+Основні параметри: `prefix`, `cache`, `logs`, `zfs_enable`, `zfs_zpool`, `network_interface`, `default_bridge`, `static_mac_default`, `bootstrap_method`, `securelevel`, `children_max`, `search_path`, `compress_xz_options`, `networks`.
+
+### Іменовані мережі
+
+Визначення багаторазових мережевих профілів у системному конфігу з посиланням за іменем у специфікаціях контейнерів:
+
+```yaml
+# /usr/local/etc/crate.yml
+networks:
+    external:
+        mode: bridge
+        bridge: bridge0
+        gateway: 192.168.1.1
+        static-mac: true
+    internal:
+        mode: bridge
+        bridge: bridge1
+        gateway: 10.0.0.1
+        vlan: 100
+    dmz:
+        mode: netgraph
+        interface: em1
+        gateway: 172.16.0.1
+```
+
+```yaml
+# специфікація контейнера (.crate)
+options:
+    net:
+        network: external
+        ip: 192.168.1.50/24
+        extra:
+            - network: internal
+              ip: 10.0.0.50/24
+```
+
+Поля іменованої мережі працюють як значення за замовчуванням — явно вказані значення у специфікації контейнера завжди мають пріоритет.
+
+## Шаблони
+
+Каталог `templates/` містить готові базові конфігурації:
+
+| Шаблон | Опис |
+|---|---|
+| `standard.yml` | NAT з WAN+DNS, спільна тека Downloads |
+| `development.yml` | NAT з повним доступом, спільна домашня тека, SysV IPC |
+| `minimal.yml` | Мінімальний jail, без мережі, без X11 |
+| `privacy.yml` | Tor проксі, ZFS шифрування, ефемерний COW, DNS-фільтрація |
+| `network-isolated.yml` | Без мережі, nested X11 (1280x720) |
+| `bridge-dhcp.yml` | Bridge режим з DHCP та статичним MAC |
+| `bridge-static.yml` | Bridge режим зі статичним IP та gateway |
+| `passthrough.yml` | Passthrough з DHCP та IPv6 SLAAC |
+| `netgraph.yml` | Netgraph режим з DHCP та статичним MAC |
 
 ## Приклади
 
 Каталог `examples/` містить готові специфікації:
 
 **Десктопні застосунки:**
-firefox, chromium, gimp, thunderbird, libreoffice, telegram-desktop, vlc, mpv, meld, qbittorrent, qtox, xfce-desktop
+firefox, chromium, gimp, thunderbird, meld, mpv, vlc, qbittorrent, qtox, telegram-desktop, xfce-desktop
 
 **Headless/GPU режими:**
-firefox-headless, firefox-gpu, chromium-headless, chromium-gpu, gimp-headless, libreoffice-headless, blender-gpu, glxgears-gpu
+firefox-headless, firefox-gpu, chromium-headless, chromium-gpu, gimp-headless, blender-gpu, glxgears-gpu
 
 **Мережеві сервіси:**
 gogs, nginx, syncthing, tor, i2pd
@@ -154,7 +281,37 @@ gogs, nginx, syncthing, tor, i2pd
 chromium+tor, firefox+i2pd, chromium+i2pd, qbittorrent+i2pd
 
 **Утиліти:**
-nmap, amass, wget, aria2, fetch, gzip, xeyes
+nmap, amass, wget, aria2, fetch, gzip, yt-dlp, xeyes
+
+## Довідка YAML-специфікації
+
+Підтримувані ключі верхнього рівня у файлах `.crate` / `.yml`:
+
+| Ключ | Опис |
+|---|---|
+| `base` | `keep`, `keep-wildcard`, `remove` — керування файлами базової системи |
+| `pkg` | `install`, `local-override`, `nuke` — керування пакунками |
+| `run` | `command`, `service` — що запускати в контейнері |
+| `dirs` | `share` — спільні теки (host<->jail) |
+| `files` | `share` — спільні файли (host<->jail) |
+| `options` | `net`, `x11`, `ssl-certs`, `tor`, `video`, `gl`, `no-rm-static-libs`, `dbg-ktrace` |
+| `scripts` | Хуки життєвого циклу (run:begin, run:after-create-jail тощо) |
+| `security` | `securelevel`, `children_max`, `cpuset`, `enforce_statfs`, `allow_*` |
+| `limits` | RCTL ресурсні обмеження (memoryuse, pcpu, maxproc тощо) |
+| `ipc` | `sysvipc`, `mqueue`, `raw_sockets` |
+| `zfs` | `datasets` — додаткові ZFS datasets |
+| `encrypted` | ZFS шифрування (method, keyformat, cipher) |
+| `cow` | Copy-on-Write (mode: ephemeral/persistent, backend: zfs/unionfs) |
+| `dns_filter` | DNS-фільтрація (allow, block, redirect_blocked) |
+| `firewall` | Per-container pf політика (block_ip, allow_tcp/udp, default) |
+| `x11` | X11 дисплей (mode: nested/shared/none, resolution, clipboard) |
+| `gui` | GUI сесія (mode: nested/headless/gpu/auto, vnc, novnc, resolution) |
+| `clipboard` | Ізоляція буфера обміну (mode: isolated/shared/none, direction) |
+| `dbus` | D-Bus політика (system, session, policy/allow_own/deny_send) |
+| `services` | Керовані сервіси (managed list, auto_start) |
+| `socket_proxy` | Проксі сокетів (share, proxy з host/jail/direction) |
+| `terminal` | Ізоляція терміналу (devfs_ruleset, allow_raw_tty) |
+| `security_advanced` | Capsicum, MAC bsdextended/portacl, hide_other_jails |
 
 ## Встановлення
 
@@ -170,11 +327,19 @@ make && sudo make install
 
 **Залежності:** yaml-cpp, libjail
 
+### Додаткові компоненти
+
+```sh
+make install-daemon       # crated — демон керування контейнерами
+make install-examples     # приклади специфікацій до /usr/local/share/examples/crate
+make install-completions  # автодоповнення shell
+```
+
 ## Сумісність з FreeBSD 15.0+
 
 * JAIL_OWN_DESC — race-free видалення jail через owning descriptor
 * Виправлення checksum offload для epair (вимкнення txcsum/txcsum6)
-* Попередження про невідповідність версій ОС (host ≠ container)
+* Попередження про невідповідність версій ОС (host != container)
 * Попередження про сумісність ipfw (видалений legacy compat code)
 * Адаптація до зміни поведінки getgroups(2)
 
