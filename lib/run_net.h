@@ -24,10 +24,17 @@ struct EpairInfo {
   unsigned num;        // epair number
 };
 
+struct BridgeInfo {
+  std::string ifaceA;       // host-side epair (member of bridge)
+  std::string ifaceB;       // jail-side epair
+  std::string bridgeIface;  // e.g. "bridge0"
+  unsigned num;
+};
+
 // Detect host's default gateway interface, IP, and LAN
 GatewayInfo detectGateway();
 
-// Create an epair interface pair and assign IPs
+// Create an epair interface pair and assign IPs (NAT mode)
 EpairInfo createEpair(int jid, const std::string &jidStr,
                       const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail);
 
@@ -47,5 +54,26 @@ RunAtEnd setupFirewallRules(const class Spec &spec, const EpairInfo &epair,
 // Set up per-container pf anchor rules, returns cleanup callback
 RunAtEnd setupPfAnchor(const class Spec &spec, const EpairInfo &epair,
                        const std::string &jailXname, bool logProgress);
+
+// Bridge mode: create epair, add to existing bridge, move b-side into jail
+BridgeInfo createBridgeEpair(int jid, const std::string &jidStr,
+    const std::string &bridgeIface,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail);
+
+// Bridge mode: remove epair from bridge and destroy it
+void destroyBridgeEpair(const BridgeInfo &info);
+
+// Ensure if_bridge kernel module is loaded
+void ensureBridgeModule();
+
+// Configure DHCP on jail-side interface (runs dhclient inside jail)
+void configureDhcp(const std::string &jailSideIface,
+    const std::string &jailPath, int jid, const std::string &jidStr,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail);
+
+// Configure static IP on jail-side interface
+void configureStaticIp(const std::string &jailSideIface,
+    const std::string &ip, const std::string &gateway, int jid,
+    const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail);
 
 }

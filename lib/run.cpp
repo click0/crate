@@ -239,20 +239,30 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // check the pre-conditions for networking
   int origIpForwarding = -1;
+  bool isNatMode = false;
   if (spec.optionExists("net")) {
     if (Util::getSysctlInt("kern.features.vimage") == 0)
       ERR("the crate needs network access, but the VIMAGE feature isn't available in the kernel (kern.features.vimage==0)")
-    Util::ensureKernelModuleIsLoaded("ipfw_nat");
+
+    auto optNet = spec.optionNet();
+    isNatMode = !optNet || optNet->isNatMode();
+
+    // NAT mode needs ipfw_nat; bridge/passthrough/netgraph don't
+    if (isNatMode)
+      Util::ensureKernelModuleIsLoaded("ipfw_nat");
+
+    // Bridge mode needs if_bridge
+    if (optNet && optNet->mode == Spec::NetOptDetails::Mode::Bridge)
+      RunNet::ensureBridgeModule();
+
     // net.inet.ip.forwarding needs to be 1 for networking to work
-    // Save original value so we can restore it when the last crate exits.
-    // NOTE: on FreeBSD 15.0+ this can be pre-set in /boot/loader.conf: net.inet.ip.forwarding=1
     origIpForwarding = Util::getSysctlInt("net.inet.ip.forwarding");
     if (origIpForwarding == 0) {
       LOG("enabling net.inet.ip.forwarding (was 0, will restore on exit)")
       Util::setSysctlInt("net.inet.ip.forwarding", 1);
     }
-    // Detect container-vs-host FreeBSD version mismatch for ipfw compatibility
-    {
+    // Detect container-vs-host FreeBSD version mismatch for ipfw compatibility (NAT mode only)
+    if (isNatMode) {
       int hostMajor = Util::getFreeBSDMajorVersion();
       int containerMajor = 0;
       auto osverFile = J("/+CRATE.OSVERSION");
@@ -432,19 +442,53 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // set up networking
   RunAtEnd destroyEpipeAtEnd;
+  RunAtEnd destroyBridgeEpairAtEnd;
   RunAtEnd destroyFirewallRulesAtEnd;
   RunAtEnd destroyIpv6FwRules;
   RunAtEnd destroyPfAnchor;
   RunAtEnd releaseFwSlot;
   auto optionNet = spec.optionNet();
-  if (optionNet && (optionNet->allowOutbound() || optionNet->allowInbound())) {
+  std::string jailSideIface; // jail-side network interface name (for all modes)
+
+  if (optionNet && optionNet->mode == Spec::NetOptDetails::Mode::Bridge) {
+    //
+    // Bridge mode: epair → user's bridge, no NAT, L2 connectivity
+    //
+    LOG("bridge mode: using bridge " << optionNet->bridgeIface)
+
+    auto bridgeInfo = RunNet::createBridgeEpair(jid, jidStr, optionNet->bridgeIface, execInJail);
+    jailSideIface = bridgeInfo.ifaceB;
+
+    destroyBridgeEpairAtEnd.reset([bridgeInfo]() {
+      RunNet::destroyBridgeEpair(bridgeInfo);
+    });
+
+    // Configure IP addressing
+    if (optionNet->ipMode == Spec::NetOptDetails::IpMode::Dhcp) {
+      // DHCP provides its own resolv.conf — don't copy host's
+      RunNet::configureDhcp(bridgeInfo.ifaceB, jailPath, jid, jidStr, execInJail);
+      LOG("bridge mode: DHCP lease acquired on " << bridgeInfo.ifaceB)
+    } else if (optionNet->ipMode == Spec::NetOptDetails::IpMode::Static) {
+      RunNet::configureStaticIp(bridgeInfo.ifaceB, optionNet->staticIp, optionNet->gateway, jid, execInJail);
+      // Copy resolv.conf for static IP (no DHCP to provide it)
+      Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
+      LOG("bridge mode: static IP " << optionNet->staticIp << " on " << bridgeInfo.ifaceB)
+    } else if (optionNet->ipMode != Spec::NetOptDetails::IpMode::None) {
+      // Auto or unspecified — default to DHCP for bridge mode
+      RunNet::configureDhcp(bridgeInfo.ifaceB, jailPath, jid, jidStr, execInJail);
+      LOG("bridge mode: DHCP (auto) on " << bridgeInfo.ifaceB)
+    }
+
+  } else if (optionNet && (optionNet->allowOutbound() || optionNet->allowInbound())) {
+    //
+    // NAT mode (original behavior): epair + ipfw NAT
+    //
     // detect host's gateway
     auto gw = RunNet::detectGateway();
     gwIface = gw.iface; hostIP = gw.hostIP; hostLAN = gw.hostLAN;
 
     // IPv6 gateway detection: determine host's IPv6-capable interface
     if (optionNet->ipv6) {
-      // Try to detect the IPv6 default gateway interface from 'netstat -rn -f inet6'
       try {
         auto output6 = Util::execPipelineGetOutput(
           {{CRATE_PATH_NETSTAT, "-rn", "-f", "inet6"}, {CRATE_PATH_GREP, "^default"}, {CRATE_PATH_SED, "s| *| |"}},
@@ -455,11 +499,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
           LOG("IPv6 gateway interface: " << gwIface6)
         }
       } catch (...) {
-        // no IPv6 default route — fall back to same interface as IPv4
         gwIface6 = gwIface;
         LOG("no IPv6 default route found, using IPv4 gateway interface: " << gwIface6)
       }
-      // Find a global-scope IPv6 address on the gateway interface
       auto ipv6addrs = Net::getIfaceIp6Addresses(gwIface6.empty() ? gwIface : gwIface6);
       for (auto &addr : ipv6addrs) {
         if (std::get<2>(addr) == "global") {
@@ -473,22 +515,17 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       else
         LOG("host IPv6 address: " << hostIP6 << "/" << hostIP6Prefix)
     }
-    // determine the host's nameserver
     auto nameserverIp = Net::getNameserverIp();
 
-    // copy /etc/resolv.conf into jail
     if (optionNet->outboundDns)
       Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
 
-    // create the epair
     auto epair = RunNet::createEpair(jid, jidStr, execInJail);
+    jailSideIface = epair.ifaceB;
 
-    // IPv6 pass-through networking: assign ULA addresses and configure routing
-    // Uses fd00:cra7:e::/48 (ULA) prefix for container-to-host links.
-    // Each epair pair gets a /126 subnet (4 addresses, 2 usable).
+    // IPv6 pass-through networking
     std::string epipeIp6A, epipeIp6B;
     if (optionNet->ipv6) {
-      // IPv6 address allocation: fd00:cra7:e::<epairNum*2+offset>
       auto numToIp6 = [](unsigned epairNum, unsigned idx) {
         unsigned addr = 100 + 2 * epairNum + idx;
         return STR("fd00:cra7:e::" << std::hex << addr);
@@ -496,16 +533,12 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       epipeIp6A = numToIp6(epair.num, 0);
       epipeIp6B = numToIp6(epair.num, 1);
 
-      // Set IPv6 loopback in jail
       execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet6", "::1", "prefixlen", "128"}, "set up lo0 IPv6 in jail");
-      // Assign IPv6 addresses to the epair interfaces (host and jail sides)
       Util::execCommand({CRATE_PATH_IFCONFIG, epair.ifaceA, "inet6", epipeIp6A, "prefixlen", "126"},
                         "set up IPv6 on host-side epair");
       execInJail({CRATE_PATH_IFCONFIG, epair.ifaceB, "inet6", epipeIp6B, "prefixlen", "126"},
                  "set up IPv6 on jail-side epair");
-      // Set IPv6 default route in jail to point to host-side epair
       execInJail({CRATE_PATH_ROUTE, "-6", "add", "default", epipeIp6A}, "set IPv6 default route in jail");
-      // Enable IPv6 forwarding on host
       auto origIp6Forwarding = Util::getSysctlInt("net.inet6.ip6.forwarding");
       if (origIp6Forwarding == 0) {
         LOG("enabling net.inet6.ip6.forwarding")
@@ -514,7 +547,6 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       LOG("IPv6 networking configured: " << epipeIp6A << " <-> " << epipeIp6B)
     }
 
-    // destroy the epair when finished
     destroyEpipeAtEnd.reset([ifaceA=epair.ifaceA]() {
       RunNet::destroyEpair(ifaceA);
     });
@@ -536,11 +568,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       fwSlots->unlock();
     });
 
-    // set up IPv4 firewall rules
     destroyFirewallRulesAtEnd = RunNet::setupFirewallRules(spec, epair, gw, fwSlot, nameserverIp, origIpForwarding, args.logProgress);
 
-    // IPv6 firewall rules: no NAT needed for IPv6 (direct routing)
-    // Uses ipfw's "ip6" protocol to match only IPv6 packets
+    // IPv6 firewall rules
     if (optionNet->ipv6 && !epipeIp6B.empty()) {
       auto execFW = [](const std::vector<std::string> &fwargs) {
         auto argv = std::vector<std::string>{CRATE_PATH_IPFW, "-q"};
@@ -548,27 +578,20 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         Util::execCommand(argv, "firewall rule");
       };
       auto fwRuleOutNo = fwRuleRangeOutBase + fwSlot * fwSlotSize + 1;
-      auto fwRule6OutNo = fwRuleOutNo + 1; // use slot+1 for IPv6 rules within the same range
+      auto fwRule6OutNo = fwRuleOutNo + 1;
       auto rule6OutS = std::to_string(fwRule6OutNo);
       auto v6Iface = gwIface6.empty() ? gwIface : gwIface6;
       if (optionNet->allowOutbound()) {
-        // Allow DNS over IPv6
-        if (optionNet->outboundDns) {
+        if (optionNet->outboundDns)
           execFW({"add", rule6OutS, "allow", "udp", "from", epipeIp6B, "to", "any", "53"});
-        }
-        // Block non-DNS UDP to port 53
         execFW({"add", rule6OutS, "deny", "udp", "from", epipeIp6B, "to", "any", "53"});
-        // Block host access if not allowed
         if (!optionNet->outboundHost)
           execFW({"add", rule6OutS, "deny", "ip6", "from", epipeIp6B, "to", "me6"});
-        // Allow outbound IPv6 traffic
         execFW({"add", rule6OutS, "allow", "ip6", "from", epipeIp6B, "to", "any", "out", "xmit", v6Iface});
-        // Allow return traffic
         execFW({"add", rule6OutS, "allow", "ip6", "from", "any", "to", epipeIp6B, "in", "recv", v6Iface});
       }
       LOG("IPv6 firewall rules configured for " << epipeIp6B)
 
-      // IPv6 firewall cleanup
       destroyIpv6FwRules.reset([fwRule6OutNo]() {
         Util::execCommand({CRATE_PATH_IPFW, "delete", std::to_string(fwRule6OutNo)}, "destroy IPv6 firewall rule");
       });
@@ -578,34 +601,28 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     if (spec.firewallPolicy) {
       auto anchorName = STR("crate/" << jailXname);
       std::ostringstream pfRules;
-      // Block IP ranges (works for both IPv4 and IPv6 CIDR notation)
       for (auto &cidr : spec.firewallPolicy->blockIp)
         pfRules << "block drop quick from " << epair.ipB << " to " << cidr << std::endl;
-      // IPv6 block rules: duplicate for IPv6 source address if enabled
       if (optionNet->ipv6 && !epipeIp6B.empty()) {
         for (auto &cidr : spec.firewallPolicy->blockIp)
           if (Net::isIpv6Address(cidr.substr(0, cidr.find('/'))))
             pfRules << "block drop quick from " << epipeIp6B << " to " << cidr << std::endl;
       }
-      // Allow specific TCP ports
       for (auto port : spec.firewallPolicy->allowTcp) {
         pfRules << "pass out quick proto tcp from " << epair.ipB << " to any port " << port << std::endl;
         if (optionNet->ipv6 && !epipeIp6B.empty())
           pfRules << "pass out quick inet6 proto tcp from " << epipeIp6B << " to any port " << port << std::endl;
       }
-      // Allow specific UDP ports
       for (auto port : spec.firewallPolicy->allowUdp) {
         pfRules << "pass out quick proto udp from " << epair.ipB << " to any port " << port << std::endl;
         if (optionNet->ipv6 && !epipeIp6B.empty())
           pfRules << "pass out quick inet6 proto udp from " << epipeIp6B << " to any port " << port << std::endl;
       }
-      // Default policy
       if (spec.firewallPolicy->defaultPolicy == "block")
         pfRules << "block drop all" << std::endl;
       else
         pfRules << "pass all" << std::endl;
 
-      // Load rules into pf anchor
       auto tmpRules = STR("/tmp/crate-pf-" << jailXname << ".conf");
       Util::Fs::writeFile(pfRules.str(), tmpRules);
       Util::execCommand({CRATE_PATH_PFCTL, "-a", anchorName, "-f", tmpRules}, "load pf anchor rules");
@@ -630,7 +647,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // rc-initialization
   if (optionInitializeRc)
     execInJail({"/bin/sh", "/etc/rc"}, "exec.start");
-  else
+  else if (isNatMode && spec.optionExists("net"))
     execInJail({"/bin/sh", "-c", "service ipfw start > /dev/null 2>&1"}, "start firewall in jail");
 
   // add user to jail
@@ -764,7 +781,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   destroySocatProxies.doNow();
   for (auto &m : mounts)
     m->unmount();
-  if (optionNet && (optionNet->allowOutbound() || optionNet->allowInbound())) {
+  if (optionNet && optionNet->mode == Spec::NetOptDetails::Mode::Bridge) {
+    destroyPfAnchor.doNow();
+    destroyBridgeEpairAtEnd.doNow();
+  } else if (optionNet && (optionNet->allowOutbound() || optionNet->allowInbound())) {
     destroyPfAnchor.doNow();
     destroyIpv6FwRules.doNow();
     destroyFirewallRulesAtEnd.doNow();

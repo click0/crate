@@ -162,6 +162,18 @@ bool Spec::NetOptDetails::allowInbound() const {
   return !inboundPortsTcp.empty() || !inboundPortsUdp.empty();
 }
 
+bool Spec::NetOptDetails::isNatMode() const {
+  return mode == Mode::Nat;
+}
+
+bool Spec::NetOptDetails::needsIpfw() const {
+  return mode == Mode::Nat;
+}
+
+bool Spec::NetOptDetails::needsDhcp() const {
+  return ipMode == IpMode::Dhcp;
+}
+
 bool Spec::optionExists(const char* opt) const {
   return options.find(opt) != options.end();
 }
@@ -313,7 +325,7 @@ void Spec::validate() const {
       ERR("the unknown script section '" << s.first << "' was supplied")
 
   // port ranges in net options must be consistent
-  if (auto optNet = optionNet())
+  if (auto optNet = optionNet()) {
     for (auto pv : {&optNet->inboundPortsTcp, &optNet->inboundPortsUdp})
       for (auto &rangePair : *pv)
         if (rangePair.first.second - rangePair.first.first != rangePair.second.second - rangePair.second.first)
@@ -321,6 +333,35 @@ void Spec::validate() const {
             << rangePair.first.first << "-" << rangePair.first.second
             << " and "
             << rangePair.second.first << "-" << rangePair.second.second)
+
+    // mode-specific validation
+    using Mode = Spec::NetOptDetails::Mode;
+    if (optNet->mode == Mode::Bridge && optNet->bridgeIface.empty())
+      ERR("options/net/mode=bridge requires 'bridge' field (e.g. bridge: bridge0)")
+    if (optNet->mode == Mode::Passthrough && optNet->passthroughIface.empty())
+      ERR("options/net/mode=passthrough requires 'interface' field")
+    if (optNet->mode == Mode::Netgraph && optNet->netgraphIface.empty())
+      ERR("options/net/mode=netgraph requires 'interface' field")
+    if (optNet->mode == Mode::Nat) {
+      if (!optNet->bridgeIface.empty())
+        ERR("options/net/bridge is only valid with mode=bridge")
+      if (optNet->ipMode == Spec::NetOptDetails::IpMode::Dhcp)
+        ERR("options/net/ip=dhcp is not valid with mode=nat (NAT uses automatic IP)")
+      if (optNet->ipMode == Spec::NetOptDetails::IpMode::Static)
+        ERR("options/net/ip with static address is not valid with mode=nat")
+    }
+    // outbound/inbound controls only apply to NAT mode
+    if (optNet->mode != Mode::Nat) {
+      if (optNet->allowInbound())
+        ERR("options/net/inbound-tcp/udp are only valid with mode=nat")
+    }
+    if (!optNet->gateway.empty() && optNet->ipMode != Spec::NetOptDetails::IpMode::Static)
+      ERR("options/net/gateway is only valid with static IP")
+    if (optNet->vlanId >= 0 && optNet->mode == Mode::Nat)
+      ERR("options/net/vlan is only valid with bridge, passthrough, or netgraph mode")
+    if (optNet->staticMac && optNet->mode == Mode::Nat)
+      ERR("options/net/static-mac is only valid with bridge, passthrough, or netgraph mode")
+  }
 
   // ZFS dataset names must be valid
   for (auto &ds : zfsDatasets)
@@ -612,8 +653,70 @@ Spec parseSpec(const std::string &fname) {
                       ERR("options/net/inbound-udp value must be an array, a scalar or a map")
                     }
                   } else if (AsString(netOpt.first) == "ipv6") {
-                    if (!YAML::convert<bool>::decode(netOpt.second, optNetDetails->ipv6))
-                      ERR("options/net/ipv6 value must be a boolean")
+                    if (netOpt.second.IsScalar()) {
+                      auto v6str = AsString(netOpt.second);
+                      if (v6str == "true" || v6str == "yes")
+                        optNetDetails->ipv6 = true;
+                      else if (v6str == "false" || v6str == "no")
+                        optNetDetails->ipv6 = false;
+                      else if (v6str == "slaac") {
+                        optNetDetails->ip6Mode = Spec::NetOptDetails::Ip6Mode::Slaac;
+                      } else if (v6str == "none") {
+                        optNetDetails->ip6Mode = Spec::NetOptDetails::Ip6Mode::None;
+                      } else {
+                        // treat as static IPv6 address
+                        optNetDetails->ip6Mode = Spec::NetOptDetails::Ip6Mode::Static;
+                        optNetDetails->staticIp6 = v6str;
+                      }
+                    } else if (!YAML::convert<bool>::decode(netOpt.second, optNetDetails->ipv6))
+                      ERR("options/net/ipv6 value must be a boolean, 'slaac', 'none', or an IPv6 address")
+                  } else if (AsString(netOpt.first) == "mode") {
+                    auto modeStr = AsString(netOpt.second);
+                    if (modeStr == "nat")
+                      optNetDetails->mode = Spec::NetOptDetails::Mode::Nat;
+                    else if (modeStr == "bridge")
+                      optNetDetails->mode = Spec::NetOptDetails::Mode::Bridge;
+                    else if (modeStr == "passthrough")
+                      optNetDetails->mode = Spec::NetOptDetails::Mode::Passthrough;
+                    else if (modeStr == "netgraph")
+                      optNetDetails->mode = Spec::NetOptDetails::Mode::Netgraph;
+                    else
+                      ERR("options/net/mode must be 'nat', 'bridge', 'passthrough', or 'netgraph'")
+                  } else if (AsString(netOpt.first) == "bridge") {
+                    optNetDetails->bridgeIface = AsString(netOpt.second);
+                  } else if (AsString(netOpt.first) == "interface") {
+                    // used for passthrough and netgraph modes
+                    optNetDetails->passthroughIface = AsString(netOpt.second);
+                    optNetDetails->netgraphIface = AsString(netOpt.second);
+                  } else if (AsString(netOpt.first) == "ip") {
+                    auto ipStr = AsString(netOpt.second);
+                    if (ipStr == "dhcp")
+                      optNetDetails->ipMode = Spec::NetOptDetails::IpMode::Dhcp;
+                    else if (ipStr == "none")
+                      optNetDetails->ipMode = Spec::NetOptDetails::IpMode::None;
+                    else {
+                      optNetDetails->ipMode = Spec::NetOptDetails::IpMode::Static;
+                      optNetDetails->staticIp = ipStr;
+                    }
+                  } else if (AsString(netOpt.first) == "gateway") {
+                    optNetDetails->gateway = AsString(netOpt.second);
+                  } else if (AsString(netOpt.first) == "ip6") {
+                    auto v6str = AsString(netOpt.second);
+                    if (v6str == "slaac")
+                      optNetDetails->ip6Mode = Spec::NetOptDetails::Ip6Mode::Slaac;
+                    else if (v6str == "none")
+                      optNetDetails->ip6Mode = Spec::NetOptDetails::Ip6Mode::None;
+                    else {
+                      optNetDetails->ip6Mode = Spec::NetOptDetails::Ip6Mode::Static;
+                      optNetDetails->staticIp6 = v6str;
+                    }
+                  } else if (AsString(netOpt.first) == "static-mac") {
+                    if (!YAML::convert<bool>::decode(netOpt.second, optNetDetails->staticMac))
+                      ERR("options/net/static-mac must be a boolean")
+                  } else if (AsString(netOpt.first) == "vlan") {
+                    optNetDetails->vlanId = netOpt.second.as<int>();
+                    if (optNetDetails->vlanId < 1 || optNetDetails->vlanId > 4094)
+                      ERR("options/net/vlan must be 1-4094")
                   } else
                     ERR("the invalid value options/net/" << netOpt.first << " supplied")
                 }

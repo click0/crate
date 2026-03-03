@@ -39,6 +39,9 @@
 #ifndef CRATE_PATH_SYSCTL
 #define CRATE_PATH_SYSCTL     "/sbin/sysctl"
 #endif
+#ifndef CRATE_PATH_DHCLIENT
+#define CRATE_PATH_DHCLIENT   "/sbin/dhclient"
+#endif
 
 // --- FreeBSD base system: /bin ---
 

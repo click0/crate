@@ -19,6 +19,12 @@ public:
     NetOptDetails();
     static std::shared_ptr<NetOptDetails> createDefault();
     typedef std::pair<unsigned,unsigned> PortRange;
+
+    // Network mode: nat (default), bridge, passthrough, netgraph
+    enum class Mode { Nat, Bridge, Passthrough, Netgraph };
+    Mode mode = Mode::Nat;
+
+    // NAT mode (existing)
     bool outboundWan;                 // allow outbound connections to WAN
     bool outboundLan;                 // allow outbound connections to LAN
     bool outboundHost;                // allow outbound connections to the host
@@ -27,8 +33,35 @@ public:
     std::vector<std::pair<PortRange, PortRange>> inboundPortsTcp;
     std::vector<std::pair<PortRange, PortRange>> inboundPortsUdp;
 
+    // Bridge mode
+    std::string bridgeIface;          // e.g. "bridge0"
+
+    // Passthrough mode
+    std::string passthroughIface;     // e.g. "vtnet1"
+
+    // Netgraph mode
+    std::string netgraphIface;        // physical iface for ng_bridge
+
+    // IP addressing for bridge/passthrough/netgraph
+    enum class IpMode { Auto, Static, Dhcp, None };
+    IpMode ipMode = IpMode::Auto;
+    std::string staticIp;             // e.g. "192.168.1.50/24"
+    std::string gateway;
+
+    // IPv6 for bridge/passthrough/netgraph
+    enum class Ip6Mode { None, Slaac, Static };
+    Ip6Mode ip6Mode = Ip6Mode::None;
+    std::string staticIp6;            // e.g. "fd00::50/64"
+
+    // Cross-mode features
+    bool staticMac = false;
+    int vlanId = -1;                  // -1 = no VLAN
+
     bool allowOutbound() const;
     bool allowInbound() const;
+    bool isNatMode() const;
+    bool needsIpfw() const;
+    bool needsDhcp() const;
   };
   class TorOptDetails : public OptDetails {
   public:
