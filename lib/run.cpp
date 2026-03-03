@@ -241,6 +241,8 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   int origIpForwarding = -1;
   bool isNatMode = false;
   if (spec.optionExists("net")) {
+    // VNET/VIMAGE is a loader tunable: set kern.features.vimage=1 in loader.conf
+    // or compile a VIMAGE-enabled kernel. Cannot be toggled at runtime.
     if (Util::getSysctlInt("kern.features.vimage") == 0)
       ERR("the crate needs network access, but the VIMAGE feature isn't available in the kernel (kern.features.vimage==0)")
 
