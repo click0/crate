@@ -9,7 +9,7 @@ if [ -n "$BASH_VERSION" ]; then
     local cur prev words cword
     _init_completion || return
 
-    local commands="create run list info console clean validate snapshot export import gui"
+    local commands="create run list info console clean validate snapshot export import gui stack"
     local global_opts="-h --help -V --version --no-color -p --log-progress"
 
     case "$prev" in
@@ -61,6 +61,10 @@ if [ -n "$BASH_VERSION" ]; then
         COMPREPLY=( $(compgen -W "list focus attach url tile screenshot resize -h --help" -- "$cur") )
         return
         ;;
+      stack)
+        COMPREPLY=( $(compgen -W "up down status --var -h --help" -- "$cur") )
+        return
+        ;;
       -s|--spec)
         COMPREPLY=( $(compgen -f -X '!*.yml' -- "$cur") )
         return
@@ -107,6 +111,7 @@ if [ -n "$ZSH_VERSION" ]; then
       'export:export a running container'
       'import:import a crate archive'
       'gui:manage GUI sessions'
+      'stack:manage multi-container stacks'
     )
 
     _arguments -C \
@@ -190,6 +195,13 @@ if [ -n "$ZSH_VERSION" ]; then
               '(-o --output)'{-o,--output}'[output file]:file:_files' \
               '(-h --help)'{-h,--help}'[show help]' \
               '2:target:'
+            ;;
+          stack)
+            _arguments \
+              '1:subcommand:(up down status)' \
+              '*--var[variable substitution]:var:' \
+              '(-h --help)'{-h,--help}'[show help]' \
+              '2:stack file:_files -g "*.yml"'
             ;;
         esac
         ;;

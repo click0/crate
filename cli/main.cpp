@@ -104,10 +104,10 @@ static int mainGuarded(int argc, char** argv) {
 
   switch (args.cmd) {
   case CmdCreate: {
-    auto spec = parseSpec(args.createSpec);
+    auto spec = parseSpecWithVars(args.createSpec, args.vars);
     // Template merging (§10): merge template spec with user spec
     if (!args.createTemplate.empty()) {
-      auto templateSpec = parseSpec(args.createTemplate);
+      auto templateSpec = parseSpecWithVars(args.createTemplate, args.vars);
       spec = mergeSpecs(templateSpec, spec);
     }
     spec.validate();
@@ -143,6 +143,9 @@ static int mainGuarded(int argc, char** argv) {
     break;
   } case CmdGui: {
     succ = guiCommand(args);
+    break;
+  } case CmdStack: {
+    succ = stackCommand(args);
     break;
   } case CmdNone: {
     break; // impossible

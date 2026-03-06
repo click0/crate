@@ -232,6 +232,19 @@ public:
   };
   std::unique_ptr<GuiOptions>                        guiOptions;
 
+  // Healthcheck (§20): monitor container readiness
+  struct Healthcheck {
+    std::string test;                    // command to run inside jail (exit 0 = healthy)
+    unsigned intervalSec = 30;           // seconds between checks
+    unsigned timeoutSec = 5;             // seconds before check times out
+    unsigned retries = 3;                // failures before marking unhealthy
+    unsigned startPeriodSec = 0;         // grace period before first check
+  };
+  std::unique_ptr<Healthcheck>                           healthcheck;
+
+  // Inter-container dependencies (§21): for stack orchestration
+  std::vector<std::string>                               depends;             // names of containers this one depends on
+
   std::map<std::string, std::map<std::string, std::string>> scripts;          // by section, by script name
 
   Spec preprocess() const;
@@ -248,4 +261,5 @@ private:
 };
 
 Spec parseSpec(const std::string &fname);
+Spec parseSpecWithVars(const std::string &fname, const std::map<std::string, std::string> &vars);
 Spec mergeSpecs(const Spec &base, const Spec &overlay);

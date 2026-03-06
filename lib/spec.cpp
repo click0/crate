@@ -18,6 +18,7 @@
 #include <list>
 #include <iostream>
 #include <sstream>
+#include <fstream>
 
 #include "lst-all-script-sections.h" // generated from create.cpp and run.cpp by the Makefile
 
@@ -587,7 +588,22 @@ void Spec::validate() const {
 // interface
 //
 
-Spec parseSpec(const std::string &fname) {
+static std::string substituteVars(const std::string &input, const std::map<std::string, std::string> &vars) {
+  if (vars.empty())
+    return input;
+  std::string result = input;
+  for (auto &kv : vars) {
+    std::string token = "${" + kv.first + "}";
+    size_t pos = 0;
+    while ((pos = result.find(token, pos)) != std::string::npos) {
+      result.replace(pos, token.length(), kv.second);
+      pos += kv.second.length();
+    }
+  }
+  return result;
+}
+
+static Spec parseSpecFromNode(YAML::Node top) {
 
   Spec spec;
 
@@ -619,9 +635,6 @@ Spec parseSpec(const std::string &fname) {
     if (!listOrScalar(node, out, opath))
       ERR("unsupported " << opath << " object of type " << node.Type() << ", only list or scalar are allowed")
   };
-
-  // parse the spec in the yaml format
-  YAML::Node top = YAML::LoadFile(fname);
 
   // top-level tags
   for (auto k : top) {
@@ -1303,6 +1316,34 @@ Spec parseSpec(const std::string &fname) {
           ERR("unknown element gui/" << b.first << " in spec")
         }
       }
+    } else if (isKey(k, "healthcheck")) {
+      spec.healthcheck = std::make_unique<Spec::Healthcheck>();
+      if (k.second.IsScalar()) {
+        // Short form: just the test command
+        spec.healthcheck->test = AsString(k.second);
+      } else if (k.second.IsMap()) {
+        for (auto b : k.second) {
+          if (isKey(b, "test"))
+            scalar(b.second, spec.healthcheck->test, "healthcheck/test");
+          else if (isKey(b, "interval")) {
+            spec.healthcheck->intervalSec = Util::toUInt(AsString(b.second));
+          } else if (isKey(b, "timeout")) {
+            spec.healthcheck->timeoutSec = Util::toUInt(AsString(b.second));
+          } else if (isKey(b, "retries")) {
+            spec.healthcheck->retries = Util::toUInt(AsString(b.second));
+          } else if (isKey(b, "start_period") || isKey(b, "start-period")) {
+            spec.healthcheck->startPeriodSec = Util::toUInt(AsString(b.second));
+          } else {
+            ERR("unknown element healthcheck/" << b.first << " in spec")
+          }
+        }
+        if (spec.healthcheck->test.empty())
+          ERR("healthcheck requires a 'test' command")
+      } else {
+        ERR("healthcheck must be a scalar (test command) or a map")
+      }
+    } else if (isKey(k, "depends")) {
+      listOrScalarOnly(k.second, spec.depends, "depends");
     } else if (isKey(k, "scripts")) {
       if (!k.second.IsMap())
         ERR("scripts must be a map")
@@ -1318,6 +1359,22 @@ Spec parseSpec(const std::string &fname) {
   }
 
   return spec;
+}
+
+Spec parseSpec(const std::string &fname) {
+  return parseSpecFromNode(YAML::LoadFile(fname));
+}
+
+Spec parseSpecWithVars(const std::string &fname, const std::map<std::string, std::string> &vars) {
+  if (vars.empty())
+    return parseSpec(fname);
+  // Read file, substitute variables, parse from string
+  std::ifstream ifs(fname);
+  if (!ifs.good())
+    ERR("cannot open spec file: " << fname)
+  std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+  content = substituteVars(content, vars);
+  return parseSpecFromNode(YAML::Load(content));
 }
 
 Spec mergeSpecs(const Spec &base, const Spec &overlay) {
@@ -1406,6 +1463,14 @@ Spec mergeSpecs(const Spec &base, const Spec &overlay) {
     result.guiOptions = std::make_unique<Spec::GuiOptions>();
     *result.guiOptions = *overlay.guiOptions;
   }
+  if (overlay.healthcheck) {
+    result.healthcheck = std::make_unique<Spec::Healthcheck>();
+    *result.healthcheck = *overlay.healthcheck;
+  }
+
+  // depends: overlay replaces (not appends) since dependency graph should be explicit
+  if (!overlay.depends.empty())
+    result.depends = overlay.depends;
 
   return result;
 }

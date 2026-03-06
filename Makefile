@@ -7,7 +7,7 @@ LIB_SRCS = lib/spec.cpp lib/create.cpp lib/run.cpp lib/list.cpp lib/info.cpp \
            lib/run_services.cpp lib/locs.cpp lib/cmd.cpp lib/mount.cpp \
            lib/net.cpp lib/ctx.cpp lib/gui_registry.cpp lib/scripts.cpp \
            lib/misc.cpp lib/util.cpp lib/err.cpp lib/validate.cpp \
-           lib/snapshot.cpp lib/config.cpp
+           lib/snapshot.cpp lib/config.cpp lib/stack.cpp
 
 CLI_SRCS = cli/main.cpp cli/args.cpp
 

@@ -4,8 +4,10 @@
 #pragma once
 
 #include <string>
+#include <vector>
+#include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack};
 
 class Args {
 public:
@@ -16,6 +18,9 @@ public:
   // general params
   bool logProgress; // log progress
   bool noColor = false;  // --no-color: disable colored output (also honors NO_COLOR env)
+
+  // variable substitution: --var KEY=VALUE replaces ${KEY} in spec YAML
+  std::map<std::string, std::string> vars;
 
   // create parameters
   std::string createSpec;
@@ -64,6 +69,10 @@ public:
   std::string guiOutput;        // -o/--output: output file (for screenshot)
   std::string guiResolution;    // WxH (for resize)
   bool guiJson = false;         // -j: output as JSON (for gui list)
+
+  // stack parameters
+  std::string stackSubcmd;      // "up", "down", "status"
+  std::string stackFile;        // stack YAML file path
 
   void validate();
 };
