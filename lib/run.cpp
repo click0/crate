@@ -110,9 +110,18 @@ static bool runHealthcheckOnce(const std::string &jidStr, const std::string &use
                                const Spec::Healthcheck &hc, unsigned timeoutSec) {
   try {
     auto cmd = STR("/bin/sh -c " << Util::shellQuote(hc.test));
-    int status = Util::execCommandGetStatus(
-      {CRATE_PATH_JEXEC, "-l", "-U", user, jidStr, cmd},
-      "healthcheck");
+    int status;
+    if (timeoutSec > 0) {
+      // Use timeout(1) to enforce the healthcheck deadline
+      status = Util::execCommandGetStatus(
+        {"/usr/bin/timeout", std::to_string(timeoutSec),
+         CRATE_PATH_JEXEC, "-l", "-U", user, jidStr, cmd},
+        "healthcheck");
+    } else {
+      status = Util::execCommandGetStatus(
+        {CRATE_PATH_JEXEC, "-l", "-U", user, jidStr, cmd},
+        "healthcheck");
+    }
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
   } catch (...) {
     return false;
@@ -130,7 +139,9 @@ static bool waitForHealthy(const std::string &jidStr, const std::string &user,
   }
 
   unsigned failures = 0;
-  for (unsigned attempt = 0; attempt <= hc.retries; attempt++) {
+  // First check + up to hc.retries retries = retries+1 total attempts
+  unsigned maxAttempts = hc.retries + 1;
+  for (unsigned attempt = 0; attempt < maxAttempts; attempt++) {
     if (attempt > 0)
       ::sleep(hc.intervalSec);
 
@@ -144,11 +155,11 @@ static bool waitForHealthy(const std::string &jidStr, const std::string &user,
     failures++;
     if (logProgress)
       std::cerr << rang::fg::yellow << "healthcheck: failed (" << failures
-                << "/" << hc.retries << ")" << rang::style::reset << std::endl;
+                << "/" << maxAttempts << ")" << rang::style::reset << std::endl;
   }
 
-  std::cerr << rang::fg::red << "healthcheck: unhealthy after " << hc.retries
-            << " retries" << rang::style::reset << std::endl;
+  std::cerr << rang::fg::red << "healthcheck: unhealthy after " << maxAttempts
+            << " attempts" << rang::style::reset << std::endl;
   return false;
 }
 
@@ -1066,9 +1077,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     writeFileInJail(STR(
         "#!/bin/sh"                                                 << std::endl <<
         ""                                                          << std::endl <<
-        "trap onSIGNIT 2"                                           << std::endl <<
+        "trap onSIGINT 2"                                           << std::endl <<
         ""                                                          << std::endl <<
-        "onSIGNIT()"                                                << std::endl <<
+        "onSIGINT()"                                                << std::endl <<
         "{"                                                         << std::endl <<
         "  echo \"Caught signal SIGINT ... exiting\""               << std::endl <<
         "  exit 0"                                                  << std::endl <<
