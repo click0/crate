@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "args.h"
+#include "spec.h"
 #include "locs.h"
 #include "pathnames.h"
 #include "util.h"
@@ -30,6 +31,9 @@ struct CrateEntry {
   std::string ip;         // primary IP (from epair)
   std::string hostname;
   std::string specFile;   // +CRATE.SPEC path if present
+  std::string ports;      // inbound ports summary (from spec)
+  std::string mounts;     // shared dirs count (from spec)
+  bool hasHealthcheck = false; // healthcheck defined in spec
 };
 
 // Parse jls output to find running crate jails.
@@ -74,10 +78,43 @@ static std::vector<CrateEntry> discoverRunningCrates() {
       continue;  // not a crate jail
     e.ip = (ipStr == "-") ? "" : ipStr;
     e.name = e.path.substr(std::string(Locations::jailDirectoryPath).size() + 1);
-    // check for +CRATE.SPEC
+    // check for +CRATE.SPEC and extract info
     auto specPath = e.path + "/+CRATE.SPEC";
-    if (Util::Fs::fileExists(specPath))
+    if (Util::Fs::fileExists(specPath)) {
       e.specFile = specPath;
+      try {
+        auto spec = parseSpec(specPath);
+        // Ports: summarize inbound TCP/UDP
+        if (auto optNet = spec.optionNet()) {
+          std::ostringstream ps;
+          for (size_t pi = 0; pi < optNet->inboundPortsTcp.size(); pi++) {
+            if (pi > 0) ps << ",";
+            auto &pr = optNet->inboundPortsTcp[pi];
+            if (pr.first.first == pr.first.second)
+              ps << pr.second.first << "/tcp";
+            else
+              ps << pr.second.first << "-" << pr.second.second << "/tcp";
+          }
+          for (size_t pi = 0; pi < optNet->inboundPortsUdp.size(); pi++) {
+            if (ps.str().size() > 0 || pi > 0) ps << ",";
+            auto &pr = optNet->inboundPortsUdp[pi];
+            if (pr.first.first == pr.first.second)
+              ps << pr.second.first << "/udp";
+            else
+              ps << pr.second.first << "-" << pr.second.second << "/udp";
+          }
+          e.ports = ps.str();
+        }
+        // Mounts
+        auto numMounts = spec.dirsShare.size() + spec.filesShare.size();
+        if (numMounts > 0)
+          e.mounts = std::to_string(numMounts) + " share" + (numMounts > 1 ? "s" : "");
+        // Healthcheck
+        e.hasHealthcheck = (spec.healthcheck != nullptr);
+      } catch (...) {
+        // spec parse failure is not fatal for listing
+      }
+    }
     entries.push_back(e);
   }
   return entries;
@@ -93,6 +130,9 @@ static void listJson(const std::vector<CrateEntry> &entries) {
     std::cout << ",\"hostname\":\"" << e.hostname << "\"";
     std::cout << ",\"ip\":\"" << e.ip << "\"";
     std::cout << ",\"path\":\"" << e.path << "\"";
+    std::cout << ",\"ports\":\"" << e.ports << "\"";
+    std::cout << ",\"mounts\":\"" << e.mounts << "\"";
+    std::cout << ",\"healthcheck\":" << (e.hasHealthcheck ? "true" : "false");
     std::cout << "}";
     if (i + 1 < entries.size()) std::cout << ",";
     std::cout << std::endl;
@@ -107,23 +147,26 @@ static void listTable(const std::vector<CrateEntry> &entries) {
   }
 
   // Calculate column widths
-  size_t wJid = 3, wName = 4, wIp = 10, wHostname = 8, wPath = 4;
+  size_t wJid = 3, wName = 4, wIp = 10, wHostname = 8, wPorts = 5, wMounts = 6;
   for (auto &e : entries) {
     wJid      = std::max(wJid, std::to_string(e.jid).size());
     wName     = std::max(wName, e.name.size());
     wIp       = std::max(wIp, e.ip.empty() ? size_t(1) : e.ip.size());
     wHostname = std::max(wHostname, e.hostname.size());
-    wPath     = std::max(wPath, e.path.size());
+    wPorts    = std::max(wPorts, e.ports.empty() ? size_t(1) : e.ports.size());
+    wMounts   = std::max(wMounts, e.mounts.empty() ? size_t(1) : e.mounts.size());
   }
 
   // Header
   std::cout << rang::style::bold
             << std::left
             << std::setw(wJid + 2) << "JID"
-            << std::setw(wName + 2) << "Name"
-            << std::setw(wIp + 2) << "IP Address"
-            << std::setw(wHostname + 2) << "Hostname"
-            << "Path"
+            << std::setw(wName + 2) << "NAME"
+            << std::setw(wIp + 2) << "IP"
+            << std::setw(wHostname + 2) << "HOSTNAME"
+            << std::setw(wPorts + 2) << "PORTS"
+            << std::setw(wMounts + 2) << "MOUNTS"
+            << "HC"
             << rang::style::reset << std::endl;
 
   // Rows
@@ -133,7 +176,9 @@ static void listTable(const std::vector<CrateEntry> &entries) {
               << std::setw(wName + 2) << e.name
               << std::setw(wIp + 2) << (e.ip.empty() ? "-" : e.ip)
               << std::setw(wHostname + 2) << e.hostname
-              << e.path
+              << std::setw(wPorts + 2) << (e.ports.empty() ? "-" : e.ports)
+              << std::setw(wMounts + 2) << (e.mounts.empty() ? "-" : e.mounts)
+              << (e.hasHealthcheck ? "Y" : "-")
               << std::endl;
   }
 

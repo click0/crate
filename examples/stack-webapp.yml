@@ -1,0 +1,25 @@
+# Example: Multi-container web application stack
+#
+# Start with:  crate stack up examples/stack-webapp.yml
+# Stop with:   crate stack down examples/stack-webapp.yml
+# Status:      crate stack status examples/stack-webapp.yml
+#
+# Variable substitution:
+#   crate stack up examples/stack-webapp.yml --var LISTEN_PORT=8080
+
+containers:
+  postgres:
+    spec: examples/postgres.yml
+    vars:
+      PG_VERSION: "16"
+
+  redis:
+    spec: examples/redis.yml
+
+  webapp:
+    spec: examples/webapp.yml
+    depends: [postgres, redis]
+    vars:
+      LISTEN_PORT: "${LISTEN_PORT:-8080}"
+      DB_HOST: "postgres"
+      CACHE_HOST: "redis"

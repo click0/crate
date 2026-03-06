@@ -45,6 +45,7 @@ static void usage() {
   std::cout << "  export                     export a running container to a .crate archive" << std::endl;
   std::cout << "  import                     import and validate a .crate archive" << std::endl;
   std::cout << "  gui                        manage GUI sessions (run 'crate gui -h' for details)" << std::endl;
+  std::cout << "  stack                      manage multi-container stacks (run 'crate stack -h' for details)" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -57,6 +58,7 @@ static void usageCreate() {
   std::cout << "  -t, --template <name>              use a template as base spec" << std::endl;
   std::cout << "  -o, --output <output-create-file>  output crate file" << std::endl;
   std::cout << "      --use-pkgbase                  bootstrap jail via pkgbase instead of base.txz" << std::endl;
+  std::cout << "      --var KEY=VALUE                substitute ${KEY} with VALUE in spec YAML (repeatable)" << std::endl;
   std::cout << "  -h, --help                         show this help screen" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Templates are searched in:" << std::endl;
@@ -66,9 +68,10 @@ static void usageCreate() {
 }
 
 static void usageRun() {
-  std::cout << "usage: crate run [-h|--help] <create-file>" << std::endl;
+  std::cout << "usage: crate run [-h|--help] [--var KEY=VALUE ...] <create-file>" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Options:" << std::endl;
+  std::cout << "      --var KEY=VALUE                substitute ${KEY} with VALUE in embedded spec (repeatable)" << std::endl;
   std::cout << "  -h, --help                         show this help screen" << std::endl;
   std::cout << "" << std::endl;
 }
@@ -207,6 +210,31 @@ static void usageGui() {
   std::cout << "" << std::endl;
 }
 
+static void usageStack() {
+  std::cout << "usage: crate stack <subcommand> [options] <stack-file>" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Manage multi-container stacks defined in a single YAML file." << std::endl;
+  std::cout << "Containers are started in dependency order and stopped in reverse." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Subcommands:" << std::endl;
+  std::cout << "  up <stack-file>            create and start all containers in the stack" << std::endl;
+  std::cout << "  down <stack-file>          stop and remove all containers in the stack" << std::endl;
+  std::cout << "  status <stack-file>        show status of all containers in the stack" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Stack file format:" << std::endl;
+  std::cout << "  containers:" << std::endl;
+  std::cout << "    postgres:" << std::endl;
+  std::cout << "      crate: postgres.crate" << std::endl;
+  std::cout << "    app:" << std::endl;
+  std::cout << "      crate: myapp.crate" << std::endl;
+  std::cout << "      depends: [postgres]" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Options:" << std::endl;
+  std::cout << "      --var KEY=VALUE        substitute ${KEY} with VALUE in spec (repeatable)" << std::endl;
+  std::cout << "  -h, --help                 show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+}
+
 static void err(const char *msg) {
   fprintf(stderr, "failed to parse arguments: %s\n", msg);
   std::cout << "" << std::endl;
@@ -263,6 +291,8 @@ static Command isCommand(const char* arg) {
     return CmdImport;
   if (strEq(arg, "gui"))
     return CmdGui;
+  if (strEq(arg, "stack"))
+    return CmdStack;
 
   return CmdNone;
 }
@@ -340,6 +370,12 @@ void Args::validate() {
       ERR("the 'gui " << guiSubcmd << "' command requires a target")
     if (guiSubcmd == "resize" && guiResolution.empty())
       ERR("the 'gui resize' command requires a resolution (e.g. 1920x1080)")
+    break;
+  case CmdStack:
+    if (stackSubcmd.empty())
+      ERR("the 'stack' command requires a subcommand (up, down, status)")
+    if (stackFile.empty())
+      ERR("the 'stack' command requires a stack file")
     break;
   default:
     err("no command was given");
@@ -435,6 +471,14 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         } else if (strEq(argv[a], "--use-pkgbase")) {
           args.usePkgbase = true;
           break;
+        } else if (strEq(argv[a], "--var")) {
+          const char *kv = getArgParam(++a, argc, argv);
+          std::string kvs(kv);
+          auto eq = kvs.find('=');
+          if (eq == std::string::npos)
+            err("--var requires KEY=VALUE format, got '%s'", kv);
+          args.vars[kvs.substr(0, eq)] = kvs.substr(eq + 1);
+          break;
         } else if (auto argLong = isLong(argv[a])) {
           if (strEq(argLong, "help")) {
             usageCreate();
@@ -458,6 +502,14 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
       case CmdRun:
         if (strEq(argv[a], "--")) {
           stop = true;
+          break;
+        } else if (strEq(argv[a], "--var")) {
+          const char *kv = getArgParam(++a, argc, argv);
+          std::string kvs(kv);
+          auto eq = kvs.find('=');
+          if (eq == std::string::npos)
+            err("--var requires KEY=VALUE format, got '%s'", kv);
+          args.vars[kvs.substr(0, eq)] = kvs.substr(eq + 1);
           break;
         } else if (auto argShort = isShort(argv[a])) {
           switch (argShort) {
@@ -702,6 +754,41 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           // Append extra args to consoleCmd
           args.consoleCmd += " ";
           args.consoleCmd += argv[a];
+        }
+        break;
+      case CmdStack:
+        if (strEq(argv[a], "--var")) {
+          const char *kv = getArgParam(++a, argc, argv);
+          std::string kvs(kv);
+          auto eq = kvs.find('=');
+          if (eq == std::string::npos)
+            err("--var requires KEY=VALUE format, got '%s'", kv);
+          args.vars[kvs.substr(0, eq)] = kvs.substr(eq + 1);
+          break;
+        } else if (auto argShort = isShort(argv[a])) {
+          switch (argShort) {
+          case 'h':
+            usageStack();
+            exit(0);
+          default:
+            err("unsupported short option '%s'", argv[a]);
+          }
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) {
+            usageStack();
+            exit(0);
+          } else {
+            err("unsupported long option '%s'", argv[a]);
+          }
+        } else if (args.stackSubcmd.empty()) {
+          args.stackSubcmd = argv[a];
+          if (args.stackSubcmd != "up" && args.stackSubcmd != "down" &&
+              args.stackSubcmd != "status")
+            err("unknown stack subcommand '%s'", argv[a]);
+        } else if (args.stackFile.empty()) {
+          args.stackFile = argv[a];
+        } else {
+          err("too many arguments for 'stack' command");
         }
         break;
       case CmdGui:

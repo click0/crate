@@ -486,6 +486,25 @@ std::string sha256hex(const std::string &input) {
   return std::string(hex);
 }
 
+bool isUrl(const std::string &str) {
+  return str.size() > 8 && (str.substr(0, 7) == "http://" || str.substr(0, 8) == "https://");
+}
+
+std::string fetchUrl(const std::string &url, const std::string &destDir) {
+  // Extract filename from URL
+  auto slash = url.rfind('/');
+  std::string fname = (slash != std::string::npos && slash + 1 < url.size())
+    ? url.substr(slash + 1) : "downloaded-spec.yml";
+  // Strip query string
+  auto q = fname.find('?');
+  if (q != std::string::npos) fname = fname.substr(0, q);
+  if (fname.empty()) fname = "downloaded-spec.yml";
+
+  auto destPath = destDir + "/" + fname;
+  execCommand({CRATE_PATH_FETCH, "-q", "-o", destPath, url}, "fetch URL");
+  return destPath;
+}
+
 bool interfaceExists(const std::string &ifaceName) {
   struct ifaddrs *ifap;
   if (::getifaddrs(&ifap) == -1)

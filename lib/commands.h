@@ -17,3 +17,4 @@ bool consoleCrate(const Args &args, int argc, char** argv);
 bool exportCrate(const Args &args);
 bool importCrate(const Args &args);
 bool guiCommand(const Args &args);
+bool stackCommand(const Args &args);

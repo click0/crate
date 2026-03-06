@@ -13,8 +13,10 @@
 #include <paths.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include <iostream>
+#include <string>
 
 static int mainGuarded(int argc, char** argv) {
 
@@ -104,15 +106,32 @@ static int mainGuarded(int argc, char** argv) {
 
   switch (args.cmd) {
   case CmdCreate: {
-    auto spec = parseSpec(args.createSpec);
+    // Support URL-based spec and template fetching (§23)
+    std::string specPath = args.createSpec;
+    std::string templatePath = args.createTemplate;
+    std::string tmpDir;
+    if (Util::isUrl(specPath) || Util::isUrl(templatePath)) {
+      tmpDir = STR("/tmp/crate-fetch-" << Util::randomHex(4));
+      Util::Fs::mkdir(tmpDir, S_IRWXU);
+    }
+    if (Util::isUrl(specPath))
+      specPath = Util::fetchUrl(specPath, tmpDir);
+    if (Util::isUrl(templatePath))
+      templatePath = Util::fetchUrl(templatePath, tmpDir);
+
+    auto spec = parseSpecWithVars(specPath, args.vars);
     // Template merging (§10): merge template spec with user spec
-    if (!args.createTemplate.empty()) {
-      auto templateSpec = parseSpec(args.createTemplate);
+    if (!templatePath.empty()) {
+      auto templateSpec = parseSpecWithVars(templatePath, args.vars);
       spec = mergeSpecs(templateSpec, spec);
     }
     spec.validate();
     createCacheDirectoryIfNeeded();
     succ = createCrate(args, spec.preprocess());
+
+    // Clean up temp dir
+    if (!tmpDir.empty())
+      Util::Fs::rmdirHier(tmpDir);
     break;
   } case CmdRun: {
     succ = runCrate(args, argc - numArgsProcessed, argv + numArgsProcessed, returnCode);
@@ -143,6 +162,9 @@ static int mainGuarded(int argc, char** argv) {
     break;
   } case CmdGui: {
     succ = guiCommand(args);
+    break;
+  } case CmdStack: {
+    succ = stackCommand(args);
     break;
   } case CmdNone: {
     break; // impossible
