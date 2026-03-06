@@ -1,11 +1,19 @@
 This file describes features that are not yet implemented, and bugs that are not yet fixed.
 
-* (feature) Configuration management
-  crate should understand configuration files (global /usr/local/etc/crate.yml, and local ~/.crate.yml).
-  They should define at least these items:
-  * crate search path: the paths searched when the crate's "run" command is invoked
+* (done) Configuration management
+  Implemented in lib/config.cpp: 3-tier config system
+  (system /usr/local/etc/crate.yml, drop-in /usr/local/etc/crate.d/*.yml,
+  user ~/.config/crate/crate.yml).
 
 * (bug) net/inbound: crates can listen on any ports for inbound connections, but connections are rejected from the host itself.
   See bug#239590: ipfw rule doesn't forward TCP connections made through the host's LAN address
 
-* (feature) Cross-device folder and file shares need tgo be implemented.
+* (feature) Cross-device folder and file shares need to be implemented.
+
+* (bug) pkg/add: command is not yet implemented (was calling abort(), now returns a proper error).
+
+* (security) X11 shared mode provides no display isolation.
+  Jail processes sharing the host X11 socket can read keystrokes and manipulate windows.
+  Users should prefer mode=nested or mode=headless for security-sensitive workloads.
+
+* (feature) SNMP AgentX: the AgentX wire protocol is not yet implemented (snmpd runs in stub mode).

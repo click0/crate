@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "config.h"
+#include "err.h"
 #include "util.h"
 
 #include <yaml-cpp/yaml.h>
@@ -94,8 +95,10 @@ const Settings& load() {
     try {
       auto cfg = YAML::LoadFile(sysConfig);
       applyYaml(g_settings, cfg);
+    } catch (const std::exception &e) {
+      WARN("failed to parse system config " << sysConfig << ": " << e.what())
     } catch (...) {
-      // ignore malformed system config
+      WARN("failed to parse system config " << sysConfig)
     }
   }
 
@@ -116,8 +119,10 @@ const Settings& load() {
       try {
         auto cfg = YAML::LoadFile(STR(confDir << "/" << f));
         applyYaml(g_settings, cfg);
+      } catch (const std::exception &e) {
+        WARN("failed to parse config fragment " << confDir << "/" << f << ": " << e.what())
       } catch (...) {
-        // ignore malformed fragment
+        WARN("failed to parse config fragment " << confDir << "/" << f)
       }
     }
   }
@@ -128,8 +133,10 @@ const Settings& load() {
     try {
       auto cfg = YAML::LoadFile(userConfig);
       applyYaml(g_settings, cfg);
+    } catch (const std::exception &e) {
+      WARN("failed to parse user config " << userConfig << ": " << e.what())
     } catch (...) {
-      // ignore malformed user config
+      WARN("failed to parse user config " << userConfig)
     }
   }
 
