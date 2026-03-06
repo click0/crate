@@ -148,25 +148,27 @@ bastille template myjail user/template → автоматизація налаш
 
 | Можливість | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **VNET** | Так (epair, автоматичне налаштування) | Так (5 режимів: -V, -B, -P, alias, inherit) |
-| **Фізичний інтерфейс** | Ні | Так (`-V` — автостворення bridge + epair) |
-| **Bridge** | Ні | Так (`-B` — підключення до наявного мосту) |
-| **Passthrough** | Ні | Так (`-P` — прямий проброс інтерфейсу, v1.1+) |
-| **Netgraph** | Ні | Так (`bastille setup netgraph`, альтернативний VNET-бекенд до if_bridge, v1.0+) |
-| **NAT** | Так (ipfw NAT, автоматичні правила) | Через pf loopback NAT (`bastille rdr`) |
-| **Перенаправлення портів** | Так (inbound-tcp/udp в YAML) | Так (`bastille rdr`, +IPv6 у v1.4) |
-| **IP-адресація** | Автоматична (10.0.0.0/8, до ~8M контейнерів) | Ручна або DHCP (SYNCDHCP/SLAAC для VNET) |
-| **DNS** | **Опціональна пересилка + DNS-фільтрація** | Через `bastille edit resolv.conf` |
-| **Контроль вихідного трафіку** | **Так** (wan/lan/host/dns гранулярність) | Через правила файрволу (pf/ipfw) |
-| **VLAN** | Ні | Так (`--vlan ID`, v0.14+) |
-| **Static MAC** | Ні | Так (прапорець `-M`) |
-| **IPv6** | **Так** (epair IPv6 fd00:crate::/64, ipfw ip6, pf inet6, routing) | **Так** (dual-stack `-D`, SLAAC, IPv6 rdr у v1.4) |
+| **VNET** | **Так** (epair, автоматичне налаштування) | **Так** (5 режимів: -V, -B, -P, alias, inherit) |
+| **Мережеві режими** | **4 режими**: NAT, bridge, passthrough, netgraph | **5+ режимів**: -V, -B, -P, alias, inherit + netgraph |
+| **NAT** | **Так** (ipfw NAT, автоматична адресація 10.0.0.0/8) | Через pf loopback NAT (`bastille rdr`) |
+| **Bridge** | **Так** (`if_bridge`, DHCP або статичний IP, VLAN, static MAC) | **Так** (`-B` — підключення до наявного мосту) |
+| **Passthrough** | **Так** (прямий проброс фізичного NIC до контейнера через VNET) | **Так** (`-P` — прямий проброс інтерфейсу, v1.1+) |
+| **Netgraph** | **Так** (`ng_bridge` + `eiface`, альтернатива `if_bridge`) | **Так** (`bastille setup netgraph`, v1.0+) |
+| **Перенаправлення портів** | **Так** (inbound-tcp/udp в YAML, NAT-режим) | **Так** (`bastille rdr`, +IPv6 у v1.4) |
+| **IP-адресація** | NAT: автоматична (10.0.0.0/8); bridge/passthrough/netgraph: DHCP або статичний CIDR | Ручна або DHCP (SYNCDHCP/SLAAC для VNET) |
+| **DHCP/SYNCDHCP** | **Так** (синхронне отримання lease для bridge/passthrough/netgraph) | **Так** (для VNET jail-ів, включно з SYNCDHCP) |
+| **Статичний IP** | **Так** (CIDR-нотація, напр. `192.168.1.50/24`, з gateway) | **Так** |
+| **DNS** | **Опціональна пересилка + DNS-фільтрація** (per-jail unbound) | Через `bastille edit resolv.conf` |
+| **Контроль вихідного трафіку** | **Так** (wan/lan/host/dns гранулярність, NAT-режим) | Через правила файрволу (pf/ipfw) |
+| **VLAN** | **Так** (802.1Q, ID 1-4094, bridge/passthrough/netgraph) | **Так** (`--vlan ID`, v0.14+) |
+| **Static MAC** | **Так** (детерміністичний SHA-256, vendor OUI `58:9c:fc`) | **Так** (прапорець `-M`) |
+| **IPv6** | **Так** (NAT ULA fd00:cra7:e::/48, SLAAC для bridge/passthrough/netgraph, статичний IPv6) | **Так** (dual-stack `-D`, SLAAC, IPv6 rdr у v1.4) |
 | **Динамічні epair** | **Так** (`ifconfig epair create`, автонумерація) | **Так** (`e0a_jailname`/`e0b_jailname`, v1.0+) |
-| **DHCP/SYNCDHCP** | Ні | **Так** (для VNET jail-ів, включно з SYNCDHCP) |
-| **Кілька інтерфейсів** | Ні | Так (`bastille network add/remove`, v0.14+) |
+| **Кілька інтерфейсів** | **Так** (основний + додаткові, кожен з незалежними mode/IP/VLAN) | **Так** (`bastille network add/remove`, v0.14+) |
+| **Іменовані мережі** | **Так** (багаторазові мережеві профілі в конфігу, посилання за іменем) | Ні |
 | **Checksum offload workaround** | **Так** (FreeBSD 15.0 epair bug) | Немає даних |
 
-**Висновок**: Crate забезпечує зручне автоматичне керування мережею з повною підтримкою IPv6 (epair IPv6, ipfw ip6, pf inet6), гранулярним контролем вихідного трафіку та DNS-фільтрацією. BastilleBSD пропонує значно більше мережевих режимів (5 типів + netgraph), DHCP, VLAN, static MAC та конфігурації корпоративного рівня.
+**Висновок**: Crate тепер підтримує 4 мережеві режими (NAT, bridge, passthrough, netgraph) з DHCP, статичним IP, VLAN-тегуванням, детерміністичним static MAC, IPv6 (NAT ULA + SLAAC), кількома інтерфейсами на контейнер та іменованими мережевими профілями. BastilleBSD пропонує 5+ мережевих режимів з alias та inherit, а також автоналаштування хоста через `bastille setup`.
 
 ---
 
@@ -480,8 +482,11 @@ TAGS web db
 
 | | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **REST API** | Ні | **Так** (bastille-api, JSON payloads, з v1.0) |
-| **Вебінтерфейс** | Ні | **Так** (bastille-ui — Go + HTML, з ttyd-терміналом) |
+| **REST API** | **Так** (`crated` — read-only API: список контейнерів, інфо про хост, GUI-сесії, Prometheus-метрики, health check) | **Так** (bastille-api, JSON payloads, з v1.0) |
+| **Prometheus-метрики** | **Так** (`crated` endpoint `/metrics`) | Ні |
+| **Вебінтерфейс** | Ні (hub web dashboard заплановано) | **Так** (bastille-ui — Go + HTML, з ttyd-терміналом) |
+| **Multi-host агрегатор** | **Так** (`crate-hub` — агрегує метрики з кількох `crated`) | Ні |
+| **SNMP** | **Так** (`crate-snmpd` — AgentX subagent, CRATE-MIB) | Ні |
 | **Супутні інструменти** | Ні | **Rocinante** — застосовує Bastillefile до хоста |
 | **Nomad Driver** | Ні | Заплановано (roadmap 2.0.x) |
 
@@ -509,7 +514,7 @@ TAGS web db
 | Серверне керування | Мінімальне | **Перевершує** |
 | Інтеграція з ZFS | **Повна** (snapshots, COW, шифрування, datasets) | **Повна** (+ send/recv, migrate, 7 форматів) |
 | Безпека (глибина) | **Перевершує** (securelevel, cpuset, children.max, pathnames.h, env, MAC, Capsicum, DNS, execv) | Добрі типові налаштування (securelevel=2) |
-| Мережеві режими | 1 (epair+NAT) + IPv6 + pf anchors | 5+ (VNET, bridge, passthrough, alias, inherit + netgraph) |
+| Мережеві режими | **4** (NAT, bridge, passthrough, netgraph) + DHCP, VLAN, static MAC, іменовані мережі | 5+ (VNET, bridge, passthrough, alias, inherit + netgraph) |
 | IPv6 | **Так** (epair IPv6, ipfw ip6, pf inet6) | **Так** (dual-stack, SLAAC, rdr) |
 | Розмір контейнера | **Оптимізований** (ELF-аналіз) | Повна система |
 | Міграція | Ні | **Так** (export → scp → import; jail працює під час snapshot, даунтайм при switchover) |
@@ -523,7 +528,7 @@ TAGS web db
 | DNS-фільтрація | **Так** | Ні |
 | Clipboard/D-Bus/Socket | **Так** | Ні |
 | Tor | Так | Через шаблони |
-| API/Web UI | Ні | **Так** (bastille-api + bastille-ui) |
+| API/Web UI | **Частково** (`crated` read-only API + Prometheus; `crate-hub` multi-host) | **Так** (bastille-api + bastille-ui) |
 | JSON вивід | **Так** (`crate list -j`) | **Так** (`bastille list -j`) |
 | Автоналаштування хоста | Ні | **Так** (`bastille setup`) |
 | Екосистема | Приклади (Firefox, Kodi...) | Репозиторій шаблонів + bastille-ui |
@@ -556,7 +561,7 @@ TAGS web db
 - Сумісності з іншими менеджерами jail-ів (iocage, ezjail імпорт)
 - Роботи з **Linux jail-ами** та кількома ОС
 - Сценаріїв, що потребують **REST API** та програмного керування
-- Множинних **мережевих режимів** (bridge, passthrough, VLAN, DHCP, netgraph)
+- Мережевих режимів **alias та inherit** (недоступні в Crate)
 - **Автоналаштування хоста** (`bastille setup`)
 - **Моніторингу** з автоматичним перезапуском сервісів
 
@@ -572,18 +577,18 @@ TAGS web db
 6. ~~**CPU pinning**~~ ✅ Реалізовано (cpuset через `security:` в YAML)
 7. **Персистентний режим** — можливість збереження jail між запусками (COW persistent — крок у цьому напрямку)
 8. **Тонкі jail-и** — економія місця через спільну базову систему
-9. **Bridge/Passthrough/Netgraph** — додаткові мережеві режими
-10. **VLAN підтримка** — `--vlan ID` для сегментації мережі
-11. **Static MAC** — фіксовані MAC-адреси для стабільності DHCP
-12. **Кілька мережевих інтерфейсів** — `network add/remove`
-13. **DHCP/SYNCDHCP** — автоматична IP-адресація для VNET jail-ів
+9. ~~**Bridge/Passthrough/Netgraph**~~ ✅ Реалізовано (4 мережеві режими: NAT, bridge, passthrough, netgraph)
+10. ~~**VLAN підтримка**~~ ✅ Реалізовано (802.1Q тегування, ID 1-4094)
+11. ~~**Static MAC**~~ ✅ Реалізовано (детерміністичний SHA-256, vendor OUI `58:9c:fc`)
+12. ~~**Кілька мережевих інтерфейсів**~~ ✅ Реалізовано (основний + додаткові через `extra[]`)
+13. ~~**DHCP/SYNCDHCP**~~ ✅ Реалізовано (синхронне отримання lease для bridge/passthrough/netgraph)
 14. **Live-міграція** — перенесення контейнера на інший хост (ZFS snapshot → export → scp → import через SSH; jail працює під час snapshot, але є даунтайм при stop/start switchover)
 15. **Теги/мітки** — групування контейнерів за тегами
 16. **Пакетні операції** — `ALL`, теги як TARGET, множинні цілі
 17. **Пріоритети завантаження** — порядок старту/зупинки jail-ів
 18. **Моніторинг з auto-restart** — watchdog сервісів з cron
 19. **Автоналаштування хоста** — `setup`-подібна команда
-20. **REST API** — програмний інтерфейс для інтеграції
+20. ~~**REST API**~~ ✅ Частково реалізовано (`crated` з read-only API; write API заплановано)
 21. **Копіювання файлів** — cp/jcp/rcp для runtime file transfer
 
 ## Що BastilleBSD міг би запозичити у Crate

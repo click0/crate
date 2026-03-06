@@ -148,25 +148,27 @@ bastille template myjail user/template → configuration automation
 
 | Feature | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **VNET** | Yes (epair, automatic configuration) | Yes (5 modes: -V, -B, -P, alias, inherit) |
-| **Physical interface** | No | Yes (`-V` — auto-create bridge + epair) |
-| **Bridge** | No | Yes (`-B` — connect to existing bridge) |
-| **Passthrough** | No | Yes (`-P` — direct interface passthrough, v1.1+) |
-| **Netgraph** | No | Yes (`bastille setup netgraph`, alternative VNET backend to if_bridge, v1.0+) |
-| **NAT** | Yes (ipfw NAT, automatic rules) | Via pf loopback NAT (`bastille rdr`) |
-| **Port forwarding** | Yes (inbound-tcp/udp in YAML) | Yes (`bastille rdr`, +IPv6 in v1.4) |
-| **IP addressing** | Automatic (10.0.0.0/8, up to ~8M containers) | Manual or DHCP (SYNCDHCP/SLAAC for VNET) |
-| **DNS** | **Optional forwarding + DNS filtering** | Via `bastille edit resolv.conf` |
-| **Outbound control** | **Yes** (wan/lan/host/dns granularity) | Via firewall rules (pf/ipfw) |
-| **VLAN** | No | Yes (`--vlan ID`, v0.14+) |
-| **Static MAC** | No | Yes (`-M` flag) |
-| **IPv6** | **Yes** (epair IPv6 fd00:crate::/64, ipfw ip6, pf inet6, routing) | **Yes** (dual-stack `-D`, SLAAC, IPv6 rdr in v1.4) |
+| **VNET** | **Yes** (epair, automatic configuration) | **Yes** (5 modes: -V, -B, -P, alias, inherit) |
+| **Network modes** | **4 modes**: NAT, bridge, passthrough, netgraph | **5+ modes**: -V, -B, -P, alias, inherit + netgraph |
+| **NAT** | **Yes** (ipfw NAT, automatic 10.0.0.0/8 addressing) | Via pf loopback NAT (`bastille rdr`) |
+| **Bridge** | **Yes** (`if_bridge`, DHCP or static IP, VLAN, static MAC) | **Yes** (`-B` — connect to existing bridge) |
+| **Passthrough** | **Yes** (direct physical NIC assignment to container via VNET) | **Yes** (`-P` — direct interface passthrough, v1.1+) |
+| **Netgraph** | **Yes** (`ng_bridge` + `eiface`, alternative to `if_bridge`) | **Yes** (`bastille setup netgraph`, v1.0+) |
+| **Port forwarding** | **Yes** (inbound-tcp/udp in YAML, NAT mode) | **Yes** (`bastille rdr`, +IPv6 in v1.4) |
+| **IP addressing** | NAT: automatic (10.0.0.0/8); bridge/passthrough/netgraph: DHCP or static CIDR | Manual or DHCP (SYNCDHCP/SLAAC for VNET) |
+| **DHCP/SYNCDHCP** | **Yes** (synchronous lease acquisition for bridge/passthrough/netgraph) | **Yes** (for VNET jails, including SYNCDHCP) |
+| **Static IP** | **Yes** (CIDR notation, e.g. `192.168.1.50/24`, with gateway) | **Yes** |
+| **DNS** | **Optional forwarding + DNS filtering** (per-jail unbound) | Via `bastille edit resolv.conf` |
+| **Outbound control** | **Yes** (wan/lan/host/dns granularity, NAT mode) | Via firewall rules (pf/ipfw) |
+| **VLAN** | **Yes** (802.1Q, ID 1-4094, bridge/passthrough/netgraph) | **Yes** (`--vlan ID`, v0.14+) |
+| **Static MAC** | **Yes** (deterministic SHA-256, vendor OUI `58:9c:fc`) | **Yes** (`-M` flag) |
+| **IPv6** | **Yes** (NAT ULA fd00:cra7:e::/48, SLAAC for bridge/passthrough/netgraph, static IPv6) | **Yes** (dual-stack `-D`, SLAAC, IPv6 rdr in v1.4) |
 | **Dynamic epair** | **Yes** (`ifconfig epair create`, auto-numbered) | **Yes** (`e0a_jailname`/`e0b_jailname`, v1.0+) |
-| **DHCP/SYNCDHCP** | No | **Yes** (for VNET jails, including SYNCDHCP) |
-| **Multiple interfaces** | No | Yes (`bastille network add/remove`, v0.14+) |
+| **Multiple interfaces** | **Yes** (primary + extra interfaces, each with independent mode/IP/VLAN) | **Yes** (`bastille network add/remove`, v0.14+) |
+| **Named networks** | **Yes** (reusable network profiles in system config, reference by name) | No |
 | **Checksum offload workaround** | **Yes** (FreeBSD 15.0 epair bug) | No data |
 
-**Conclusion**: Crate provides convenient automatic network management with full IPv6 support (epair IPv6, ipfw ip6, pf inet6), granular outbound traffic control, and DNS filtering. BastilleBSD offers significantly more networking modes (5 types + netgraph), DHCP, VLAN, static MAC, and enterprise-level configurations.
+**Conclusion**: Crate now supports 4 network modes (NAT, bridge, passthrough, netgraph) with DHCP, static IP, VLAN tagging, deterministic static MAC, IPv6 (NAT ULA + SLAAC), multiple interfaces per container, and named network profiles. BastilleBSD offers 5+ network modes with alias and inherit options, plus host auto-configuration via `bastille setup`.
 
 ---
 
@@ -480,8 +482,11 @@ Both systems operate exclusively within the FreeBSD jail ecosystem. For OCI cont
 
 | | **Crate** | **BastilleBSD** |
 |---|---|---|
-| **REST API** | No | **Yes** (bastille-api, JSON payloads, since v1.0) |
-| **Web interface** | No | **Yes** (bastille-ui — Go + HTML, with ttyd terminal) |
+| **REST API** | **Yes** (`crated` — read-only API: container list, host info, GUI sessions, Prometheus metrics, health check) | **Yes** (bastille-api, JSON payloads, since v1.0) |
+| **Prometheus metrics** | **Yes** (`crated` `/metrics` endpoint) | No |
+| **Web interface** | No (hub web dashboard planned) | **Yes** (bastille-ui — Go + HTML, with ttyd terminal) |
+| **Multi-host aggregator** | **Yes** (`crate-hub` — aggregates metrics from multiple `crated` instances) | No |
+| **SNMP** | **Yes** (`crate-snmpd` — AgentX subagent, CRATE-MIB) | No |
 | **Companion tools** | No | **Rocinante** — applies Bastillefile to the host |
 | **Nomad Driver** | No | Planned (roadmap 2.0.x) |
 
@@ -509,7 +514,7 @@ Both systems operate exclusively within the FreeBSD jail ecosystem. For OCI cont
 | Server management | Minimal | **Superior** |
 | ZFS integration | **Full** (snapshots, COW, encryption, datasets) | **Full** (+ send/recv, migrate, 7 formats) |
 | Security (depth) | **Superior** (securelevel, cpuset, children.max, pathnames.h, env, MAC, Capsicum, DNS, execv) | Good defaults (securelevel=2) |
-| Network modes | 1 (epair+NAT) + IPv6 + pf anchors | 5+ (VNET, bridge, passthrough, alias, inherit + netgraph) |
+| Network modes | **4** (NAT, bridge, passthrough, netgraph) + DHCP, VLAN, static MAC, named networks | 5+ (VNET, bridge, passthrough, alias, inherit + netgraph) |
 | IPv6 | **Yes** (epair IPv6, ipfw ip6, pf inet6) | **Yes** (dual-stack, SLAAC, rdr) |
 | Container size | **Optimized** (ELF analysis) | Full system |
 | Migration | No | **Yes** (export → scp → import; live = jail runs during snapshot) |
@@ -523,7 +528,7 @@ Both systems operate exclusively within the FreeBSD jail ecosystem. For OCI cont
 | DNS filtering | **Yes** | No |
 | Clipboard/D-Bus/Socket | **Yes** | No |
 | Tor | Yes | Via templates |
-| API/Web UI | No | **Yes** (bastille-api + bastille-ui) |
+| API/Web UI | **Partial** (`crated` read-only API + Prometheus; `crate-hub` multi-host) | **Yes** (bastille-api + bastille-ui) |
 | JSON output | **Yes** (`crate list -j`) | **Yes** (`bastille list -j`) |
 | Host auto-config | No | **Yes** (`bastille setup`) |
 | Ecosystem | Examples (Firefox, Kodi...) | Template repository + bastille-ui |
@@ -556,7 +561,7 @@ Both systems operate exclusively within the FreeBSD jail ecosystem. For OCI cont
 - Compatibility with other jail managers (iocage, ezjail import)
 - Working with **Linux jails** and multiple operating systems
 - Scenarios requiring a **REST API** and programmatic management
-- Multiple **networking modes** (bridge, passthrough, VLAN, DHCP, netgraph)
+- **Alias and inherit** networking modes (not available in Crate)
 - **Host auto-configuration** (`bastille setup`)
 - **Monitoring** with automatic service restart
 
@@ -572,18 +577,18 @@ Both systems operate exclusively within the FreeBSD jail ecosystem. For OCI cont
 6. ~~**CPU pinning**~~ ✅ Implemented (cpuset via `security:` in YAML)
 7. **Persistent mode** — option to preserve a jail between runs (COW persistent is a step in this direction)
 8. **Thin jails** — saving space through a shared base system
-9. **Bridge/Passthrough/Netgraph** — additional networking modes
-10. **VLAN support** — `--vlan ID` for network segmentation
-11. **Static MAC** — fixed MAC addresses for DHCP stability
-12. **Multiple network interfaces** — `network add/remove`
-13. **DHCP/SYNCDHCP** — automatic IP addressing for VNET jails
+9. ~~**Bridge/Passthrough/Netgraph**~~ ✅ Implemented (4 network modes: NAT, bridge, passthrough, netgraph)
+10. ~~**VLAN support**~~ ✅ Implemented (802.1Q tagging, ID 1-4094)
+11. ~~**Static MAC**~~ ✅ Implemented (deterministic SHA-256, vendor OUI `58:9c:fc`)
+12. ~~**Multiple network interfaces**~~ ✅ Implemented (primary + extra interfaces via `extra[]`)
+13. ~~**DHCP/SYNCDHCP**~~ ✅ Implemented (synchronous lease acquisition for bridge/passthrough/netgraph)
 14. **Live migration** — transferring a running container to another host (ZFS snapshot → export → scp → import via SSH; jail runs during snapshot but there is a downtime window at switchover)
 15. **Tags/labels** — grouping containers by tags
 16. **Batch operations** — `ALL`, tags as TARGET, multiple targets
 17. **Boot priorities** — start/stop ordering for jails
 18. **Monitoring with auto-restart** — service watchdog with cron
 19. **Host auto-configuration** — `setup`-like command
-20. **REST API** — programmatic interface for integration
+20. ~~**REST API**~~ ✅ Partially implemented (`crated` with read-only API; write API planned)
 21. **File copying** — cp/jcp/rcp for runtime file transfer
 
 ## What BastilleBSD Could Borrow from Crate
