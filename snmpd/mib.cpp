@@ -32,6 +32,8 @@ bool initAgentX(const std::string &socketPath) {
   // For bsnmpd: connect to Unix socket, send Open PDU
   // For net-snmp: use init_agent() API
   (void)socketPath;
+  std::cerr << "crate-snmpd: WARNING: AgentX protocol not yet implemented — "
+               "running in stub mode, no SNMP data will be exported" << std::endl;
   try {
     g_hostname = Util::getSysctlString("kern.hostname");
   } catch (...) {

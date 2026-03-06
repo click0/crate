@@ -661,8 +661,7 @@ static Spec parseSpecFromNode(YAML::Node top) {
             spec.pkgLocalOverride.push_back({AsString(lo.first), AsString(lo.second)});
         } else if (isKey(b, "add")) {
           listOrScalarOnly(b.second, spec.pkgAdd, "pkg/add");
-          std::cerr << "pkg/add tag is currently broken" << std::endl;
-          abort();
+          ERR("pkg/add is not yet implemented — use pkg/install instead")
         } else if (isKey(b, "nuke")) {
           listOrScalarOnly(b.second, spec.pkgNuke, "pkg/nuke");
         } else {
