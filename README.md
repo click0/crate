@@ -335,13 +335,15 @@ make install-examples     # example spec files to /usr/local/share/examples/crat
 make install-completions  # shell completions
 ```
 
-## FreeBSD 15.0+ Compatibility
+## Compatibility
 
-* JAIL_OWN_DESC — race-free jail removal via owning descriptor
-* epair checksum offload fix (txcsum/txcsum6 disable)
-* OS version mismatch warning (host != container)
-* ipfw compatibility warning (removed legacy compat code)
-* getgroups(2) behavior change adjustment
+**Supported:** FreeBSD 13.0 and later (13.x, 14.x, 15.x). All version-specific features have safe fallbacks.
+
+FreeBSD 15.0 adaptations (automatic, no user action needed):
+* JAIL_OWN_DESC — race-free jail removal via owning descriptor (falls back to `jail_remove()` on older kernels)
+* epair checksum offload fix — `txcsum`/`txcsum6` disabled unconditionally (harmless on 13.x/14.x)
+* OS version mismatch warning — detects host vs container FreeBSD major version difference
+* ipfw compatibility warning — alerts when FreeBSD 15 host runs a container built with older base
 
 ## Caveats
 

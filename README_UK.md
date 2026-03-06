@@ -335,13 +335,15 @@ make install-examples     # приклади специфікацій до /usr/
 make install-completions  # автодоповнення shell
 ```
 
-## Сумісність з FreeBSD 15.0+
+## Сумісність
 
-* JAIL_OWN_DESC — race-free видалення jail через owning descriptor
-* Виправлення checksum offload для epair (вимкнення txcsum/txcsum6)
-* Попередження про невідповідність версій ОС (host != container)
-* Попередження про сумісність ipfw (видалений legacy compat code)
-* Адаптація до зміни поведінки getgroups(2)
+**Підтримується:** FreeBSD 13.0 та новіші (13.x, 14.x, 15.x). Усі версійно-специфічні функції мають безпечні fallback-шляхи.
+
+Адаптації для FreeBSD 15.0 (автоматичні, без дій з боку користувача):
+* JAIL_OWN_DESC — race-free видалення jail через owning descriptor (на старших ядрах використовує `jail_remove()`)
+* Виправлення checksum offload для epair — `txcsum`/`txcsum6` вимикаються безумовно (безпечно на 13.x/14.x)
+* Попередження про невідповідність версій ОС — виявляє різницю major-версій FreeBSD між хостом та контейнером
+* Попередження про сумісність ipfw — сповіщає коли хост FreeBSD 15 запускає контейнер зі старішою базою
 
 ## Застереження
 

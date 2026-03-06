@@ -674,17 +674,25 @@ options:
 .Ed
 .Sh COMPATIBILITY
 .Nm
-supports FreeBSD 13.0 and later.
-FreeBSD 15.0+ specific features:
+supports FreeBSD 13.0 and later (13.x, 14.x, 15.x).
+All version-specific features have safe fallback code paths.
+.Pp
+FreeBSD 15.0 adaptations (automatic, no user action needed):
 .Bl -bullet
 .It
 JAIL_OWN_DESC \(em race-free jail removal via owning descriptor.
+Falls back to
+.Fn jail_remove
+on older kernels.
 .It
-Epair checksum offload fix (txcsum/txcsum6 disabled).
+Epair checksum offload fix \(em txcsum/txcsum6 disabled unconditionally
+(harmless on 13.x/14.x).
 .It
-OS version mismatch detection between host and container.
+OS version mismatch detection \(em warns when host and container
+FreeBSD major versions differ.
 .It
-ipfw compatibility warning for removed legacy code.
+ipfw compatibility warning \(em alerts when a FreeBSD 15 host runs
+a container built with an older base.
 .El
 .Pp
 All network modes require VIMAGE support in the kernel
