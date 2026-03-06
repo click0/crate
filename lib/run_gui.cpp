@@ -567,10 +567,11 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
   }
 
   // Shared mode (default): mount host X11 socket into jail
-  WARN("x11 shared mode provides NO display isolation — jail processes can read host "
-       "keystrokes and manipulate windows. Consider mode=nested or mode=headless for security.")
-  if (logProgress)
+  if (logProgress) {
     std::cerr << rang::fg::gray << "x11 option (mode=shared): mount the X11 socket in jail" << rang::style::reset << std::endl;
+    WARN("x11 shared mode provides NO display isolation — jail processes can read host "
+         "keystrokes and manipulate windows. Consider mode=nested or mode=headless for security.")
+  }
   Util::Fs::mkdir(J("/tmp/.X11-unix"), 01777);
   mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix", MNT_IGNORE));
   auto *display = ::getenv("DISPLAY");
