@@ -242,6 +242,13 @@ public:
   };
   std::unique_ptr<Healthcheck>                           healthcheck;
 
+  // Base container cloning (§22): ZFS-clone from existing running jail
+  struct BaseContainer {
+    std::string type;     // "jail" (clone from running jail)
+    std::string name;     // jail name or JID to clone from
+  };
+  std::unique_ptr<BaseContainer>                         baseContainer;
+
   // Inter-container dependencies (§21): for stack orchestration
   std::vector<std::string>                               depends;             // names of containers this one depends on
 

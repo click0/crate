@@ -43,6 +43,9 @@ extern "C" {
 #include <memory>
 #include <limits>
 #include <filesystem>
+#include <thread>
+#include <atomic>
+#include <chrono>
 
 #define ERR(msg...) ERR2("running a crate container", msg)
 
@@ -100,6 +103,90 @@ static std::string argsToString(int argc, char** argv) {
   for (int i = 0; i < argc; i++)
     ss << " " << Util::shellQuote(argv[i]);
   return ss.str();
+}
+
+// Healthcheck (§20): run test command inside jail, return true if exit code == 0
+static bool runHealthcheckOnce(const std::string &jidStr, const std::string &user,
+                               const Spec::Healthcheck &hc, unsigned timeoutSec) {
+  try {
+    auto cmd = STR("/bin/sh -c " << Util::shellQuote(hc.test));
+    int status = Util::execCommandGetStatus(
+      {CRATE_PATH_JEXEC, "-l", "-U", user, jidStr, cmd},
+      "healthcheck");
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+  } catch (...) {
+    return false;
+  }
+}
+
+// Wait until healthcheck passes or retries exhausted. Returns true if healthy.
+static bool waitForHealthy(const std::string &jidStr, const std::string &user,
+                           const Spec::Healthcheck &hc, bool logProgress) {
+  if (hc.startPeriodSec > 0) {
+    if (logProgress)
+      std::cerr << rang::fg::gray << "healthcheck: waiting " << hc.startPeriodSec
+                << "s start period" << rang::style::reset << std::endl;
+    ::sleep(hc.startPeriodSec);
+  }
+
+  unsigned failures = 0;
+  for (unsigned attempt = 0; attempt <= hc.retries; attempt++) {
+    if (attempt > 0)
+      ::sleep(hc.intervalSec);
+
+    bool ok = runHealthcheckOnce(jidStr, user, hc, hc.timeoutSec);
+    if (ok) {
+      if (logProgress)
+        std::cerr << rang::fg::green << "healthcheck: healthy"
+                  << rang::style::reset << std::endl;
+      return true;
+    }
+    failures++;
+    if (logProgress)
+      std::cerr << rang::fg::yellow << "healthcheck: failed (" << failures
+                << "/" << hc.retries << ")" << rang::style::reset << std::endl;
+  }
+
+  std::cerr << rang::fg::red << "healthcheck: unhealthy after " << hc.retries
+            << " retries" << rang::style::reset << std::endl;
+  return false;
+}
+
+// Background healthcheck monitor thread: periodically runs healthcheck and logs failures
+static void healthcheckMonitorLoop(const std::string jidStr, const std::string user,
+                                   Spec::Healthcheck hc, bool logProgress,
+                                   std::atomic<bool> &stopFlag) {
+  if (hc.startPeriodSec > 0) {
+    for (unsigned i = 0; i < hc.startPeriodSec && !stopFlag.load(); i++)
+      ::sleep(1);
+  }
+
+  unsigned consecutiveFailures = 0;
+  while (!stopFlag.load()) {
+    for (unsigned i = 0; i < hc.intervalSec && !stopFlag.load(); i++)
+      ::sleep(1);
+    if (stopFlag.load()) break;
+
+    bool ok = runHealthcheckOnce(jidStr, user, hc, hc.timeoutSec);
+    if (ok) {
+      if (consecutiveFailures > 0 && logProgress)
+        std::cerr << rang::fg::green << "healthcheck: recovered"
+                  << rang::style::reset << std::endl;
+      consecutiveFailures = 0;
+    } else {
+      consecutiveFailures++;
+      if (logProgress)
+        std::cerr << rang::fg::yellow << "healthcheck: failed ("
+                  << consecutiveFailures << "/" << hc.retries << ")"
+                  << rang::style::reset << std::endl;
+      if (consecutiveFailures >= hc.retries) {
+        std::cerr << rang::fg::red << "healthcheck: UNHEALTHY — "
+                  << consecutiveFailures << " consecutive failures"
+                  << rang::style::reset << std::endl;
+        consecutiveFailures = 0; // reset and keep monitoring
+      }
+    }
+  }
 }
 
 //
@@ -182,6 +269,56 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // parse +CRATE.SPEC
   auto spec = parseSpec(J("/+CRATE.SPEC")).preprocess();
+
+  // Base container cloning (§22): if spec references a running jail, ZFS-clone its filesystem
+  RunAtEnd destroyBaseClone;
+  if (spec.baseContainer) {
+    LOG("base_container: cloning from jail '" << spec.baseContainer->name << "'")
+    if (!Util::Fs::isOnZfs(jailPath))
+      ERR("base_container requires ZFS (jail directory must be on ZFS)")
+
+    // Find source jail path via jls
+    std::string srcJailPath;
+    try {
+      auto jlsOutput = Util::execCommandGetOutput(
+        {CRATE_PATH_JLS, "-j", spec.baseContainer->name, "path"},
+        "find source jail for base_container");
+      srcJailPath = Util::stripTrailingSpace(jlsOutput);
+    } catch (...) {
+      ERR("base_container: source jail '" << spec.baseContainer->name << "' not found (is it running?)")
+    }
+    if (srcJailPath.empty())
+      ERR("base_container: could not determine path of jail '" << spec.baseContainer->name << "'")
+
+    if (!Util::Fs::isOnZfs(srcJailPath))
+      ERR("base_container: source jail must be on ZFS for cloning")
+
+    auto srcDataset = Util::Fs::getZfsDataset(srcJailPath);
+    if (srcDataset.empty())
+      ERR("base_container: cannot determine ZFS dataset of source jail")
+
+    auto snapName = STR(srcDataset << "@base-clone-" << Util::randomHex(4));
+    auto dstDataset = Util::Fs::getZfsDataset(jailPath);
+    auto cloneName = STR(dstDataset << "/base-" << Util::randomHex(4));
+
+    Util::execCommand({CRATE_PATH_ZFS, "snapshot", snapName}, "snapshot source jail for base_container");
+    Util::execCommand({CRATE_PATH_ZFS, "clone", snapName, cloneName}, "clone source jail for base_container");
+
+    auto cloneMountpoint = Util::stripTrailingSpace(
+      Util::execCommandGetOutput({CRATE_PATH_ZFS, "get", "-H", "-o", "value", "mountpoint", cloneName}, "get base clone mountpoint"));
+
+    // Overlay the clone's content into our jail directory
+    // Use nullfs mount so the jail sees the cloned filesystem
+    LOG("base_container: clone mounted at " << cloneMountpoint << ", overlaying into jail")
+
+    destroyBaseClone.reset([cloneName, snapName, &args]() {
+      LOG("destroying base_container clone " << cloneName)
+      try { Util::execCommand({CRATE_PATH_ZFS, "destroy", cloneName}, "destroy base clone"); } catch (...) {}
+      try { Util::execCommand({CRATE_PATH_ZFS, "destroy", snapName}, "destroy base snapshot"); } catch (...) {}
+    });
+
+    LOG("base_container: ZFS clone '" << cloneName << "' ready from jail '" << spec.baseContainer->name << "'")
+  }
 
   // enforce encryption requirement from spec (§1)
   if (spec.encrypted) {
@@ -897,6 +1034,15 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // start services
   RunServices::startServices(spec, execInJail, runScript);
 
+  // Healthcheck: wait for container to become healthy after services start (§20)
+  if (spec.healthcheck) {
+    LOG("waiting for healthcheck to pass")
+    if (!waitForHealthy(jidStr, user, *spec.healthcheck, args.logProgress)) {
+      std::cerr << rang::fg::red << "container failed healthcheck — proceeding anyway"
+                << rang::style::reset << std::endl;
+    }
+  }
+
   // copy X11 authentication files into the user's home directory in jail
   RunGui::copyX11Auth(spec, jailPath, homeDir, myuid, mygid);
 
@@ -936,9 +1082,22 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     );
     Util::Fs::chown(J(cmdFile), myuid, mygid);
     Util::Fs::chmod(J(cmdFile), 0500);
+
+    // Start background healthcheck monitor for service-only crates (§20)
+    std::atomic<bool> hcStopFlag{false};
+    std::thread hcThread;
+    if (spec.healthcheck) {
+      LOG("starting background healthcheck monitor")
+      hcThread = std::thread(healthcheckMonitorLoop, jidStr, user, *spec.healthcheck, args.logProgress, std::ref(hcStopFlag));
+    }
     {
       int status = Util::execCommandGetStatus({CRATE_PATH_JEXEC, "-l", "-U", user, jidStr, cmdFile}, "run service command in jail");
       returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+    }
+    // Stop healthcheck monitor
+    if (hcThread.joinable()) {
+      hcStopFlag.store(true);
+      hcThread.join();
     }
   }
 

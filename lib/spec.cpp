@@ -1344,6 +1344,25 @@ static Spec parseSpecFromNode(YAML::Node top) {
       }
     } else if (isKey(k, "depends")) {
       listOrScalarOnly(k.second, spec.depends, "depends");
+    } else if (isKey(k, "base_container") || isKey(k, "base-container")) {
+      // Base container cloning (§22): clone from existing running jail
+      if (!k.second.IsMap())
+        ERR("base_container must be a map with 'type' and 'name'")
+      spec.baseContainer = std::make_unique<Spec::BaseContainer>();
+      for (auto b : k.second) {
+        if (isKey(b, "type"))
+          scalar(b.second, spec.baseContainer->type, "base_container/type");
+        else if (isKey(b, "name"))
+          scalar(b.second, spec.baseContainer->name, "base_container/name");
+        else
+          ERR("unknown element base_container/" << b.first << " in spec")
+      }
+      if (spec.baseContainer->type.empty())
+        spec.baseContainer->type = "jail"; // default
+      if (spec.baseContainer->type != "jail")
+        ERR("base_container/type must be 'jail' (only type currently supported)")
+      if (spec.baseContainer->name.empty())
+        ERR("base_container/name is required (jail name or JID)")
     } else if (isKey(k, "scripts")) {
       if (!k.second.IsMap())
         ERR("scripts must be a map")
@@ -1466,6 +1485,10 @@ Spec mergeSpecs(const Spec &base, const Spec &overlay) {
   if (overlay.healthcheck) {
     result.healthcheck = std::make_unique<Spec::Healthcheck>();
     *result.healthcheck = *overlay.healthcheck;
+  }
+  if (overlay.baseContainer) {
+    result.baseContainer = std::make_unique<Spec::BaseContainer>();
+    *result.baseContainer = *overlay.baseContainer;
   }
 
   // depends: overlay replaces (not appends) since dependency graph should be explicit
