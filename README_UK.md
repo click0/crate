@@ -6,7 +6,7 @@ Crate — контейнеризатор для FreeBSD. Пакує застос
 
 **Мова:** C++17 | **Ліцензія:** BSD 3-Clause | **Статус:** Alpha (активна розробка з 2019)
 
-[English version](README.md) | [Порівняння з BastilleBSD](COMPARISON-BASTILLEBSD_UK.md)
+[English version](README.md) | [Порівняння з BastilleBSD](docs/research/COMPARISON-BASTILLEBSD_UK.md)
 
 ## Можливості
 
