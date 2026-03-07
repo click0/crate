@@ -8,7 +8,9 @@ LIB_SRCS = lib/spec.cpp lib/create.cpp lib/run.cpp lib/list.cpp lib/info.cpp \
            lib/net.cpp lib/ctx.cpp lib/gui_registry.cpp lib/scripts.cpp \
            lib/misc.cpp lib/util.cpp lib/err.cpp lib/validate.cpp \
            lib/snapshot.cpp lib/config.cpp lib/stack.cpp \
-           lib/jail_query.cpp lib/zfs_ops.cpp lib/ifconfig_ops.cpp
+           lib/jail_query.cpp lib/zfs_ops.cpp lib/ifconfig_ops.cpp \
+           lib/pfctl_ops.cpp lib/mac_ops.cpp lib/ipfw_ops.cpp \
+           lib/capsicum_ops.cpp lib/netgraph_ops.cpp lib/nv_protocol.cpp
 
 CLI_SRCS = cli/main.cpp cli/args.cpp
 
@@ -37,6 +39,34 @@ endif
 ifdef HAVE_LIBIFCONFIG
 CXXFLAGS += -DHAVE_LIBIFCONFIG
 LIBS     += -lifconfig
+endif
+ifdef HAVE_LIBPFCTL
+CXXFLAGS += -DHAVE_LIBPFCTL
+LIBS     += -lpfctl
+endif
+ifdef HAVE_CAPSICUM
+CXXFLAGS += -DHAVE_CAPSICUM
+LIBS     += -lcasper -lcap_dns -lcap_syslog
+endif
+ifdef WITH_LIBVIRT
+CXXFLAGS += -DHAVE_LIBVIRT
+LIB_SRCS += lib/vm_spec.cpp lib/vm_run.cpp
+LIBS     += -lvirt
+endif
+ifdef WITH_LIBVNCSERVER
+CXXFLAGS += -DHAVE_LIBVNCSERVER
+LIB_SRCS += lib/vnc_server.cpp
+LIBS     += -lvncserver
+endif
+ifdef WITH_X11
+CXXFLAGS += -DHAVE_X11
+LIB_SRCS += lib/x11_ops.cpp
+LIBS     += -lX11 -lXrandr -lXext
+endif
+ifdef WITH_LIBSEAT
+CXXFLAGS += -DHAVE_LIBSEAT
+LIB_SRCS += lib/drm_session.cpp
+LIBS     += -lseat
 endif
 
 CXXFLAGS += -Wall -std=c++17
