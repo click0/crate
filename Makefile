@@ -7,7 +7,8 @@ LIB_SRCS = lib/spec.cpp lib/create.cpp lib/run.cpp lib/list.cpp lib/info.cpp \
            lib/run_services.cpp lib/locs.cpp lib/cmd.cpp lib/mount.cpp \
            lib/net.cpp lib/ctx.cpp lib/gui_registry.cpp lib/scripts.cpp \
            lib/misc.cpp lib/util.cpp lib/err.cpp lib/validate.cpp \
-           lib/snapshot.cpp lib/config.cpp lib/stack.cpp
+           lib/snapshot.cpp lib/config.cpp lib/stack.cpp \
+           lib/jail_query.cpp lib/zfs_ops.cpp lib/ifconfig_ops.cpp
 
 CLI_SRCS = cli/main.cpp cli/args.cpp
 
@@ -27,6 +28,16 @@ PREFIX   ?= /usr/local
 CXXFLAGS += `pkg-config --cflags yaml-cpp`
 LDFLAGS  += `pkg-config --libs yaml-cpp`
 LIBS     += -ljail
+
+# Optional native API support (fallback to shell commands if not defined)
+ifdef HAVE_LIBZFS
+CXXFLAGS += -DHAVE_LIBZFS
+LIBS     += -lzfs -lzfs_core -lnvpair
+endif
+ifdef HAVE_LIBIFCONFIG
+CXXFLAGS += -DHAVE_LIBIFCONFIG
+LIBS     += -lifconfig
+endif
 
 CXXFLAGS += -Wall -std=c++17
 CXXFLAGS += -Ilib             # lib/ headers visible to all
