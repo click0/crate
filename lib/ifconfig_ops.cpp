@@ -291,6 +291,12 @@ void setMacAddr(const std::string &iface, const unsigned char mac[6]) {
     STR("set MAC on " << iface));
 }
 
+void setMacAddr(const std::string &iface, const std::string &mac) {
+  Util::execCommand(
+    {CRATE_PATH_IFCONFIG, iface, "ether", mac},
+    STR("set MAC on " << iface));
+}
+
 void setDescription(const std::string &iface, const std::string &desc) {
   Util::execCommand(
     {CRATE_PATH_IFCONFIG, iface, "description", desc},

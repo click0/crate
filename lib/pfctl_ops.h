@@ -14,6 +14,7 @@ bool available();
 // Manage PF anchors for crate containers.
 // Each jail gets its own anchor: crate/<jailname>
 void addRules(const std::string &anchor, const std::vector<std::string> &rules);
+void addRules(const std::string &anchor, const std::string &rulesText);
 void flushRules(const std::string &anchor);
 
 // NAT / RDR rules

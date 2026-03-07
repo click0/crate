@@ -2,11 +2,14 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "args.h"
+#include "zfs_ops.h"
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
 
 #include <rang.hpp>
+
+#include <unistd.h>
 
 #include <iostream>
 #include <chrono>
@@ -31,42 +34,39 @@ bool snapshotCrate(const Args &args) {
   if (subcmd == "create") {
     auto name = args.snapshotName.empty() ? autoSnapshotName() : args.snapshotName;
     auto snapName = STR(ds << "@" << name);
-    Util::execCommand({CRATE_PATH_ZFS, "snapshot", snapName},
-      CSTR("create ZFS snapshot " << snapName));
+    ZfsOps::snapshot(snapName);
     std::cout << rang::fg::green << "Snapshot created: " << snapName << rang::style::reset << std::endl;
 
   } else if (subcmd == "list") {
-    auto output = Util::execCommandGetOutput(
-      {CRATE_PATH_ZFS, "list", "-t", "snapshot", "-r", "-o", "name,creation,used,refer", ds},
-      "list ZFS snapshots");
-    std::cout << output;
+    auto snaps = ZfsOps::listSnapshots(ds);
+    if (snaps.empty()) {
+      std::cout << "No snapshots found for " << ds << std::endl;
+    } else {
+      std::cout << "NAME" << std::string(40, ' ') << "CREATION" << std::string(16, ' ')
+                << "USED" << std::string(8, ' ') << "REFER" << std::endl;
+      for (auto &s : snaps)
+        std::cout << s.name << std::string(std::max(1, 44 - (int)s.name.size()), ' ')
+                  << s.creation << std::string(std::max(1, 24 - (int)s.creation.size()), ' ')
+                  << s.used << std::string(std::max(1, 12 - (int)s.used.size()), ' ')
+                  << s.refer << std::endl;
+    }
 
   } else if (subcmd == "restore") {
     auto snapName = STR(ds << "@" << args.snapshotName);
     std::cerr << rang::fg::yellow << "WARNING: rolling back to " << snapName
               << " will destroy all changes since that snapshot" << rang::style::reset << std::endl;
-    Util::execCommand({CRATE_PATH_ZFS, "rollback", snapName},
-      CSTR("rollback to ZFS snapshot " << snapName));
+    ZfsOps::rollback(snapName);
     std::cout << rang::fg::green << "Restored to: " << snapName << rang::style::reset << std::endl;
 
   } else if (subcmd == "delete") {
     auto snapName = STR(ds << "@" << args.snapshotName);
-    Util::execCommand({CRATE_PATH_ZFS, "destroy", snapName},
-      CSTR("delete ZFS snapshot " << snapName));
+    ZfsOps::destroy(snapName);
     std::cout << rang::fg::green << "Deleted: " << snapName << rang::style::reset << std::endl;
 
   } else if (subcmd == "diff") {
     auto snap1 = STR(ds << "@" << args.snapshotName);
-    std::vector<std::string> diffCmd;
-    if (args.snapshotName2.empty()) {
-      // diff snapshot vs current state
-      diffCmd = {CRATE_PATH_ZFS, "diff", snap1, ds};
-    } else {
-      // diff two snapshots
-      diffCmd = {CRATE_PATH_ZFS, "diff", snap1, STR(ds << "@" << args.snapshotName2)};
-    }
-    auto output = Util::execCommandGetOutput(diffCmd, "diff ZFS snapshots");
-    std::cout << output;
+    auto snap2 = args.snapshotName2.empty() ? ds : STR(ds << "@" << args.snapshotName2);
+    ZfsOps::diff(snap1, snap2, STDOUT_FILENO);
 
   } else {
     ERR("unknown snapshot subcommand: " << subcmd)

@@ -22,6 +22,7 @@ struct UgidfwRule {
 };
 
 void addUgidfwRule(const UgidfwRule &rule);
+void addUgidfwRuleRaw(const std::string &ruleStr);
 void removeUgidfwRules(int jailJid);
 void listUgidfwRules(std::vector<std::string> &output);
 

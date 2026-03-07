@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "util.h"
+#include "zfs_ops.h"
 #include "pathnames.h"
 #include "err.h"
 
@@ -826,18 +827,11 @@ std::string getZfsDataset(const std::string &path) {
 }
 
 bool isZfsEncrypted(const std::string &dataset) {
-  auto output = execCommandGetOutput(
-    {CRATE_PATH_ZFS, "get", "-H", "-o", "value", "encryption", dataset},
-    "check ZFS encryption");
-  auto val = stripTrailingSpace(output);
-  return !val.empty() && val != "off" && val != "-";
+  return ZfsOps::isEncrypted(dataset);
 }
 
 bool isZfsKeyLoaded(const std::string &dataset) {
-  auto output = execCommandGetOutput(
-    {CRATE_PATH_ZFS, "get", "-H", "-o", "value", "keystatus", dataset},
-    "check ZFS key status");
-  return stripTrailingSpace(output) == "available";
+  return ZfsOps::isKeyLoaded(dataset);
 }
 
 std::string getUserHomeDir() {

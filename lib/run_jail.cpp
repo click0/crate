@@ -3,6 +3,7 @@
 
 #include "run_jail.h"
 #include "spec.h"
+#include "zfs_ops.h"
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
@@ -141,21 +142,17 @@ RunAtEnd attachZfsDatasets(const Spec &spec, int jid, bool logProgress) {
   if (spec.zfsDatasets.empty())
     return RunAtEnd();
 
-  auto jidStr = std::to_string(jid);
   for (auto &dataset : spec.zfsDatasets) {
     if (logProgress)
       std::cerr << rang::fg::gray << "attaching ZFS dataset " << dataset << " to jail " << jid << rang::style::reset << std::endl;
-    Util::execCommand({CRATE_PATH_ZFS, "jail", jidStr, dataset},
-      CSTR("attach ZFS dataset " << dataset));
+    ZfsOps::jailDataset(jid, dataset);
   }
 
   return RunAtEnd([&spec, jid, logProgress]() {
-    auto jidStr = std::to_string(jid);
     for (auto &dataset : Util::reverseVector(spec.zfsDatasets)) {
       if (logProgress)
         std::cerr << rang::fg::gray << "detaching ZFS dataset " << dataset << " from jail " << jid << rang::style::reset << std::endl;
-      Util::execCommand({CRATE_PATH_ZFS, "unjail", jidStr, dataset},
-        CSTR("detach ZFS dataset " << dataset));
+      ZfsOps::unjailDataset(jid, dataset);
     }
   });
 }

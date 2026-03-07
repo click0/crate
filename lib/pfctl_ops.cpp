@@ -83,6 +83,20 @@ void addRules(const std::string &anchor, const std::vector<std::string> &rules) 
   Util::Fs::unlink(tmpFile);
 }
 
+void addRules(const std::string &anchor, const std::string &rulesText) {
+  // Write rules to a temp file, then load
+  auto tmpFile = STR("/tmp/crate-pf-" << ::getpid() << ".rules");
+  Util::Fs::writeFile(rulesText, tmpFile);
+  try {
+    Util::execCommand({CRATE_PATH_PFCTL, "-a", anchor, "-f", tmpFile},
+      STR("load PF rules into anchor " << anchor));
+  } catch (...) {
+    Util::Fs::unlink(tmpFile);
+    throw;
+  }
+  Util::Fs::unlink(tmpFile);
+}
+
 void flushRules(const std::string &anchor) {
 #ifdef HAVE_LIBPFCTL
   int fd = openPfDev();

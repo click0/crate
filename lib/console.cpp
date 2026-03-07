@@ -3,6 +3,7 @@
 
 #include "args.h"
 #include "locs.h"
+#include "jail_query.h"
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
@@ -22,37 +23,37 @@
   ERR2("console", msg)
 
 // Resolve a container target (name or JID) to its JID and path.
-// Same logic as info.cpp — searches jls output for crate jails.
+// Uses libjail API via JailQuery (replaces jls parsing).
 static bool resolveContainer(const std::string &target, int &outJid, std::string &outPath) {
-  std::string output;
-  try {
-    output = Util::execCommandGetOutput({CRATE_PATH_JLS, "-N"}, "list jails");
-  } catch (...) {
-    return false;
+  auto cratePrefix = std::string(Locations::jailDirectoryPath) + "/jail-";
+
+  // Try direct lookup by name first
+  auto jail = JailQuery::getJailByName(target);
+  if (!jail) {
+    try {
+      int jid = std::stoi(target);
+      jail = JailQuery::getJailByJid(jid);
+    } catch (...) {}
   }
 
-  auto cratePrefix = std::string(Locations::jailDirectoryPath) + "/jail-";
-  std::istringstream is(output);
-  std::string line;
-  bool header = true;
-  while (std::getline(is, line)) {
-    if (header) { header = false; continue; }
-    if (line.empty()) continue;
-    std::istringstream ls(line);
-    int jid;
-    std::string ip, hostname, path;
-    ls >> jid >> ip >> hostname >> path;
-    if (path.find(cratePrefix) != 0)
-      continue;
-    auto name = path.substr(std::string(Locations::jailDirectoryPath).size() + 1);
+  if (jail && jail->path.find(cratePrefix) == 0) {
+    outJid = jail->jid;
+    outPath = jail->path;
+    return true;
+  }
+
+  // Fall back to scanning all crate jails for partial match
+  auto jails = JailQuery::getAllJails(true);
+  for (auto &j : jails) {
+    auto name = j.path.substr(std::string(Locations::jailDirectoryPath).size() + 1);
     bool match = false;
-    try { match = (std::stoi(target) == jid); } catch (...) {}
+    try { match = (std::stoi(target) == j.jid); } catch (...) {}
     if (!match) match = (name == target);
     if (!match) match = (name.find("jail-" + target) == 0);
-    if (!match) match = (hostname == target);
+    if (!match) match = (j.hostname == target);
     if (match) {
-      outJid = jid;
-      outPath = path;
+      outJid = j.jid;
+      outPath = j.path;
       return true;
     }
   }

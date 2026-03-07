@@ -5,6 +5,9 @@
 #include "spec.h"
 #include "net.h"
 #include "ctx.h"
+#include "ifconfig_ops.h"
+#include "netgraph_ops.h"
+#include "pfctl_ops.h"
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
@@ -73,31 +76,26 @@ EpairInfo createEpair(int jid, const std::string &jidStr,
   // set the lo0 IP address (lo0 is always automatically present in vnet jails)
   execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet", "127.0.0.1"}, "set up the lo0 interface in jail");
 
-  // create networking interface
-  info.ifaceA = Util::stripTrailingSpace(
-    Util::execCommandGetOutput({CRATE_PATH_IFCONFIG, "epair", "create"}, "create the jail epair"));
-  info.ifaceB = STR(info.ifaceA.substr(0, info.ifaceA.size()-1) << "b");
+  // create networking interface (uses libifconfig with shell fallback)
+  auto epairPair = IfconfigOps::createEpair();
+  info.ifaceA = epairPair.first;
+  info.ifaceB = epairPair.second;
   info.num = std::stoul(info.ifaceA.substr(5/*skip epair*/, info.ifaceA.size()-5-1));
 
   info.ipA = epairNumToIp(info.num, 0);
   info.ipB = epairNumToIp(info.num, 1);
 
   // disable checksum offload on epair interfaces to work around FreeBSD 15.0 bug
-  // where packets between jails/host get dropped due to uncomputed checksums
-  Util::execCommand({CRATE_PATH_IFCONFIG, info.ifaceA, "-txcsum", "-txcsum6"},
-    "disable checksum offload on epair (host side)");
-  Util::execCommand({CRATE_PATH_IFCONFIG, info.ifaceB, "-txcsum", "-txcsum6"},
-    "disable checksum offload on epair (jail side)");
+  IfconfigOps::disableOffload(info.ifaceA);
+  IfconfigOps::disableOffload(info.ifaceB);
 
   // transfer the interface into jail
-  Util::execCommand({CRATE_PATH_IFCONFIG, info.ifaceB, "vnet", jidStr},
-    "transfer the network interface into jail");
+  IfconfigOps::moveToVnet(info.ifaceB, jid);
 
   // set the IP addresses on the jail epair
   execInJail({CRATE_PATH_IFCONFIG, info.ifaceB, "inet", info.ipB, "netmask", "0xfffffffe"},
     "set up IP jail epair addresses");
-  Util::execCommand({CRATE_PATH_IFCONFIG, info.ifaceA, "inet", info.ipA, "netmask", "0xfffffffe"},
-    "set up IP jail epair addresses");
+  IfconfigOps::setInetAddr(info.ifaceA, info.ipA, 31);
 
   // set default route in jail
   execInJail({CRATE_PATH_ROUTE, "add", "default", info.ipA}, "set default route in jail");
@@ -106,8 +104,7 @@ EpairInfo createEpair(int jid, const std::string &jidStr,
 }
 
 void destroyEpair(const std::string &ifaceA) {
-  Util::execCommand({CRATE_PATH_IFCONFIG, ifaceA, "destroy"},
-    CSTR("destroy the jail epair (" << ifaceA << ")"));
+  IfconfigOps::destroyInterface(ifaceA);
 }
 
 RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
@@ -239,10 +236,7 @@ RunAtEnd setupPfAnchor(const Spec &spec, const EpairInfo &epair,
     pfRules << "pass all" << std::endl;
 
   // Load rules into pf anchor
-  auto tmpRules = STR("/tmp/crate-pf-" << jailXname << ".conf");
-  Util::Fs::writeFile(pfRules.str(), tmpRules);
-  Util::execCommand({CRATE_PATH_PFCTL, "-a", anchorName, "-f", tmpRules}, "load pf anchor rules");
-  Util::Fs::unlink(tmpRules);
+  PfctlOps::addRules(anchorName, pfRules.str());
 
   if (logProgress)
     std::cerr << rang::fg::gray << "pf anchor '" << anchorName << "' loaded" << rang::style::reset << std::endl;
@@ -250,7 +244,7 @@ RunAtEnd setupPfAnchor(const Spec &spec, const EpairInfo &epair,
   return RunAtEnd([anchorName, logProgress]() {
     if (logProgress)
       std::cerr << rang::fg::gray << "flushing pf anchor '" << anchorName << "'" << rang::style::reset << std::endl;
-    Util::execCommand({CRATE_PATH_PFCTL, "-a", anchorName, "-F", "all"}, "flush pf anchor");
+    PfctlOps::flushRules(anchorName);
   });
 }
 
@@ -268,8 +262,7 @@ PassthroughInfo passthroughInterface(int jid, const std::string &jidStr,
   execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet", "127.0.0.1"}, "set up the lo0 interface in jail");
 
   // pass the physical interface directly into the jail
-  Util::execCommand({CRATE_PATH_IFCONFIG, iface, "vnet", jidStr},
-    CSTR("pass interface " << iface << " into jail"));
+  IfconfigOps::moveToVnet(iface, jid);
 
   return info;
 }
@@ -307,27 +300,20 @@ NetgraphInfo createNetgraphInterface(int jid, const std::string &jidStr,
   execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet", "127.0.0.1"}, "set up the lo0 interface in jail");
 
   // Create ng_bridge node attached to the physical interface's lower hook
-  // ngctl mkpeer <physIface>: bridge lower link0
-  Util::execCommand({CRATE_PATH_NGCTL, "mkpeer", STR(physIface << ":"), "bridge", "lower", "link0"},
-    CSTR("create ng_bridge on " << physIface));
+  NetgraphOps::mkpeer(STR(physIface << ":"), "bridge", "lower", "link0");
 
   // Name the bridge node for easier management
-  Util::execCommand({CRATE_PATH_NGCTL, "name", STR(physIface << ":lower"), info.bridgeNode},
-    CSTR("name ng_bridge node " << info.bridgeNode));
+  NetgraphOps::name(STR(physIface << ":lower"), info.bridgeNode);
 
   // Connect the upper hook of the physical interface to the bridge
-  Util::execCommand({CRATE_PATH_NGCTL, "connect", STR(physIface << ":"), STR(info.bridgeNode << ":"), "upper", "link1"},
-    CSTR("connect " << physIface << " upper to ng_bridge"));
+  NetgraphOps::connect(STR(physIface << ":"), STR(info.bridgeNode << ":"), "upper", "link1");
 
   // Create an eiface for the jail
-  Util::execCommand({CRATE_PATH_NGCTL, "mkpeer", STR(info.bridgeNode << ":"), "eiface", "link2", "ether"},
-    "create ng_eiface for jail");
+  NetgraphOps::mkpeer(STR(info.bridgeNode << ":"), "eiface", "link2", "ether");
 
   // Get the eiface name
-  info.ngIface = Util::stripTrailingSpace(
-    Util::execCommandGetOutput({CRATE_PATH_NGCTL, "show", "-n", STR(info.bridgeNode << ":link2")},
-      "get ng_eiface name"));
-  // Parse the interface name from ngctl output (format: "Name: ngeth0  ...")
+  info.ngIface = NetgraphOps::show(STR(info.bridgeNode << ":link2"));
+  // Parse the interface name from output (format: "Name: ngeth0  ...")
   auto namePos = info.ngIface.find("Name: ");
   if (namePos != std::string::npos) {
     info.ngIface = info.ngIface.substr(namePos + 6);
@@ -337,16 +323,14 @@ NetgraphInfo createNetgraphInterface(int jid, const std::string &jidStr,
   }
 
   // Move eiface into jail
-  Util::execCommand({CRATE_PATH_IFCONFIG, info.ngIface, "vnet", jidStr},
-    CSTR("move " << info.ngIface << " into jail"));
+  IfconfigOps::moveToVnet(info.ngIface, jid);
 
   return info;
 }
 
 void destroyNetgraphInterface(const NetgraphInfo &info) {
   // Shutdown the bridge node — this cleans up all connected peers
-  Util::execCommand({CRATE_PATH_NGCTL, "shutdown", STR(info.bridgeNode << ":")},
-    CSTR("shutdown ng_bridge " << info.bridgeNode));
+  NetgraphOps::shutdown(STR(info.bridgeNode << ":"));
 }
 
 BridgeInfo createBridgeEpair(int jid, const std::string &jidStr,
@@ -359,36 +343,29 @@ BridgeInfo createBridgeEpair(int jid, const std::string &jidStr,
   execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet", "127.0.0.1"}, "set up the lo0 interface in jail");
 
   // create epair
-  info.ifaceA = Util::stripTrailingSpace(
-    Util::execCommandGetOutput({CRATE_PATH_IFCONFIG, "epair", "create"}, "create bridge epair"));
-  info.ifaceB = STR(info.ifaceA.substr(0, info.ifaceA.size()-1) << "b");
+  auto epairPair = IfconfigOps::createEpair();
+  info.ifaceA = epairPair.first;
+  info.ifaceB = epairPair.second;
   info.num = std::stoul(info.ifaceA.substr(5, info.ifaceA.size()-5-1));
 
   // disable checksum offload (FreeBSD 15 workaround)
-  Util::execCommand({CRATE_PATH_IFCONFIG, info.ifaceA, "-txcsum", "-txcsum6"},
-    "disable checksum offload on epair (host side)");
-  Util::execCommand({CRATE_PATH_IFCONFIG, info.ifaceB, "-txcsum", "-txcsum6"},
-    "disable checksum offload on epair (jail side)");
+  IfconfigOps::disableOffload(info.ifaceA);
+  IfconfigOps::disableOffload(info.ifaceB);
 
   // bring host-side up and add to bridge
-  Util::execCommand({CRATE_PATH_IFCONFIG, info.ifaceA, "up"},
-    CSTR("bring up " << info.ifaceA));
-  Util::execCommand({CRATE_PATH_IFCONFIG, bridgeIface, "addm", info.ifaceA},
-    CSTR("add " << info.ifaceA << " to bridge " << bridgeIface));
+  IfconfigOps::setUp(info.ifaceA);
+  IfconfigOps::bridgeAddMember(bridgeIface, info.ifaceA);
 
   // move jail-side into jail
-  Util::execCommand({CRATE_PATH_IFCONFIG, info.ifaceB, "vnet", jidStr},
-    "transfer bridge epair into jail");
+  IfconfigOps::moveToVnet(info.ifaceB, jid);
 
   return info;
 }
 
 void destroyBridgeEpair(const BridgeInfo &info) {
   // remove from bridge first, then destroy
-  Util::execCommand({CRATE_PATH_IFCONFIG, info.bridgeIface, "deletem", info.ifaceA},
-    CSTR("remove " << info.ifaceA << " from bridge " << info.bridgeIface));
-  Util::execCommand({CRATE_PATH_IFCONFIG, info.ifaceA, "destroy"},
-    CSTR("destroy bridge epair (" << info.ifaceA << ")"));
+  IfconfigOps::bridgeDelMember(info.bridgeIface, info.ifaceA);
+  IfconfigOps::destroyInterface(info.ifaceA);
 }
 
 //
@@ -495,8 +472,7 @@ std::pair<std::string,std::string> generateStaticMac(
 }
 
 void setMacAddress(const std::string &iface, const std::string &mac) {
-  Util::execCommand({CRATE_PATH_IFCONFIG, iface, "ether", mac},
-    CSTR("set MAC address " << mac << " on " << iface));
+  IfconfigOps::setMacAddr(iface, mac);
 }
 
 //

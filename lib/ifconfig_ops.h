@@ -49,6 +49,9 @@ void setDown(const std::string &iface);
 // Set MAC address (6 bytes).
 void setMacAddr(const std::string &iface, const unsigned char mac[6]);
 
+// Set MAC address from string (e.g. "58:9c:fc:ab:cd:ef").
+void setMacAddr(const std::string &iface, const std::string &mac);
+
 // Set interface description.
 void setDescription(const std::string &iface, const std::string &desc);
 

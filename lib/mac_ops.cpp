@@ -46,6 +46,13 @@ void addUgidfwRule(const UgidfwRule &rule) {
   Util::execCommand({CRATE_PATH_UGIDFW, ruleStr}, "add ugidfw rule");
 }
 
+void addUgidfwRuleRaw(const std::string &ruleStr) {
+  auto ruleArgs = Util::splitString(ruleStr, " ");
+  auto fullArgs = std::vector<std::string>{CRATE_PATH_UGIDFW, "add"};
+  fullArgs.insert(fullArgs.end(), ruleArgs.begin(), ruleArgs.end());
+  Util::execCommand(fullArgs, STR("add ugidfw rule: " << ruleStr));
+}
+
 void removeUgidfwRules(int jailJid) {
   // List rules, find matching jail, remove them
   std::vector<std::string> rules;
