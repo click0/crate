@@ -315,7 +315,7 @@ fi
 section "T09: epair checksum offload fix"
 
 # Source-level check first
-if grep -q '\-txcsum' $RUN_ALL && grep -q '\-txcsum6' $RUN_ALL; then
+if grep -qE '\-txcsum|disableOffload' $RUN_ALL; then
   pass "run.cpp disables txcsum/txcsum6 on epair interfaces"
 else
   fail "run.cpp missing -txcsum/-txcsum6 on epair"
@@ -428,7 +428,7 @@ else
   skip "compile-only CI (no full build)"
   section "T09: epair checksum offload fix"
   # Source-level checks still run
-  if grep -q '\-txcsum' $RUN_ALL && grep -q '\-txcsum6' $RUN_ALL; then
+  if grep -qE '\-txcsum|disableOffload' $RUN_ALL; then
     pass "run.cpp disables txcsum/txcsum6 on epair interfaces"
   else
     fail "run.cpp missing -txcsum/-txcsum6 on epair"
@@ -502,7 +502,7 @@ else
 fi
 
 # Source-level: run.cpp has ZFS dataset attach/detach (exec-based: "zfs", "jail")
-if grep -qE 'CRATE_PATH_ZFS.*"jail"|"zfs".*"jail"' $RUN_ALL && grep -qE 'CRATE_PATH_ZFS.*"unjail"|"zfs".*"unjail"' $RUN_ALL; then
+if grep -qE 'CRATE_PATH_ZFS.*"jail"|"zfs".*"jail"|ZfsOps::jailDataset' $RUN_ALL && grep -qE 'CRATE_PATH_ZFS.*"unjail"|"zfs".*"unjail"|ZfsOps::unjailDataset' $RUN_ALL; then
   pass "run.cpp has ZFS dataset attach/detach (exec-based)"
 else
   fail "run.cpp missing ZFS dataset attach/detach"
@@ -604,7 +604,7 @@ else
 fi
 
 # user and jailPath now go through exec (no shell) — verify exec-based patterns
-if grep -qE 'execCommandGetStatus.*CRATE_PATH_JEXEC|execCommandGetStatus.*jexec' $RUN_ALL; then
+if grep -qE 'execCommandGetStatus.*CRATE_PATH_JEXEC|execCommandGetStatus.*jexec|JailExec::execInJail' $RUN_ALL; then
   pass "run.cpp uses execCommandGetStatus for jexec (user/jid via exec, not shell)"
 else
   fail "run.cpp missing execCommandGetStatus for jexec"
@@ -973,19 +973,19 @@ else
   fail "main.cpp missing CmdSnapshot dispatch"
 fi
 
-if grep -qE 'CRATE_PATH_ZFS.*"snapshot"|"zfs".*"snapshot"' "$LIBDIR/snapshot.cpp"; then
+if grep -qE 'CRATE_PATH_ZFS.*"snapshot"|"zfs".*"snapshot"|ZfsOps::snapshot' "$LIBDIR/snapshot.cpp"; then
   pass "snapshot.cpp calls zfs snapshot"
 else
   fail "snapshot.cpp missing zfs snapshot call"
 fi
 
-if grep -qE 'CRATE_PATH_ZFS.*"rollback"|"zfs".*"rollback"' "$LIBDIR/snapshot.cpp"; then
+if grep -qE 'CRATE_PATH_ZFS.*"rollback"|"zfs".*"rollback"|ZfsOps::rollback' "$LIBDIR/snapshot.cpp"; then
   pass "snapshot.cpp calls zfs rollback"
 else
   fail "snapshot.cpp missing zfs rollback call"
 fi
 
-if grep -qE 'CRATE_PATH_ZFS.*"diff"|"zfs".*"diff"' "$LIBDIR/snapshot.cpp"; then
+if grep -qE 'CRATE_PATH_ZFS.*"diff"|"zfs".*"diff"|ZfsOps::diff' "$LIBDIR/snapshot.cpp"; then
   pass "snapshot.cpp calls zfs diff"
 else
   fail "snapshot.cpp missing zfs diff call"
@@ -1156,7 +1156,7 @@ else
   fail "run.cpp missing COW logic"
 fi
 
-if grep -qE 'CRATE_PATH_ZFS.*snapshot.*snapName|"zfs".*snapshot.*snapName|CRATE_PATH_ZFS.*clone.*cloneName|"zfs".*clone.*cloneName' $RUN_ALL; then
+if grep -qE 'CRATE_PATH_ZFS.*snapshot.*snapName|"zfs".*snapshot.*snapName|CRATE_PATH_ZFS.*clone.*cloneName|"zfs".*clone.*cloneName|ZfsOps::snapshot.*snapName|ZfsOps::clone.*cloneName' $RUN_ALL; then
   pass "run.cpp calls zfs snapshot/clone for COW"
 else
   fail "run.cpp missing zfs snapshot/clone call"
@@ -1599,7 +1599,7 @@ else
 fi
 
 # epair checksum offload fix
-if grep -q 'txcsum.*txcsum6\|-txcsum' $RUN_ALL; then
+if grep -qE 'txcsum.*txcsum6|-txcsum|disableOffload' $RUN_ALL; then
   pass "run.cpp disables epair checksum offload (-txcsum -txcsum6)"
 else
   fail "run.cpp missing epair checksum offload fix"
@@ -1803,7 +1803,7 @@ else
 fi
 
 # export.cpp uses CRATE_PATH_JLS for container resolution
-if grep -q 'CRATE_PATH_JLS' "$LIBDIR/export.cpp"; then
+if grep -qE 'CRATE_PATH_JLS|JailQuery' "$LIBDIR/export.cpp"; then
   pass "export.cpp uses CRATE_PATH_JLS"
 else
   fail "export.cpp missing CRATE_PATH_JLS"
