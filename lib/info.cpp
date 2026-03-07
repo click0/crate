@@ -3,6 +3,7 @@
 
 #include "args.h"
 #include "locs.h"
+#include "jail_query.h"
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
@@ -21,41 +22,44 @@
   ERR2("info", msg)
 
 // Resolve a container target (name or JID) to its jail path and JID.
-// Searches jls output for crate jails matching the target.
+// Uses libjail API via JailQuery (replaces jls parsing).
 static bool resolveContainer(const std::string &target, int &outJid, std::string &outPath,
                              std::string &outHostname, std::string &outIp) {
-  std::string output;
-  try {
-    output = Util::execCommandGetOutput({CRATE_PATH_JLS, "-N"}, "list jails");
-  } catch (...) {
-    return false;
+  auto cratePrefix = std::string(Locations::jailDirectoryPath) + "/jail-";
+
+  // Try direct lookup by name first
+  auto jail = JailQuery::getJailByName(target);
+  if (!jail) {
+    // Try lookup by JID
+    try {
+      int jid = std::stoi(target);
+      jail = JailQuery::getJailByJid(jid);
+    } catch (...) {}
   }
 
-  auto cratePrefix = std::string(Locations::jailDirectoryPath) + "/jail-";
-  std::istringstream is(output);
-  std::string line;
-  bool header = true;
-  while (std::getline(is, line)) {
-    if (header) { header = false; continue; }
-    if (line.empty()) continue;
-    std::istringstream ls(line);
-    int jid;
-    std::string ip, hostname, path;
-    ls >> jid >> ip >> hostname >> path;
-    if (path.find(cratePrefix) != 0)
-      continue;
-    auto name = path.substr(std::string(Locations::jailDirectoryPath).size() + 1);
-    // Match by JID, full name, or partial name (jail-SPECNAME-*)
+  // If direct lookup succeeded and it's a crate jail, use it
+  if (jail && jail->path.find(cratePrefix) == 0) {
+    outJid = jail->jid;
+    outPath = jail->path;
+    outHostname = jail->hostname;
+    outIp = jail->ip4;
+    return true;
+  }
+
+  // Fall back to scanning all crate jails for partial match
+  auto jails = JailQuery::getAllJails(true /* crateOnly */);
+  for (auto &j : jails) {
+    auto name = j.path.substr(std::string(Locations::jailDirectoryPath).size() + 1);
     bool match = false;
-    try { match = (std::stoi(target) == jid); } catch (...) {}
+    try { match = (std::stoi(target) == j.jid); } catch (...) {}
     if (!match) match = (name == target);
     if (!match) match = (name.find("jail-" + target) == 0);
-    if (!match) match = (hostname == target);
+    if (!match) match = (j.hostname == target);
     if (match) {
-      outJid = jid;
-      outPath = path;
-      outHostname = hostname;
-      outIp = (ip == "-") ? "" : ip;
+      outJid = j.jid;
+      outPath = j.path;
+      outHostname = j.hostname;
+      outIp = j.ip4;
       return true;
     }
   }
@@ -88,29 +92,28 @@ bool infoCrate(const Args &args) {
   if (Util::Fs::fileExists(specPath))
     field("  Spec", specPath);
 
-  // Show mount points from jls
+  // Show jail parameters via libjail API
   std::cout << std::endl;
   std::cout << rang::fg::green << "=== Jail Parameters ===" << rang::style::reset << std::endl;
-  try {
-    auto params = Util::execCommandGetOutput(
-      {CRATE_PATH_JLS, "-j", jidStr, "-N"},
-      "get jail parameters");
-    // Print each line indented
-    std::istringstream ps(params);
-    std::string pline;
-    while (std::getline(ps, pline))
-      std::cout << "  " << pline << std::endl;
-  } catch (...) {
-    std::cout << "  (unable to retrieve jail parameters)" << std::endl;
+  {
+    auto ji = JailQuery::getJailByJid(jid);
+    if (ji) {
+      std::cout << "  name: " << ji->name << std::endl;
+      std::cout << "  path: " << ji->path << std::endl;
+      std::cout << "  hostname: " << ji->hostname << std::endl;
+      std::cout << "  ip4: " << (ji->ip4.empty() ? "(none)" : ji->ip4) << std::endl;
+      std::cout << "  dying: " << (ji->dying ? "true" : "false") << std::endl;
+    } else {
+      std::cout << "  (unable to retrieve jail parameters)" << std::endl;
+    }
   }
 
   // Show network interfaces inside jail
   std::cout << std::endl;
   std::cout << rang::fg::green << "=== Network Interfaces ===" << rang::style::reset << std::endl;
   try {
-    auto ifOutput = Util::execCommandGetOutput(
-      {CRATE_PATH_JEXEC, jidStr, CRATE_PATH_IFCONFIG, "-a"},
-      "get jail interfaces");
+    auto ifOutput = JailExec::execInJailGetOutput(
+      jid, {CRATE_PATH_IFCONFIG, "-a"}, "root", "get jail interfaces");
     std::istringstream ifs(ifOutput);
     std::string ifline;
     while (std::getline(ifs, ifline))
@@ -142,9 +145,8 @@ bool infoCrate(const Args &args) {
   std::cout << std::endl;
   std::cout << rang::fg::green << "=== Processes ===" << rang::style::reset << std::endl;
   try {
-    auto psOutput = Util::execCommandGetOutput(
-      {CRATE_PATH_JEXEC, jidStr, "/bin/ps", "auxww"},
-      "list jail processes");
+    auto psOutput = JailExec::execInJailGetOutput(
+      jid, {"/bin/ps", "auxww"}, "root", "list jail processes");
     std::istringstream pss(psOutput);
     std::string psline;
     while (std::getline(pss, psline))

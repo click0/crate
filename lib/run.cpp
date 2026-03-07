@@ -9,6 +9,9 @@
 #include "net.h"
 #include "scripts.h"
 #include "ctx.h"
+#include "jail_query.h"
+#include "zfs_ops.h"
+#include "mac_ops.h"
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
@@ -288,15 +291,14 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     if (!Util::Fs::isOnZfs(jailPath))
       ERR("base_container requires ZFS (jail directory must be on ZFS)")
 
-    // Find source jail path via jls
+    // Find source jail path via libjail API
     std::string srcJailPath;
-    try {
-      auto jlsOutput = Util::execCommandGetOutput(
-        {CRATE_PATH_JLS, "-j", spec.baseContainer->name, "path"},
-        "find source jail for base_container");
-      srcJailPath = Util::stripTrailingSpace(jlsOutput);
-    } catch (...) {
-      ERR("base_container: source jail '" << spec.baseContainer->name << "' not found (is it running?)")
+    {
+      auto srcJail = JailQuery::getJailByName(spec.baseContainer->name);
+      if (srcJail)
+        srcJailPath = srcJail->path;
+      else
+        ERR("base_container: source jail '" << spec.baseContainer->name << "' not found (is it running?)")
     }
     if (srcJailPath.empty())
       ERR("base_container: could not determine path of jail '" << spec.baseContainer->name << "'")
@@ -312,11 +314,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     auto dstDataset = Util::Fs::getZfsDataset(jailPath);
     auto cloneName = STR(dstDataset << "/base-" << Util::randomHex(4));
 
-    Util::execCommand({CRATE_PATH_ZFS, "snapshot", snapName}, "snapshot source jail for base_container");
-    Util::execCommand({CRATE_PATH_ZFS, "clone", snapName, cloneName}, "clone source jail for base_container");
+    ZfsOps::snapshot(snapName);
+    ZfsOps::clone(snapName, cloneName);
 
-    auto cloneMountpoint = Util::stripTrailingSpace(
-      Util::execCommandGetOutput({CRATE_PATH_ZFS, "get", "-H", "-o", "value", "mountpoint", cloneName}, "get base clone mountpoint"));
+    auto cloneMountpoint = ZfsOps::getMountpoint(cloneName);
 
     // Overlay the clone's content into our jail directory
     // Use nullfs mount so the jail sees the cloned filesystem
@@ -324,8 +325,8 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
     destroyBaseClone.reset([cloneName, snapName, &args]() {
       LOG("destroying base_container clone " << cloneName)
-      try { Util::execCommand({CRATE_PATH_ZFS, "destroy", cloneName}, "destroy base clone"); } catch (...) {}
-      try { Util::execCommand({CRATE_PATH_ZFS, "destroy", snapName}, "destroy base snapshot"); } catch (...) {}
+      try { ZfsOps::destroy(cloneName); } catch (...) {}
+      try { ZfsOps::destroy(snapName); } catch (...) {}
     });
 
     LOG("base_container: ZFS clone '" << cloneName << "' ready from jail '" << spec.baseContainer->name << "'")
@@ -359,16 +360,15 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         ERR("cannot determine ZFS dataset for jail directory")
       auto snapName = STR(baseDataset << "@cow-" << Util::randomHex(4));
       auto cloneName = STR(baseDataset << "/cow-" << Util::randomHex(4));
-      Util::execCommand({CRATE_PATH_ZFS, "snapshot", snapName}, "create COW base snapshot");
-      Util::execCommand({CRATE_PATH_ZFS, "clone", snapName, cloneName}, "create COW clone");
-      auto cloneMountpoint = Util::stripTrailingSpace(
-        Util::execCommandGetOutput({CRATE_PATH_ZFS, "get", "-H", "-o", "value", "mountpoint", cloneName}, "get clone mountpoint"));
+      ZfsOps::snapshot(snapName);
+      ZfsOps::clone(snapName, cloneName);
+      auto cloneMountpoint = ZfsOps::getMountpoint(cloneName);
       LOG("COW clone created: " << cloneName << " at " << cloneMountpoint)
       if (spec.cowOptions->mode == "ephemeral") {
         destroyCowClone.reset([cloneName, snapName, &args]() {
           LOG("destroying ephemeral COW clone " << cloneName)
-          Util::execCommand({CRATE_PATH_ZFS, "destroy", cloneName}, "destroy COW clone");
-          Util::execCommand({CRATE_PATH_ZFS, "destroy", snapName}, "destroy COW base snapshot");
+          ZfsOps::destroy(cloneName);
+          ZfsOps::destroy(snapName);
         });
       }
     } else if (spec.cowOptions->backend == "unionfs") {
@@ -448,14 +448,12 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       Util::ensureKernelModuleIsLoaded("mac_bsdextended");
       for (auto &rule : spec.securityAdvanced->macRules) {
         LOG("adding MAC rule: " << rule)
-        auto ruleArgs = Util::splitString(rule, " ");
-        auto fullArgs = std::vector<std::string>{CRATE_PATH_UGIDFW, "add"};
-        fullArgs.insert(fullArgs.end(), ruleArgs.begin(), ruleArgs.end());
-        Util::execCommand(fullArgs, CSTR("add MAC rule: " << rule));
+        MacOps::addUgidfwRuleRaw(rule);
       }
       removeMacRules.reset([&spec, &args]() {
         LOG("removing MAC bsdextended rules")
-        Util::execCommand({CRATE_PATH_UGIDFW, "list"}, "list MAC rules before cleanup");
+        std::vector<std::string> rules;
+        MacOps::listUgidfwRules(rules);
       });
     }
     if (!spec.securityAdvanced->macAllowPorts.empty()) {
@@ -576,12 +574,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // attach ZFS datasets to jail
   RunAtEnd detachZfsDatasets = RunJail::attachZfsDatasets(spec, jid, args.logProgress);
 
-  // helpers for jail access (exec-based: no shell)
+  // helpers for jail access (uses jail_attach with jexec fallback)
   auto jidStr = std::to_string(jid);
-  auto execInJail = [&jidStr](const std::vector<std::string> &argv, const std::string &descr) {
-    auto fullArgv = std::vector<std::string>{CRATE_PATH_JEXEC, jidStr};
-    fullArgv.insert(fullArgv.end(), argv.begin(), argv.end());
-    Util::execCommand(fullArgv, descr);
+  auto execInJail = [&jid](const std::vector<std::string> &argv, const std::string &descr) {
+    JailExec::execInJailChecked(jid, argv, "root", descr);
   };
   auto writeFileInJail = [J](auto str, auto file) {
     Util::Fs::writeFile(str, J(file));
@@ -1068,7 +1064,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     auto innerCmd = STR("/usr/bin/env " << jailEnv
                         << (spec.optionExists("dbg-ktrace") ? " /usr/bin/ktrace" : "")
                         << " " << Util::shellQuote(spec.runCmdExecutable) << spec.runCmdArgs << argsToString(argc, argv));
-    int status = Util::execCommandGetStatus({CRATE_PATH_JEXEC, "-l", "-U", user, jidStr, innerCmd}, "run command in jail");
+    int status = JailExec::execInJail(jid, {"/bin/sh", "-c", innerCmd}, user, "run command in jail");
     returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     LOG("command has finished in jail: returnCode=" << returnCode)
   } else {
@@ -1102,7 +1098,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       hcThread = std::thread(healthcheckMonitorLoop, jidStr, user, *spec.healthcheck, args.logProgress, std::ref(hcStopFlag));
     }
     {
-      int status = Util::execCommandGetStatus({CRATE_PATH_JEXEC, "-l", "-U", user, jidStr, cmdFile}, "run service command in jail");
+      int status = JailExec::execInJail(jid, {cmdFile}, user, "run service command in jail");
       returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     }
     // Stop healthcheck monitor

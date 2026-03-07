@@ -3,6 +3,7 @@
 
 #include "args.h"
 #include "locs.h"
+#include "jail_query.h"
 #include "pathnames.h"
 #include "ctx.h"
 #include "util.h"
@@ -24,51 +25,20 @@
 #define ERR(msg...) \
   ERR2("clean", msg)
 
-// Collect JIDs of all running jails
+// Collect JIDs of all running jails (uses libjail API)
 static std::set<int> getRunningJailJids() {
   std::set<int> jids;
-  std::string output;
-  try {
-    output = Util::execCommandGetOutput({CRATE_PATH_JLS, "-N"}, "list jails");
-  } catch (...) {
-    return jids;
-  }
-  std::istringstream is(output);
-  std::string line;
-  bool header = true;
-  while (std::getline(is, line)) {
-    if (header) { header = false; continue; }
-    if (line.empty()) continue;
-    int jid;
-    std::istringstream ls(line);
-    if (ls >> jid)
-      jids.insert(jid);
-  }
+  for (auto &j : JailQuery::getAllJails())
+    jids.insert(j.jid);
   return jids;
 }
 
-// Collect paths of all running jail roots
+// Collect paths of all running jail roots (uses libjail API)
 static std::set<std::string> getRunningJailPaths() {
   std::set<std::string> paths;
-  std::string output;
-  try {
-    output = Util::execCommandGetOutput({CRATE_PATH_JLS, "-N"}, "list jails");
-  } catch (...) {
-    return paths;
-  }
-  std::istringstream is(output);
-  std::string line;
-  bool header = true;
-  while (std::getline(is, line)) {
-    if (header) { header = false; continue; }
-    if (line.empty()) continue;
-    std::istringstream ls(line);
-    int jid;
-    std::string ip, hostname, path;
-    ls >> jid >> ip >> hostname >> path;
-    if (!path.empty())
-      paths.insert(path);
-  }
+  for (auto &j : JailQuery::getAllJails())
+    if (!j.path.empty())
+      paths.insert(j.path);
   return paths;
 }
 

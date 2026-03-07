@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "args.h"
+#include "jail_query.h"
 #include "pathnames.h"
 #include "cmd.h"
 #include "util.h"
@@ -24,32 +25,32 @@
 static uid_t myuid = ::getuid();
 static gid_t mygid = ::getgid();
 
-// Resolve a running container by name or JID (same logic as info/console)
+// Resolve a running container by name or JID (uses libjail API).
 static bool resolveContainer(const std::string &target, int &jid, std::string &path, std::string &hostname) {
-  auto output = Util::execCommandGetOutput(
-    {CRATE_PATH_JLS, "-N", "jid", "name", "path", "host.hostname"},
-    "list jails for export");
-  std::istringstream is(output);
-  std::string line;
-  while (std::getline(is, line)) {
-    if (line.empty() || line[0] == ' ') continue;
-    std::istringstream ls(line);
-    std::string jidS, name, p, h;
-    ls >> jidS >> name >> p >> h;
-    if (jidS.empty() || jidS == "jid") continue;
+  // Try direct lookup
+  auto jail = JailQuery::getJailByName(target);
+  if (!jail) {
+    try {
+      int id = std::stoi(target);
+      jail = JailQuery::getJailByJid(id);
+    } catch (...) {}
+  }
+  if (jail) {
+    jid = jail->jid;
+    path = jail->path;
+    hostname = jail->hostname;
+    return true;
+  }
 
+  // Fall back to scanning all jails for partial match
+  for (auto &j : JailQuery::getAllJails()) {
     bool match = false;
-    if (name == target || jidS == target)
-      match = true;
-    else if (h == target)
-      match = true;
-    else if (name.find("jail-" + target + "-") == 0)
-      match = true;
-
+    if (j.hostname == target) match = true;
+    else if (j.name.find("jail-" + target + "-") == 0) match = true;
     if (match) {
-      jid = std::stoi(jidS);
-      path = p;
-      hostname = h;
+      jid = j.jid;
+      path = j.path;
+      hostname = j.hostname;
       return true;
     }
   }

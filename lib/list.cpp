@@ -4,6 +4,7 @@
 #include "args.h"
 #include "spec.h"
 #include "locs.h"
+#include "jail_query.h"
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
@@ -36,48 +37,21 @@ struct CrateEntry {
   bool hasHealthcheck = false; // healthcheck defined in spec
 };
 
-// Parse jls output to find running crate jails.
-// crate jails live under /var/run/crate/jail-*
+// Discover running crate jails using libjail API (replaces jls parsing).
 static std::vector<CrateEntry> discoverRunningCrates() {
   std::vector<CrateEntry> entries;
-  std::string output;
-  try {
-    output = Util::execCommandGetOutput(
-      {CRATE_PATH_JLS, "-N", "-h",
-       "--libxo:J"},
-      "list jails (JSON)");
-  } catch (...) {
-    // jls may fail if no jails exist — that's fine
-    return entries;
-  }
 
-  // Fallback: parse plain jls output (JID  IP  Hostname  Path)
-  // Use -N for column headers
-  std::string plainOutput;
-  try {
-    plainOutput = Util::execCommandGetOutput(
-      {CRATE_PATH_JLS, "-N"},
-      "list jails");
-  } catch (...) {
-    return entries;
-  }
-
-  std::istringstream is(plainOutput);
-  std::string line;
-  bool header = true;
-  auto cratePrefix = std::string(Locations::jailDirectoryPath) + "/jail-";
-  while (std::getline(is, line)) {
-    if (header) { header = false; continue; }
-    if (line.empty()) continue;
-    // jls -N columns: JID  IP Address  Hostname  Path
-    std::istringstream ls(line);
+  auto jails = JailQuery::getAllJails(true /* crateOnly */);
+  for (auto &j : jails) {
     CrateEntry e;
-    std::string ipStr;
-    ls >> e.jid >> ipStr >> e.hostname >> e.path;
-    if (e.path.find(cratePrefix) != 0)
-      continue;  // not a crate jail
-    e.ip = (ipStr == "-") ? "" : ipStr;
-    e.name = e.path.substr(std::string(Locations::jailDirectoryPath).size() + 1);
+    e.jid = j.jid;
+    e.path = j.path;
+    e.hostname = j.hostname;
+    e.ip = j.ip4;
+    e.name = j.name.empty()
+      ? j.path.substr(std::string(Locations::jailDirectoryPath).size() + 1)
+      : j.name;
+
     // check for +CRATE.SPEC and extract info
     auto specPath = e.path + "/+CRATE.SPEC";
     if (Util::Fs::fileExists(specPath)) {
