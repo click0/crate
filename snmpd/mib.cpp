@@ -24,7 +24,7 @@ static std::mutex g_mibMutex;
 static std::vector<ContainerMetrics> g_containers;
 static unsigned g_totalCount = 0;
 static unsigned g_runningCount = 0;
-static std::string g_version = "0.2.2";
+static std::string g_version = "0.2.5";
 static std::string g_hostname;
 
 bool initAgentX(const std::string &socketPath) {
