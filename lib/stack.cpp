@@ -5,6 +5,7 @@
 #include "util.h"
 #include "err.h"
 #include "commands.h"
+#include "jail_query.h"
 
 #include <rang.hpp>
 #include <yaml-cpp/yaml.h>
@@ -19,6 +20,8 @@
 #include <fstream>
 #include <iomanip>
 #include <filesystem>
+
+#include <sys/wait.h>
 
 #define ERR(msg...) ERR2("stack", msg)
 
@@ -336,6 +339,43 @@ bool stackCommand(const Args &args) {
       std::cout << rang::fg::green << "Stack stopped." << rang::style::reset << std::endl;
     }
     return allOk;
+  }
+
+  if (args.stackSubcmd == "exec") {
+    // Execute a command in a specific stack container
+    // Usage: crate stack exec <stack-file> <container-name> -- <command...>
+    if (args.stackExecContainer.empty())
+      ERR("stack exec requires a container name and command")
+
+    // Find the container
+    bool found = false;
+    for (auto &e : entries) {
+      if (e.name == args.stackExecContainer) {
+        found = true;
+        break;
+      }
+    }
+    if (!found)
+      ERR("container '" << args.stackExecContainer << "' not found in stack")
+
+    // Find running jail matching the container name
+    auto jails = JailQuery::getAllJails(true);
+    int jid = -1;
+    for (auto &j : jails) {
+      if (j.name.find(args.stackExecContainer) != std::string::npos) {
+        jid = j.jid;
+        break;
+      }
+    }
+    if (jid < 0)
+      ERR("container '" << args.stackExecContainer << "' is not running")
+
+    // Execute via JailExec
+    if (args.stackExecArgs.empty())
+      ERR("no command specified for stack exec")
+
+    auto status = JailExec::execInJail(jid, args.stackExecArgs, "root", "stack exec");
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
   }
 
   ERR("unknown stack subcommand: " << args.stackSubcmd)
