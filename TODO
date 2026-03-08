@@ -1,19 +1,122 @@
-This file describes features that are not yet implemented, and bugs that are not yet fixed.
+This file describes features that are not yet implemented, and bugs that are
+not yet fixed. Items are grouped by priority for production readiness.
 
-* (done) Configuration management
-  Implemented in lib/config.cpp: 3-tier config system
-  (system /usr/local/etc/crate.yml, drop-in /usr/local/etc/crate.d/*.yml,
-  user ~/.config/crate/crate.yml).
+=== Known bugs ===
 
-* (bug) net/inbound: crates can listen on any ports for inbound connections, but connections are rejected from the host itself.
-  See bug#239590: ipfw rule doesn't forward TCP connections made through the host's LAN address
+* (bug) net/inbound: crates can listen on any ports for inbound connections,
+  but connections are rejected from the host itself.
+  See bug#239590: ipfw rule doesn't forward TCP connections made through
+  the host's LAN address.
 
-* (feature) Cross-device folder and file shares need to be implemented.
+* (bug) pkg/add: command is not yet implemented (returns a proper error).
 
-* (bug) pkg/add: command is not yet implemented (was calling abort(), now returns a proper error).
+=== Security warnings ===
 
 * (security) X11 shared mode provides no display isolation.
-  Jail processes sharing the host X11 socket can read keystrokes and manipulate windows.
-  Users should prefer mode=nested or mode=headless for security-sensitive workloads.
+  Jail processes sharing the host X11 socket can read keystrokes and
+  manipulate windows. Users should prefer mode=nested or mode=headless for
+  security-sensitive workloads.
 
-* (feature) SNMP AgentX: the AgentX wire protocol is not yet implemented (snmpd runs in stub mode).
+=== High priority — blocking production use ===
+
+* (feature) crate stop TARGET — explicit stop command.
+  Currently the only way to stop a container is SIGTERM to the crate run
+  process. Need a standalone stop command that finds the running jail and
+  tears it down.
+
+* (feature) crate restart TARGET — stop + start in one step.
+
+* (feature) Restart policy for automatic recovery on crash:
+    restart:
+        policy: on-failure   # never | on-failure | always
+        max_retries: 3
+        delay: 5s
+
+* (feature) Graceful shutdown — configurable stop timeout and ordered
+  service teardown (reverse dependency order) before SIGKILL.
+
+* (feature) Container image signing — .crate archives have SHA256
+  checksums but no cryptographic signature. Production deployments need
+  ed25519 or GPG signing for integrity verification.
+
+* (feature) Audit logging — record who started which container, when,
+  and with what parameters. Essential for compliance.
+
+* (feature) crate logs TARGET — stream/tail container logs from
+  /var/log/crate/. Currently logs exist but there is no CLI to view them.
+
+=== Medium priority — operational quality ===
+
+* (feature) crate stats TARGET — real-time resource usage (CPU, memory,
+  network I/O, disk I/O). Data is available via rctl -u, needs
+  presentation layer.
+
+* (feature) crate top — live resource monitor across all running
+  containers (like htop).
+
+* (feature) Base system caching — base.txz is downloaded on every create.
+  Cache in /var/cache/crate/base/ with SHA256 verification.
+
+* (feature) Auto-create bridge — if the specified bridge interface does
+  not exist, create it automatically (opt-in via
+  auto_create_bridge: true in crate.yml).
+
+* (feature) IP pool for named networks — add ip_range to network
+  definitions for automatic IP assignment when ip: auto.
+
+* (feature) Cross-device folder and file shares need to be implemented.
+  (nullfs cannot cross device boundaries.)
+
+* (feature) crated F2 write API — the daemon currently only has read-only
+  endpoints. Need POST/DELETE for container lifecycle, WebSocket console,
+  stats streaming, snapshot and export/import management.
+
+* (feature) Unit tests — only integration tests exist (tests/).
+  Need unit tests for spec parsing, config loading, network IP calculation,
+  MAC generation, spec merging, and port range parsing.
+
+=== Low priority — future enhancements ===
+
+* (feature) SNMP AgentX: the AgentX wire protocol is not yet implemented
+  (snmpd runs in stub mode).
+
+* (feature) Hub web dashboard — hub/web/ directory is empty. Need minimal
+  HTML/JS UI: node list, container list by node, CPU/RAM metrics,
+  start/stop controls (requires F2 API).
+
+* (feature) Inter-container DNS — built-in DNS service for .crate zone
+  so containers can resolve each other by name without manual /etc/hosts.
+
+* (feature) WireGuard/IPsec tunnels — VPN support between hosts for
+  multi-host container networking.
+
+* (feature) Rootless containers — crate is setuid root (04755). Explore
+  rootless jail via jail(8) with allow.nfds.
+
+* (feature) Container migration — automated export → transfer → import
+  between hosts via crate-hub.
+
+* (feature) Hub scheduling — automatic container placement on the least
+  loaded host.
+
+* (feature) Layered images — ZFS-based layering through clones instead
+  of monolithic .crate archives.
+
+* (feature) crate update TARGET — in-place base system and package update
+  inside a running jail without full recreate.
+
+* (feature) Man pages for crated(8) and crate-hub(8).
+
+* (feature) crate inspect TARGET — full JSON dump of running container
+  configuration (spec, runtime, network, mounts).
+
+=== Done (removed) ===
+
+Items completed and removed from this file:
+- Configuration management (0.2.0 — lib/config.cpp, 3-tier system)
+- Health checks (0.2.3 — healthcheck: spec section)
+- Container dependencies (0.2.3 — depends: spec section)
+- crate stack multi-container orchestration (0.2.3)
+- Enhanced crate list with ports/mounts/healthcheck columns (0.2.3)
+- CHANGELOG.md (0.2.0)
+- Native FreeBSD API wrappers replacing shell commands (0.2.5)
