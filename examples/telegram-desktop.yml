@@ -17,6 +17,7 @@ dirs:
 
 options:
     - net
+    - ssl-certs
     - x11
     - gl
     - video

@@ -1,0 +1,21 @@
+##
+## container for Redis in-memory data store
+##
+
+---
+
+pkg:
+  install: redis
+
+run:
+  service: redis
+
+options:
+  net:
+    outbound: none
+    inbound-tcp:
+      6379: 6379
+
+scripts:
+  run:before-start-services:
+    - "echo redis_enable=\"YES\" >> /etc/rc.conf"

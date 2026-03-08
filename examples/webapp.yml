@@ -1,0 +1,38 @@
+##
+## container for a sample web application (nginx + static files)
+## Serves on LISTEN_PORT (default 8080), connects to DB_HOST and CACHE_HOST.
+##
+## ASSUMES: directory $HOME/www exists with your application files
+##
+## VARS (set via stack or --var):
+##   LISTEN_PORT — port to listen on (default: 8080)
+##   DB_HOST     — PostgreSQL host
+##   CACHE_HOST  — Redis host
+##
+
+---
+
+base:
+  keep:
+    - /usr/sbin/chown
+
+pkg:
+  install: nginx
+
+run:
+  service: nginx
+
+dirs:
+  share:
+    - [/usr/local/www/nginx, $HOME/www]
+
+options:
+  net:
+    outbound: wan dns
+    inbound-tcp:
+      ${LISTEN_PORT:-8080}: 80
+
+scripts:
+  run:before-start-services:
+    - "echo nginx_enable=\"YES\" >> /etc/rc.conf"
+    - "chown -R www:www /usr/local/www/nginx"

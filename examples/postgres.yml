@@ -1,0 +1,44 @@
+##
+## container for PostgreSQL database server
+## Data is persisted via shared directory.
+##
+## ASSUMES: directory $HOME/postgres/data exists
+##
+## VARS (set via stack or --var):
+##   PG_VERSION — PostgreSQL major version (default: 16)
+##
+
+---
+
+base:
+  keep:
+    - /usr/bin/su
+    - /usr/sbin/chown
+    - /usr/bin/install
+
+pkg:
+  install:
+    - postgresql${PG_VERSION:-16}-server
+    - postgresql${PG_VERSION:-16}-client
+
+run:
+  service: postgresql
+
+dirs:
+  share:
+    - [/var/db/postgres/data${PG_VERSION:-16}, $HOME/postgres/data]
+
+options:
+  net:
+    outbound: dns
+    inbound-tcp:
+      5432: 5432
+
+scripts:
+  run:before-start-services:
+    - "echo postgresql_enable=\"YES\" >> /etc/rc.conf"
+    - |
+      if [ ! -f /var/db/postgres/data${PG_VERSION:-16}/PG_VERSION ]; then
+        /usr/local/etc/rc.d/postgresql initdb
+      fi
+    - "chown -R postgres:postgres /var/db/postgres"

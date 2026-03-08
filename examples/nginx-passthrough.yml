@@ -1,0 +1,35 @@
+##
+## container for nginx with passthrough networking
+## Demonstrates passthrough mode: the container gets exclusive access to a
+## physical NIC (vtnet1) with its own DHCP-assigned IP address.
+##
+## Prerequisite: a spare network interface (vtnet1) not used by the host.
+##
+
+---
+
+base:
+  keep:
+    - /usr/sbin/chown
+
+pkg:
+  install: nginx
+
+run:
+  service: nginx
+
+dirs:
+  share:
+    - [/usr/local/www/nginx, $HOME/www]
+
+options:
+  net:
+    mode: passthrough
+    interface: vtnet1
+    ip: dhcp
+    ip6: slaac
+
+scripts:
+  run:before-start-services:
+    - "echo nginx_enable=\"YES\" >> /etc/rc.conf"
+    - "chown -R www:www /usr/local/www/nginx"
