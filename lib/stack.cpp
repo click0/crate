@@ -102,8 +102,24 @@ static std::vector<StackEntry> parseStackFile(const std::string &fname, const st
     }
 
     if (c.second["vars"] && c.second["vars"].IsMap()) {
-      for (auto v : c.second["vars"])
-        entry.vars[v.first.as<std::string>()] = v.second.as<std::string>();
+      for (auto v : c.second["vars"]) {
+        auto varName = v.first.as<std::string>();
+        if (v.second.IsMap() && v.second["from_file"]) {
+          // Secret from file (§26): read value from a file on the host
+          auto filePath = Util::pathSubstituteVarsInPath(v.second["from_file"].as<std::string>());
+          std::ifstream secretFile(filePath);
+          if (!secretFile.good())
+            ERR("vars/" << varName << "/from_file: cannot read file: " << filePath)
+          std::string value((std::istreambuf_iterator<char>(secretFile)),
+                             std::istreambuf_iterator<char>());
+          // Trim trailing newline (common in secret files)
+          while (!value.empty() && (value.back() == '\n' || value.back() == '\r'))
+            value.pop_back();
+          entry.vars[varName] = value;
+        } else {
+          entry.vars[varName] = v.second.as<std::string>();
+        }
+      }
     }
 
     // Merge global vars (global vars are defaults, per-container overrides win)

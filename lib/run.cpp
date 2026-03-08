@@ -1057,6 +1057,18 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     LOG("cron: " << spec.cronJobs.size() << " jobs configured")
   }
 
+  // Init scripts (§26): run only on first start, skip on subsequent runs.
+  // Uses a marker file to track whether init has already been performed.
+  {
+    auto initMarker = J("/.crate-initialized");
+    if (!spec.scripts.empty() && spec.scripts.count("init") && !Util::Fs::fileExists(initMarker)) {
+      LOG("running init scripts (first start)")
+      runScript("init");
+      Util::Fs::writeFile("", initMarker);
+      LOG("init scripts completed, marker created")
+    }
+  }
+
   // start services
   RunServices::startServices(spec, execInJail, runScript);
 
