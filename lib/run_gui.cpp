@@ -6,6 +6,7 @@
 #include "gui_registry.h"
 #include "pathnames.h"
 #include "util.h"
+#include "x11_ops.h"
 #include "err.h"
 
 #include <rang.hpp>
@@ -513,14 +514,67 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
       ERR("failed to fork Xorg: " << strerror(errno))
     }
 
-    // Wait for X socket
+    // Wait for X socket — if it fails, retry with lower resolutions
+    static const char *fallbackResolutions[] = {
+      "1280x720", "1024x768", "800x600", nullptr
+    };
+
     if (!waitForXSocket(dispNum, 10000)) {
+      // Xorg failed at the requested resolution — try fallbacks
       ::kill(xorgPid, SIGTERM);
       int status;
       ::waitpid(xorgPid, &status, 0);
-      Util::Fs::unlink(confPath);
-      ERR("Xorg failed to start within 10s on display " << dispStr
-          << " (check /var/log/Xorg." << dispNum << ".log)")
+
+      bool started = false;
+      for (auto *fb = fallbackResolutions; *fb; ++fb) {
+        if (resolution == *fb) continue; // already tried
+
+        if (logProgress)
+          std::cerr << rang::fg::yellow << "warning: Xorg failed to start at " << resolution
+                    << ", trying fallback " << *fb << rang::style::reset << std::endl;
+
+        auto fbConf = generateGpuXorgConf(dispNum, *fb, gpuDriver, gpuDevice);
+        Util::Fs::writeFile(fbConf, confPath);
+        resolution = *fb;
+
+        xorgPid = ::fork();
+        if (xorgPid == 0) {
+          ::execl(CRATE_PATH_XORG, "Xorg", dispStr.c_str(),
+                  "-config", confPath.c_str(),
+                  "-noreset", "-nolisten", "tcp",
+                  nullptr);
+          ::_exit(127);
+        }
+        if (xorgPid == -1) {
+          Util::Fs::unlink(confPath);
+          ERR("failed to fork Xorg: " << strerror(errno))
+        }
+
+        if (waitForXSocket(dispNum, 10000)) {
+          started = true;
+          break;
+        }
+        ::kill(xorgPid, SIGTERM);
+        ::waitpid(xorgPid, &status, 0);
+      }
+
+      if (!started) {
+        Util::Fs::unlink(confPath);
+        ERR("Xorg failed to start on display " << dispStr
+            << " at any resolution (check /var/log/Xorg." << dispNum << ".log)")
+      }
+    }
+
+    // Check actual resolution vs requested and warn if different
+    unsigned actualW = 0, actualH = 0;
+    if (X11Ops::getResolution(dispStr, actualW, actualH)) {
+      auto reqXpos = resolution.find('x');
+      unsigned reqW = std::stoul(resolution.substr(0, reqXpos));
+      unsigned reqH = std::stoul(resolution.substr(reqXpos + 1));
+      if (actualW != reqW || actualH != reqH) {
+        std::cerr << rang::fg::yellow << "warning: GPU display is " << actualW << "x" << actualH
+                  << " (requested " << resolution << ")" << rang::style::reset << std::endl;
+      }
     }
 
     auto cleanup = setupVncAndRegister(dispNum, xorgPid, "gpu", jailXname,

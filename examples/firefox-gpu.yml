@@ -24,7 +24,7 @@ options:
 
 gui:
     mode: gpu
-    resolution: 1280x720       # adjust to match your GPU capabilities
+    resolution: 1920x1080
     vnc: true
     novnc: true
     # gpu_driver: nvidia       # auto-detected if omitted
