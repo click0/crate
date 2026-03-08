@@ -220,6 +220,7 @@ static void usageStack() {
   std::cout << "  up <stack-file>            create and start all containers in the stack" << std::endl;
   std::cout << "  down <stack-file>          stop and remove all containers in the stack" << std::endl;
   std::cout << "  status <stack-file>        show status of all containers in the stack" << std::endl;
+  std::cout << "  exec <stack-file> <name> -- <cmd>  run command in a stack container" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Stack file format:" << std::endl;
   std::cout << "  containers:" << std::endl;
@@ -373,9 +374,13 @@ void Args::validate() {
     break;
   case CmdStack:
     if (stackSubcmd.empty())
-      ERR("the 'stack' command requires a subcommand (up, down, status)")
+      ERR("the 'stack' command requires a subcommand (up, down, status, exec)")
     if (stackFile.empty())
       ERR("the 'stack' command requires a stack file")
+    if (stackSubcmd == "exec" && stackExecContainer.empty())
+      ERR("the 'stack exec' command requires a container name")
+    if (stackSubcmd == "exec" && stackExecArgs.empty())
+      ERR("the 'stack exec' command requires a command to execute")
     break;
   default:
     err("no command was given");
@@ -783,10 +788,20 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         } else if (args.stackSubcmd.empty()) {
           args.stackSubcmd = argv[a];
           if (args.stackSubcmd != "up" && args.stackSubcmd != "down" &&
-              args.stackSubcmd != "status")
+              args.stackSubcmd != "status" && args.stackSubcmd != "exec")
             err("unknown stack subcommand '%s'", argv[a]);
         } else if (args.stackFile.empty()) {
           args.stackFile = argv[a];
+        } else if (args.stackSubcmd == "exec" && args.stackExecContainer.empty()) {
+          args.stackExecContainer = argv[a];
+        } else if (args.stackSubcmd == "exec") {
+          // Remaining args are the command to execute
+          // Handle "--" separator
+          if (strcmp(argv[a], "--") == 0) {
+            a++;
+          }
+          for (; a < argc; a++)
+            args.stackExecArgs.push_back(argv[a]);
         } else {
           err("too many arguments for 'stack' command");
         }

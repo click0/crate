@@ -252,6 +252,14 @@ public:
   // Inter-container dependencies (§21): for stack orchestration
   std::vector<std::string>                               depends;             // names of containers this one depends on
 
+  // Cron jobs (§25): periodic tasks inside the container
+  struct CronJob {
+    std::string schedule;        // cron schedule (e.g., "0 3 * * *")
+    std::string command;         // command to run
+    std::string user = "root";   // user to run as
+  };
+  std::vector<CronJob>                                   cronJobs;
+
   std::map<std::string, std::map<std::string, std::string>> scripts;          // by section, by script name
 
   Spec preprocess() const;

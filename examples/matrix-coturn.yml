@@ -1,0 +1,69 @@
+##
+## container for coturn TURN/STUN server for Matrix Synapse
+## Provides voice/video call relay for Matrix clients.
+##
+## VARS (set via stack or --var):
+##   DOMAIN        — server domain (e.g., matrix.example.com)
+##   TURN_SECRET   — shared auth secret (must match Synapse config)
+##   EXTERNAL_IPV4 — public IPv4 address for NAT traversal
+##   EXTERNAL_IPV6 — public IPv6 address (optional, leave empty to skip)
+##
+
+---
+
+pkg:
+  install: coturn
+
+run:
+  service: turnserver
+
+options:
+  net:
+    mode: bridge
+    bridge: bridge99
+    ip: 10.99.0.4/24
+    gateway: 10.99.0.1
+    outbound: wan dns
+    inbound-tcp:
+      3478: 3478
+      5349: 5349
+    inbound-udp:
+      3478: 3478
+      5349: 5349
+      # UDP relay range: 49152-65535 forwarded through bridge
+
+limits:
+  memoryuse: 512M
+
+healthcheck:
+  test: "sockstat -l | grep -q ':3478'"
+  interval: 30
+  timeout: 5
+  retries: 3
+  start-period: 10
+
+scripts:
+  run:before-start-services:
+    - "echo turnserver_enable=\"YES\" >> /etc/rc.conf"
+    - "mkdir -p /var/log/coturn"
+    - |
+      cat > /usr/local/etc/turnserver.conf <<'COTURN'
+      listening-port=3478
+      tls-listening-port=5349
+      listening-ip=0.0.0.0
+      listening-ip=::
+      relay-ip=${EXTERNAL_IPV4}
+      external-ip=${EXTERNAL_IPV4}
+      min-port=49152
+      max-port=65535
+      use-auth-secret
+      static-auth-secret=${TURN_SECRET}
+      realm=${DOMAIN}
+      no-multicast-peers
+      denied-peer-ip=10.0.0.0-10.255.255.255
+      denied-peer-ip=192.168.0.0-192.168.255.255
+      denied-peer-ip=172.16.0.0-172.31.255.255
+      denied-peer-ip=0.0.0.0-0.255.255.255
+      log-file=/var/log/coturn/turnserver.log
+      simple-log
+      COTURN

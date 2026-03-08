@@ -5,6 +5,7 @@
 #include "util.h"
 #include "err.h"
 #include "commands.h"
+#include "jail_query.h"
 
 #include <rang.hpp>
 #include <yaml-cpp/yaml.h>
@@ -18,9 +19,33 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
+#include <sstream>
 #include <filesystem>
 
+#include <sys/wait.h>
+
 #define ERR(msg...) ERR2("stack", msg)
+
+// A network definition within a stack file
+struct StackNetwork {
+  std::string name;             // logical name (e.g., "matrix")
+  std::string bridge;           // bridge interface (e.g., "bridge99")
+  std::string subnet;           // subnet CIDR (e.g., "10.99.0.0/24")
+  std::string gateway;          // gateway IP (e.g., "10.99.0.1")
+};
+
+// A named volume declared at stack level
+struct StackVolume {
+  std::string name;             // logical name (e.g., "certs")
+  std::string hostPath;         // host directory path
+};
+
+// A volume mount for a container
+struct VolumeMountEntry {
+  std::string volumeName;       // reference to StackVolume
+  std::string containerPath;    // path inside the container
+  bool readOnly = false;        // :ro suffix
+};
 
 // A container entry within a stack file
 struct StackEntry {
@@ -30,10 +55,76 @@ struct StackEntry {
   std::string templateName;     // optional template
   std::vector<std::string> depends;  // names of dependencies
   std::map<std::string, std::string> vars;  // per-container variable overrides
+  std::vector<VolumeMountEntry> volumeMounts;  // named volume mounts
 };
 
-// Parse a stack YAML file into a list of StackEntry
-static std::vector<StackEntry> parseStackFile(const std::string &fname, const std::map<std::string, std::string> &globalVars) {
+// Parse networks section from a stack YAML
+static std::vector<StackNetwork> parseNetworks(const YAML::Node &top) {
+  std::vector<StackNetwork> networks;
+  if (!top["networks"] || !top["networks"].IsMap())
+    return networks;
+  for (auto n : top["networks"]) {
+    StackNetwork net;
+    net.name = n.first.as<std::string>();
+    if (!n.second.IsMap())
+      ERR("networks/" << net.name << " must be a map")
+    if (n.second["bridge"])
+      net.bridge = n.second["bridge"].as<std::string>();
+    else
+      ERR("networks/" << net.name << " requires 'bridge' field")
+    if (n.second["subnet"])
+      net.subnet = n.second["subnet"].as<std::string>();
+    if (n.second["gateway"])
+      net.gateway = n.second["gateway"].as<std::string>();
+    networks.push_back(std::move(net));
+  }
+  return networks;
+}
+
+// Extract the IP address (without prefix length) from a CIDR string like "10.99.0.2/24"
+static std::string ipFromCidr(const std::string &cidr) {
+  auto pos = cidr.find('/');
+  return pos != std::string::npos ? cidr.substr(0, pos) : cidr;
+}
+
+// Collect container name -> IP mappings by parsing each spec's network config.
+// Returns a map of container name to IP address string.
+static std::map<std::string, std::string> collectContainerIPs(const std::vector<StackEntry> &entries) {
+  std::map<std::string, std::string> nameToIp;
+  for (auto &e : entries) {
+    if (e.specFile.empty())
+      continue;
+    try {
+      auto spec = parseSpecWithVars(e.specFile, e.vars);
+      if (!e.templateName.empty()) {
+        auto tpl = parseSpec(e.templateName);
+        spec = mergeSpecs(tpl, spec);
+      }
+      auto *netOpt = spec.optionNet();
+      if (netOpt && !netOpt->staticIp.empty())
+        nameToIp[e.name] = ipFromCidr(netOpt->staticIp);
+    } catch (...) {
+      // Skip containers whose specs can't be parsed at this stage
+    }
+  }
+  return nameToIp;
+}
+
+// Build /etc/hosts content from container name->IP mappings
+static std::string buildHostsEntries(const std::map<std::string, std::string> &nameToIp) {
+  std::ostringstream ss;
+  for (auto &kv : nameToIp)
+    ss << kv.second << " " << kv.first << "\n";
+  return ss.str();
+}
+
+struct ParsedStack {
+  std::vector<StackEntry> entries;
+  std::map<std::string, StackVolume> volumes;
+};
+
+// Parse a stack YAML file into entries and volumes
+static ParsedStack parseStackFile(const std::string &fname, const std::map<std::string, std::string> &globalVars) {
   std::vector<StackEntry> entries;
 
   // Read and substitute global variables
@@ -61,6 +152,26 @@ static std::vector<StackEntry> parseStackFile(const std::string &fname, const st
 
   if (!top["containers"] || !top["containers"].IsMap())
     ERR("stack file must have a 'containers' map at the top level")
+
+  // Parse named volumes (§26)
+  std::map<std::string, StackVolume> volumes;
+  if (top["volumes"] && top["volumes"].IsMap()) {
+    for (auto v : top["volumes"]) {
+      StackVolume vol;
+      vol.name = v.first.as<std::string>();
+      if (v.second.IsMap()) {
+        if (v.second["path"])
+          vol.hostPath = Util::pathSubstituteVarsInPath(v.second["path"].as<std::string>());
+        else
+          ERR("volumes/" << vol.name << " requires a 'path' field")
+      } else if (v.second.IsScalar()) {
+        vol.hostPath = Util::pathSubstituteVarsInPath(v.second.as<std::string>());
+      } else {
+        ERR("volumes/" << vol.name << " must be a map or scalar path")
+      }
+      volumes[vol.name] = vol;
+    }
+  }
 
   // Resolve paths relative to the stack file's directory
   auto stackDir = std::filesystem::path(fname).parent_path();
@@ -99,8 +210,52 @@ static std::vector<StackEntry> parseStackFile(const std::string &fname, const st
     }
 
     if (c.second["vars"] && c.second["vars"].IsMap()) {
-      for (auto v : c.second["vars"])
-        entry.vars[v.first.as<std::string>()] = v.second.as<std::string>();
+      for (auto v : c.second["vars"]) {
+        auto varName = v.first.as<std::string>();
+        if (v.second.IsMap() && v.second["from_file"]) {
+          // Secret from file (§26): read value from a file on the host
+          auto filePath = Util::pathSubstituteVarsInPath(v.second["from_file"].as<std::string>());
+          std::ifstream secretFile(filePath);
+          if (!secretFile.good())
+            ERR("vars/" << varName << "/from_file: cannot read file: " << filePath)
+          std::string value((std::istreambuf_iterator<char>(secretFile)),
+                             std::istreambuf_iterator<char>());
+          // Trim trailing newline (common in secret files)
+          while (!value.empty() && (value.back() == '\n' || value.back() == '\r'))
+            value.pop_back();
+          entry.vars[varName] = value;
+        } else {
+          entry.vars[varName] = v.second.as<std::string>();
+        }
+      }
+    }
+
+    // Parse volume mounts: "volumes: [certs:/etc/letsencrypt:ro]"
+    if (c.second["volumes"]) {
+      auto &vols = c.second["volumes"];
+      if (!vols.IsSequence())
+        ERR("containers/" << entry.name << "/volumes must be a list")
+      for (auto vm : vols) {
+        auto mountStr = vm.as<std::string>();
+        VolumeMountEntry mount;
+        // Parse format: "volume_name:/container/path[:ro]"
+        auto colon1 = mountStr.find(':');
+        if (colon1 == std::string::npos)
+          ERR("containers/" << entry.name << "/volumes: invalid format '" << mountStr
+              << "', expected 'volume_name:/path[:ro]'")
+        mount.volumeName = mountStr.substr(0, colon1);
+        auto rest = mountStr.substr(colon1 + 1);
+        auto colon2 = rest.rfind(':');
+        if (colon2 != std::string::npos && rest.substr(colon2 + 1) == "ro") {
+          mount.readOnly = true;
+          mount.containerPath = rest.substr(0, colon2);
+        } else {
+          mount.containerPath = rest;
+        }
+        if (volumes.find(mount.volumeName) == volumes.end())
+          ERR("containers/" << entry.name << "/volumes: unknown volume '" << mount.volumeName << "'")
+        entry.volumeMounts.push_back(std::move(mount));
+      }
     }
 
     // Merge global vars (global vars are defaults, per-container overrides win)
@@ -111,7 +266,7 @@ static std::vector<StackEntry> parseStackFile(const std::string &fname, const st
     entries.push_back(std::move(entry));
   }
 
-  return entries;
+  return {entries, volumes};
 }
 
 // Topological sort using Kahn's algorithm; returns entries in dependency order.
@@ -168,20 +323,35 @@ static std::vector<StackEntry> topoSort(const std::vector<StackEntry> &entries) 
   return sorted;
 }
 
-// Print status table for a stack
+// Print status table for a stack, querying runtime state from running jails
 static void printStackStatus(const std::vector<StackEntry> &entries) {
+  // Query all running jails once
+  auto jails = JailQuery::getAllJails(true);
+
   // Header
   std::cout << std::left;
-  std::cout << "  " << std::setw(20) << "NAME"
-            << std::setw(30) << "CRATE/SPEC"
-            << std::setw(30) << "DEPENDS"
+  std::cout << "  " << std::setw(18) << "NAME"
+            << std::setw(10) << "STATE"
+            << std::setw(8) << "JID"
+            << std::setw(16) << "IP"
+            << std::setw(20) << "DEPENDS"
             << std::endl;
-  std::cout << "  " << std::string(78, '-') << std::endl;
+  std::cout << "  " << std::string(70, '-') << std::endl;
 
   for (auto &e : entries) {
-    std::string source = e.crateFile.empty() ? e.specFile : e.crateFile;
-    // Shorten to basename for display
-    auto base = std::filesystem::path(source).filename().string();
+    // Try to find a running jail matching this container name
+    std::string state = "stopped";
+    std::string jidStr = "-";
+    std::string ipStr = "-";
+
+    for (auto &j : jails) {
+      if (j.name.find(e.name) != std::string::npos) {
+        state = j.dying ? "dying" : "running";
+        jidStr = std::to_string(j.jid);
+        ipStr = j.ip4.empty() ? "-" : j.ip4;
+        break;
+      }
+    }
 
     std::string deps;
     for (size_t i = 0; i < e.depends.size(); i++) {
@@ -190,21 +360,58 @@ static void printStackStatus(const std::vector<StackEntry> &entries) {
     }
     if (deps.empty()) deps = "-";
 
-    std::cout << "  " << std::setw(20) << e.name
-              << std::setw(30) << base
-              << std::setw(30) << deps
+    // Color-code state
+    std::cout << "  " << std::setw(18) << e.name;
+    if (state == "running")
+      std::cout << rang::fg::green << std::setw(10) << state << rang::style::reset;
+    else if (state == "dying")
+      std::cout << rang::fg::yellow << std::setw(10) << state << rang::style::reset;
+    else
+      std::cout << rang::fg::red << std::setw(10) << state << rang::style::reset;
+    std::cout << std::setw(8) << jidStr
+              << std::setw(16) << ipStr
+              << std::setw(20) << deps
               << std::endl;
   }
 }
 
 bool stackCommand(const Args &args) {
-  auto entries = parseStackFile(args.stackFile, args.vars);
+  auto parsed = parseStackFile(args.stackFile, args.vars);
+  auto &entries = parsed.entries;
+  auto &volumes = parsed.volumes;
 
   if (args.stackSubcmd == "status") {
     auto sorted = topoSort(entries);
+
+    // Parse networks
+    std::string content;
+    {
+      std::ifstream ifs(args.stackFile);
+      if (ifs.good())
+        content.assign(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
+    }
+    auto networks = parseNetworks(YAML::Load(content));
+
     std::cout << rang::style::bold << "Stack: " << rang::style::reset
               << args.stackFile << std::endl;
     std::cout << "  Containers: " << sorted.size() << std::endl;
+
+    if (!networks.empty()) {
+      std::cout << "  Networks:" << std::endl;
+      for (auto &net : networks)
+        std::cout << "    " << net.name << ": " << net.bridge
+                  << (net.subnet.empty() ? "" : " (" + net.subnet + ")")
+                  << std::endl;
+    }
+
+    // Show container IPs
+    auto containerIPs = collectContainerIPs(sorted);
+    if (!containerIPs.empty()) {
+      std::cout << "  DNS mappings:" << std::endl;
+      for (auto &kv : containerIPs)
+        std::cout << "    " << kv.first << " -> " << kv.second << std::endl;
+    }
+
     std::cout << "  Start order (dependency-resolved):" << std::endl;
     std::cout << std::endl;
     printStackStatus(sorted);
@@ -214,6 +421,41 @@ bool stackCommand(const Args &args) {
 
   if (args.stackSubcmd == "up") {
     auto sorted = topoSort(entries);
+
+    // Collect container name -> IP mappings for /etc/hosts injection
+    auto containerIPs = collectContainerIPs(sorted);
+    auto hostsEntries = buildHostsEntries(containerIPs);
+
+    // Parse networks section and create bridges if needed
+    {
+      std::string content;
+      std::ifstream ifs(args.stackFile);
+      if (ifs.good()) {
+        content.assign(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
+        auto top = YAML::Load(content);
+        auto networks = parseNetworks(top);
+        for (auto &net : networks) {
+          // Check if bridge exists, create if not
+          std::string checkCmd = "ifconfig " + net.bridge + " > /dev/null 2>&1";
+          if (system(checkCmd.c_str()) != 0) {
+            std::cout << rang::fg::cyan << "  [stack] " << rang::style::reset
+                      << "Creating bridge: " << net.bridge << std::endl;
+            std::string createCmd = "ifconfig " + net.bridge + " create";
+            if (system(createCmd.c_str()) != 0)
+              ERR("failed to create bridge " << net.bridge)
+            if (!net.gateway.empty()) {
+              std::string addrCmd = "ifconfig " + net.bridge + " inet " +
+                                    net.gateway + (net.subnet.empty() ? "" :
+                                    "/" + net.subnet.substr(net.subnet.find('/') + 1));
+              system(addrCmd.c_str());
+            }
+            std::string upCmd = "ifconfig " + net.bridge + " up";
+            system(upCmd.c_str());
+          }
+        }
+      }
+    }
+
     std::cout << rang::style::bold << "Starting stack: " << rang::style::reset
               << args.stackFile << " (" << sorted.size() << " containers)" << std::endl;
     std::cout << "  Start order: ";
@@ -222,6 +464,14 @@ bool stackCommand(const Args &args) {
       std::cout << sorted[i].name;
     }
     std::cout << std::endl;
+
+    // Show container DNS mappings
+    if (!containerIPs.empty()) {
+      std::cout << "  DNS mappings:";
+      for (auto &kv : containerIPs)
+        std::cout << " " << kv.first << "=" << kv.second;
+      std::cout << std::endl;
+    }
     std::cout << std::endl;
 
     for (auto &e : sorted) {
@@ -259,6 +509,25 @@ bool stackCommand(const Args &args) {
           auto templateSpec = parseSpec(e.templateName);
           spec = mergeSpecs(templateSpec, spec);
         }
+
+        // Inject /etc/hosts entries for inter-container DNS (§26)
+        if (!hostsEntries.empty()) {
+          // Build a shell command that appends all container mappings to /etc/hosts
+          std::ostringstream hostsCmd;
+          hostsCmd << "printf '\\n# crate stack containers\\n";
+          for (auto &kv : containerIPs)
+            hostsCmd << kv.second << " " << kv.first << "\\n";
+          hostsCmd << "' >> /etc/hosts";
+          spec.scripts["run:before-start-services"]["__crate_stack_hosts"] = hostsCmd.str();
+        }
+
+        // Inject named volume mounts as dirsShare entries (§26)
+        for (auto &vm : e.volumeMounts) {
+          auto it = volumes.find(vm.volumeName);
+          if (it != volumes.end())
+            spec.dirsShare.push_back({vm.containerPath, it->second.hostPath});
+        }
+
         spec.validate();
 
         Args createArgs;
@@ -336,6 +605,43 @@ bool stackCommand(const Args &args) {
       std::cout << rang::fg::green << "Stack stopped." << rang::style::reset << std::endl;
     }
     return allOk;
+  }
+
+  if (args.stackSubcmd == "exec") {
+    // Execute a command in a specific stack container
+    // Usage: crate stack exec <stack-file> <container-name> -- <command...>
+    if (args.stackExecContainer.empty())
+      ERR("stack exec requires a container name and command")
+
+    // Find the container
+    bool found = false;
+    for (auto &e : entries) {
+      if (e.name == args.stackExecContainer) {
+        found = true;
+        break;
+      }
+    }
+    if (!found)
+      ERR("container '" << args.stackExecContainer << "' not found in stack")
+
+    // Find running jail matching the container name
+    auto jails = JailQuery::getAllJails(true);
+    int jid = -1;
+    for (auto &j : jails) {
+      if (j.name.find(args.stackExecContainer) != std::string::npos) {
+        jid = j.jid;
+        break;
+      }
+    }
+    if (jid < 0)
+      ERR("container '" << args.stackExecContainer << "' is not running")
+
+    // Execute via JailExec
+    if (args.stackExecArgs.empty())
+      ERR("no command specified for stack exec")
+
+    auto status = JailExec::execInJail(jid, args.stackExecArgs, "root", "stack exec");
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
   }
 
   ERR("unknown stack subcommand: " << args.stackSubcmd)

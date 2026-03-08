@@ -1361,6 +1361,30 @@ static Spec parseSpecFromNode(YAML::Node top) {
         ERR("base_container/type must be 'jail' (only type currently supported)")
       if (spec.baseContainer->name.empty())
         ERR("base_container/name is required (jail name or JID)")
+    } else if (isKey(k, "cron")) {
+      // Cron jobs (§25): periodic tasks inside the container
+      if (!k.second.IsSequence())
+        ERR("cron must be a list of {schedule, command} entries")
+      for (auto entry : k.second) {
+        if (!entry.IsMap())
+          ERR("each cron entry must be a map with 'schedule' and 'command'")
+        Spec::CronJob job;
+        for (auto field : entry) {
+          if (isKey(field, "schedule"))
+            scalar(field.second, job.schedule, "cron/schedule");
+          else if (isKey(field, "command"))
+            scalar(field.second, job.command, "cron/command");
+          else if (isKey(field, "user"))
+            scalar(field.second, job.user, "cron/user");
+          else
+            ERR("unknown element cron/" << field.first << " in spec")
+        }
+        if (job.schedule.empty())
+          ERR("cron entry requires 'schedule' (e.g., '0 3 * * *')")
+        if (job.command.empty())
+          ERR("cron entry requires 'command'")
+        spec.cronJobs.push_back(std::move(job));
+      }
     } else if (isKey(k, "scripts")) {
       if (!k.second.IsMap())
         ERR("scripts must be a map")

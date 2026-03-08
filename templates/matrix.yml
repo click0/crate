@@ -1,0 +1,17 @@
+# Matrix Synapse bridge network template
+# Provides bridge networking with static IP for Matrix stack containers.
+#
+# Prerequisites: create bridge first:
+#   ifconfig bridge99 create
+#   ifconfig bridge99 inet 10.99.0.1/24
+#   ifconfig bridge99 up
+#
+# Usage: crate create --template matrix -s examples/matrix-synapse.yml -o synapse.crate
+
+options:
+  net:
+    mode: bridge
+    bridge: bridge99
+    ip: 10.99.0.2/24
+    gateway: 10.99.0.1
+    static-mac: true

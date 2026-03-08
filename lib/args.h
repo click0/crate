@@ -71,8 +71,10 @@ public:
   bool guiJson = false;         // -j: output as JSON (for gui list)
 
   // stack parameters
-  std::string stackSubcmd;      // "up", "down", "status"
+  std::string stackSubcmd;      // "up", "down", "status", "exec"
   std::string stackFile;        // stack YAML file path
+  std::string stackExecContainer; // container name for "exec" subcommand
+  std::vector<std::string> stackExecArgs; // command args for "exec" subcommand
 
   void validate();
 };
