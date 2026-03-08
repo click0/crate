@@ -6,7 +6,7 @@ Crate containers contain everything needed to run the containerized software —
 
 **Language:** C++17 | **License:** BSD 3-Clause | **Status:** Alpha (active development since 2019)
 
-[Українська версія](README_UK.md) | [Порівняння з BastilleBSD](docs/research/COMPARISON-BASTILLEBSD.md)
+[Українська версія](README_UK.md) | [Comparison with BastilleBSD](docs/research/COMPARISON-BASTILLEBSD.md)
 
 ## Features
 
