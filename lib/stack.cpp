@@ -256,20 +256,35 @@ static std::vector<StackEntry> topoSort(const std::vector<StackEntry> &entries) 
   return sorted;
 }
 
-// Print status table for a stack
+// Print status table for a stack, querying runtime state from running jails
 static void printStackStatus(const std::vector<StackEntry> &entries) {
+  // Query all running jails once
+  auto jails = JailQuery::getAllJails(true);
+
   // Header
   std::cout << std::left;
-  std::cout << "  " << std::setw(20) << "NAME"
-            << std::setw(30) << "CRATE/SPEC"
-            << std::setw(30) << "DEPENDS"
+  std::cout << "  " << std::setw(18) << "NAME"
+            << std::setw(10) << "STATE"
+            << std::setw(8) << "JID"
+            << std::setw(16) << "IP"
+            << std::setw(20) << "DEPENDS"
             << std::endl;
-  std::cout << "  " << std::string(78, '-') << std::endl;
+  std::cout << "  " << std::string(70, '-') << std::endl;
 
   for (auto &e : entries) {
-    std::string source = e.crateFile.empty() ? e.specFile : e.crateFile;
-    // Shorten to basename for display
-    auto base = std::filesystem::path(source).filename().string();
+    // Try to find a running jail matching this container name
+    std::string state = "stopped";
+    std::string jidStr = "-";
+    std::string ipStr = "-";
+
+    for (auto &j : jails) {
+      if (j.name.find(e.name) != std::string::npos) {
+        state = j.dying ? "dying" : "running";
+        jidStr = std::to_string(j.jid);
+        ipStr = j.ip4.empty() ? "-" : j.ip4;
+        break;
+      }
+    }
 
     std::string deps;
     for (size_t i = 0; i < e.depends.size(); i++) {
@@ -278,9 +293,17 @@ static void printStackStatus(const std::vector<StackEntry> &entries) {
     }
     if (deps.empty()) deps = "-";
 
-    std::cout << "  " << std::setw(20) << e.name
-              << std::setw(30) << base
-              << std::setw(30) << deps
+    // Color-code state
+    std::cout << "  " << std::setw(18) << e.name;
+    if (state == "running")
+      std::cout << rang::fg::green << std::setw(10) << state << rang::style::reset;
+    else if (state == "dying")
+      std::cout << rang::fg::yellow << std::setw(10) << state << rang::style::reset;
+    else
+      std::cout << rang::fg::red << std::setw(10) << state << rang::style::reset;
+    std::cout << std::setw(8) << jidStr
+              << std::setw(16) << ipStr
+              << std::setw(20) << deps
               << std::endl;
   }
 }
