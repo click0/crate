@@ -19,11 +19,20 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
+#include <sstream>
 #include <filesystem>
 
 #include <sys/wait.h>
 
 #define ERR(msg...) ERR2("stack", msg)
+
+// A network definition within a stack file
+struct StackNetwork {
+  std::string name;             // logical name (e.g., "matrix")
+  std::string bridge;           // bridge interface (e.g., "bridge99")
+  std::string subnet;           // subnet CIDR (e.g., "10.99.0.0/24")
+  std::string gateway;          // gateway IP (e.g., "10.99.0.1")
+};
 
 // A container entry within a stack file
 struct StackEntry {
@@ -34,6 +43,66 @@ struct StackEntry {
   std::vector<std::string> depends;  // names of dependencies
   std::map<std::string, std::string> vars;  // per-container variable overrides
 };
+
+// Parse networks section from a stack YAML
+static std::vector<StackNetwork> parseNetworks(const YAML::Node &top) {
+  std::vector<StackNetwork> networks;
+  if (!top["networks"] || !top["networks"].IsMap())
+    return networks;
+  for (auto n : top["networks"]) {
+    StackNetwork net;
+    net.name = n.first.as<std::string>();
+    if (!n.second.IsMap())
+      ERR("networks/" << net.name << " must be a map")
+    if (n.second["bridge"])
+      net.bridge = n.second["bridge"].as<std::string>();
+    else
+      ERR("networks/" << net.name << " requires 'bridge' field")
+    if (n.second["subnet"])
+      net.subnet = n.second["subnet"].as<std::string>();
+    if (n.second["gateway"])
+      net.gateway = n.second["gateway"].as<std::string>();
+    networks.push_back(std::move(net));
+  }
+  return networks;
+}
+
+// Extract the IP address (without prefix length) from a CIDR string like "10.99.0.2/24"
+static std::string ipFromCidr(const std::string &cidr) {
+  auto pos = cidr.find('/');
+  return pos != std::string::npos ? cidr.substr(0, pos) : cidr;
+}
+
+// Collect container name -> IP mappings by parsing each spec's network config.
+// Returns a map of container name to IP address string.
+static std::map<std::string, std::string> collectContainerIPs(const std::vector<StackEntry> &entries) {
+  std::map<std::string, std::string> nameToIp;
+  for (auto &e : entries) {
+    if (e.specFile.empty())
+      continue;
+    try {
+      auto spec = parseSpecWithVars(e.specFile, e.vars);
+      if (!e.templateName.empty()) {
+        auto tpl = parseSpec(e.templateName);
+        spec = mergeSpecs(tpl, spec);
+      }
+      auto *netOpt = spec.optionNet();
+      if (netOpt && !netOpt->staticIp.empty())
+        nameToIp[e.name] = ipFromCidr(netOpt->staticIp);
+    } catch (...) {
+      // Skip containers whose specs can't be parsed at this stage
+    }
+  }
+  return nameToIp;
+}
+
+// Build /etc/hosts content from container name->IP mappings
+static std::string buildHostsEntries(const std::map<std::string, std::string> &nameToIp) {
+  std::ostringstream ss;
+  for (auto &kv : nameToIp)
+    ss << kv.second << " " << kv.first << "\n";
+  return ss.str();
+}
 
 // Parse a stack YAML file into a list of StackEntry
 static std::vector<StackEntry> parseStackFile(const std::string &fname, const std::map<std::string, std::string> &globalVars) {
@@ -221,9 +290,36 @@ bool stackCommand(const Args &args) {
 
   if (args.stackSubcmd == "status") {
     auto sorted = topoSort(entries);
+
+    // Parse networks
+    std::string content;
+    {
+      std::ifstream ifs(args.stackFile);
+      if (ifs.good())
+        content.assign(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
+    }
+    auto networks = parseNetworks(YAML::Load(content));
+
     std::cout << rang::style::bold << "Stack: " << rang::style::reset
               << args.stackFile << std::endl;
     std::cout << "  Containers: " << sorted.size() << std::endl;
+
+    if (!networks.empty()) {
+      std::cout << "  Networks:" << std::endl;
+      for (auto &net : networks)
+        std::cout << "    " << net.name << ": " << net.bridge
+                  << (net.subnet.empty() ? "" : " (" + net.subnet + ")")
+                  << std::endl;
+    }
+
+    // Show container IPs
+    auto containerIPs = collectContainerIPs(sorted);
+    if (!containerIPs.empty()) {
+      std::cout << "  DNS mappings:" << std::endl;
+      for (auto &kv : containerIPs)
+        std::cout << "    " << kv.first << " -> " << kv.second << std::endl;
+    }
+
     std::cout << "  Start order (dependency-resolved):" << std::endl;
     std::cout << std::endl;
     printStackStatus(sorted);
@@ -233,6 +329,41 @@ bool stackCommand(const Args &args) {
 
   if (args.stackSubcmd == "up") {
     auto sorted = topoSort(entries);
+
+    // Collect container name -> IP mappings for /etc/hosts injection
+    auto containerIPs = collectContainerIPs(sorted);
+    auto hostsEntries = buildHostsEntries(containerIPs);
+
+    // Parse networks section and create bridges if needed
+    {
+      std::string content;
+      std::ifstream ifs(args.stackFile);
+      if (ifs.good()) {
+        content.assign(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
+        auto top = YAML::Load(content);
+        auto networks = parseNetworks(top);
+        for (auto &net : networks) {
+          // Check if bridge exists, create if not
+          std::string checkCmd = "ifconfig " + net.bridge + " > /dev/null 2>&1";
+          if (system(checkCmd.c_str()) != 0) {
+            std::cout << rang::fg::cyan << "  [stack] " << rang::style::reset
+                      << "Creating bridge: " << net.bridge << std::endl;
+            std::string createCmd = "ifconfig " + net.bridge + " create";
+            if (system(createCmd.c_str()) != 0)
+              ERR("failed to create bridge " << net.bridge)
+            if (!net.gateway.empty()) {
+              std::string addrCmd = "ifconfig " + net.bridge + " inet " +
+                                    net.gateway + (net.subnet.empty() ? "" :
+                                    "/" + net.subnet.substr(net.subnet.find('/') + 1));
+              system(addrCmd.c_str());
+            }
+            std::string upCmd = "ifconfig " + net.bridge + " up";
+            system(upCmd.c_str());
+          }
+        }
+      }
+    }
+
     std::cout << rang::style::bold << "Starting stack: " << rang::style::reset
               << args.stackFile << " (" << sorted.size() << " containers)" << std::endl;
     std::cout << "  Start order: ";
@@ -241,6 +372,14 @@ bool stackCommand(const Args &args) {
       std::cout << sorted[i].name;
     }
     std::cout << std::endl;
+
+    // Show container DNS mappings
+    if (!containerIPs.empty()) {
+      std::cout << "  DNS mappings:";
+      for (auto &kv : containerIPs)
+        std::cout << " " << kv.first << "=" << kv.second;
+      std::cout << std::endl;
+    }
     std::cout << std::endl;
 
     for (auto &e : sorted) {
@@ -278,6 +417,18 @@ bool stackCommand(const Args &args) {
           auto templateSpec = parseSpec(e.templateName);
           spec = mergeSpecs(templateSpec, spec);
         }
+
+        // Inject /etc/hosts entries for inter-container DNS (§26)
+        if (!hostsEntries.empty()) {
+          // Build a shell command that appends all container mappings to /etc/hosts
+          std::ostringstream hostsCmd;
+          hostsCmd << "printf '\\n# crate stack containers\\n";
+          for (auto &kv : containerIPs)
+            hostsCmd << kv.second << " " << kv.first << "\\n";
+          hostsCmd << "' >> /etc/hosts";
+          spec.scripts["run:before-start-services"]["__crate_stack_hosts"] = hostsCmd.str();
+        }
+
         spec.validate();
 
         Args createArgs;
