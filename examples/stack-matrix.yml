@@ -1,0 +1,54 @@
+# Matrix Synapse stack: Synapse + PostgreSQL, Nginx + Element Web, coturn
+#
+# Prerequisites:
+#   1. Create bridge:
+#      ifconfig bridge99 create
+#      ifconfig bridge99 inet 10.99.0.1/24
+#      ifconfig bridge99 up
+#   2. Create data directories:
+#      mkdir -p ~/matrix/{synapse,postgres,nginx/{conf.d,element,letsencrypt,certbot}}
+#   3. Generate secrets:
+#      DB_PASSWORD=$(openssl rand -hex 32)
+#      SYNAPSE_SECRET=$(openssl rand -hex 32)
+#      TURN_SECRET=$(openssl rand -hex 32)
+#
+# Start with:
+#   crate stack up examples/stack-matrix.yml \
+#     --var DOMAIN=matrix.example.com \
+#     --var SERVER_NAME=example.com \
+#     --var DB_PASSWORD=$DB_PASSWORD \
+#     --var SYNAPSE_SECRET=$SYNAPSE_SECRET \
+#     --var TURN_SECRET=$TURN_SECRET \
+#     --var EXTERNAL_IPV4=$(ifconfig | grep 'inet ' | grep -v 127.0.0.1 | head -1 | awk '{print $2}')
+#
+# Stop with:   crate stack down examples/stack-matrix.yml
+# Status:      crate stack status examples/stack-matrix.yml
+
+containers:
+  synapse:
+    spec: examples/matrix-synapse.yml
+    vars:
+      DOMAIN: "${DOMAIN}"
+      SERVER_NAME: "${SERVER_NAME}"
+      DB_PASSWORD: "${DB_PASSWORD}"
+      SYNAPSE_SECRET: "${SYNAPSE_SECRET}"
+      TURN_SECRET: "${TURN_SECRET}"
+      TURN_DOMAIN: "${TURN_DOMAIN:-${DOMAIN}}"
+      ENABLE_REGISTRATION: "${ENABLE_REGISTRATION:-false}"
+
+  nginx:
+    spec: examples/matrix-nginx.yml
+    depends: [synapse]
+    vars:
+      DOMAIN: "${DOMAIN}"
+      SERVER_NAME: "${SERVER_NAME}"
+      SYNAPSE_HOST: "10.99.0.2"
+      LE_EMAIL: "${LE_EMAIL:-}"
+
+  coturn:
+    spec: examples/matrix-coturn.yml
+    vars:
+      DOMAIN: "${DOMAIN}"
+      TURN_SECRET: "${TURN_SECRET}"
+      EXTERNAL_IPV4: "${EXTERNAL_IPV4}"
+      EXTERNAL_IPV6: "${EXTERNAL_IPV6:-}"
