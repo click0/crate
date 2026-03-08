@@ -30,7 +30,7 @@ options:
     inbound-udp:
       3478: 3478
       5349: 5349
-      # UDP relay range: 49152-65535 forwarded through bridge
+      49152-65535: 49152-65535
 
 limits:
   memoryuse: 512M

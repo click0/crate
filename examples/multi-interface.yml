@@ -1,0 +1,48 @@
+##
+## container with multiple network interfaces (extra interfaces)
+## Demonstrates a container attached to two bridge networks simultaneously:
+##   - bridge0: public-facing (web traffic)
+##   - bridge1: internal backend (database, services)
+##
+## Prerequisites:
+##   1. Create bridges:
+##      ifconfig bridge0 create && ifconfig bridge0 addm em0 && ifconfig bridge0 up
+##      ifconfig bridge1 create && ifconfig bridge1 up
+##      ifconfig bridge1 inet 10.0.1.1/24
+##
+
+---
+
+base:
+  keep:
+    - /usr/sbin/chown
+
+pkg:
+  install: nginx
+
+run:
+  service: nginx
+
+dirs:
+  share:
+    - [/usr/local/www/nginx, $HOME/www]
+
+options:
+  net:
+    mode: bridge
+    bridge: bridge0
+    ip: dhcp
+    ip6: slaac
+    outbound: wan dns
+    inbound-tcp:
+      80: 80
+      443: 443
+    extra:
+      - mode: bridge
+        bridge: bridge1
+        ip: 10.0.1.10/24
+
+scripts:
+  run:before-start-services:
+    - "echo nginx_enable=\"YES\" >> /etc/rc.conf"
+    - "chown -R www:www /usr/local/www/nginx"

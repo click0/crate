@@ -6,6 +6,7 @@
 #include "gui_registry.h"
 #include "pathnames.h"
 #include "util.h"
+#include "x11_ops.h"
 #include "err.h"
 
 #include <rang.hpp>
@@ -20,6 +21,7 @@
 #include <netinet/in.h>
 #include <errno.h>
 
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -105,6 +107,45 @@ static std::string resolveResolution(const Spec &spec) {
   return "1280x720";
 }
 
+// Compute CVT (Coordinated Video Timing) modeline for arbitrary resolution.
+// Based on VESA CVT standard v1.1, reduced blanking formula for 60Hz.
+struct CvtModeline {
+  double pixelClock;   // MHz
+  unsigned hdisp, hsyncStart, hsyncEnd, htotal;
+  unsigned vdisp, vsyncStart, vsyncEnd, vtotal;
+};
+
+static CvtModeline computeCvtModeline(unsigned w, unsigned h, double refresh = 60.0) {
+  CvtModeline m{};
+  m.hdisp = w;
+  m.vdisp = h;
+
+  // CVT reduced blanking (RB) for flat panels / virtual displays
+  constexpr double minVPorch = 3.0;
+  constexpr unsigned rbHBlank = 160;     // reduced blanking H blank pixels
+  constexpr unsigned rbVFrontPorch = 3;
+  constexpr unsigned rbVSync = 4;        // V sync width (lines)
+  constexpr double rbMinVBlank = 460.0;  // microseconds
+
+  double hPeriodEst = ((1000000.0 / refresh) - rbMinVBlank) / (h + minVPorch);
+  unsigned vbiLines = static_cast<unsigned>(rbMinVBlank / hPeriodEst) + 1;
+  unsigned rbMinVbi = static_cast<unsigned>(rbVFrontPorch + rbVSync + minVPorch);
+  if (vbiLines < rbMinVbi)
+    vbiLines = rbMinVbi;
+
+  m.vtotal = h + vbiLines;
+  m.htotal = w + rbHBlank;
+  m.pixelClock = (m.htotal * m.vtotal * refresh) / 1000000.0;
+
+  m.hsyncStart = w + 48;           // H front porch = 48 pixels (RB standard)
+  m.hsyncEnd = m.hsyncStart + 32;  // H sync = 32 pixels (RB standard)
+
+  m.vsyncStart = h + rbVFrontPorch;
+  m.vsyncEnd = m.vsyncStart + rbVSync;
+
+  return m;
+}
+
 // Generate xorg.conf for headless GPU mode
 static std::string generateGpuXorgConf(unsigned displayNum,
                                         const std::string &resolution,
@@ -115,10 +156,15 @@ static std::string generateGpuXorgConf(unsigned displayNum,
   auto width = (xpos != std::string::npos) ? resolution.substr(0, xpos) : "1280";
   auto height = (xpos != std::string::npos) ? resolution.substr(xpos + 1) : "720";
 
+  unsigned w = std::stoul(width);
+  unsigned h = std::stoul(height);
+  auto cvt = computeCvtModeline(w, h);
+
   // Determine effective driver
   auto driver = gpuDriver.empty() ? std::string("dummy") : gpuDriver;
 
   std::ostringstream conf;
+  conf << std::fixed << std::setprecision(2);
 
   // Device section
   conf << "Section \"Device\"" << std::endl;
@@ -135,18 +181,16 @@ static std::string generateGpuXorgConf(unsigned displayNum,
   conf << "EndSection" << std::endl;
   conf << std::endl;
 
-  // Monitor section (virtual)
+  // Monitor section (virtual) with CVT-computed modeline
   conf << "Section \"Monitor\"" << std::endl;
   conf << "    Identifier \"Monitor0\"" << std::endl;
-  conf << "    HorizSync   28.0-80.0" << std::endl;
+  conf << "    HorizSync   28.0-200.0" << std::endl;
   conf << "    VertRefresh  48.0-75.0" << std::endl;
   conf << "    Modeline \"" << resolution << "\" "
-       << (width == "1920" ? "148.50" : width == "1280" ? "74.25" : "108.00")
-       << " " << width << " "
-       << (width == "1920" ? "2008 2052 2200" : width == "1280" ? "1390 1420 1650" : "1328 1440 1688")
-       << " " << height << " "
-       << (height == "1080" ? "1084 1089 1125" : height == "720" ? "725 730 750" : "1025 1028 1066")
-       << " +hsync +vsync" << std::endl;
+       << cvt.pixelClock
+       << " " << cvt.hdisp << " " << cvt.hsyncStart << " " << cvt.hsyncEnd << " " << cvt.htotal
+       << " " << cvt.vdisp << " " << cvt.vsyncStart << " " << cvt.vsyncEnd << " " << cvt.vtotal
+       << " +hsync -vsync" << std::endl;
   conf << "EndSection" << std::endl;
   conf << std::endl;
 
@@ -470,14 +514,67 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
       ERR("failed to fork Xorg: " << strerror(errno))
     }
 
-    // Wait for X socket
+    // Wait for X socket — if it fails, retry with lower resolutions
+    static const char *fallbackResolutions[] = {
+      "1280x720", "1024x768", "800x600", nullptr
+    };
+
     if (!waitForXSocket(dispNum, 10000)) {
+      // Xorg failed at the requested resolution — try fallbacks
       ::kill(xorgPid, SIGTERM);
       int status;
       ::waitpid(xorgPid, &status, 0);
-      Util::Fs::unlink(confPath);
-      ERR("Xorg failed to start within 10s on display " << dispStr
-          << " (check /var/log/Xorg." << dispNum << ".log)")
+
+      bool started = false;
+      for (auto *fb = fallbackResolutions; *fb; ++fb) {
+        if (resolution == *fb) continue; // already tried
+
+        if (logProgress)
+          std::cerr << rang::fg::yellow << "warning: Xorg failed to start at " << resolution
+                    << ", trying fallback " << *fb << rang::style::reset << std::endl;
+
+        auto fbConf = generateGpuXorgConf(dispNum, *fb, gpuDriver, gpuDevice);
+        Util::Fs::writeFile(fbConf, confPath);
+        resolution = *fb;
+
+        xorgPid = ::fork();
+        if (xorgPid == 0) {
+          ::execl(CRATE_PATH_XORG, "Xorg", dispStr.c_str(),
+                  "-config", confPath.c_str(),
+                  "-noreset", "-nolisten", "tcp",
+                  nullptr);
+          ::_exit(127);
+        }
+        if (xorgPid == -1) {
+          Util::Fs::unlink(confPath);
+          ERR("failed to fork Xorg: " << strerror(errno))
+        }
+
+        if (waitForXSocket(dispNum, 10000)) {
+          started = true;
+          break;
+        }
+        ::kill(xorgPid, SIGTERM);
+        ::waitpid(xorgPid, &status, 0);
+      }
+
+      if (!started) {
+        Util::Fs::unlink(confPath);
+        ERR("Xorg failed to start on display " << dispStr
+            << " at any resolution (check /var/log/Xorg." << dispNum << ".log)")
+      }
+    }
+
+    // Check actual resolution vs requested and warn if different
+    unsigned actualW = 0, actualH = 0;
+    if (X11Ops::getResolution(dispStr, actualW, actualH)) {
+      auto reqXpos = resolution.find('x');
+      unsigned reqW = std::stoul(resolution.substr(0, reqXpos));
+      unsigned reqH = std::stoul(resolution.substr(reqXpos + 1));
+      if (actualW != reqW || actualH != reqH) {
+        std::cerr << rang::fg::yellow << "warning: GPU display is " << actualW << "x" << actualH
+                  << " (requested " << resolution << ")" << rang::style::reset << std::endl;
+      }
     }
 
     auto cleanup = setupVncAndRegister(dispNum, xorgPid, "gpu", jailXname,

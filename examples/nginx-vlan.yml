@@ -1,0 +1,46 @@
+##
+## container for nginx on a VLAN-tagged bridge interface
+## Demonstrates bridge mode with VLAN tagging, static IP, and IPv6 SLAAC.
+##
+## Prerequisites:
+##   1. Create bridge:
+##      ifconfig bridge0 create
+##      ifconfig bridge0 addm em0
+##      ifconfig bridge0 up
+##   2. Create directory: mkdir -p ~/www
+##
+
+---
+
+base:
+  keep:
+    - /usr/sbin/chown
+
+pkg:
+  install: nginx
+
+run:
+  service: nginx
+
+dirs:
+  share:
+    - [/usr/local/www/nginx, $HOME/www]
+
+options:
+  net:
+    mode: bridge
+    bridge: bridge0
+    ip: 192.168.10.50/24
+    gateway: 192.168.10.1
+    ip6: slaac
+    vlan: 10
+    static-mac: true
+    outbound: wan dns
+    inbound-tcp:
+      80: 80
+      443: 443
+
+scripts:
+  run:before-start-services:
+    - "echo nginx_enable=\"YES\" >> /etc/rc.conf"
+    - "chown -R www:www /usr/local/www/nginx"

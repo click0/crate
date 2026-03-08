@@ -22,5 +22,6 @@ run:
 
 options:
     - net
+    - ssl-certs
     - x11
     - video

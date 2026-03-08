@@ -1,0 +1,47 @@
+##
+## container for Chromium with DNS filtering and firewall rules
+## Demonstrates dns_filter and firewall features for privacy-focused browsing.
+## Blocks ads, trackers, and restricts network access to HTTPS only.
+##
+
+---
+
+base:
+  keep:
+    - /sbin/sysctl
+
+pkg:
+  install:
+    - chromium
+
+run:
+  command: /usr/local/bin/chrome
+
+options:
+  net:
+    outbound: wan dns
+  x11:
+  gl:
+  video:
+  ssl-certs:
+
+dns_filter:
+  block:
+    - "*.doubleclick.net"
+    - "*.googlesyndication.com"
+    - "*.googleadservices.com"
+    - "*.facebook.com"
+    - "*.facebook.net"
+    - "*.fbcdn.net"
+    - "*.analytics.google.com"
+    - "*.ads.linkedin.com"
+  redirect_blocked: nxdomain
+
+firewall:
+  allow-tcp:
+    - 80
+    - 443
+  allow-udp:
+    - 53
+    - 443
+  default: block

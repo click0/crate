@@ -1,0 +1,36 @@
+##
+## container for nginx using netgraph networking
+## Demonstrates netgraph mode: uses FreeBSD's ng_bridge for network
+## virtualization without requiring an ifconfig bridge.
+##
+## Prerequisite: kldload ng_ether ng_bridge (if not already loaded)
+##
+
+---
+
+base:
+  keep:
+    - /usr/sbin/chown
+
+pkg:
+  install: nginx
+
+run:
+  service: nginx
+
+dirs:
+  share:
+    - [/usr/local/www/nginx, $HOME/www]
+
+options:
+  net:
+    mode: netgraph
+    interface: em0
+    ip: dhcp
+    ip6: slaac
+    static-mac: true
+
+scripts:
+  run:before-start-services:
+    - "echo nginx_enable=\"YES\" >> /etc/rc.conf"
+    - "chown -R www:www /usr/local/www/nginx"
