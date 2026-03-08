@@ -22,6 +22,19 @@
 
 #define ERR(msg...) ERR2("stack", msg)
 
+// A named volume declared at stack level
+struct StackVolume {
+  std::string name;             // logical name (e.g., "certs")
+  std::string hostPath;         // host directory path
+};
+
+// A volume mount for a container
+struct VolumeMountEntry {
+  std::string volumeName;       // reference to StackVolume
+  std::string containerPath;    // path inside the container
+  bool readOnly = false;        // :ro suffix
+};
+
 // A container entry within a stack file
 struct StackEntry {
   std::string name;             // container name
@@ -30,10 +43,16 @@ struct StackEntry {
   std::string templateName;     // optional template
   std::vector<std::string> depends;  // names of dependencies
   std::map<std::string, std::string> vars;  // per-container variable overrides
+  std::vector<VolumeMountEntry> volumeMounts;  // named volume mounts
 };
 
-// Parse a stack YAML file into a list of StackEntry
-static std::vector<StackEntry> parseStackFile(const std::string &fname, const std::map<std::string, std::string> &globalVars) {
+struct ParsedStack {
+  std::vector<StackEntry> entries;
+  std::map<std::string, StackVolume> volumes;
+};
+
+// Parse a stack YAML file into entries and volumes
+static ParsedStack parseStackFile(const std::string &fname, const std::map<std::string, std::string> &globalVars) {
   std::vector<StackEntry> entries;
 
   // Read and substitute global variables
@@ -61,6 +80,26 @@ static std::vector<StackEntry> parseStackFile(const std::string &fname, const st
 
   if (!top["containers"] || !top["containers"].IsMap())
     ERR("stack file must have a 'containers' map at the top level")
+
+  // Parse named volumes (§26)
+  std::map<std::string, StackVolume> volumes;
+  if (top["volumes"] && top["volumes"].IsMap()) {
+    for (auto v : top["volumes"]) {
+      StackVolume vol;
+      vol.name = v.first.as<std::string>();
+      if (v.second.IsMap()) {
+        if (v.second["path"])
+          vol.hostPath = Util::pathSubstituteVarsInPath(v.second["path"].as<std::string>());
+        else
+          ERR("volumes/" << vol.name << " requires a 'path' field")
+      } else if (v.second.IsScalar()) {
+        vol.hostPath = Util::pathSubstituteVarsInPath(v.second.as<std::string>());
+      } else {
+        ERR("volumes/" << vol.name << " must be a map or scalar path")
+      }
+      volumes[vol.name] = vol;
+    }
+  }
 
   // Resolve paths relative to the stack file's directory
   auto stackDir = std::filesystem::path(fname).parent_path();
@@ -103,6 +142,34 @@ static std::vector<StackEntry> parseStackFile(const std::string &fname, const st
         entry.vars[v.first.as<std::string>()] = v.second.as<std::string>();
     }
 
+    // Parse volume mounts: "volumes: [certs:/etc/letsencrypt:ro]"
+    if (c.second["volumes"]) {
+      auto &vols = c.second["volumes"];
+      if (!vols.IsSequence())
+        ERR("containers/" << entry.name << "/volumes must be a list")
+      for (auto vm : vols) {
+        auto mountStr = vm.as<std::string>();
+        VolumeMountEntry mount;
+        // Parse format: "volume_name:/container/path[:ro]"
+        auto colon1 = mountStr.find(':');
+        if (colon1 == std::string::npos)
+          ERR("containers/" << entry.name << "/volumes: invalid format '" << mountStr
+              << "', expected 'volume_name:/path[:ro]'")
+        mount.volumeName = mountStr.substr(0, colon1);
+        auto rest = mountStr.substr(colon1 + 1);
+        auto colon2 = rest.rfind(':');
+        if (colon2 != std::string::npos && rest.substr(colon2 + 1) == "ro") {
+          mount.readOnly = true;
+          mount.containerPath = rest.substr(0, colon2);
+        } else {
+          mount.containerPath = rest;
+        }
+        if (volumes.find(mount.volumeName) == volumes.end())
+          ERR("containers/" << entry.name << "/volumes: unknown volume '" << mount.volumeName << "'")
+        entry.volumeMounts.push_back(std::move(mount));
+      }
+    }
+
     // Merge global vars (global vars are defaults, per-container overrides win)
     for (auto &gv : globalVars)
       if (entry.vars.find(gv.first) == entry.vars.end())
@@ -111,7 +178,7 @@ static std::vector<StackEntry> parseStackFile(const std::string &fname, const st
     entries.push_back(std::move(entry));
   }
 
-  return entries;
+  return {entries, volumes};
 }
 
 // Topological sort using Kahn's algorithm; returns entries in dependency order.
@@ -198,7 +265,9 @@ static void printStackStatus(const std::vector<StackEntry> &entries) {
 }
 
 bool stackCommand(const Args &args) {
-  auto entries = parseStackFile(args.stackFile, args.vars);
+  auto parsed = parseStackFile(args.stackFile, args.vars);
+  auto &entries = parsed.entries;
+  auto &volumes = parsed.volumes;
 
   if (args.stackSubcmd == "status") {
     auto sorted = topoSort(entries);
@@ -259,6 +328,14 @@ bool stackCommand(const Args &args) {
           auto templateSpec = parseSpec(e.templateName);
           spec = mergeSpecs(templateSpec, spec);
         }
+
+        // Inject named volume mounts as dirsShare entries (§26)
+        for (auto &vm : e.volumeMounts) {
+          auto it = volumes.find(vm.volumeName);
+          if (it != volumes.end())
+            spec.dirsShare.push_back({vm.containerPath, it->second.hostPath});
+        }
+
         spec.validate();
 
         Args createArgs;
