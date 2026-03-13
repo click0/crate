@@ -6,26 +6,51 @@
 #include "metrics.h"
 
 #include "gui_registry.h"
+#include "pathnames.h"
 #include "util.h"
 
+#include <map>
 #include <sstream>
 
 namespace Crated {
+
+// Parse rctl -u output ("resource=value\n" lines) into a key→value map.
+// Extracted so it can be reused by `crate stats` (Phase 4) and other callers.
+static std::map<std::string, std::string> parseRctlUsage(const std::string &rctlOutput) {
+  std::map<std::string, std::string> result;
+  std::istringstream is(rctlOutput);
+  std::string line;
+  while (std::getline(is, line)) {
+    auto eqPos = line.find('=');
+    if (eqPos == std::string::npos) continue;
+    result[line.substr(0, eqPos)] = line.substr(eqPos + 1);
+  }
+  return result;
+}
 
 std::string collectPrometheusMetrics() {
   std::ostringstream ss;
 
   // --- Container count ---
   unsigned total = 0, running = 0;
+
+  struct JailInfo {
+    std::string jid;
+    std::string name;
+  };
+  std::vector<JailInfo> jails;
+
   try {
     auto jlsOutput = Util::execCommandGetOutput(
-      {"/usr/sbin/jls", "-q", "jid", "name", "dying"}, "list jails");
+      {CRATE_PATH_JLS, "-q", "jid", "name", "dying"}, "list jails");
     std::istringstream is(jlsOutput);
     std::string jid, name, dying;
     while (is >> jid >> name >> dying) {
       total++;
-      if (dying == "0")
+      if (dying == "0") {
         running++;
+        jails.push_back({jid, name});
+      }
     }
   } catch (...) {}
 
@@ -56,8 +81,49 @@ std::string collectPrometheusMetrics() {
     }
   } catch (...) {}
 
-  // --- Per-container RCTL metrics (if available) ---
-  // TODO: iterate jails and query rctl for CPU/memory/network
+  // --- Per-container RCTL metrics ---
+  if (!jails.empty()) {
+    ss << "# HELP crate_container_cpu_percent CPU usage percentage\n"
+       << "# TYPE crate_container_cpu_percent gauge\n"
+       << "# HELP crate_container_memory_bytes Memory usage in bytes\n"
+       << "# TYPE crate_container_memory_bytes gauge\n"
+       << "# HELP crate_container_processes Number of processes\n"
+       << "# TYPE crate_container_processes gauge\n"
+       << "# HELP crate_container_openfiles Number of open files\n"
+       << "# TYPE crate_container_openfiles gauge\n"
+       << "# HELP crate_container_read_bps Disk read bytes per second\n"
+       << "# TYPE crate_container_read_bps gauge\n"
+       << "# HELP crate_container_write_bps Disk write bytes per second\n"
+       << "# TYPE crate_container_write_bps gauge\n";
+
+    for (auto &j : jails) {
+      try {
+        auto rctlOut = Util::execCommandGetOutput(
+          {CRATE_PATH_RCTL, "-u", "jail:" + j.name}, "rctl usage");
+        std::istringstream is(rctlOut);
+        std::string line;
+        auto label = "name=\"" + j.name + "\",jid=\"" + j.jid + "\"";
+        while (std::getline(is, line)) {
+          auto eq = line.find('=');
+          if (eq == std::string::npos) continue;
+          auto key = line.substr(0, eq);
+          auto val = line.substr(eq + 1);
+          if (key == "pcpu")
+            ss << "crate_container_cpu_percent{" << label << "} " << val << "\n";
+          else if (key == "memoryuse")
+            ss << "crate_container_memory_bytes{" << label << "} " << val << "\n";
+          else if (key == "maxproc")
+            ss << "crate_container_processes{" << label << "} " << val << "\n";
+          else if (key == "openfiles")
+            ss << "crate_container_openfiles{" << label << "} " << val << "\n";
+          else if (key == "readbps")
+            ss << "crate_container_read_bps{" << label << "} " << val << "\n";
+          else if (key == "writebps")
+            ss << "crate_container_write_bps{" << label << "} " << val << "\n";
+        }
+      } catch (...) {}
+    }
+  }
 
   return ss.str();
 }

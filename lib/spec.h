@@ -117,6 +117,7 @@ public:
 
   // Resource limits via RCTL (§5)
   std::map<std::string, std::string>                 limits;                  // RCTL resource limits: name -> value
+  std::string                                        diskQuota;               // ZFS refquota (e.g. "10G"), applied to container dataset
 
   // Encryption (§1)
   bool                                               encrypted = false;       // require encrypted ZFS dataset
@@ -248,6 +249,27 @@ public:
     std::string name;     // jail name or JID to clone from
   };
   std::unique_ptr<BaseContainer>                         baseContainer;
+
+  // Network policy: inter-container firewall rules (§27)
+  struct NetworkPolicyRule {
+    std::string from;                    // source container name
+    std::string to;                      // destination container name
+    std::vector<unsigned> ports;         // allowed ports
+    std::string proto = "tcp";           // "tcp" or "udp"
+    std::string action = "allow";        // "allow" or "deny"
+  };
+  struct NetworkPolicy {
+    std::string defaultAction = "allow"; // "allow" or "deny"
+    std::vector<NetworkPolicyRule> rules;
+  };
+
+  // Restart policy (§23): automatic restart on failure
+  struct RestartPolicy {
+    std::string policy = "no";         // "no", "on-failure", "always", "unless-stopped"
+    unsigned maxRetries = 3;           // max restart attempts (on-failure only)
+    unsigned delaySec = 1;             // delay between restarts in seconds
+  };
+  std::unique_ptr<RestartPolicy>                          restartPolicy;
 
   // Inter-container dependencies (§21): for stack orchestration
   std::vector<std::string>                               depends;             // names of containers this one depends on

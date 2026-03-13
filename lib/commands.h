@@ -18,3 +18,7 @@ bool exportCrate(const Args &args);
 bool importCrate(const Args &args);
 bool guiCommand(const Args &args);
 bool stackCommand(const Args &args);
+bool statsCrate(const Args &args);
+bool logsCrate(const Args &args);
+bool stopCrate(const Args &args);
+bool restartCrate(const Args &args);

@@ -964,8 +964,28 @@ static Spec parseSpecFromNode(YAML::Node top) {
     } else if (isKey(k, "limits")) {
       if (!k.second.IsMap())
         ERR("limits must be a map of resource-name to value")
-      for (auto b : k.second)
-        spec.limits[AsString(b.first)] = AsString(b.second);
+      for (auto b : k.second) {
+        auto key = AsString(b.first);
+        if (key == "disk_quota") {
+          auto dq = AsString(b.second);
+          // Validate disk_quota format: integer followed by K, M, G, or T
+          if (dq.size() < 2)
+            ERR("invalid disk_quota '" << dq << "': must be an integer followed by K, M, G, or T (e.g. '10G', '500M')")
+          char suffix = dq.back();
+          if (suffix != 'K' && suffix != 'M' && suffix != 'G' && suffix != 'T')
+            ERR("invalid disk_quota '" << dq << "': must end with K, M, G, or T")
+          auto numPart = dq.substr(0, dq.size() - 1);
+          for (auto c : numPart) {
+            if (!::isdigit(c))
+              ERR("invalid disk_quota '" << dq << "': prefix must be an integer")
+          }
+          if (numPart.empty() || numPart[0] == '0')
+            ERR("invalid disk_quota '" << dq << "': must start with a non-zero integer")
+          spec.diskQuota = dq;
+        }
+        else
+          spec.limits[key] = AsString(b.second);
+      }
     } else if (isKey(k, "encrypted")) {
       if (k.second.IsScalar()) {
         // simple form: encrypted: true
@@ -1385,6 +1405,29 @@ static Spec parseSpecFromNode(YAML::Node top) {
           ERR("cron entry requires 'command'")
         spec.cronJobs.push_back(std::move(job));
       }
+    } else if (isKey(k, "restart") || isKey(k, "restart_policy")) {
+      // Restart policy (§23)
+      spec.restartPolicy = std::make_unique<Spec::RestartPolicy>();
+      if (k.second.IsScalar()) {
+        // Simple form: restart: "on-failure"
+        spec.restartPolicy->policy = AsString(k.second);
+      } else if (k.second.IsMap()) {
+        for (auto b : k.second) {
+          if (isKey(b, "policy"))
+            scalar(b.second, spec.restartPolicy->policy, "restart/policy");
+          else if (isKey(b, "max_retries"))
+            spec.restartPolicy->maxRetries = Util::toUInt(AsString(b.second));
+          else if (isKey(b, "delay"))
+            spec.restartPolicy->delaySec = Util::toUInt(AsString(b.second));
+          else
+            ERR("unknown element restart/" << b.first << " in spec")
+        }
+      } else {
+        ERR("restart must be a scalar or a map")
+      }
+      auto &p = spec.restartPolicy->policy;
+      if (p != "no" && p != "on-failure" && p != "always" && p != "unless-stopped")
+        ERR("restart/policy must be one of: no, on-failure, always, unless-stopped")
     } else if (isKey(k, "scripts")) {
       if (!k.second.IsMap())
         ERR("scripts must be a map")
@@ -1511,6 +1554,10 @@ Spec mergeSpecs(const Spec &base, const Spec &overlay) {
   if (overlay.baseContainer) {
     result.baseContainer = std::make_unique<Spec::BaseContainer>();
     *result.baseContainer = *overlay.baseContainer;
+  }
+  if (overlay.restartPolicy) {
+    result.restartPolicy = std::make_unique<Spec::RestartPolicy>();
+    *result.restartPolicy = *overlay.restartPolicy;
   }
 
   // depends: overlay replaces (not appends) since dependency graph should be explicit

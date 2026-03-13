@@ -10,7 +10,8 @@ LIB_SRCS = lib/spec.cpp lib/create.cpp lib/run.cpp lib/list.cpp lib/info.cpp \
            lib/snapshot.cpp lib/config.cpp lib/stack.cpp \
            lib/jail_query.cpp lib/zfs_ops.cpp lib/ifconfig_ops.cpp \
            lib/pfctl_ops.cpp lib/mac_ops.cpp lib/ipfw_ops.cpp \
-           lib/capsicum_ops.cpp lib/netgraph_ops.cpp lib/nv_protocol.cpp
+           lib/capsicum_ops.cpp lib/netgraph_ops.cpp lib/nv_protocol.cpp \
+           lib/lifecycle.cpp
 
 CLI_SRCS = cli/main.cpp cli/args.cpp
 
