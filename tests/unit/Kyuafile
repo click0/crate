@@ -3,3 +3,6 @@ syntax(2)
 test_suite("crate")
 
 atf_test_program{name="util_test"}
+atf_test_program{name="spec_test"}
+atf_test_program{name="lifecycle_test"}
+atf_test_program{name="network_test"}
