@@ -30,6 +30,16 @@ RunAtEnd applyRctlLimits(const class Spec &spec, int jid, bool logProgress);
 // Diagnose cause of container death (OOM, signal, exit code)
 std::string diagnoseExitReason(int jid, int exitStatus);
 
+// Return true if the exit status indicates an OOM kill (for restart policies)
+bool isOomKill(int exitStatus);
+
+// Return true if the container was killed by an RCTL resource limit
+bool wasKilledByRctl(int jid, int exitStatus);
+
+// Return RCTL usage of a resource as a percentage of its limit (0-100),
+// or -1 if no limit is set.  Enables memory pressure monitoring.
+int getRctlUsagePercent(int jid, const std::string &resource);
+
 // Apply ZFS disk quota (refquota) to container dataset
 void applyDiskQuota(const class Spec &spec, const std::string &jailPath, bool logProgress);
 

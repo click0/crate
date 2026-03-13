@@ -8,9 +8,24 @@
 #include "gui_registry.h"
 #include "util.h"
 
+#include <map>
 #include <sstream>
 
 namespace Crated {
+
+// Parse rctl -u output ("resource=value\n" lines) into a key→value map.
+// Extracted so it can be reused by `crate stats` (Phase 4) and other callers.
+static std::map<std::string, std::string> parseRctlUsage(const std::string &rctlOutput) {
+  std::map<std::string, std::string> result;
+  std::istringstream is(rctlOutput);
+  std::string line;
+  while (std::getline(is, line)) {
+    auto eqPos = line.find('=');
+    if (eqPos == std::string::npos) continue;
+    result[line.substr(0, eqPos)] = line.substr(eqPos + 1);
+  }
+  return result;
+}
 
 std::string collectPrometheusMetrics() {
   std::ostringstream ss;
@@ -86,29 +101,21 @@ std::string collectPrometheusMetrics() {
           headerWritten = true;
         }
 
-        // Parse rctl -u output: "resource=value\n" lines
-        std::istringstream rctlIs(rctlOutput);
-        std::string line;
-        while (std::getline(rctlIs, line)) {
-          auto eqPos = line.find('=');
-          if (eqPos == std::string::npos) continue;
-          auto key = line.substr(0, eqPos);
-          auto val = line.substr(eqPos + 1);
+        auto rctlMap = parseRctlUsage(rctlOutput);
+        auto labels = "name=\"" + rname + "\"";
 
-          auto labels = "name=\"" + rname + "\"";
-          if (key == "memoryuse")
-            ss << "crate_container_memory_bytes{" << labels << "} " << val << "\n";
-          else if (key == "pcpu")
-            ss << "crate_container_cpu_pct{" << labels << "} " << val << "\n";
-          else if (key == "maxproc")
-            ss << "crate_container_maxproc{" << labels << "} " << val << "\n";
-          else if (key == "openfiles")
-            ss << "crate_container_openfiles{" << labels << "} " << val << "\n";
-          else if (key == "readbps")
-            ss << "crate_container_readbps{" << labels << "} " << val << "\n";
-          else if (key == "writebps")
-            ss << "crate_container_writebps{" << labels << "} " << val << "\n";
-        }
+        auto emit = [&](const char *rctlKey, const char *metricName) {
+          auto it = rctlMap.find(rctlKey);
+          if (it != rctlMap.end())
+            ss << metricName << "{" << labels << "} " << it->second << "\n";
+        };
+
+        emit("memoryuse",  "crate_container_memory_bytes");
+        emit("pcpu",       "crate_container_cpu_pct");
+        emit("maxproc",    "crate_container_maxproc");
+        emit("openfiles",  "crate_container_openfiles");
+        emit("readbps",    "crate_container_readbps");
+        emit("writebps",   "crate_container_writebps");
       } catch (...) {
         // RCTL might not be available for this jail
       }

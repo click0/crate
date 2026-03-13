@@ -966,8 +966,23 @@ static Spec parseSpecFromNode(YAML::Node top) {
         ERR("limits must be a map of resource-name to value")
       for (auto b : k.second) {
         auto key = AsString(b.first);
-        if (key == "disk_quota")
-          spec.diskQuota = AsString(b.second);
+        if (key == "disk_quota") {
+          auto dq = AsString(b.second);
+          // Validate disk_quota format: integer followed by K, M, G, or T
+          if (dq.size() < 2)
+            ERR("invalid disk_quota '" << dq << "': must be an integer followed by K, M, G, or T (e.g. '10G', '500M')")
+          char suffix = dq.back();
+          if (suffix != 'K' && suffix != 'M' && suffix != 'G' && suffix != 'T')
+            ERR("invalid disk_quota '" << dq << "': must end with K, M, G, or T")
+          auto numPart = dq.substr(0, dq.size() - 1);
+          for (auto c : numPart) {
+            if (!::isdigit(c))
+              ERR("invalid disk_quota '" << dq << "': prefix must be an integer")
+          }
+          if (numPart.empty() || numPart[0] == '0')
+            ERR("invalid disk_quota '" << dq << "': must start with a non-zero integer")
+          spec.diskQuota = dq;
+        }
         else
           spec.limits[key] = AsString(b.second);
       }
