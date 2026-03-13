@@ -8,6 +8,7 @@
 //   cd tests && kyua test
 
 #include <atf-c++.hpp>
+#include <sys/socket.h>
 #include <arpa/inet.h>
 #include <cstdint>
 #include <string>

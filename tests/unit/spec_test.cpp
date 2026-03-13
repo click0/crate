@@ -81,9 +81,9 @@ ATF_TEST_CASE_BODY(parsePortRange_full_range)
 ATF_TEST_CASE_WITHOUT_HEAD(parsePortRange_invalid_throws);
 ATF_TEST_CASE_BODY(parsePortRange_invalid_throws)
 {
-	ATF_REQUIRE_THROW(std::exception, parsePortRange("abc"));
-	ATF_REQUIRE_THROW(std::exception, parsePortRange(""));
-	ATF_REQUIRE_THROW(std::exception, parsePortRange("80abc"));
+	ATF_REQUIRE_THROW(std::runtime_error, parsePortRange("abc"));
+	ATF_REQUIRE_THROW(std::runtime_error, parsePortRange(""));
+	ATF_REQUIRE_THROW(std::runtime_error, parsePortRange("80abc"));
 }
 
 // ===================================================================
@@ -108,14 +108,14 @@ ATF_TEST_CASE_BODY(toUInt_trailing_chars_throws)
 ATF_TEST_CASE_WITHOUT_HEAD(toUInt_empty_throws);
 ATF_TEST_CASE_BODY(toUInt_empty_throws)
 {
-	ATF_REQUIRE_THROW(std::exception, toUInt(""));
+	ATF_REQUIRE_THROW(std::runtime_error, toUInt(""));
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(toUInt_negative_throws);
 ATF_TEST_CASE_BODY(toUInt_negative_throws)
 {
 	// stoul accepts negative as unsigned wraparound, but trailing check should catch non-numeric
-	ATF_REQUIRE_THROW(std::exception, toUInt("abc"));
+	ATF_REQUIRE_THROW(std::runtime_error, toUInt("abc"));
 }
 
 // ===================================================================
