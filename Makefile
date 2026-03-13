@@ -128,7 +128,16 @@ install-snmpd: crate-snmpd
 	@mkdir -p $(DESTDIR)$(PREFIX)/share/snmp/mibs
 	install -m 0644 snmpd/CRATE-MIB.txt $(DESTDIR)$(PREFIX)/share/snmp/mibs/CRATE-MIB.txt
 
-clean:
+test: tests/unit/util_test
+	cd tests && kyua test
+
+tests/unit/util_test: tests/unit/util_test.cpp
+	$(CXX) -std=c++17 -Ilib -o $@ $< -L/usr/local/lib -latf-c++ -latf-c
+
+clean-tests:
+	rm -f tests/unit/util_test
+
+clean: clean-tests
 	rm -f $(LIB_OBJS) $(CLI_OBJS) $(DAEMON_OBJS) $(SNMPD_OBJS) libcrate.a crate crated crate-snmpd lib/lst-all-script-sections.h
 
 # --- Generated sources ---
