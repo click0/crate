@@ -469,7 +469,7 @@ bool createCrate(const Args &args, const Spec &spec) {
       archivePath = Locations::baseArchive;
     } else {
       // Download to version-specific cache directory
-      Util::Fs::mkdirHier(versionedCacheDir);
+      Util::execCommand({"/bin/mkdir", "-p", versionedCacheDir}, "create cache dir");
       std::cout << "downloading base.txz from " << Locations::baseArchiveUrl << " ..." << std::endl;
       Util::execCommand({CRATE_PATH_FETCH, "-o", versionedArchive, Locations::baseArchiveUrl}, "download base.txz");
       std::cout << "base.txz has finished downloading (cached at " << versionedArchive << ")" << std::endl;
