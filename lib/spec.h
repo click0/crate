@@ -249,6 +249,19 @@ public:
   };
   std::unique_ptr<BaseContainer>                         baseContainer;
 
+  // Network policy: inter-container firewall rules (§27)
+  struct NetworkPolicyRule {
+    std::string from;                    // source container name
+    std::string to;                      // destination container name
+    std::vector<unsigned> ports;         // allowed ports
+    std::string proto = "tcp";           // "tcp" or "udp"
+    std::string action = "allow";        // "allow" or "deny"
+  };
+  struct NetworkPolicy {
+    std::string defaultAction = "allow"; // "allow" or "deny"
+    std::vector<NetworkPolicyRule> rules;
+  };
+
   // Inter-container dependencies (§21): for stack orchestration
   std::vector<std::string>                               depends;             // names of containers this one depends on
 
