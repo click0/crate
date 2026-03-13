@@ -132,7 +132,10 @@ static std::map<std::string, std::string> allocateIpPool(
   uint32_t baseAddr;
   unsigned prefixLen;
   if (!parseCidr(network.subnet, baseAddr, prefixLen))
-    return result;
+    ERR("invalid CIDR subnet '" << network.subnet << "' in network '" << network.name << "'")
+  if (prefixLen < 8 || prefixLen > 30)
+    ERR("invalid prefix length " << prefixLen << " in network '" << network.name
+        << "': must be between 8 and 30")
 
   // Determine pool start/end
   uint32_t poolStart, poolEnd;
@@ -198,14 +201,19 @@ static std::string generateUnboundConf(
     const std::string &listenIp,
     const std::string &subnet,
     const std::map<std::string, std::string> &nameToIp,
-    const std::string &upstreamDns) {
+    const std::string &upstreamDns,
+    const std::string &networkName = "") {
 
   std::ostringstream conf;
   conf << "server:\n";
   conf << "  interface: " << listenIp << "\n";
   conf << "  port: 53\n";
   conf << "  do-daemonize: yes\n";
-  conf << "  pidfile: \"/var/run/unbound_stack.pid\"\n";
+  // Use per-stack pidfile to avoid clashes when multiple stacks run DNS
+  if (!networkName.empty())
+    conf << "  pidfile: \"/var/run/crate/dns-" << networkName << "/unbound.pid\"\n";
+  else
+    conf << "  pidfile: \"/var/run/crate/dns-default/unbound.pid\"\n";
   conf << "  access-control: 127.0.0.0/8 allow\n";
   if (!subnet.empty())
     conf << "  access-control: " << subnet << " allow\n";
@@ -245,7 +253,7 @@ static pid_t startStackDns(
   std::filesystem::create_directories(confDir);
 
   auto confPath = STR(confDir << "/unbound.conf");
-  auto conf = generateUnboundConf(network.gateway, network.subnet, nameToIp, upstreamDns);
+  auto conf = generateUnboundConf(network.gateway, network.subnet, nameToIp, upstreamDns, network.name);
   Util::Fs::writeFile(conf, confPath);
 
   if (logProgress)
@@ -261,6 +269,17 @@ static pid_t startStackDns(
   if (pid < 0)
     ERR("failed to fork unbound for stack DNS: " << strerror(errno))
 
+  // Brief wait to verify unbound didn't exit immediately (e.g. config error)
+  ::usleep(200000); // 200ms
+  int status;
+  pid_t ret = ::waitpid(pid, &status, WNOHANG);
+  if (ret > 0) {
+    // Child already exited — unbound failed to start
+    WARN("stack DNS (unbound) for network '" << network.name
+         << "' exited immediately (status=" << WEXITSTATUS(status) << ")")
+    return -1;
+  }
+
   return pid;
 }
 
@@ -274,6 +293,32 @@ static void stopStackDns(const std::string &networkName, pid_t unboundPid) {
   // Clean up config directory
   auto confDir = STR("/var/run/crate/dns-" << networkName);
   std::filesystem::remove_all(confDir);
+}
+
+// Update per-stack DNS when containers are hot-added/removed from a running stack.
+// Regenerates the unbound config and sends SIGHUP to reload without restart.
+static bool updateStackDns(
+    const StackNetwork &network,
+    const std::map<std::string, std::string> &nameToIp,
+    pid_t unboundPid) {
+
+  if (!network.dns || network.gateway.empty() || unboundPid <= 0)
+    return false;
+
+  auto upstreamDns = Net::getNameserverIp();
+  auto confDir = STR("/var/run/crate/dns-" << network.name);
+  auto confPath = STR(confDir << "/unbound.conf");
+
+  auto conf = generateUnboundConf(network.gateway, network.subnet, nameToIp, upstreamDns, network.name);
+  Util::Fs::writeFile(conf, confPath);
+
+  if (::kill(unboundPid, SIGHUP) != 0) {
+    WARN("failed to send SIGHUP to unbound (pid=" << unboundPid
+         << ") for network '" << network.name << "': " << strerror(errno))
+    return false;
+  }
+
+  return true;
 }
 
 // --- Network Policies (§27.2) ---
@@ -293,8 +338,18 @@ static Spec::NetworkPolicy parseNetworkPolicy(const YAML::Node &top) {
       Spec::NetworkPolicyRule rule;
       if (r["from"]) rule.from = r["from"].as<std::string>();
       if (r["to"])   rule.to = r["to"].as<std::string>();
-      if (r["action"]) rule.action = r["action"].as<std::string>();
-      if (r["proto"])  rule.proto = r["proto"].as<std::string>();
+      if (r["action"]) {
+        rule.action = r["action"].as<std::string>();
+        if (rule.action != "allow" && rule.action != "deny")
+          ERR("network_policy rule: invalid action '" << rule.action
+              << "', must be 'allow' or 'deny'")
+      }
+      if (r["proto"]) {
+        rule.proto = r["proto"].as<std::string>();
+        if (rule.proto != "tcp" && rule.proto != "udp")
+          ERR("network_policy rule: invalid proto '" << rule.proto
+              << "', must be 'tcp' or 'udp'")
+      }
       if (r["ports"] && r["ports"].IsSequence()) {
         for (auto p : r["ports"])
           rule.ports.push_back(p.as<unsigned>());
@@ -307,12 +362,16 @@ static Spec::NetworkPolicy parseNetworkPolicy(const YAML::Node &top) {
 }
 
 // Apply network policies as ipfw rules on the bridge interface.
+// When default policy is "deny", also blocks traffic from other stacks' subnets
+// (otherStackSubnets) to enforce inter-stack network isolation -- containers in
+// one stack cannot reach containers in another stack's subnet unless explicitly allowed.
 // Returns cleanup callback that removes the rules on stack teardown.
 static RunAtEnd applyNetworkPolicies(
     const Spec::NetworkPolicy &policy,
     const std::map<std::string, std::string> &nameToIp,
     const std::string &bridgeIface,
-    bool logProgress) {
+    bool logProgress,
+    const std::vector<std::string> &otherStackSubnets = {}) {
 
   if (policy.rules.empty() && policy.defaultAction == "allow")
     return RunAtEnd();
@@ -329,8 +388,16 @@ static RunAtEnd applyNetworkPolicies(
   for (auto &rule : policy.rules) {
     auto fromIt = nameToIp.find(rule.from);
     auto toIt = nameToIp.find(rule.to);
-    if (fromIt == nameToIp.end() || toIt == nameToIp.end())
+    if (fromIt == nameToIp.end()) {
+      WARN("network_policy rule: 'from' container '" << rule.from
+           << "' not found in stack, skipping rule")
       continue;
+    }
+    if (toIt == nameToIp.end()) {
+      WARN("network_policy rule: 'to' container '" << rule.to
+           << "' not found in stack, skipping rule")
+      continue;
+    }
 
     for (auto port : rule.ports) {
       auto ruleStr = STR(rule.action << " " << rule.proto
@@ -358,6 +425,21 @@ static RunAtEnd applyNetworkPolicies(
       addedRules.push_back(ruleNum);
       ruleNum++;
     }
+
+    // Inter-stack isolation: block traffic from other stacks' subnets into this bridge.
+    // This prevents containers in foreign stacks from reaching our containers even if
+    // they share a common host network path.
+    for (auto &foreignSubnet : otherStackSubnets) {
+      auto ruleStr = STR("deny ip from " << foreignSubnet << " to any via " << bridgeIface);
+      IpfwOps::addRule(ruleNum, ruleStr);
+      addedRules.push_back(ruleNum);
+      ruleNum++;
+      if (logProgress)
+        std::cerr << rang::fg::gray << "network policy: blocking foreign subnet "
+                  << foreignSubnet << " on " << bridgeIface
+                  << rang::style::reset << std::endl;
+    }
+
     if (logProgress)
       std::cerr << rang::fg::gray << "network policy: default deny on "
                 << bridgeIface << rang::style::reset << std::endl;
