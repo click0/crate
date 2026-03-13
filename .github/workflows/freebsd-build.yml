@@ -28,7 +28,7 @@ jobs:
           set -ex
 
           echo "::group::Install dependencies"
-          sudo pkg install -y pkgconf yaml-cpp rang
+          sudo pkg install -y pkgconf yaml-cpp rang kyua
           echo "::endgroup::"
 
           echo "::group::System info"
@@ -43,6 +43,13 @@ jobs:
             echo "  Compiling $f ..."
             c++ $CXXFLAGS -c "$f" -o "${f%.cpp}.o"
           done
+          echo "::endgroup::"
+
+          echo "::group::Kyua unit tests"
+          c++ -std=c++17 -Ilib -o tests/unit/util_test tests/unit/util_test.cpp -L/usr/local/lib -latf-c++ -latf-c
+          cd tests && sudo kyua test || true
+          sudo kyua report --verbose
+          cd ..
           echo "::endgroup::"
 
           echo "::group::CI verification tests"

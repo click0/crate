@@ -1,0 +1,5 @@
+syntax(2)
+
+test_suite("crate")
+
+atf_test_program{name="util_test"}

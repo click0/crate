@@ -1,0 +1,6 @@
+syntax(2)
+
+test_suite("crate")
+
+include("unit/Kyuafile")
+include("functional/Kyuafile")
