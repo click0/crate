@@ -166,6 +166,18 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdStack: {
     succ = stackCommand(args);
     break;
+  } case CmdStats: {
+    succ = statsCrate(args);
+    break;
+  } case CmdLogs: {
+    succ = logsCrate(args);
+    break;
+  } case CmdStop: {
+    succ = stopCrate(args);
+    break;
+  } case CmdRestart: {
+    succ = restartCrate(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}

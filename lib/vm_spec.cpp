@@ -43,6 +43,40 @@ VmOptions parseVmOptions(const void *yamlNodePtr) {
     opts.network.type = node["network"].as<std::string>();
   }
 
+  // Shared bridge for jail<->VM networking (§27.3)
+  if (node["shared_bridge"]) opts.sharedBridge = node["shared_bridge"].as<std::string>();
+  if (node["shared_bridge_ip"]) opts.sharedBridgeIp = node["shared_bridge_ip"].as<std::string>();
+
+  // Shared volumes via virtio-9p (§27.3)
+  if (node["shared_volumes"] && node["shared_volumes"].IsSequence()) {
+    for (auto v : node["shared_volumes"]) {
+      VirtioFsMount mount;
+      if (v.IsMap()) {
+        if (v["host_path"])     mount.hostPath = v["host_path"].as<std::string>();
+        if (v["tag"])           mount.tag = v["tag"].as<std::string>();
+        if (v["read_only"])     mount.readOnly = v["read_only"].as<bool>();
+        if (v["share_method"])  mount.shareMethod = v["share_method"].as<std::string>();
+      } else if (v.IsScalar()) {
+        // Format: "host_path:tag[:ro]"
+        auto str = v.as<std::string>();
+        auto c1 = str.find(':');
+        if (c1 != std::string::npos) {
+          mount.hostPath = str.substr(0, c1);
+          auto rest = str.substr(c1 + 1);
+          auto c2 = rest.rfind(':');
+          if (c2 != std::string::npos && rest.substr(c2 + 1) == "ro") {
+            mount.readOnly = true;
+            mount.tag = rest.substr(0, c2);
+          } else {
+            mount.tag = rest;
+          }
+        }
+      }
+      if (!mount.hostPath.empty() && !mount.tag.empty())
+        opts.sharedVolumes.push_back(std::move(mount));
+    }
+  }
+
   return opts;
 }
 
@@ -97,14 +131,17 @@ std::string generateDomainXml(const std::string &name, const VmOptions &opts) {
     xml << "    </disk>\n";
   }
 
-  // Network
-  xml << "    <interface type='bridge'>\n"
-      << "      <source bridge='bridge0'/>\n";
-  if (opts.network.type == "e1000")
-    xml << "      <model type='e1000'/>\n";
-  else
-    xml << "      <model type='virtio'/>\n";
-  xml << "    </interface>\n";
+  // Network — use shared bridge if configured, otherwise default bridge0
+  {
+    auto bridge = opts.sharedBridge.empty() ? "bridge0" : opts.sharedBridge;
+    xml << "    <interface type='bridge'>\n"
+        << "      <source bridge='" << bridge << "'/>\n";
+    if (opts.network.type == "e1000")
+      xml << "      <model type='e1000'/>\n";
+    else
+      xml << "      <model type='virtio'/>\n";
+    xml << "    </interface>\n";
+  }
 
   // Display
   if (opts.display.mode == "vnc") {
@@ -128,6 +165,16 @@ std::string generateDomainXml(const std::string &name, const VmOptions &opts) {
     xml << "    <memballoon model='virtio'/>\n";
   } else {
     xml << "    <memballoon model='none'/>\n";
+  }
+
+  // Shared volumes via virtio-9p (plan 9 filesystem) for jail<->VM sharing
+  for (auto &vol : opts.sharedVolumes) {
+    xml << "    <filesystem type='mount' accessmode='passthrough'>\n"
+        << "      <source dir='" << vol.hostPath << "'/>\n"
+        << "      <target dir='" << vol.tag << "'/>\n";
+    if (vol.readOnly)
+      xml << "      <readonly/>\n";
+    xml << "    </filesystem>\n";
   }
 
   xml << "  </devices>\n"

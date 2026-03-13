@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart};
 
 class Args {
 public:
@@ -75,6 +75,23 @@ public:
   std::string stackFile;        // stack YAML file path
   std::string stackExecContainer; // container name for "exec" subcommand
   std::vector<std::string> stackExecArgs; // command args for "exec" subcommand
+
+  // stats parameters
+  std::string statsTarget;      // jail name or JID
+  bool statsJson = false;       // -j: output as JSON
+
+  // logs parameters
+  std::string logsTarget;       // jail name or JID
+  bool logsFollow = false;      // -f/--follow: stream logs
+  unsigned logsTail = 0;        // --tail N: show last N lines (0=all)
+
+  // stop parameters
+  std::string stopTarget;       // jail name or JID
+  unsigned stopTimeout = 10;    // -t/--timeout: seconds before SIGKILL
+
+  // restart parameters
+  std::string restartTarget;    // jail name or JID
+  unsigned restartTimeout = 10; // -t/--timeout: stop timeout before restart
 
   void validate();
 };
