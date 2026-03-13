@@ -24,8 +24,14 @@ JailInfo createJail(const class Spec &spec, const std::string &jailPath, bool lo
 // Remove a jail (race-free via descriptor if available)
 void removeJail(const JailInfo &info);
 
-// Apply RCTL resource limits, returns cleanup callback
+// Apply RCTL resource limits (with verification), returns cleanup callback
 RunAtEnd applyRctlLimits(const class Spec &spec, int jid, bool logProgress);
+
+// Diagnose cause of container death (OOM, signal, exit code)
+std::string diagnoseExitReason(int jid, int exitStatus);
+
+// Apply ZFS disk quota (refquota) to container dataset
+void applyDiskQuota(const class Spec &spec, const std::string &jailPath, bool logProgress);
 
 // Attach ZFS datasets to jail, returns cleanup callback
 RunAtEnd attachZfsDatasets(const class Spec &spec, int jid, bool logProgress);

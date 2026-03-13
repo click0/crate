@@ -964,8 +964,13 @@ static Spec parseSpecFromNode(YAML::Node top) {
     } else if (isKey(k, "limits")) {
       if (!k.second.IsMap())
         ERR("limits must be a map of resource-name to value")
-      for (auto b : k.second)
-        spec.limits[AsString(b.first)] = AsString(b.second);
+      for (auto b : k.second) {
+        auto key = AsString(b.first);
+        if (key == "disk_quota")
+          spec.diskQuota = AsString(b.second);
+        else
+          spec.limits[key] = AsString(b.second);
+      }
     } else if (isKey(k, "encrypted")) {
       if (k.second.IsScalar()) {
         // simple form: encrypted: true

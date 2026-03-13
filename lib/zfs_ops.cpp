@@ -426,4 +426,25 @@ void recv(const std::string &targetDataset, int fd) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Refquota (disk usage limit per dataset)
+// ---------------------------------------------------------------------------
+
+void setRefquota(const std::string &dataset, const std::string &quota) {
+#ifdef HAVE_LIBZFS
+  auto *h = getHandle();
+  if (h) {
+    zfs_handle_t *zhp = zfs_open(h, dataset.c_str(), ZFS_TYPE_DATASET);
+    if (zhp) {
+      int err = zfs_prop_set(zhp, "refquota", quota.c_str());
+      zfs_close(zhp);
+      if (err == 0) return;
+    }
+  }
+#endif
+  // Fallback: zfs set refquota=<quota> <dataset>
+  Util::execCommand({CRATE_PATH_ZFS, "set", STR("refquota=" << quota), dataset},
+    CSTR("set ZFS refquota " << quota << " on " << dataset));
+}
+
 }

@@ -130,12 +130,88 @@ RunAtEnd applyRctlLimits(const Spec &spec, int jid, bool logProgress) {
     Util::execCommand({CRATE_PATH_RCTL, "-a", rule}, CSTR("apply RCTL rule " << lim.first));
   }
 
+  // Verify that RCTL rules were actually applied
+  try {
+    auto listing = Util::execCommandGetOutput(
+      {CRATE_PATH_RCTL, "-l", STR("jail:" << jidStr)}, "verify RCTL rules");
+    for (auto &lim : spec.limits) {
+      if (listing.find(lim.first) == std::string::npos)
+        WARN("RCTL limit '" << lim.first << "' may not be enforced — "
+             "check that kern.racct.enable=1 is set in /boot/loader.conf")
+    }
+  } catch (...) {
+    WARN("cannot verify RCTL rules — check kern.racct.enable=1 in /boot/loader.conf")
+  }
+
   return RunAtEnd([jid, logProgress]() {
     auto jidStr = std::to_string(jid);
     if (logProgress)
       std::cerr << rang::fg::gray << "removing RCTL rules for jail " << jidStr << rang::style::reset << std::endl;
     Util::execCommand({CRATE_PATH_RCTL, "-r", STR("jail:" << jidStr)}, "remove RCTL rules");
   });
+}
+
+// Diagnose the cause of container death based on exit status and RCTL state.
+// Returns a human-readable reason string.
+std::string diagnoseExitReason(int jid, int exitStatus) {
+  auto jidStr = std::to_string(jid);
+
+  // SIGKILL (signal 9) with exit status 137 typically indicates OOM
+  if (WIFSIGNALED(exitStatus) && WTERMSIG(exitStatus) == SIGKILL) {
+    // Check RCTL usage to determine if it was memory-related
+    try {
+      auto usage = Util::execCommandGetOutput(
+        {CRATE_PATH_RCTL, "-u", STR("jail:" << jidStr)}, "check RCTL usage");
+
+      // Look for memory limits that were hit
+      for (auto &resource : {"memoryuse", "vmemoryuse", "swapuse"}) {
+        auto pos = usage.find(resource);
+        if (pos != std::string::npos) {
+          auto valueStart = usage.find('=', pos);
+          if (valueStart != std::string::npos) {
+            auto valueEnd = usage.find('\n', valueStart);
+            auto value = usage.substr(valueStart + 1,
+                                       valueEnd - valueStart - 1);
+            return STR("OOM: killed by RCTL (" << resource << "=" << value << ")");
+          }
+        }
+      }
+    } catch (...) {}
+
+    return "killed by signal SIGKILL (possible OOM)";
+  }
+
+  if (WIFSIGNALED(exitStatus))
+    return STR("killed by signal " << WTERMSIG(exitStatus));
+
+  if (WIFEXITED(exitStatus) && WEXITSTATUS(exitStatus) != 0)
+    return STR("exited with code " << WEXITSTATUS(exitStatus));
+
+  return "exited normally";
+}
+
+// Apply ZFS disk quota (refquota) to the container's dataset
+void applyDiskQuota(const Spec &spec, const std::string &jailPath, bool logProgress) {
+  if (spec.diskQuota.empty())
+    return;
+
+  // Determine the ZFS dataset for the jail path
+  if (!Util::Fs::isOnZfs(jailPath)) {
+    WARN("disk_quota specified but jail path is not on ZFS — ignoring")
+    return;
+  }
+
+  auto dataset = Util::Fs::getZfsDataset(jailPath);
+  if (dataset.empty()) {
+    WARN("disk_quota specified but could not determine ZFS dataset — ignoring")
+    return;
+  }
+
+  if (logProgress)
+    std::cerr << rang::fg::gray << "setting ZFS refquota " << spec.diskQuota
+              << " on " << dataset << rang::style::reset << std::endl;
+
+  ZfsOps::setRefquota(dataset, spec.diskQuota);
 }
 
 RunAtEnd attachZfsDatasets(const Spec &spec, int jid, bool logProgress) {
