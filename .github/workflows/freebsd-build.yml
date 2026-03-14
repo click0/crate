@@ -47,7 +47,7 @@ jobs:
 
           echo "::group::Kyua unit tests"
           ATF_LIBS="-L/usr/local/lib -latf-c++ -latf-c"
-          for t in util_test spec_test lifecycle_test network_test; do
+          for t in util_test spec_test spec_netopt_test lifecycle_test network_test network_ipv6_test err_test; do
             echo "  Compiling tests/unit/${t} ..."
             c++ -std=c++17 -Ilib -o "tests/unit/${t}" "tests/unit/${t}.cpp" $ATF_LIBS
           done
