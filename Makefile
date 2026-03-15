@@ -98,12 +98,17 @@ crate-snmpd: libcrate.a $(SNMPD_OBJS)
 	$(CXX) $(LDFLAGS) -o $@ $(SNMPD_OBJS) libcrate.a $(LIBS) -lpthread
 
 install: crate
+	@mkdir -p $(DESTDIR)$(PREFIX)/bin
+	@mkdir -p $(DESTDIR)$(PREFIX)/man/man5
 	install -s -m 04755 crate $(DESTDIR)$(PREFIX)/bin
 	gzip -9 < crate.5 > $(DESTDIR)$(PREFIX)/man/man5/crate.5.gz
 
 install-daemon: crated
+	@mkdir -p $(DESTDIR)$(PREFIX)/sbin
+	@mkdir -p $(DESTDIR)$(PREFIX)/etc/rc.d
 	install -s -m 0755 crated $(DESTDIR)$(PREFIX)/sbin/crated
 	install -m 0555 daemon/crated.rc $(DESTDIR)$(PREFIX)/etc/rc.d/crated
+	install -m 0640 daemon/crated.conf.sample $(DESTDIR)$(PREFIX)/etc/crated.conf.sample
 	@if [ ! -f $(DESTDIR)$(PREFIX)/etc/crated.conf ]; then \
 		install -m 0640 daemon/crated.conf.sample $(DESTDIR)$(PREFIX)/etc/crated.conf; \
 	fi
@@ -111,10 +116,11 @@ install-daemon: crated
 install-local: crate.x
 
 install-examples:
-	@mkdir -p $(DESTDIR)$(PREFIX)/share/examples/crate
-	@for e in `ls examples/`; do \
-		install examples/$$e $(DESTDIR)$(PREFIX)/share/examples/crate/$$e; \
-	done;
+	@mkdir -p $(DESTDIR)$(PREFIX)/share/examples/crate/broken
+	@mkdir -p $(DESTDIR)$(PREFIX)/share/examples/crate/matrix
+	@find examples -type f | while read f; do \
+		install -m 644 "$$f" $(DESTDIR)$(PREFIX)/share/examples/crate/$${f#examples/}; \
+	done
 
 install-completions:
 	@mkdir -p $(DESTDIR)$(PREFIX)/share/crate/completions
