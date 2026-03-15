@@ -5,7 +5,7 @@ MASTER_SITES=	GH
 GH_ACCOUNT=	click0
 GH_PROJECT=	crate
 
-MAINTAINER=	crate-ports@FreeBSD.org
+MAINTAINER=	admin@support.od.ua
 COMMENT=	FreeBSD container manager using jails, ZFS, and VNET
 WWW=		https://github.com/click0/crate
 
