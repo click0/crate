@@ -1,0 +1,14 @@
+Crate is a FreeBSD container manager that leverages jails, ZFS, and VNET
+networking to provide lightweight, secure application containers.
+
+Features:
+ - Container lifecycle management (create, run, stop, clean)
+ - ZFS-backed snapshots, export/import, and disk quotas
+ - VNET networking with NAT, bridge, passthrough, and netgraph modes
+ - X11/GPU forwarding for GUI applications
+ - YAML-based container specifications
+ - Stack orchestration for multi-container setups
+ - IPFW/PF firewall integration
+ - Capsicum sandboxing
+ - Optional REST API daemon (crated)
+ - SNMP monitoring agent
