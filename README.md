@@ -315,25 +315,156 @@ Top-level keys supported in `.crate` / `.yml` spec files:
 
 ## Installation
 
-Via FreeBSD ports:
+### Via FreeBSD ports
+
 ```sh
 cd /usr/ports/sysutils/crate && make install clean
 ```
 
-Or build from source:
+The port supports build OPTIONS (enabled by default unless noted):
+
+| Option | Description |
+|---|---|
+| `DAEMON` | Container lifecycle daemon (crated) |
+| `SNMPD` | SNMP monitoring agent (crate-snmpd) |
+| `EXAMPLES` | Example container specifications |
+| `COMPLETIONS` | Bash/ZSH shell completions (off by default) |
+| `ZFS` | Native ZFS API (libzfs) |
+| `IFCONFIG` | Native interface configuration (libifconfig) |
+| `PFCTL` | Native PF firewall control (libpfctl) |
+| `CAPSICUM` | Capsicum sandbox support (libcasper) |
+| `LIBVIRT` | Virtual machine support (bhyve via libvirt) |
+| `X11` | X11 display forwarding |
+| `VNCSERVER` | Embedded VNC server (libvncserver) (off by default) |
+| `LIBSEAT` | DRM/GPU session management (libseat) |
+
+```sh
+# Configure options interactively
+cd /usr/ports/sysutils/crate && make config && make install clean
+```
+
+### From source
+
 ```sh
 make && sudo make install
 ```
 
 **Dependencies:** yaml-cpp, libjail
 
-### Additional Components
+**Compile-time feature flags** (set `=0` to disable):
 
 ```sh
-make install-daemon       # crated — container lifecycle daemon
-make install-examples     # example spec files to /usr/local/share/examples/crate
-make install-completions  # shell completions
+make HAVE_LIBZFS=1 HAVE_LIBIFCONFIG=1 HAVE_LIBPFCTL=1 HAVE_CAPSICUM=1 \
+     WITH_LIBVIRT=1 WITH_X11=1 WITH_LIBSEAT=1 WITH_LIBVNCSERVER=0
 ```
+
+All native API wrappers fall back to shell commands when compiled without the corresponding flag.
+
+### Make targets
+
+| Target | Description |
+|---|---|
+| `make` | Build `crate` CLI |
+| `make all-daemon` | Build `crate` + `crated` daemon |
+| `make all-snmpd` | Build `crate` + `crate-snmpd` agent |
+| `make install` | Install crate CLI + man pages |
+| `make install-daemon` | Install crated, RC script, config |
+| `make install-snmpd` | Install crate-snmpd + MIB file |
+| `make install-examples` | Install example specs to `/usr/local/share/examples/crate/` |
+| `make install-completions` | Install shell completions |
+| `make test` | Compile unit tests and run via kyua |
+
+## crated — REST API Daemon
+
+`crated` is a container lifecycle daemon providing a REST API for remote management.
+
+### Features
+
+* Listens on **Unix socket** (local) and **TCP/TLS** (remote)
+* **Token-based authentication** (SHA-256 hashes, roles: `viewer`/`admin`)
+* **Rate limiting** (100 req/s read, 10 req/s write)
+* **Prometheus metrics** at `/metrics`
+* FreeBSD **RC service** integration
+
+### API Endpoints
+
+| Endpoint | Auth | Description |
+|---|---|---|
+| `GET /healthz` | — | Health check |
+| `GET /api/v1/containers` | — | List running containers |
+| `GET /api/v1/containers/:name/gui` | — | GUI session info (display, VNC/WS ports) |
+| `GET /api/v1/containers/:name/stats` | yes | Resource usage (RCTL) |
+| `GET /api/v1/containers/:name/logs` | yes | Logs (`?follow=true`, `?tail=N`) |
+| `POST /api/v1/containers/:name/start` | yes | Start container from .crate |
+| `POST /api/v1/containers/:name/stop` | yes | Stop container (SIGTERM → SIGKILL) |
+| `DELETE /api/v1/containers/:name` | yes | Destroy container |
+| `GET /api/v1/host` | — | Host system info |
+| `GET /metrics` | — | Prometheus metrics |
+
+### Configuration
+
+```yaml
+# /usr/local/etc/crated.conf
+listen:
+    unix: /var/run/crate/crated.sock
+    tcp_port: 9800
+    tcp_bind: 0.0.0.0
+
+tls:
+    cert: /usr/local/etc/crate/tls/server.pem
+    key: /usr/local/etc/crate/tls/server.key
+    ca: /usr/local/etc/crate/tls/ca.pem
+    require_client_cert: true
+
+auth:
+    tokens:
+        - name: ansible
+          token_hash: "sha256:..."
+          role: admin
+        - name: grafana
+          token_hash: "sha256:..."
+          role: viewer
+
+log:
+    file: /var/log/crated.log
+    level: info
+```
+
+### RC service
+
+```sh
+# /etc/rc.conf
+crated_enable="YES"
+
+# Control
+service crated start
+service crated stop
+service crated status
+```
+
+## crate-snmpd — SNMP Monitoring Agent
+
+`crate-snmpd` is an AgentX subagent that exposes container metrics via SNMP. It collects data from `jls`/`rctl` and registers a `CRATE-MIB` (installed to `/usr/local/share/snmp/mibs/`).
+
+```sh
+make all-snmpd && sudo make install-snmpd
+```
+
+## Testing
+
+The project uses **Kyua** and **ATF** (FreeBSD's standard test framework).
+
+```sh
+make test                     # Build and run all tests
+cd tests && kyua test         # Run from tests directory
+kyua test unit/               # Unit tests only
+kyua test functional/         # Functional tests only
+kyua report -v                # Verbose report
+```
+
+**Unit tests** (C++17, libatf-c++): spec parsing, network options, IPv6, jail lifecycle, error handling.
+
+**Functional tests** (shell-based ATF): CLI commands (`help`, `version`, `validate`, `list`).
 
 ## Compatibility
 
