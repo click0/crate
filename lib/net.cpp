@@ -47,8 +47,8 @@ std::vector<IpInfo> getIfaceIp4Addresses(const std::string &ifaceName) {
     for (int i = 0; i < 4; i++) {
       if (i > 0)
         ss << ".";
-      uint8_t mask = std::stoul(netmaskVec[i]);
-      ss << (std::stoul(hostVec[i]) & mask);
+      uint8_t mask = Util::toUInt(netmaskVec[i]);
+      ss << (Util::toUInt(hostVec[i]) & mask);
       nbits += countBits(mask);
     }
     ss << "/" << nbits;

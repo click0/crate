@@ -156,8 +156,8 @@ static std::string generateGpuXorgConf(unsigned displayNum,
   auto width = (xpos != std::string::npos) ? resolution.substr(0, xpos) : "1280";
   auto height = (xpos != std::string::npos) ? resolution.substr(xpos + 1) : "720";
 
-  unsigned w = std::stoul(width);
-  unsigned h = std::stoul(height);
+  unsigned w = Util::toUInt(width);
+  unsigned h = Util::toUInt(height);
   auto cvt = computeCvtModeline(w, h);
 
   // Determine effective driver
@@ -569,11 +569,17 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
     unsigned actualW = 0, actualH = 0;
     if (X11Ops::getResolution(dispStr, actualW, actualH)) {
       auto reqXpos = resolution.find('x');
-      unsigned reqW = std::stoul(resolution.substr(0, reqXpos));
-      unsigned reqH = std::stoul(resolution.substr(reqXpos + 1));
-      if (actualW != reqW || actualH != reqH) {
-        std::cerr << rang::fg::yellow << "warning: GPU display is " << actualW << "x" << actualH
-                  << " (requested " << resolution << ")" << rang::style::reset << std::endl;
+      if (reqXpos != std::string::npos) {
+        try {
+          unsigned reqW = Util::toUInt(resolution.substr(0, reqXpos));
+          unsigned reqH = Util::toUInt(resolution.substr(reqXpos + 1));
+          if (actualW != reqW || actualH != reqH) {
+            std::cerr << rang::fg::yellow << "warning: GPU display is " << actualW << "x" << actualH
+                      << " (requested " << resolution << ")" << rang::style::reset << std::endl;
+          }
+        } catch (const std::exception &e) {
+          WARN("could not parse requested resolution '" << resolution << "': " << e.what())
+        }
       }
     }
 

@@ -964,13 +964,13 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           switch (argShort) {
           case 'h': usageLogs(); exit(0);
           case 'f': args.logsFollow = true; break;
-          case 'n': args.logsTail = std::stoul(getArgParam(++a, argc, argv)); break;
+          case 'n': args.logsTail = Util::toUInt(getArgParam(++a, argc, argv)); break;
           default: err("unsupported short option '%s'", argv[a]);
           }
         } else if (auto argLong = isLong(argv[a])) {
           if (strEq(argLong, "help")) { usageLogs(); exit(0); }
           else if (strEq(argLong, "follow")) args.logsFollow = true;
-          else if (strEq(argLong, "tail")) args.logsTail = std::stoul(getArgParam(++a, argc, argv));
+          else if (strEq(argLong, "tail")) args.logsTail = Util::toUInt(getArgParam(++a, argc, argv));
           else err("unsupported long option '%s'", argv[a]);
         } else if (args.logsTarget.empty()) {
           args.logsTarget = argv[a];
@@ -982,12 +982,12 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         if (auto argShort = isShort(argv[a])) {
           switch (argShort) {
           case 'h': usageStop(); exit(0);
-          case 't': args.stopTimeout = std::stoul(getArgParam(++a, argc, argv)); break;
+          case 't': args.stopTimeout = Util::toUInt(getArgParam(++a, argc, argv)); break;
           default: err("unsupported short option '%s'", argv[a]);
           }
         } else if (auto argLong = isLong(argv[a])) {
           if (strEq(argLong, "help")) { usageStop(); exit(0); }
-          else if (strEq(argLong, "timeout")) args.stopTimeout = std::stoul(getArgParam(++a, argc, argv));
+          else if (strEq(argLong, "timeout")) args.stopTimeout = Util::toUInt(getArgParam(++a, argc, argv));
           else err("unsupported long option '%s'", argv[a]);
         } else if (args.stopTarget.empty()) {
           args.stopTarget = argv[a];
@@ -999,12 +999,12 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         if (auto argShort = isShort(argv[a])) {
           switch (argShort) {
           case 'h': usageRestart(); exit(0);
-          case 't': args.restartTimeout = std::stoul(getArgParam(++a, argc, argv)); break;
+          case 't': args.restartTimeout = Util::toUInt(getArgParam(++a, argc, argv)); break;
           default: err("unsupported short option '%s'", argv[a]);
           }
         } else if (auto argLong = isLong(argv[a])) {
           if (strEq(argLong, "help")) { usageRestart(); exit(0); }
-          else if (strEq(argLong, "timeout")) args.restartTimeout = std::stoul(getArgParam(++a, argc, argv));
+          else if (strEq(argLong, "timeout")) args.restartTimeout = Util::toUInt(getArgParam(++a, argc, argv));
           else err("unsupported long option '%s'", argv[a]);
         } else if (args.restartTarget.empty()) {
           args.restartTarget = argv[a];
