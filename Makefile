@@ -141,6 +141,12 @@ UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 test: $(UNIT_TEST_BINS)
 	cd tests && kyua test
 
+# test-unit: run only the unit test suite (no functional tests).
+# Handy for local development on Linux where functional/crate_info_test
+# requires a FreeBSD jail and will otherwise be reported as broken.
+test-unit: $(UNIT_TEST_BINS)
+	cd tests && kyua test unit
+
 tests/unit/%: tests/unit/%.cpp
 	$(CXX) -std=c++17 -Ilib -o $@ $< -L/usr/local/lib -latf-c++ -latf-c
 

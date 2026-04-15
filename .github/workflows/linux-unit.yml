@@ -1,0 +1,91 @@
+name: Linux Unit Tests
+
+# Swift feedback loop: build and run the kyua unit suite directly on an
+# Ubuntu runner (no FreeBSD VM). Unit tests are pure C++ and do not depend
+# on jail(2) / ZFS / pf — so they compile and run on Linux just fine via
+# kyua + libatf from Ubuntu universe.
+#
+# This is a *complement* to the FreeBSD workflows, not a replacement:
+#   * Linux unit tests: ~30 seconds, every push.
+#   * FreeBSD lite: ~10 minutes, feature branches.
+#   * FreeBSD full: ~25 minutes, master / PRs / weekly cron.
+#
+# Functional tests (tests/functional/*) require a FreeBSD jail and are
+# scoped out here via `kyua test unit`.
+
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - 'TODO'
+      - 'CHANGELOG.md'
+      - 'completions/**'
+      - 'examples/**'
+      - 'templates/**'
+      - 'crate.5'
+      - '.github/workflows/freebsd-build.yml'
+      - '.github/workflows/freebsd-build-lite.yml'
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: Linux unit tests (kyua + libatf)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kyua + libatf + compiler
+        run: |
+          set -ex
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            g++ make libatf-dev kyua
+          g++ --version | head -1
+          kyua help >/dev/null
+          echo "Toolchain ready."
+
+      - name: Build unit test binaries
+        run: |
+          set -ex
+          # Drive the Makefile so the link recipe stays in one place.
+          # -L/usr/local/lib is harmless on Linux; libatf-c++ resolves via
+          # the default loader search path.
+          make -j"$(nproc)" \
+            tests/unit/util_test \
+            tests/unit/spec_test \
+            tests/unit/spec_netopt_test \
+            tests/unit/lifecycle_test \
+            tests/unit/network_test \
+            tests/unit/network_ipv6_test \
+            tests/unit/err_test
+
+      - name: Run kyua unit suite
+        run: |
+          set -ex
+          # `make test-unit` runs `kyua test unit` which scopes to the
+          # unit Kyuafile and skips the FreeBSD-only functional tests.
+          make test-unit
+
+      - name: Kyua report on failure
+        if: failure()
+        run: |
+          kyua report --verbose || true
+          kyua report-html --output=kyua-html || true
+
+      - name: Upload kyua HTML report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kyua-html-linux
+          path: kyua-html
+          if-no-files-found: ignore
+          retention-days: 7
