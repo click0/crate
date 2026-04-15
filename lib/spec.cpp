@@ -1044,7 +1044,11 @@ static Spec parseSpecFromNode(YAML::Node top) {
           if (spec.securelevel < -1 || spec.securelevel > 3)
             ERR("security/securelevel must be between -1 and 3")
         } else if (isKey(b, "children_max") || isKey(b, "children-max")) {
-          spec.childrenMax = std::stoi(AsString(b.second));
+          try {
+            spec.childrenMax = std::stoi(AsString(b.second));
+          } catch (const std::exception &) {
+            ERR("security/children_max must be a non-negative integer")
+          }
           if (spec.childrenMax < 0)
             ERR("security/children_max must be >= 0")
         } else if (isKey(b, "cpuset") || isKey(b, "cpu-set")) {

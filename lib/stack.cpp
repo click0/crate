@@ -100,7 +100,17 @@ static bool parseCidr(const std::string &cidr, uint32_t &baseAddr, unsigned &pre
   if (slashPos == std::string::npos)
     return false;
   auto addrStr = cidr.substr(0, slashPos);
-  prefixLen = std::stoul(cidr.substr(slashPos + 1));
+  try {
+    std::size_t pos = 0;
+    auto suffix = cidr.substr(slashPos + 1);
+    prefixLen = std::stoul(suffix, &pos);
+    if (pos != suffix.size())
+      return false;
+  } catch (const std::invalid_argument &) {
+    return false;
+  } catch (const std::out_of_range &) {
+    return false;
+  }
   struct in_addr addr;
   if (inet_pton(AF_INET, addrStr.c_str(), &addr) != 1)
     return false;

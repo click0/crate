@@ -38,8 +38,14 @@ int main(int argc, char **argv) {
       foreground = true;
     else if (arg == "-p" && i + 1 < argc)
       agentxSocket = argv[++i];
-    else if (arg == "-i" && i + 1 < argc)
-      pollInterval = std::stoi(argv[++i]);
+    else if (arg == "-i" && i + 1 < argc) {
+      try {
+        pollInterval = Util::toUInt(argv[++i]);
+      } catch (const std::exception &e) {
+        std::cerr << "crate-snmpd: invalid value for -i: " << e.what() << std::endl;
+        return 1;
+      }
+    }
     else if (arg == "-h") {
       usage();
       return 0;

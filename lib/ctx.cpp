@@ -85,8 +85,15 @@ std::string FwUsers::file() {
 }
 
 void FwUsers::readIntoMemory() {
-  for (auto const &line : Util::Fs::readFileLines(fd))
-    pids.insert(std::stoul(line));
+  for (auto const &line : Util::Fs::readFileLines(fd)) {
+    if (line.empty())
+      continue;
+    try {
+      pids.insert(std::stoul(line));
+    } catch (const std::exception &) {
+      // Ignore malformed pid lines (stale/corrupted context file).
+    }
+  }
   inMemory = true;
 }
 

@@ -27,6 +27,20 @@
 
 #define ERR(msg...) ERR2("lifecycle", msg)
 
+// --- helpers ---
+
+// Parse an unsigned 64-bit number from rctl output. rctl output is controlled
+// by the kernel and should always be numeric, but guard against malformed
+// fields (truncated pipes, locale-specific output, etc.) instead of leaking a
+// std::invalid_argument / std::out_of_range from std::stoull to the caller.
+static unsigned long long safeStoull(const std::string &s) {
+  try {
+    return std::stoull(s);
+  } catch (const std::exception &) {
+    return 0ULL;
+  }
+}
+
 // --- crate stats TARGET ---
 
 // Format bytes into human-readable form (e.g., 1073741824 -> "1.0G")
@@ -181,7 +195,7 @@ bool statsCrate(const Args &args) {
   }
 
   // Table output
-  auto memUsed = usage.count("memoryuse") ? std::stoull(usage["memoryuse"]) : 0ULL;
+  auto memUsed = usage.count("memoryuse") ? safeStoull(usage["memoryuse"]) : 0ULL;
   auto memLimit = limits.count("memoryuse") ? limits["memoryuse"] : "-";
   auto cpuPct = usage.count("pcpu") ? usage["pcpu"] : "0";
   auto procs = usage.count("maxproc") ? usage["maxproc"] : "0";
@@ -214,9 +228,9 @@ bool statsCrate(const Args &args) {
   if (usage.count("readbps") || usage.count("writebps")) {
     std::cout << std::endl << "I/O:" << std::endl;
     if (usage.count("readbps"))
-      std::cout << "  Read:  " << humanBytes(std::stoull(usage["readbps"])) << "/s" << std::endl;
+      std::cout << "  Read:  " << humanBytes(safeStoull(usage["readbps"])) << "/s" << std::endl;
     if (usage.count("writebps"))
-      std::cout << "  Write: " << humanBytes(std::stoull(usage["writebps"])) << "/s" << std::endl;
+      std::cout << "  Write: " << humanBytes(safeStoull(usage["writebps"])) << "/s" << std::endl;
   }
 
   return true;

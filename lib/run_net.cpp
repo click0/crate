@@ -80,7 +80,7 @@ EpairInfo createEpair(int jid, const std::string &jidStr,
   auto epairPair = IfconfigOps::createEpair();
   info.ifaceA = epairPair.first;
   info.ifaceB = epairPair.second;
-  info.num = std::stoul(info.ifaceA.substr(5/*skip epair*/, info.ifaceA.size()-5-1));
+  info.num = Util::toUInt(info.ifaceA.substr(5/*skip epair*/, info.ifaceA.size()-5-1));
 
   info.ipA = epairNumToIp(info.num, 0);
   info.ipB = epairNumToIp(info.num, 1);
@@ -346,7 +346,7 @@ BridgeInfo createBridgeEpair(int jid, const std::string &jidStr,
   auto epairPair = IfconfigOps::createEpair();
   info.ifaceA = epairPair.first;
   info.ifaceB = epairPair.second;
-  info.num = std::stoul(info.ifaceA.substr(5, info.ifaceA.size()-5-1));
+  info.num = Util::toUInt(info.ifaceA.substr(5, info.ifaceA.size()-5-1));
 
   // disable checksum offload (FreeBSD 15 workaround)
   IfconfigOps::disableOffload(info.ifaceA);
@@ -395,7 +395,7 @@ void configureStaticIp(const std::string &jailSideIface,
   std::string addr, netmask;
   if (slashPos != std::string::npos) {
     addr = ip.substr(0, slashPos);
-    auto prefixLen = std::stoul(ip.substr(slashPos + 1));
+    auto prefixLen = Util::toUInt(ip.substr(slashPos + 1));
     // Convert prefix length to hex netmask
     uint32_t mask = prefixLen > 0 ? ~((1u << (32 - prefixLen)) - 1) : 0;
     netmask = STR("0x" << std::hex << mask);
