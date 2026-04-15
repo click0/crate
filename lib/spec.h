@@ -263,14 +263,6 @@ public:
     std::vector<NetworkPolicyRule> rules;
   };
 
-  // Restart policy (§23): automatic restart on failure
-  struct RestartPolicy {
-    std::string policy = "no";         // "no", "on-failure", "always", "unless-stopped"
-    unsigned maxRetries = 3;           // max restart attempts (on-failure only)
-    unsigned delaySec = 1;             // delay between restarts in seconds
-  };
-  std::unique_ptr<RestartPolicy>                          restartPolicy;
-
   // Inter-container dependencies (§21): for stack orchestration
   std::vector<std::string>                               depends;             // names of containers this one depends on
 
