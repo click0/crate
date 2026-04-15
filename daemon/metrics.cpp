@@ -6,6 +6,7 @@
 #include "metrics.h"
 
 #include "gui_registry.h"
+#include "pathnames.h"
 #include "util.h"
 
 #include <map>
@@ -32,15 +33,24 @@ std::string collectPrometheusMetrics() {
 
   // --- Container count ---
   unsigned total = 0, running = 0;
+
+  struct JailInfo {
+    std::string jid;
+    std::string name;
+  };
+  std::vector<JailInfo> jails;
+
   try {
     auto jlsOutput = Util::execCommandGetOutput(
-      {"/usr/sbin/jls", "-q", "jid", "name", "dying"}, "list jails");
+      {CRATE_PATH_JLS, "-q", "jid", "name", "dying"}, "list jails");
     std::istringstream is(jlsOutput);
     std::string jid, name, dying;
     while (is >> jid >> name >> dying) {
       total++;
-      if (dying == "0")
+      if (dying == "0") {
         running++;
+        jails.push_back({jid, name});
+      }
     }
   } catch (...) {}
 

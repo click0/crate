@@ -1,50 +1,138 @@
-name: FreeBSD Build
+name: FreeBSD Build (full)
+
+# Повна збірка через `gmake`, всі kyua-тести і ci-verify.sh.
+# Запускається на:
+#   * push у master       (gate'ить mainline);
+#   * pull_request → master (gate'ить злиття);
+#   * щотижневий cron     (ловить bit-rot із новими версіями FreeBSD);
+#   * workflow_dispatch   (ручний запуск).
+#
+# Швидкий смок-чек на feature-гілках живе в freebsd-build-lite.yml.
 
 on:
   push:
-    branches: ['*']
+    branches: [master]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - 'TODO'
+      - 'CHANGELOG.md'
+      - 'completions/**'
+      - 'examples/**'
+      - 'templates/**'
+      - 'crate.5'
+      - '.github/workflows/freebsd-build-lite.yml'
   pull_request:
     branches: [master]
+  schedule:
+    # Щопонеділка о 04:00 UTC — ловить регресії від оновлень pkg.
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
         freebsd-version: ['14.2', '15.0']
-    name: FreeBSD ${{ matrix.freebsd-version }} build+test
+    name: FreeBSD ${{ matrix.freebsd-version }} full
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Build and test on FreeBSD
-      uses: cross-platform-actions/action@v0.32.0
-      timeout-minutes: 25
-      with:
-        operating_system: freebsd
-        version: ${{ matrix.freebsd-version }}
-        run: |
-          set -ex
+      - name: Build + test on FreeBSD
+        uses: cross-platform-actions/action@v0.32.0
+        timeout-minutes: 45
+        with:
+          operating_system: freebsd
+          version: ${{ matrix.freebsd-version }}
+          shell: sh
+          # Стримуємо ресурси VM, щоб уникнути OOM на CI-runner'і.
+          # cross-platform-actions за замовчуванням дає ~6GB / 4 vCPU.
+          memory: 6G
+          cpu_count: 3
+          run: |
+            set -ex
 
-          echo "::group::Install dependencies"
-          sudo pkg install -y pkgconf yaml-cpp rang
-          echo "::endgroup::"
+            echo "::group::Install dependencies"
+            sudo pkg install -y pkgconf yaml-cpp rang kyua gmake
+            echo "::endgroup::"
 
-          echo "::group::System info"
-          uname -a
-          c++ --version
-          sysctl hw.ncpu
-          echo "::endgroup::"
+            echo "::group::System info"
+            uname -a
+            c++ --version
+            NCPU=$(sysctl -n hw.ncpu)
+            # Обмежуємо паралелізм, щоб не з'їсти всю пам'ять VM
+            # під час лінкування libcrate.a + crate.
+            JOBS=$(( NCPU < 3 ? NCPU : 2 ))
+            echo "ncpu=$NCPU jobs=$JOBS"
+            df -h
+            echo "::endgroup::"
 
-          echo "::group::Compile changed components"
-          CXXFLAGS="-Wall -std=c++17 -Ilib $(pkg-config --cflags yaml-cpp)"
-          for f in lib/run.cpp lib/util.cpp lib/create.cpp lib/locs.cpp lib/mount.cpp; do
-            echo "  Compiling $f ..."
-            c++ $CXXFLAGS -c "$f" -o "${f%.cpp}.o"
-          done
-          echo "::endgroup::"
+            echo "::group::Build crate (gmake)"
+            gmake -j"$JOBS" crate
+            ls -la crate
+            file crate || true
+            echo "::endgroup::"
 
-          echo "::group::CI verification tests"
-          sudo sh tests/ci-verify.sh .
-          echo "::endgroup::"
+            echo "::group::Build unit tests"
+            gmake -j"$JOBS" \
+              tests/unit/util_test \
+              tests/unit/spec_test \
+              tests/unit/spec_netopt_test \
+              tests/unit/lifecycle_test \
+              tests/unit/network_test \
+              tests/unit/network_ipv6_test \
+              tests/unit/err_test
+            echo "::endgroup::"
+
+            echo "::group::Ensure functional tests are executable"
+            chmod +x tests/functional/crate_info_test
+            echo "::endgroup::"
+
+            echo "::group::Run kyua test suite"
+            # Без `|| true`. Провал тесту = провал CI.
+            # `set +e` локально — щоб встигнути зібрати report навіть при провалі.
+            set +e
+            ( cd tests && sudo kyua test )
+            KYUA_RC=$?
+            ( cd tests && sudo kyua report --verbose )
+            ( cd tests && sudo kyua report-html --output=../kyua-html ) || true
+            set -e
+            test "$KYUA_RC" -eq 0
+            echo "::endgroup::"
+
+            echo "::group::CI verification (ci-verify.sh)"
+            sudo sh tests/ci-verify.sh .
+            echo "::endgroup::"
+
+            echo "::group::Disk usage after build"
+            df -h
+            du -sh lib/*.o crate libcrate.a 2>/dev/null | tail -n 20 || true
+            echo "::endgroup::"
+
+      - name: Upload crate binary
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crate-${{ matrix.freebsd-version }}
+          path: |
+            crate
+            libcrate.a
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload kyua HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kyua-report-${{ matrix.freebsd-version }}
+          path: kyua-html
+          if-no-files-found: ignore
+          retention-days: 14

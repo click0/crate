@@ -27,6 +27,7 @@
 #include <set>
 #include <functional>
 #include <filesystem>
+#include <algorithm>
 
 #define ERR(msg...) ERR2("creating a crate", msg)
 
@@ -342,6 +343,75 @@ static void removeRedundantJailParts(const std::string &jailPath, const Spec &sp
         Fs::unlink(entry.path());
 }
 
+// Clean up old base.txz cache entries.  Keeps at most 'maxEntries' cached
+// archives (sorted by mtime, oldest removed first) and warns when the total
+// cache size exceeds 5 GB.
+static void cleanBaseCache(unsigned maxEntries = 5) {
+  namespace fs = std::filesystem;
+  const std::string cacheDir = Locations::cacheDirectoryPath;
+
+  if (!fs::is_directory(cacheDir))
+    return;
+
+  // Collect all base.txz files across version subdirectories
+  // Layout: /var/cache/crate/<version>/base.txz
+  struct CacheEntry {
+    fs::path path;
+    std::filesystem::file_time_type mtime;
+    uintmax_t size;
+  };
+  std::vector<CacheEntry> entries;
+
+  try {
+    for (auto &verDir : fs::directory_iterator(cacheDir)) {
+      if (!verDir.is_directory())
+        continue;
+      auto baseTxz = verDir.path() / "base.txz";
+      if (fs::exists(baseTxz) && fs::is_regular_file(baseTxz)) {
+        entries.push_back({baseTxz, fs::last_write_time(baseTxz), fs::file_size(baseTxz)});
+      }
+    }
+  } catch (const fs::filesystem_error &) {
+    return; // cache directory not accessible, skip cleanup
+  }
+
+  if (entries.empty())
+    return;
+
+  // Sort by modification time, newest first
+  std::sort(entries.begin(), entries.end(),
+    [](const CacheEntry &a, const CacheEntry &b) {
+      return a.mtime > b.mtime;
+    });
+
+  // Remove oldest entries exceeding maxEntries
+  while (entries.size() > maxEntries) {
+    auto &oldest = entries.back();
+    try {
+      fs::remove(oldest.path);
+      // Remove the parent version directory if now empty
+      auto parent = oldest.path.parent_path();
+      if (fs::is_empty(parent))
+        fs::remove(parent);
+    } catch (const fs::filesystem_error &) {
+      // best-effort removal
+    }
+    entries.pop_back();
+  }
+
+  // Warn if total remaining cache size exceeds 5 GB
+  uintmax_t totalSize = 0;
+  for (auto &e : entries)
+    totalSize += e.size;
+
+  constexpr uintmax_t fiveGB = (uintmax_t)5 * 1024 * 1024 * 1024;
+  if (totalSize > fiveGB) {
+    std::cerr << "warning: base.txz cache in " << cacheDir
+              << " exceeds 5 GB (" << (totalSize / (1024 * 1024)) << " MB)"
+              << std::endl;
+  }
+}
+
 //
 // interface
 //
@@ -385,18 +455,34 @@ bool createCrate(const Args &args, const Spec &spec) {
     LOG("bootstrapping jail root via pkgbase (§17)")
     bootstrapJailViaPkgbase(jailPath, args.logProgress);
   } else {
-    // download the base archive if not yet
-    if (!Util::Fs::fileExists(Locations::baseArchive)) {
+    // download the base archive with version-specific caching
+    // Cache path: /var/cache/crate/<osrelease>/base.txz
+    auto osrelease = Util::getSysctlString("kern.osrelease");
+    auto versionedCacheDir = STR(Locations::cacheDirectoryPath << "/" << osrelease);
+    auto versionedArchive = versionedCacheDir + "/base.txz";
+
+    // Check version-specific cache first, then legacy path
+    std::string archivePath;
+    if (Util::Fs::fileExists(versionedArchive)) {
+      archivePath = versionedArchive;
+    } else if (Util::Fs::fileExists(Locations::baseArchive)) {
+      archivePath = Locations::baseArchive;
+    } else {
+      // Download to version-specific cache directory
+      Util::execCommand({"/bin/mkdir", "-p", versionedCacheDir}, "create cache dir");
       std::cout << "downloading base.txz from " << Locations::baseArchiveUrl << " ..." << std::endl;
-      Util::execCommand({CRATE_PATH_FETCH, "-o", Locations::baseArchive, Locations::baseArchiveUrl}, "download base.txz");
-      std::cout << "base.txz has finished downloading" << std::endl;
+      Util::execCommand({CRATE_PATH_FETCH, "-o", versionedArchive, Locations::baseArchiveUrl}, "download base.txz");
+      std::cout << "base.txz has finished downloading (cached at " << versionedArchive << ")" << std::endl;
+      archivePath = versionedArchive;
+      // Evict old cache entries after storing a new one
+      cleanBaseCache();
     }
 
     // unpack the base archive
     LOG("unpacking the base archive")
     Util::execPipeline(
       {{CRATE_PATH_XZ, Cmd::xzThreadsArg, "--decompress"}, {CRATE_PATH_TAR, "-xf", "-", "--uname", "", "--gname", "", "-C", jailPath}},
-      "unpack the system base into the jail directory", Locations::baseArchive);
+      "unpack the system base into the jail directory", archivePath);
   }
 
   // Record FreeBSD version used to build this container (for version-mismatch detection at run time)

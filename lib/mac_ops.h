@@ -10,8 +10,12 @@
 
 namespace MacOps {
 
+// Runtime detection: returns true if /dev/ugidfw is accessible for
+// read+write so the native ioctl path can be used.  Cached.
+bool useNativeUgidfw();
+
 // mac_bsdextended (ugidfw) rule management via /dev/ugidfw ioctl.
-// Falls back to ugidfw(8) command if ioctl fails.
+// Falls back to ugidfw(8) command if /dev/ugidfw is not accessible.
 
 struct UgidfwRule {
   int jailJid = -1;      // -1 = not jail-specific

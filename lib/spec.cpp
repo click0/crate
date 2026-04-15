@@ -1405,6 +1405,29 @@ static Spec parseSpecFromNode(YAML::Node top) {
           ERR("cron entry requires 'command'")
         spec.cronJobs.push_back(std::move(job));
       }
+    } else if (isKey(k, "restart") || isKey(k, "restart_policy")) {
+      // Restart policy (§23)
+      spec.restartPolicy = std::make_unique<Spec::RestartPolicy>();
+      if (k.second.IsScalar()) {
+        // Simple form: restart: "on-failure"
+        spec.restartPolicy->policy = AsString(k.second);
+      } else if (k.second.IsMap()) {
+        for (auto b : k.second) {
+          if (isKey(b, "policy"))
+            scalar(b.second, spec.restartPolicy->policy, "restart/policy");
+          else if (isKey(b, "max_retries"))
+            spec.restartPolicy->maxRetries = Util::toUInt(AsString(b.second));
+          else if (isKey(b, "delay"))
+            spec.restartPolicy->delaySec = Util::toUInt(AsString(b.second));
+          else
+            ERR("unknown element restart/" << b.first << " in spec")
+        }
+      } else {
+        ERR("restart must be a scalar or a map")
+      }
+      auto &p = spec.restartPolicy->policy;
+      if (p != "no" && p != "on-failure" && p != "always" && p != "unless-stopped")
+        ERR("restart/policy must be one of: no, on-failure, always, unless-stopped")
     } else if (isKey(k, "scripts")) {
       if (!k.second.IsMap())
         ERR("scripts must be a map")
@@ -1531,6 +1554,10 @@ Spec mergeSpecs(const Spec &base, const Spec &overlay) {
   if (overlay.baseContainer) {
     result.baseContainer = std::make_unique<Spec::BaseContainer>();
     *result.baseContainer = *overlay.baseContainer;
+  }
+  if (overlay.restartPolicy) {
+    result.restartPolicy = std::make_unique<Spec::RestartPolicy>();
+    *result.restartPolicy = *overlay.restartPolicy;
   }
 
   // depends: overlay replaces (not appends) since dependency graph should be explicit
