@@ -1,0 +1,65 @@
+#!/bin/sh
+# ATF functional tests for 'crate' CLI commands
+#
+# Run: cd tests && kyua test
+
+atf_test_case crate_help
+crate_help_head()
+{
+	atf_set "descr" "crate --help exits successfully and shows usage"
+}
+crate_help_body()
+{
+	if [ ! -x /usr/local/bin/crate ]; then
+		atf_skip "crate binary not installed"
+	fi
+	atf_check -s exit:0 -o match:"usage:" /usr/local/bin/crate --help
+}
+
+atf_test_case crate_version
+crate_version_head()
+{
+	atf_set "descr" "crate --version exits successfully"
+}
+crate_version_body()
+{
+	if [ ! -x /usr/local/bin/crate ]; then
+		atf_skip "crate binary not installed"
+	fi
+	atf_check -s exit:0 -o match:"crate" /usr/local/bin/crate --version
+}
+
+atf_test_case crate_validate_missing_file
+crate_validate_missing_file_head()
+{
+	atf_set "descr" "crate validate with non-existent file fails"
+}
+crate_validate_missing_file_body()
+{
+	if [ ! -x /usr/local/bin/crate ]; then
+		atf_skip "crate binary not installed"
+	fi
+	atf_check -s not-exit:0 /usr/local/bin/crate validate /nonexistent/spec.yml
+}
+
+atf_test_case crate_list_no_jails
+crate_list_no_jails_head()
+{
+	atf_set "descr" "crate list succeeds even with no running containers"
+	atf_set "require.user" "root"
+}
+crate_list_no_jails_body()
+{
+	if [ ! -x /usr/local/bin/crate ]; then
+		atf_skip "crate binary not installed"
+	fi
+	atf_check -s exit:0 /usr/local/bin/crate list
+}
+
+atf_init_test_cases()
+{
+	atf_add_test_case crate_help
+	atf_add_test_case crate_version
+	atf_add_test_case crate_validate_missing_file
+	atf_add_test_case crate_list_no_jails
+}

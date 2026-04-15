@@ -22,6 +22,7 @@ extern "C" {
 #include <string>
 #include <filesystem>
 #include <limits>
+#include <sstream>
 
 #define ERR(msg...) ERR2("jail", msg)
 #define WARN(msg...) \
@@ -130,12 +131,206 @@ RunAtEnd applyRctlLimits(const Spec &spec, int jid, bool logProgress) {
     Util::execCommand({CRATE_PATH_RCTL, "-a", rule}, CSTR("apply RCTL rule " << lim.first));
   }
 
+  // Verify that RCTL rules were actually applied
+  try {
+    auto listing = Util::execCommandGetOutput(
+      {CRATE_PATH_RCTL, "-l", STR("jail:" << jidStr)}, "verify RCTL rules");
+    for (auto &lim : spec.limits) {
+      if (listing.find(lim.first) == std::string::npos)
+        WARN("RCTL limit '" << lim.first << "' may not be enforced — "
+             "check that kern.racct.enable=1 is set in /boot/loader.conf")
+    }
+  } catch (...) {
+    WARN("cannot verify RCTL rules — check kern.racct.enable=1 in /boot/loader.conf")
+  }
+
   return RunAtEnd([jid, logProgress]() {
     auto jidStr = std::to_string(jid);
     if (logProgress)
       std::cerr << rang::fg::gray << "removing RCTL rules for jail " << jidStr << rang::style::reset << std::endl;
     Util::execCommand({CRATE_PATH_RCTL, "-r", STR("jail:" << jidStr)}, "remove RCTL rules");
   });
+}
+
+// ---------------------------------------------------------------------------
+// Future: devd integration for real-time OOM notifications
+// ---------------------------------------------------------------------------
+// The current OOM / RCTL detection in diagnoseExitReason(), isOomKill(), and
+// wasKilledByRctl() is *post-mortem*: we inspect exit status and RCTL usage
+// after the process has already died.
+//
+// FreeBSD's devd(8) can deliver real-time RCTL notifications.  A rule like:
+//
+//   notify 100 {
+//       match "system"   "RCTL";
+//       match "subsystem" "rule";
+//       match "type"      "matched";
+//       action "/usr/local/libexec/crate-rctl-handler $jail $rule";
+//   };
+//
+// would let crated react *before* the kernel sends SIGKILL, e.g. to:
+//   - log a warning when usage crosses a soft threshold
+//   - trigger a graceful shutdown instead of an abrupt kill
+//   - emit a container event on the metrics / event bus
+//
+// Implementation steps (not yet done):
+//   1. Ship a devd.conf(5) snippet in /usr/local/etc/devd/crate-rctl.conf
+//   2. Write a small helper (crate-rctl-handler) that notifies crated via
+//      its Unix-domain socket or writes to a shared event queue.
+//   3. crated watches the queue and maps RCTL events to container names.
+//
+// Until then, all detection is post-mortem only.
+// ---------------------------------------------------------------------------
+
+// Diagnose the cause of container death based on exit status and RCTL state.
+// Returns a human-readable reason string.
+std::string diagnoseExitReason(int jid, int exitStatus) {
+  auto jidStr = std::to_string(jid);
+
+  // SIGKILL (signal 9) with exit status 137 typically indicates OOM
+  if (WIFSIGNALED(exitStatus) && WTERMSIG(exitStatus) == SIGKILL) {
+    // Check RCTL usage to determine if it was memory-related
+    try {
+      auto usage = Util::execCommandGetOutput(
+        {CRATE_PATH_RCTL, "-u", STR("jail:" << jidStr)}, "check RCTL usage");
+
+      // Look for memory limits that were hit
+      for (auto &resource : {"memoryuse", "vmemoryuse", "swapuse"}) {
+        auto pos = usage.find(resource);
+        if (pos != std::string::npos) {
+          auto valueStart = usage.find('=', pos);
+          if (valueStart != std::string::npos) {
+            auto valueEnd = usage.find('\n', valueStart);
+            auto value = usage.substr(valueStart + 1,
+                                       valueEnd - valueStart - 1);
+            return STR("OOM: killed by RCTL (" << resource << "=" << value << ")");
+          }
+        }
+      }
+    } catch (...) {}
+
+    return "killed by signal SIGKILL (possible OOM)";
+  }
+
+  if (WIFSIGNALED(exitStatus))
+    return STR("killed by signal " << WTERMSIG(exitStatus));
+
+  if (WIFEXITED(exitStatus) && WEXITSTATUS(exitStatus) != 0)
+    return STR("exited with code " << WEXITSTATUS(exitStatus));
+
+  return "exited normally";
+}
+
+// Check whether the container was killed due to an out-of-memory condition.
+// This is used by restart policies to decide whether a restart is appropriate
+// (e.g. an OOM kill may warrant a restart while a clean exit does not).
+bool isOomKill(int exitStatus) {
+  // OOM manifests as SIGKILL.  We cannot distinguish a user-sent SIGKILL from
+  // a kernel/RCTL OOM kill based on the signal alone, but SIGKILL + exit
+  // status 137 (128 + 9) is the conventional OOM indicator on FreeBSD/Linux.
+  if (WIFSIGNALED(exitStatus) && WTERMSIG(exitStatus) == SIGKILL)
+    return true;
+  if (WIFEXITED(exitStatus) && WEXITSTATUS(exitStatus) == 137)
+    return true;
+  return false;
+}
+
+// Check whether the container was killed by an RCTL resource limit.
+// Combines the SIGKILL signal check with an RCTL usage query to confirm that
+// a resource limit was in effect at the time of death.
+bool wasKilledByRctl(int jid, int exitStatus) {
+  // Must have been killed by SIGKILL to be an RCTL-enforced kill
+  if (!(WIFSIGNALED(exitStatus) && WTERMSIG(exitStatus) == SIGKILL))
+    return false;
+
+  // Query RCTL to see if any deny rules exist for this jail
+  auto jidStr = std::to_string(jid);
+  try {
+    auto listing = Util::execCommandGetOutput(
+      {CRATE_PATH_RCTL, "-l", STR("jail:" << jidStr)}, "check RCTL rules");
+    // If there are deny rules, RCTL likely caused the kill
+    return listing.find(":deny=") != std::string::npos;
+  } catch (...) {
+    return false;
+  }
+}
+
+// Return current RCTL usage of |resource| for jail |jid| as a percentage
+// (0–100) of the configured limit.  Returns -1 if no limit is set for the
+// given resource.  This enables memory-pressure monitoring in higher layers.
+int getRctlUsagePercent(int jid, const std::string &resource) {
+  auto jidStr = std::to_string(jid);
+
+  // Get current usage
+  long long usage = -1;
+  try {
+    auto usageOutput = Util::execCommandGetOutput(
+      {CRATE_PATH_RCTL, "-u", STR("jail:" << jidStr)}, "query RCTL usage");
+    std::istringstream is(usageOutput);
+    std::string line;
+    while (std::getline(is, line)) {
+      auto eqPos = line.find('=');
+      if (eqPos == std::string::npos) continue;
+      if (line.substr(0, eqPos) == resource) {
+        usage = std::stoll(line.substr(eqPos + 1));
+        break;
+      }
+    }
+  } catch (...) {
+    return -1;
+  }
+
+  if (usage < 0)
+    return -1;
+
+  // Get the limit for this resource
+  long long limit = -1;
+  try {
+    auto listing = Util::execCommandGetOutput(
+      {CRATE_PATH_RCTL, "-l", STR("jail:" << jidStr)}, "query RCTL limits");
+    std::istringstream is(listing);
+    std::string line;
+    while (std::getline(is, line)) {
+      // Format: jail:<jid>:<resource>:deny=<value>
+      if (line.find(":" + resource + ":deny=") != std::string::npos) {
+        auto eqPos = line.rfind('=');
+        if (eqPos != std::string::npos)
+          limit = std::stoll(line.substr(eqPos + 1));
+        break;
+      }
+    }
+  } catch (...) {
+    return -1;
+  }
+
+  if (limit <= 0)
+    return -1;
+
+  return static_cast<int>((usage * 100) / limit);
+}
+
+// Apply ZFS disk quota (refquota) to the container's dataset
+void applyDiskQuota(const Spec &spec, const std::string &jailPath, bool logProgress) {
+  if (spec.diskQuota.empty())
+    return;
+
+  // Determine the ZFS dataset for the jail path
+  if (!Util::Fs::isOnZfs(jailPath)) {
+    WARN("disk_quota specified but jail path is not on ZFS — ignoring")
+    return;
+  }
+
+  auto dataset = Util::Fs::getZfsDataset(jailPath);
+  if (dataset.empty()) {
+    WARN("disk_quota specified but could not determine ZFS dataset — ignoring")
+    return;
+  }
+
+  if (logProgress)
+    std::cerr << rang::fg::gray << "setting ZFS refquota " << spec.diskQuota
+              << " on " << dataset << rang::style::reset << std::endl;
+
+  ZfsOps::setRefquota(dataset, spec.diskQuota);
 }
 
 RunAtEnd attachZfsDatasets(const Spec &spec, int jid, bool logProgress) {

@@ -46,6 +46,10 @@ static void usage() {
   std::cout << "  import                     import and validate a .crate archive" << std::endl;
   std::cout << "  gui                        manage GUI sessions (run 'crate gui -h' for details)" << std::endl;
   std::cout << "  stack                      manage multi-container stacks (run 'crate stack -h' for details)" << std::endl;
+  std::cout << "  stats                      show container resource usage (run 'crate stats -h' for details)" << std::endl;
+  std::cout << "  logs                       view container logs (run 'crate logs -h' for details)" << std::endl;
+  std::cout << "  stop                       stop a running container (run 'crate stop -h' for details)" << std::endl;
+  std::cout << "  restart                    restart a running container (run 'crate restart -h' for details)" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -236,6 +240,74 @@ static void usageStack() {
   std::cout << "" << std::endl;
 }
 
+static void usageStats() {
+  std::cout << "usage: crate stats [-h|--help] [-j|--json] <name|JID>" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Show resource usage statistics for a running container." << std::endl;
+  std::cout << "Displays CPU%, memory, PIDs, I/O, and network I/O." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Options:" << std::endl;
+  std::cout << "  -j, --json                         output as JSON" << std::endl;
+  std::cout << "  -h, --help                         show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Examples:" << std::endl;
+  std::cout << "  crate stats myapp                  show stats for 'myapp'" << std::endl;
+  std::cout << "  crate stats 5                      show stats for jail with JID 5" << std::endl;
+  std::cout << "  crate stats myapp --json           output stats as JSON" << std::endl;
+  std::cout << "" << std::endl;
+}
+
+static void usageLogs() {
+  std::cout << "usage: crate logs [-h|--help] [-f|--follow] [--tail N] <name|JID>" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "View log output from a container." << std::endl;
+  std::cout << "Checks /var/log/crate/<name>/ and falls back to jail /var/log/messages." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Options:" << std::endl;
+  std::cout << "  -f, --follow                       stream new log output (like tail -f)" << std::endl;
+  std::cout << "      --tail N                       show last N lines (default: all)" << std::endl;
+  std::cout << "  -h, --help                         show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Examples:" << std::endl;
+  std::cout << "  crate logs myapp                   show all logs for 'myapp'" << std::endl;
+  std::cout << "  crate logs myapp --tail 50         show last 50 lines" << std::endl;
+  std::cout << "  crate logs myapp -f                follow log output" << std::endl;
+  std::cout << "" << std::endl;
+}
+
+static void usageStop() {
+  std::cout << "usage: crate stop [-h|--help] [-t TIMEOUT] <name|JID>" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Stop a running container." << std::endl;
+  std::cout << "Sends SIGTERM to all processes, waits for graceful shutdown," << std::endl;
+  std::cout << "then sends SIGKILL if the timeout expires." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Options:" << std::endl;
+  std::cout << "  -t TIMEOUT                         seconds to wait before SIGKILL (default: 10)" << std::endl;
+  std::cout << "  -h, --help                         show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Examples:" << std::endl;
+  std::cout << "  crate stop myapp                   stop 'myapp' (10s timeout)" << std::endl;
+  std::cout << "  crate stop -t 30 myapp             stop with 30s grace period" << std::endl;
+  std::cout << "" << std::endl;
+}
+
+static void usageRestart() {
+  std::cout << "usage: crate restart [-h|--help] [-t TIMEOUT] <name|JID>" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Restart a running container." << std::endl;
+  std::cout << "Stops the container and then starts it again from its .crate file." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Options:" << std::endl;
+  std::cout << "  -t TIMEOUT                         seconds to wait before SIGKILL during stop (default: 10)" << std::endl;
+  std::cout << "  -h, --help                         show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Examples:" << std::endl;
+  std::cout << "  crate restart myapp                restart 'myapp'" << std::endl;
+  std::cout << "  crate restart -t 30 myapp          restart with 30s stop timeout" << std::endl;
+  std::cout << "" << std::endl;
+}
+
 static void err(const char *msg) {
   fprintf(stderr, "failed to parse arguments: %s\n", msg);
   std::cout << "" << std::endl;
@@ -294,6 +366,14 @@ static Command isCommand(const char* arg) {
     return CmdGui;
   if (strEq(arg, "stack"))
     return CmdStack;
+  if (strEq(arg, "stats"))
+    return CmdStats;
+  if (strEq(arg, "logs"))
+    return CmdLogs;
+  if (strEq(arg, "stop"))
+    return CmdStop;
+  if (strEq(arg, "restart"))
+    return CmdRestart;
 
   return CmdNone;
 }
@@ -381,6 +461,22 @@ void Args::validate() {
       ERR("the 'stack exec' command requires a container name")
     if (stackSubcmd == "exec" && stackExecArgs.empty())
       ERR("the 'stack exec' command requires a command to execute")
+    break;
+  case CmdStats:
+    if (statsTarget.empty())
+      ERR("the 'stats' command requires a container name or JID")
+    break;
+  case CmdLogs:
+    if (logsTarget.empty())
+      ERR("the 'logs' command requires a container name or JID")
+    break;
+  case CmdStop:
+    if (stopTarget.empty())
+      ERR("the 'stop' command requires a container name or JID")
+    break;
+  case CmdRestart:
+    if (restartTarget.empty())
+      ERR("the 'restart' command requires a container name or JID")
     break;
   default:
     err("no command was given");
@@ -844,6 +940,76 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.guiResolution = argv[a];
         } else {
           err("too many arguments for 'gui' command");
+        }
+        break;
+      case CmdStats:
+        if (auto argShort = isShort(argv[a])) {
+          switch (argShort) {
+          case 'h': usageStats(); exit(0);
+          case 'j': args.statsJson = true; break;
+          default: err("unsupported short option '%s'", argv[a]);
+          }
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) { usageStats(); exit(0); }
+          else if (strEq(argLong, "json")) args.statsJson = true;
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.statsTarget.empty()) {
+          args.statsTarget = argv[a];
+        } else {
+          err("too many arguments for 'stats' command");
+        }
+        break;
+      case CmdLogs:
+        if (auto argShort = isShort(argv[a])) {
+          switch (argShort) {
+          case 'h': usageLogs(); exit(0);
+          case 'f': args.logsFollow = true; break;
+          case 'n': args.logsTail = std::stoul(getArgParam(++a, argc, argv)); break;
+          default: err("unsupported short option '%s'", argv[a]);
+          }
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) { usageLogs(); exit(0); }
+          else if (strEq(argLong, "follow")) args.logsFollow = true;
+          else if (strEq(argLong, "tail")) args.logsTail = std::stoul(getArgParam(++a, argc, argv));
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.logsTarget.empty()) {
+          args.logsTarget = argv[a];
+        } else {
+          err("too many arguments for 'logs' command");
+        }
+        break;
+      case CmdStop:
+        if (auto argShort = isShort(argv[a])) {
+          switch (argShort) {
+          case 'h': usageStop(); exit(0);
+          case 't': args.stopTimeout = std::stoul(getArgParam(++a, argc, argv)); break;
+          default: err("unsupported short option '%s'", argv[a]);
+          }
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) { usageStop(); exit(0); }
+          else if (strEq(argLong, "timeout")) args.stopTimeout = std::stoul(getArgParam(++a, argc, argv));
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.stopTarget.empty()) {
+          args.stopTarget = argv[a];
+        } else {
+          err("too many arguments for 'stop' command");
+        }
+        break;
+      case CmdRestart:
+        if (auto argShort = isShort(argv[a])) {
+          switch (argShort) {
+          case 'h': usageRestart(); exit(0);
+          case 't': args.restartTimeout = std::stoul(getArgParam(++a, argc, argv)); break;
+          default: err("unsupported short option '%s'", argv[a]);
+          }
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) { usageRestart(); exit(0); }
+          else if (strEq(argLong, "timeout")) args.restartTimeout = std::stoul(getArgParam(++a, argc, argv));
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.restartTarget.empty()) {
+          args.restartTarget = argv[a];
+        } else {
+          err("too many arguments for 'restart' command");
         }
         break;
       }

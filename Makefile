@@ -10,7 +10,8 @@ LIB_SRCS = lib/spec.cpp lib/create.cpp lib/run.cpp lib/list.cpp lib/info.cpp \
            lib/snapshot.cpp lib/config.cpp lib/stack.cpp \
            lib/jail_query.cpp lib/zfs_ops.cpp lib/ifconfig_ops.cpp \
            lib/pfctl_ops.cpp lib/mac_ops.cpp lib/ipfw_ops.cpp \
-           lib/capsicum_ops.cpp lib/netgraph_ops.cpp lib/nv_protocol.cpp
+           lib/capsicum_ops.cpp lib/netgraph_ops.cpp lib/nv_protocol.cpp \
+           lib/lifecycle.cpp
 
 CLI_SRCS = cli/main.cpp cli/args.cpp
 
@@ -97,12 +98,17 @@ crate-snmpd: libcrate.a $(SNMPD_OBJS)
 	$(CXX) $(LDFLAGS) -o $@ $(SNMPD_OBJS) libcrate.a $(LIBS) -lpthread
 
 install: crate
+	@mkdir -p $(DESTDIR)$(PREFIX)/bin
+	@mkdir -p $(DESTDIR)$(PREFIX)/man/man5
 	install -s -m 04755 crate $(DESTDIR)$(PREFIX)/bin
 	gzip -9 < crate.5 > $(DESTDIR)$(PREFIX)/man/man5/crate.5.gz
 
 install-daemon: crated
+	@mkdir -p $(DESTDIR)$(PREFIX)/sbin
+	@mkdir -p $(DESTDIR)$(PREFIX)/etc/rc.d
 	install -s -m 0755 crated $(DESTDIR)$(PREFIX)/sbin/crated
 	install -m 0555 daemon/crated.rc $(DESTDIR)$(PREFIX)/etc/rc.d/crated
+	install -m 0640 daemon/crated.conf.sample $(DESTDIR)$(PREFIX)/etc/crated.conf.sample
 	@if [ ! -f $(DESTDIR)$(PREFIX)/etc/crated.conf ]; then \
 		install -m 0640 daemon/crated.conf.sample $(DESTDIR)$(PREFIX)/etc/crated.conf; \
 	fi
@@ -110,10 +116,11 @@ install-daemon: crated
 install-local: crate.x
 
 install-examples:
-	@mkdir -p $(DESTDIR)$(PREFIX)/share/examples/crate
-	@for e in `ls examples/`; do \
-		install examples/$$e $(DESTDIR)$(PREFIX)/share/examples/crate/$$e; \
-	done;
+	@mkdir -p $(DESTDIR)$(PREFIX)/share/examples/crate/broken
+	@mkdir -p $(DESTDIR)$(PREFIX)/share/examples/crate/matrix
+	@find examples -type f | while read f; do \
+		install -m 644 "$$f" $(DESTDIR)$(PREFIX)/share/examples/crate/$${f#examples/}; \
+	done
 
 install-completions:
 	@mkdir -p $(DESTDIR)$(PREFIX)/share/crate/completions
@@ -127,7 +134,20 @@ install-snmpd: crate-snmpd
 	@mkdir -p $(DESTDIR)$(PREFIX)/share/snmp/mibs
 	install -m 0644 snmpd/CRATE-MIB.txt $(DESTDIR)$(PREFIX)/share/snmp/mibs/CRATE-MIB.txt
 
-clean:
+UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
+             network_test network_ipv6_test err_test
+UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
+
+test: $(UNIT_TEST_BINS)
+	cd tests && kyua test
+
+tests/unit/%: tests/unit/%.cpp
+	$(CXX) -std=c++17 -Ilib -o $@ $< -L/usr/local/lib -latf-c++ -latf-c
+
+clean-tests:
+	rm -f $(UNIT_TEST_BINS)
+
+clean: clean-tests
 	rm -f $(LIB_OBJS) $(CLI_OBJS) $(DAEMON_OBJS) $(SNMPD_OBJS) libcrate.a crate crated crate-snmpd lib/lst-all-script-sections.h
 
 # --- Generated sources ---

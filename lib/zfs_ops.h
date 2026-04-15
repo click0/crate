@@ -50,4 +50,7 @@ void diff(const std::string &snapOrDataset1, const std::string &snapOrDataset2, 
 void send(const std::string &snapName, int fd);
 void recv(const std::string &targetDataset, int fd);
 
+// Set refquota (per-dataset disk usage limit)
+void setRefquota(const std::string &dataset, const std::string &quota);
+
 }

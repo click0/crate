@@ -11,6 +11,13 @@ namespace IpfwOps {
 
 bool available();
 
+// Runtime detection: returns true if the native IP_FW3 setsockopt API
+// is functional on this system.  Result is probed once and cached.
+bool useNativeApi();
+
+// Enable/disable performance timing output for native vs shell operations.
+void setLogProgress(bool enabled);
+
 // Add a firewall rule. ruleNum=0 for auto-numbering.
 void addRule(unsigned ruleNum, const std::string &rule);
 

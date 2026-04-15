@@ -117,6 +117,7 @@ public:
 
   // Resource limits via RCTL (§5)
   std::map<std::string, std::string>                 limits;                  // RCTL resource limits: name -> value
+  std::string                                        diskQuota;               // ZFS refquota (e.g. "10G"), applied to container dataset
 
   // Encryption (§1)
   bool                                               encrypted = false;       // require encrypted ZFS dataset

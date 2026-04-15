@@ -1,0 +1,79 @@
+name: FreeBSD Build (lite)
+
+# Швидкий компайл-чек + юніт-тести.
+# Запускається на push у будь-яку гілку, окрім master,
+# щоб давати швидкий зворотній зв'язок під час розробки.
+# Повний build (make + ci-verify) живе в freebsd-build.yml.
+
+on:
+  push:
+    branches-ignore: [master]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - 'TODO'
+      - 'CHANGELOG.md'
+      - 'completions/**'
+      - 'examples/**'
+      - 'templates/**'
+      - 'crate.5'
+      - '.github/workflows/freebsd-build.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    name: FreeBSD 14.2 lite (compile + unit tests)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile + unit tests on FreeBSD
+        uses: cross-platform-actions/action@v0.32.0
+        timeout-minutes: 20
+        with:
+          operating_system: freebsd
+          version: '14.2'
+          shell: sh
+          run: |
+            set -ex
+
+            echo "::group::Install dependencies"
+            sudo pkg install -y pkgconf yaml-cpp rang kyua
+            echo "::endgroup::"
+
+            echo "::group::System info"
+            uname -a
+            c++ --version
+            NCPU=$(sysctl -n hw.ncpu)
+            echo "ncpu=$NCPU"
+            echo "::endgroup::"
+
+            echo "::group::Compile changed components (smoke)"
+            CXXFLAGS="-Wall -std=c++17 -Ilib $(pkg-config --cflags yaml-cpp)"
+            for f in lib/run.cpp lib/util.cpp lib/create.cpp lib/locs.cpp lib/mount.cpp; do
+              echo "  Compiling $f ..."
+              c++ $CXXFLAGS -c "$f" -o "${f%.cpp}.o"
+            done
+            echo "::endgroup::"
+
+            echo "::group::Build unit tests"
+            ATF_LIBS="-L/usr/local/lib -latf-c++ -latf-c"
+            for t in util_test spec_test spec_netopt_test lifecycle_test \
+                     network_test network_ipv6_test err_test; do
+              echo "  Compiling tests/unit/${t} ..."
+              c++ -std=c++17 -Ilib -o "tests/unit/${t}" \
+                  "tests/unit/${t}.cpp" $ATF_LIBS
+            done
+            echo "::endgroup::"
+
+            echo "::group::Run kyua unit tests"
+            # Без `|| true` — провал юніт-тесту має валити CI.
+            cd tests && sudo kyua test unit
+            sudo kyua report --verbose
+            echo "::endgroup::"

@@ -315,25 +315,156 @@ nmap, amass, wget, aria2, fetch, gzip, yt-dlp, xeyes
 
 ## Встановлення
 
-Через порти FreeBSD:
+### Через порти FreeBSD
+
 ```sh
 cd /usr/ports/sysutils/crate && make install clean
 ```
 
-Або збірка з вихідних кодів:
+Порт підтримує OPTIONS збірки (увімкнені за замовчуванням, якщо не зазначено інше):
+
+| Опція | Опис |
+|---|---|
+| `DAEMON` | Демон керування контейнерами (crated) |
+| `SNMPD` | SNMP-агент моніторингу (crate-snmpd) |
+| `EXAMPLES` | Приклади специфікацій контейнерів |
+| `COMPLETIONS` | Автодоповнення Bash/ZSH (вимкнено за замовчуванням) |
+| `ZFS` | Нативний ZFS API (libzfs) |
+| `IFCONFIG` | Нативне налаштування інтерфейсів (libifconfig) |
+| `PFCTL` | Нативне керування PF файрволом (libpfctl) |
+| `CAPSICUM` | Підтримка Capsicum sandbox (libcasper) |
+| `LIBVIRT` | Підтримка віртуальних машин (bhyve через libvirt) |
+| `X11` | Проброс X11 дисплею |
+| `VNCSERVER` | Вбудований VNC-сервер (libvncserver) (вимкнено за замовчуванням) |
+| `LIBSEAT` | Керування DRM/GPU сесіями (libseat) |
+
+```sh
+# Інтерактивне налаштування опцій
+cd /usr/ports/sysutils/crate && make config && make install clean
+```
+
+### З вихідних кодів
+
 ```sh
 make && sudo make install
 ```
 
 **Залежності:** yaml-cpp, libjail
 
-### Додаткові компоненти
+**Прапорці збірки** (встановіть `=0` для вимкнення):
 
 ```sh
-make install-daemon       # crated — демон керування контейнерами
-make install-examples     # приклади специфікацій до /usr/local/share/examples/crate
-make install-completions  # автодоповнення shell
+make HAVE_LIBZFS=1 HAVE_LIBIFCONFIG=1 HAVE_LIBPFCTL=1 HAVE_CAPSICUM=1 \
+     WITH_LIBVIRT=1 WITH_X11=1 WITH_LIBSEAT=1 WITH_LIBVNCSERVER=0
 ```
+
+Всі нативні API-обгортки мають fallback на shell-команди при збірці без відповідного прапорця.
+
+### Make-цілі
+
+| Ціль | Опис |
+|---|---|
+| `make` | Зібрати CLI `crate` |
+| `make all-daemon` | Зібрати `crate` + демон `crated` |
+| `make all-snmpd` | Зібрати `crate` + агент `crate-snmpd` |
+| `make install` | Встановити crate CLI + man-сторінки |
+| `make install-daemon` | Встановити crated, RC-скрипт, конфігурацію |
+| `make install-snmpd` | Встановити crate-snmpd + MIB-файл |
+| `make install-examples` | Встановити приклади до `/usr/local/share/examples/crate/` |
+| `make install-completions` | Встановити автодоповнення shell |
+| `make test` | Скомпілювати юніт-тести та запустити через kyua |
+
+## crated — REST API демон
+
+`crated` — демон керування життєвим циклом контейнерів з REST API для віддаленого керування.
+
+### Можливості
+
+* Слухає на **Unix-сокеті** (локально) та **TCP/TLS** (віддалено)
+* **Автентифікація токенами** (SHA-256 хеші, ролі: `viewer`/`admin`)
+* **Обмеження швидкості** (100 зап/с читання, 10 зап/с запис)
+* **Prometheus-метрики** на `/metrics`
+* Інтеграція з **RC-сервісами** FreeBSD
+
+### API ендпоінти
+
+| Ендпоінт | Авт. | Опис |
+|---|---|---|
+| `GET /healthz` | — | Перевірка стану |
+| `GET /api/v1/containers` | — | Перелік запущених контейнерів |
+| `GET /api/v1/containers/:name/gui` | — | Інформація GUI-сесії (дисплей, VNC/WS порти) |
+| `GET /api/v1/containers/:name/stats` | так | Використання ресурсів (RCTL) |
+| `GET /api/v1/containers/:name/logs` | так | Логи (`?follow=true`, `?tail=N`) |
+| `POST /api/v1/containers/:name/start` | так | Запустити контейнер з .crate |
+| `POST /api/v1/containers/:name/stop` | так | Зупинити контейнер (SIGTERM → SIGKILL) |
+| `DELETE /api/v1/containers/:name` | так | Знищити контейнер |
+| `GET /api/v1/host` | — | Інформація про хост-систему |
+| `GET /metrics` | — | Prometheus-метрики |
+
+### Конфігурація
+
+```yaml
+# /usr/local/etc/crated.conf
+listen:
+    unix: /var/run/crate/crated.sock
+    tcp_port: 9800
+    tcp_bind: 0.0.0.0
+
+tls:
+    cert: /usr/local/etc/crate/tls/server.pem
+    key: /usr/local/etc/crate/tls/server.key
+    ca: /usr/local/etc/crate/tls/ca.pem
+    require_client_cert: true
+
+auth:
+    tokens:
+        - name: ansible
+          token_hash: "sha256:..."
+          role: admin
+        - name: grafana
+          token_hash: "sha256:..."
+          role: viewer
+
+log:
+    file: /var/log/crated.log
+    level: info
+```
+
+### RC-сервіс
+
+```sh
+# /etc/rc.conf
+crated_enable="YES"
+
+# Керування
+service crated start
+service crated stop
+service crated status
+```
+
+## crate-snmpd — SNMP-агент моніторингу
+
+`crate-snmpd` — AgentX-підагент, що надає метрики контейнерів через SNMP. Збирає дані з `jls`/`rctl` та реєструє `CRATE-MIB` (встановлюється до `/usr/local/share/snmp/mibs/`).
+
+```sh
+make all-snmpd && sudo make install-snmpd
+```
+
+## Тестування
+
+Проєкт використовує **Kyua** та **ATF** (стандартний фреймворк тестування FreeBSD).
+
+```sh
+make test                     # Зібрати та запустити всі тести
+cd tests && kyua test         # Запуск з каталогу tests
+kyua test unit/               # Лише юніт-тести
+kyua test functional/         # Лише функціональні тести
+kyua report -v                # Детальний звіт
+```
+
+**Юніт-тести** (C++17, libatf-c++): парсинг специфікацій, мережеві опції, IPv6, життєвий цикл jail, обробка помилок.
+
+**Функціональні тести** (shell-based ATF): CLI-команди (`help`, `version`, `validate`, `list`).
 
 ## Сумісність
 

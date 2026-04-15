@@ -40,4 +40,17 @@ std::vector<VmInfo> listVms();
 // Get info about a specific VM.
 VmInfo getVmInfo(const std::string &name);
 
+// Connect a VM's tap interface to a shared bridge (for jail<->VM networking).
+// Called after VM creation to add the tap to the same bridge used by jails.
+void connectToSharedBridge(const std::string &vmName,
+                           const std::string &bridgeIface);
+
+// Configure VM to use stack DNS service.
+// Writes resolv.conf via virtio-9p shared directory or cloud-init.
+void configureVmDns(const std::string &vmName, const std::string &dnsIp);
+
+// Generate cloud-init user-data script that mounts 9p shares in the guest.
+// Returns the path to the generated user-data file.
+std::string generateCloudInitFor9p(const std::vector<VmSpec::VirtioFsMount> &volumes);
+
 }
