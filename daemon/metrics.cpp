@@ -82,48 +82,55 @@ std::string collectPrometheusMetrics() {
   } catch (...) {}
 
   // --- Per-container RCTL metrics ---
-  if (!jails.empty()) {
-    ss << "# HELP crate_container_cpu_percent CPU usage percentage\n"
-       << "# TYPE crate_container_cpu_percent gauge\n"
-       << "# HELP crate_container_memory_bytes Memory usage in bytes\n"
-       << "# TYPE crate_container_memory_bytes gauge\n"
-       << "# HELP crate_container_processes Number of processes\n"
-       << "# TYPE crate_container_processes gauge\n"
-       << "# HELP crate_container_openfiles Number of open files\n"
-       << "# TYPE crate_container_openfiles gauge\n"
-       << "# HELP crate_container_read_bps Disk read bytes per second\n"
-       << "# TYPE crate_container_read_bps gauge\n"
-       << "# HELP crate_container_write_bps Disk write bytes per second\n"
-       << "# TYPE crate_container_write_bps gauge\n";
+  // Query rctl -u for each running jail to get resource usage
+  try {
+    auto jlsOutput2 = Util::execCommandGetOutput(
+      {"/usr/sbin/jls", "-q", "jid", "name"}, "list jails for rctl");
+    std::istringstream jlsIs(jlsOutput2);
+    std::string rjid, rname;
 
-    for (auto &j : jails) {
+    bool headerWritten = false;
+    while (jlsIs >> rjid >> rname) {
       try {
-        auto rctlOut = Util::execCommandGetOutput(
-          {CRATE_PATH_RCTL, "-u", "jail:" + j.name}, "rctl usage");
-        std::istringstream is(rctlOut);
-        std::string line;
-        auto label = "name=\"" + j.name + "\",jid=\"" + j.jid + "\"";
-        while (std::getline(is, line)) {
-          auto eq = line.find('=');
-          if (eq == std::string::npos) continue;
-          auto key = line.substr(0, eq);
-          auto val = line.substr(eq + 1);
-          if (key == "pcpu")
-            ss << "crate_container_cpu_percent{" << label << "} " << val << "\n";
-          else if (key == "memoryuse")
-            ss << "crate_container_memory_bytes{" << label << "} " << val << "\n";
-          else if (key == "maxproc")
-            ss << "crate_container_processes{" << label << "} " << val << "\n";
-          else if (key == "openfiles")
-            ss << "crate_container_openfiles{" << label << "} " << val << "\n";
-          else if (key == "readbps")
-            ss << "crate_container_read_bps{" << label << "} " << val << "\n";
-          else if (key == "writebps")
-            ss << "crate_container_write_bps{" << label << "} " << val << "\n";
+        auto rctlOutput = Util::execCommandGetOutput(
+          {"/usr/bin/rctl", "-u", "jail:" + rjid}, "query RCTL usage");
+
+        if (!headerWritten) {
+          ss << "# HELP crate_container_memory_bytes Container memory usage in bytes\n"
+             << "# TYPE crate_container_memory_bytes gauge\n"
+             << "# HELP crate_container_cpu_pct Container CPU usage percent\n"
+             << "# TYPE crate_container_cpu_pct gauge\n"
+             << "# HELP crate_container_maxproc Container max processes\n"
+             << "# TYPE crate_container_maxproc gauge\n"
+             << "# HELP crate_container_openfiles Container open file descriptors\n"
+             << "# TYPE crate_container_openfiles gauge\n"
+             << "# HELP crate_container_readbps Container read bytes per second\n"
+             << "# TYPE crate_container_readbps gauge\n"
+             << "# HELP crate_container_writebps Container write bytes per second\n"
+             << "# TYPE crate_container_writebps gauge\n";
+          headerWritten = true;
         }
-      } catch (...) {}
+
+        auto rctlMap = parseRctlUsage(rctlOutput);
+        auto labels = "name=\"" + rname + "\"";
+
+        auto emit = [&](const char *rctlKey, const char *metricName) {
+          auto it = rctlMap.find(rctlKey);
+          if (it != rctlMap.end())
+            ss << metricName << "{" << labels << "} " << it->second << "\n";
+        };
+
+        emit("memoryuse",  "crate_container_memory_bytes");
+        emit("pcpu",       "crate_container_cpu_pct");
+        emit("maxproc",    "crate_container_maxproc");
+        emit("openfiles",  "crate_container_openfiles");
+        emit("readbps",    "crate_container_readbps");
+        emit("writebps",   "crate_container_writebps");
+      } catch (...) {
+        // RCTL might not be available for this jail
+      }
     }
-  }
+  } catch (...) {}
 
   return ss.str();
 }
