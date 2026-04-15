@@ -19,8 +19,15 @@
 typedef std::pair<unsigned, unsigned> PortRange;
 
 static unsigned toUInt(const std::string &str) {
-	std::size_t pos;
-	auto u = std::stoul(str, &pos);
+	std::size_t pos = 0;
+	unsigned long u = 0;
+	try {
+		u = std::stoul(str, &pos);
+	} catch (const std::invalid_argument &) {
+		throw std::runtime_error("invalid numeric string '" + str + "'");
+	} catch (const std::out_of_range &) {
+		throw std::runtime_error("number out of range '" + str + "'");
+	}
 	if (pos != str.size())
 		throw std::runtime_error("trailing characters");
 	return u;

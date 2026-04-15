@@ -400,8 +400,15 @@ std::string stripTrailingSpace(const std::string &str) {
 }
 
 unsigned toUInt(const std::string &str) {
-  std::size_t pos;
-  auto u = std::stoul(str, &pos);
+  std::size_t pos = 0;
+  unsigned long u = 0;
+  try {
+    u = std::stoul(str, &pos);
+  } catch (const std::invalid_argument &) {
+    ERR2("convert string to unsigned", "invalid numeric string '" << str << "'")
+  } catch (const std::out_of_range &) {
+    ERR2("convert string to unsigned", "number out of range '" << str << "'")
+  }
   if (pos != str.size())
     ERR2("convert string to unsigned", "trailing characters in string '" << str << "'")
   return u;
