@@ -21,6 +21,18 @@
 
 #define ERR(msg...) ERR2("pfctl", msg)
 
+// RAII exclusive lock to serialize concurrent pfctl operations across
+// multiple crate processes.  Uses O_EXLOCK (FreeBSD atomic open+lock).
+class PfLock {
+public:
+  PfLock() : fd_(::open("/var/run/crate/pfctl.lock",
+                         O_RDWR | O_CREAT | O_EXLOCK, 0600)) {}
+  ~PfLock() { if (fd_ >= 0) ::close(fd_); }
+  bool held() const { return fd_ >= 0; }
+private:
+  int fd_;
+};
+
 namespace PfctlOps {
 
 #ifdef HAVE_LIBPFCTL
@@ -47,6 +59,7 @@ bool available() {
 }
 
 void addRules(const std::string &anchor, const std::vector<std::string> &rules) {
+  PfLock lock;
 #ifdef HAVE_LIBPFCTL
   int fd = openPfDev();
   if (fd >= 0) {
@@ -86,6 +99,7 @@ void addRules(const std::string &anchor, const std::vector<std::string> &rules) 
 }
 
 void addRules(const std::string &anchor, const std::string &rulesText) {
+  PfLock lock;
   // Write rules to a temp file, then load
   auto tmpFile = STR("/tmp/crate-pf-" << ::getpid() << ".rules");
   Util::Fs::writeFile(rulesText, tmpFile);
@@ -100,6 +114,7 @@ void addRules(const std::string &anchor, const std::string &rulesText) {
 }
 
 void flushRules(const std::string &anchor) {
+  PfLock lock;
 #ifdef HAVE_LIBPFCTL
   int fd = openPfDev();
   if (fd >= 0) {
@@ -122,12 +137,44 @@ void flushRules(const std::string &anchor) {
   }
 }
 
+static bool g_anchorChecked = false;
+
+static void warnIfParentAnchorMissing() {
+  if (g_anchorChecked)
+    return;
+  g_anchorChecked = true;
+  try {
+    auto output = Util::execCommandGetOutput(
+      {CRATE_PATH_PFCTL, "-s", "Anchors"}, "list pf anchors");
+    bool found = false;
+    std::istringstream iss(output);
+    std::string line;
+    while (std::getline(iss, line)) {
+      if (line == "crate" || line.substr(0, 6) == "crate/") {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      WARN("pf anchor \"crate\" is not present in the main ruleset.\n"
+           "  Per-container firewall policy will load rules into anchors\n"
+           "  but pf will not evaluate them until you add to /etc/pf.conf:\n"
+           "    anchor \"crate/*\"\n"
+           "  and reload: pfctl -f /etc/pf.conf")
+    }
+  } catch (...) {
+    WARN("could not verify pf anchor hierarchy (pfctl -s Anchors failed)")
+  }
+}
+
 std::string loadContainerPolicy(const Spec &spec,
                                 const std::string &jailXname,
                                 const std::string &ipv4,
                                 const std::string &ipv6) {
   if (!spec.firewallPolicy)
     return {};
+
+  warnIfParentAnchorMissing();
 
   auto anchorName = STR("crate/" << jailXname);
   bool hasV6 = !ipv6.empty();

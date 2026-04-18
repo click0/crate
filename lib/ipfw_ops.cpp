@@ -199,8 +199,22 @@ void deleteRulesInSet(unsigned setNum) {
     "delete ipfw rule set");
 }
 
+static bool isNatInstanceInUse(unsigned natInstance) {
+  try {
+    auto output = Util::execCommandGetOutput(
+      {CRATE_PATH_IPFW, "nat", std::to_string(natInstance), "show"},
+      "check ipfw NAT instance");
+    return !output.empty();
+  } catch (...) {
+    return false;
+  }
+}
+
 void configureNat(unsigned natInstance, const std::string &natConfig) {
-  // NAT configuration requires complex TLV encoding; use command fallback
+  if (isNatInstanceInUse(natInstance))
+    WARN("ipfw NAT instance " << natInstance << " already exists — "
+         "another application may be using it; overwriting")
+
   PerfTimer timer("configureNat", false /*always shell*/);
   std::vector<std::string> argv = {CRATE_PATH_IPFW, "nat",
                                     std::to_string(natInstance), "config"};

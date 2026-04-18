@@ -24,9 +24,16 @@
 // ipfw rule number layout (§18): dynamically assigned via FwSlots.
 // Each crate gets a unique slot; rule numbers are: base + slot*slotSize + offset.
 // IN rules use range 10000-29999, OUT rules use range 50000-64999.
-static const unsigned fwSlotSize = 10;
-static const unsigned fwRuleRangeInBase = 10000;
-static const unsigned fwRuleRangeOutBase = 50000;
+// Override via environment: CRATE_IPFW_RULE_BASE_IN, CRATE_IPFW_RULE_BASE_OUT,
+// CRATE_IPFW_SLOT_SIZE to avoid collisions with other jail managers.
+static unsigned envOrDefault(const char *name, unsigned def) {
+  auto *val = ::getenv(name);
+  if (!val) return def;
+  try { return Util::toUInt(val); } catch (...) { return def; }
+}
+static const unsigned fwSlotSize          = envOrDefault("CRATE_IPFW_SLOT_SIZE", 10);
+static const unsigned fwRuleRangeInBase   = envOrDefault("CRATE_IPFW_RULE_BASE_IN", 10000);
+static const unsigned fwRuleRangeOutBase  = envOrDefault("CRATE_IPFW_RULE_BASE_OUT", 50000);
 
 namespace RunNet {
 
