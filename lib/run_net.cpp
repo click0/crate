@@ -24,9 +24,16 @@
 // ipfw rule number layout (§18): dynamically assigned via FwSlots.
 // Each crate gets a unique slot; rule numbers are: base + slot*slotSize + offset.
 // IN rules use range 10000-29999, OUT rules use range 50000-64999.
-static const unsigned fwSlotSize = 10;
-static const unsigned fwRuleRangeInBase = 10000;
-static const unsigned fwRuleRangeOutBase = 50000;
+// Override via environment: CRATE_IPFW_RULE_BASE_IN, CRATE_IPFW_RULE_BASE_OUT,
+// CRATE_IPFW_SLOT_SIZE to avoid collisions with other jail managers.
+static unsigned envOrDefault(const char *name, unsigned def) {
+  auto *val = ::getenv(name);
+  if (!val) return def;
+  try { return Util::toUInt(val); } catch (...) { return def; }
+}
+static const unsigned fwSlotSize          = envOrDefault("CRATE_IPFW_SLOT_SIZE", 10);
+static const unsigned fwRuleRangeInBase   = envOrDefault("CRATE_IPFW_RULE_BASE_IN", 10000);
+static const unsigned fwRuleRangeOutBase  = envOrDefault("CRATE_IPFW_RULE_BASE_OUT", 50000);
 
 namespace RunNet {
 
@@ -110,7 +117,9 @@ void destroyEpair(const std::string &ifaceA) {
 RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
                             const GatewayInfo &gw, unsigned fwSlot,
                             const std::string &nameserverIp,
-                            int origIpForwarding, bool logProgress) {
+                            int origIpForwarding, bool logProgress,
+                            const std::string &ipv6Addr,
+                            const std::string &ipv6Iface) {
   auto optionNet = spec.optionNet();
   if (!optionNet)
     return RunAtEnd();
@@ -122,11 +131,13 @@ RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
     Util::execCommand(argv, "firewall rule");
   };
 
+  bool hasV6 = !ipv6Addr.empty();
   auto fwRuleInNo  = fwRuleRangeInBase + fwSlot * fwSlotSize + 1;
   auto fwNatInNo = fwRuleInNo;
   auto fwNatOutCommonNo = fwRuleRangeOutBase;
   auto fwRuleOutCommonNo = fwRuleRangeOutBase;
   auto fwRuleOutNo = fwRuleRangeOutBase + fwSlot * fwSlotSize + 1;
+  auto fwRule6InNo = fwRuleRangeInBase + fwSlot * fwSlotSize + 2;
 
   auto ruleInS  = std::to_string(fwRuleInNo);
   auto natInS   = std::to_string(fwNatInNo);
@@ -161,6 +172,21 @@ RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
       execFW({"add", ruleInS, "nat", natInS, "udp", "from", "any", "to", gw.hostIP, rangeToStr(rangePair.first), "in", "recv", gw.iface});
       execFW({"add", ruleInS, "nat", natInS, "udp", "from", epair.ipB, rangeToStr(rangePair.second), "to", "any", "out", "xmit", gw.iface});
     }
+
+    // IPv6 inbound: no NAT, use ipfw fwd to forward directly to jail IPv6 addr.
+    // IPv6 global addresses are routable, so we only need a forward rule.
+    if (hasV6) {
+      auto fwRule6InNo = fwRuleRangeInBase + fwSlot * fwSlotSize + 2;
+      auto rule6InS = std::to_string(fwRule6InNo);
+      for (auto &rangePair : optionNet->inboundPortsTcp) {
+        execFW({"add", rule6InS, "fwd", ipv6Addr + "," + rangeToStr(rangePair.second),
+                "tcp", "from", "any", "to", "me6", rangeToStr(rangePair.first), "in"});
+      }
+      for (auto &rangePair : optionNet->inboundPortsUdp) {
+        execFW({"add", rule6InS, "fwd", ipv6Addr + "," + rangeToStr(rangePair.second),
+                "udp", "from", "any", "to", "me6", rangeToStr(rangePair.first), "in"});
+      }
+    }
   }
 
   // OUT common rules
@@ -188,15 +214,45 @@ RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
     execFW({"add", ruleOutS, "nat", natOutCommonS, "all", "from", epair.ipB, "to", "any", "out", "xmit", gw.iface});
   }
 
+  // IPv6 outbound rules (no NAT — IPv6 uses global addresses)
+  unsigned fwRule6OutNo = 0;
+  if (hasV6 && optionNet->allowOutbound()) {
+    fwRule6OutNo = fwRuleRangeOutBase + fwSlot * fwSlotSize + 2;
+    auto rule6S = std::to_string(fwRule6OutNo);
+    auto v6Iface = ipv6Iface.empty() ? gw.iface : ipv6Iface;
+    if (optionNet->outboundDns)
+      execFW({"add", rule6S, "allow", "udp", "from", ipv6Addr, "to", "any", "53"});
+    execFW({"add", rule6S, "deny", "udp", "from", ipv6Addr, "to", "any", "53"});
+    if (!optionNet->outboundHost)
+      execFW({"add", rule6S, "deny", "ip6", "from", ipv6Addr, "to", "me6"});
+    execFW({"add", rule6S, "allow", "ip6", "from", ipv6Addr, "to", "any", "out", "xmit", v6Iface});
+    execFW({"add", rule6S, "allow", "ip6", "from", "any", "to", ipv6Addr, "in", "recv", v6Iface});
+  }
+
   // cleanup callback
-  return RunAtEnd([fwRuleInNo, fwRuleOutNo, fwRuleOutCommonNo, optionNet, origIpForwarding, logProgress]() {
+  return RunAtEnd([fwRuleInNo, fwRule6InNo, fwRuleOutNo, fwRuleOutCommonNo, fwRule6OutNo, hasV6, optionNet, origIpForwarding, logProgress]() {
     auto ruleInS  = std::to_string(fwRuleInNo);
     auto ruleOutS = std::to_string(fwRuleOutNo);
     auto ruleOutCommonS = std::to_string(fwRuleOutCommonNo);
-    if (optionNet->allowInbound())
+    if (optionNet->allowInbound()) {
       Util::execCommand({CRATE_PATH_IPFW, "delete", ruleInS}, "destroy firewall rule");
+      if (hasV6) {
+        try {
+          Util::execCommand({CRATE_PATH_IPFW, "delete", std::to_string(fwRule6InNo)}, "destroy IPv6 inbound firewall rule");
+        } catch (const std::exception &e) {
+          WARN("failed to delete IPv6 inbound rule " << fwRule6InNo << ": " << e.what())
+        }
+      }
+    }
     if (optionNet->allowOutbound()) {
       Util::execCommand({CRATE_PATH_IPFW, "delete", ruleOutS}, "destroy firewall rule");
+      if (hasV6 && fwRule6OutNo > 0) {
+        try {
+          Util::execCommand({CRATE_PATH_IPFW, "delete", std::to_string(fwRule6OutNo)}, "destroy IPv6 firewall rule");
+        } catch (const std::exception &e) {
+          WARN("failed to delete IPv6 firewall rule " << fwRule6OutNo << ": " << e.what())
+        }
+      }
       std::unique_ptr<Ctx::FwUsers> fwUsers(Ctx::FwUsers::lock());
       fwUsers->del(::getpid());
       if (fwUsers->isEmpty()) {
@@ -209,42 +265,6 @@ RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
       }
       fwUsers->unlock();
     }
-  });
-}
-
-RunAtEnd setupPfAnchor(const Spec &spec, const EpairInfo &epair,
-                       const std::string &jailXname, bool logProgress) {
-  if (!spec.firewallPolicy)
-    return RunAtEnd();
-
-  auto anchorName = STR("crate/" << jailXname);
-  std::ostringstream pfRules;
-
-  // Block IP ranges
-  for (auto &cidr : spec.firewallPolicy->blockIp)
-    pfRules << "block drop quick from " << epair.ipB << " to " << cidr << std::endl;
-  // Allow specific TCP ports
-  for (auto port : spec.firewallPolicy->allowTcp)
-    pfRules << "pass out quick proto tcp from " << epair.ipB << " to any port " << port << std::endl;
-  // Allow specific UDP ports
-  for (auto port : spec.firewallPolicy->allowUdp)
-    pfRules << "pass out quick proto udp from " << epair.ipB << " to any port " << port << std::endl;
-  // Default policy
-  if (spec.firewallPolicy->defaultPolicy == "block")
-    pfRules << "block drop all" << std::endl;
-  else
-    pfRules << "pass all" << std::endl;
-
-  // Load rules into pf anchor
-  PfctlOps::addRules(anchorName, pfRules.str());
-
-  if (logProgress)
-    std::cerr << rang::fg::gray << "pf anchor '" << anchorName << "' loaded" << rang::style::reset << std::endl;
-
-  return RunAtEnd([anchorName, logProgress]() {
-    if (logProgress)
-      std::cerr << rang::fg::gray << "flushing pf anchor '" << anchorName << "'" << rang::style::reset << std::endl;
-    PfctlOps::flushRules(anchorName);
   });
 }
 

@@ -3,6 +3,8 @@
 // PF firewall operations using libpfctl with pfctl(8) fallback.
 
 #include "pfctl_ops.h"
+#include "spec.h"
+#include "net.h"
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
@@ -18,6 +20,18 @@
 #include <sstream>
 
 #define ERR(msg...) ERR2("pfctl", msg)
+
+// RAII exclusive lock to serialize concurrent pfctl operations across
+// multiple crate processes.  Uses O_EXLOCK (FreeBSD atomic open+lock).
+class PfLock {
+public:
+  PfLock() : fd_(::open("/var/run/crate/pfctl.lock",
+                         O_RDWR | O_CREAT | O_EXLOCK, 0600)) {}
+  ~PfLock() { if (fd_ >= 0) ::close(fd_); }
+  bool held() const { return fd_ >= 0; }
+private:
+  int fd_;
+};
 
 namespace PfctlOps {
 
@@ -45,6 +59,7 @@ bool available() {
 }
 
 void addRules(const std::string &anchor, const std::vector<std::string> &rules) {
+  PfLock lock;
 #ifdef HAVE_LIBPFCTL
   int fd = openPfDev();
   if (fd >= 0) {
@@ -84,6 +99,7 @@ void addRules(const std::string &anchor, const std::vector<std::string> &rules) 
 }
 
 void addRules(const std::string &anchor, const std::string &rulesText) {
+  PfLock lock;
   // Write rules to a temp file, then load
   auto tmpFile = STR("/tmp/crate-pf-" << ::getpid() << ".rules");
   Util::Fs::writeFile(rulesText, tmpFile);
@@ -98,6 +114,7 @@ void addRules(const std::string &anchor, const std::string &rulesText) {
 }
 
 void flushRules(const std::string &anchor) {
+  PfLock lock;
 #ifdef HAVE_LIBPFCTL
   int fd = openPfDev();
   if (fd >= 0) {
@@ -113,25 +130,85 @@ void flushRules(const std::string &anchor) {
   try {
     Util::execCommand({CRATE_PATH_PFCTL, "-a", anchor, "-F", "all"},
       STR("flush PF anchor " << anchor));
+  } catch (const std::exception &e) {
+    WARN("failed to flush pf anchor '" << anchor << "': " << e.what())
   } catch (...) {
-    // Best effort — anchor may not exist
+    WARN("failed to flush pf anchor '" << anchor << "'")
   }
 }
 
-void addNatRule(const std::string &anchor,
-                const std::string &srcNet, const std::string &natAddr) {
-  auto rule = STR("nat on egress from " << srcNet << " to any -> " << natAddr);
-  addRules(anchor, {rule});
+static bool g_anchorChecked = false;
+
+static void warnIfParentAnchorMissing() {
+  if (g_anchorChecked)
+    return;
+  g_anchorChecked = true;
+  try {
+    auto output = Util::execCommandGetOutput(
+      {CRATE_PATH_PFCTL, "-s", "Anchors"}, "list pf anchors");
+    bool found = false;
+    std::istringstream iss(output);
+    std::string line;
+    while (std::getline(iss, line)) {
+      if (line == "crate" || line.substr(0, 6) == "crate/") {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      WARN("pf anchor \"crate\" is not present in the main ruleset.\n"
+           "  Per-container firewall policy will load rules into anchors\n"
+           "  but pf will not evaluate them until you add to /etc/pf.conf:\n"
+           "    anchor \"crate/*\"\n"
+           "  and reload: pfctl -f /etc/pf.conf")
+    }
+  } catch (...) {
+    WARN("could not verify pf anchor hierarchy (pfctl -s Anchors failed)")
+  }
 }
 
-void addRdrRule(const std::string &anchor,
-                const std::string &extAddr, int extPort,
-                const std::string &intAddr, int intPort,
-                const std::string &proto) {
-  auto rule = STR("rdr on egress proto " << proto
-                  << " from any to " << extAddr << " port " << extPort
-                  << " -> " << intAddr << " port " << intPort);
-  addRules(anchor, {rule});
+std::string loadContainerPolicy(const Spec &spec,
+                                const std::string &jailXname,
+                                const std::string &ipv4,
+                                const std::string &ipv6) {
+  if (!spec.firewallPolicy)
+    return {};
+
+  warnIfParentAnchorMissing();
+
+  auto anchorName = STR("crate/" << jailXname);
+  bool hasV6 = !ipv6.empty();
+  std::ostringstream pf;
+
+  for (auto &cidr : spec.firewallPolicy->blockIp) {
+    pf << "block drop quick from " << ipv4 << " to " << cidr << "\n";
+    if (hasV6) {
+      auto slash = cidr.find('/');
+      auto addr = (slash != std::string::npos) ? cidr.substr(0, slash) : cidr;
+      if (Net::isIpv6Address(addr))
+        pf << "block drop quick from " << ipv6 << " to " << cidr << "\n";
+    }
+  }
+
+  for (auto port : spec.firewallPolicy->allowTcp) {
+    pf << "pass out quick proto tcp from " << ipv4 << " to any port " << port << "\n";
+    if (hasV6)
+      pf << "pass out quick inet6 proto tcp from " << ipv6 << " to any port " << port << "\n";
+  }
+
+  for (auto port : spec.firewallPolicy->allowUdp) {
+    pf << "pass out quick proto udp from " << ipv4 << " to any port " << port << "\n";
+    if (hasV6)
+      pf << "pass out quick inet6 proto udp from " << ipv6 << " to any port " << port << "\n";
+  }
+
+  if (spec.firewallPolicy->defaultPolicy == "block")
+    pf << "block drop all\n";
+  else
+    pf << "pass all\n";
+
+  addRules(anchorName, pf.str());
+  return anchorName;
 }
 
 }

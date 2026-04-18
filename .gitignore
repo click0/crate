@@ -2,4 +2,13 @@
 *.a
 crate
 crate.x
+crated
+crate-snmpd
 lib/lst-all-script-sections.h
+tests/unit/util_test
+tests/unit/spec_test
+tests/unit/spec_netopt_test
+tests/unit/lifecycle_test
+tests/unit/network_test
+tests/unit/network_ipv6_test
+tests/unit/err_test

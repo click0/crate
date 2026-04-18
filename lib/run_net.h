@@ -44,16 +44,16 @@ void destroyEpair(const std::string &ifaceA);
 // Convert epair number to 10.0.0.0/8 IP address
 std::string epairNumToIp(unsigned epairNum, unsigned ipIdx);
 
-// Set up ipfw NAT + filter rules for a container, returns cleanup callback
-// fwSlot is allocated from Ctx::FwSlots
+// Set up ipfw NAT + filter rules for a container, returns cleanup callback.
+// fwSlot is allocated from Ctx::FwSlots.
+// ipv6Addr / ipv6Iface: jail-side IPv6 address and outbound interface
+// (pass empty strings to skip IPv6 rules).
 RunAtEnd setupFirewallRules(const class Spec &spec, const EpairInfo &epair,
                             const GatewayInfo &gw, unsigned fwSlot,
                             const std::string &nameserverIp,
-                            int origIpForwarding, bool logProgress);
-
-// Set up per-container pf anchor rules, returns cleanup callback
-RunAtEnd setupPfAnchor(const class Spec &spec, const EpairInfo &epair,
-                       const std::string &jailXname, bool logProgress);
+                            int origIpForwarding, bool logProgress,
+                            const std::string &ipv6Addr = {},
+                            const std::string &ipv6Iface = {});
 
 struct PassthroughInfo {
   std::string iface;  // e.g. "vtnet1" — MUST reclaim before jail destruction

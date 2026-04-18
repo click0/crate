@@ -31,12 +31,4 @@ void deleteRulesInSet(unsigned setNum);
 void configureNat(unsigned natInstance, const std::string &natConfig);
 void deleteNat(unsigned natInstance);
 
-// Common patterns used by crate
-void addNatForJail(unsigned ruleNum, unsigned natInstance,
-                   const std::string &jailIp, const std::string &extIface);
-void addPortForward(unsigned ruleNum, unsigned natInstance,
-                    const std::string &extIp, int extPort,
-                    const std::string &jailIp, int jailPort,
-                    const std::string &proto = "tcp");
-
 }

@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+class Spec;
+
 namespace PfctlOps {
 
 bool available();
@@ -17,12 +19,13 @@ void addRules(const std::string &anchor, const std::vector<std::string> &rules);
 void addRules(const std::string &anchor, const std::string &rulesText);
 void flushRules(const std::string &anchor);
 
-// NAT / RDR rules
-void addNatRule(const std::string &anchor,
-                const std::string &srcNet, const std::string &natAddr);
-void addRdrRule(const std::string &anchor,
-                const std::string &extAddr, int extPort,
-                const std::string &intAddr, int intPort,
-                const std::string &proto = "tcp");
+// Build pf rules from a container's FirewallPolicy and load them into
+// the anchor crate/<jailXname>.  ipv4 is the jail-side IPv4 address;
+// ipv6 is the jail-side IPv6 address (empty string to skip IPv6 rules).
+// Returns the anchor name so the caller can set up cleanup.
+std::string loadContainerPolicy(const Spec &spec,
+                                const std::string &jailXname,
+                                const std::string &ipv4,
+                                const std::string &ipv6);
 
 }
