@@ -81,10 +81,8 @@ static UserInfo userInfo = []() -> UserInfo {
 // options
 static bool optionInitializeRc = false; // this pulls a lot of dependencies, and starts a lot of things that we don't need in crate
 // ipfw rule number bases (§18): dynamically assigned via FwSlots to eliminate conflicts.
-// Each crate gets a unique slot; rule numbers are: base + slot*10 + offset.
-// OUT rules use range 50000-64999; IPv6 uses slot+1 within the same range.
-static const unsigned fwSlotSize = 10;
-static const unsigned fwRuleRangeOutBase = 50000;
+// ipfw rule numbering is now managed by setupFirewallRules() in run_net.cpp.
+// IPv6 outbound is also handled there (Phase C9 consolidation).
 
 // hosts's default gateway network parameters
 static std::string gwIface;
@@ -594,7 +592,6 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   RunAtEnd destroyNetgraphAtEnd;
   std::vector<RunAtEnd> destroyExtraInterfaces;
   RunAtEnd destroyFirewallRulesAtEnd;
-  RunAtEnd destroyIpv6FwRules;
   RunAtEnd destroyPfAnchor;
   RunAtEnd releaseFwSlot;
   auto optionNet = spec.optionNet();
@@ -843,33 +840,14 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       fwSlots->unlock();
     });
 
-    destroyFirewallRulesAtEnd = RunNet::setupFirewallRules(spec, epair, gw, fwSlot, nameserverIp, origIpForwarding, args.logProgress);
-
-    // IPv6 firewall rules
-    if (optionNet->ipv6 && !epipeIp6B.empty()) {
-      auto execFW = [](const std::vector<std::string> &fwargs) {
-        auto argv = std::vector<std::string>{CRATE_PATH_IPFW, "-q"};
-        argv.insert(argv.end(), fwargs.begin(), fwargs.end());
-        Util::execCommand(argv, "firewall rule");
-      };
-      auto fwRuleOutNo = fwRuleRangeOutBase + fwSlot * fwSlotSize + 1;
-      auto fwRule6OutNo = fwRuleOutNo + 1;
-      auto rule6OutS = std::to_string(fwRule6OutNo);
-      auto v6Iface = gwIface6.empty() ? gwIface : gwIface6;
-      if (optionNet->allowOutbound()) {
-        if (optionNet->outboundDns)
-          execFW({"add", rule6OutS, "allow", "udp", "from", epipeIp6B, "to", "any", "53"});
-        execFW({"add", rule6OutS, "deny", "udp", "from", epipeIp6B, "to", "any", "53"});
-        if (!optionNet->outboundHost)
-          execFW({"add", rule6OutS, "deny", "ip6", "from", epipeIp6B, "to", "me6"});
-        execFW({"add", rule6OutS, "allow", "ip6", "from", epipeIp6B, "to", "any", "out", "xmit", v6Iface});
-        execFW({"add", rule6OutS, "allow", "ip6", "from", "any", "to", epipeIp6B, "in", "recv", v6Iface});
-      }
-      LOG("IPv6 firewall rules configured for " << epipeIp6B)
-
-      destroyIpv6FwRules.reset([fwRule6OutNo]() {
-        Util::execCommand({CRATE_PATH_IPFW, "delete", std::to_string(fwRule6OutNo)}, "destroy IPv6 firewall rule");
-      });
+    {
+      auto v6addr  = (optionNet->ipv6 && !epipeIp6B.empty()) ? epipeIp6B : std::string();
+      auto v6iface = (optionNet->ipv6 && !epipeIp6B.empty()) ? (gwIface6.empty() ? gwIface : gwIface6) : std::string();
+      destroyFirewallRulesAtEnd = RunNet::setupFirewallRules(spec, epair, gw, fwSlot, nameserverIp,
+                                                             origIpForwarding, args.logProgress,
+                                                             v6addr, v6iface);
+      if (!v6addr.empty())
+        LOG("IPv6 firewall rules configured for " << v6addr)
     }
 
     // Per-container firewall policy via pf anchors (§3)
@@ -1166,7 +1144,6 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     destroyNetgraphAtEnd.doNow();
   } else if (optionNet && (optionNet->allowOutbound() || optionNet->allowInbound())) {
     destroyPfAnchor.doNow();
-    destroyIpv6FwRules.doNow();
     destroyFirewallRulesAtEnd.doNow();
     destroyEpipeAtEnd.doNow();
     releaseFwSlot.doNow();
