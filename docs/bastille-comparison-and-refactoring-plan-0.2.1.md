@@ -117,7 +117,7 @@ Extract from `run.cpp`:
 - Epair creation (lines 591-632): `createEpair()` → returns epair info struct
 - IP allocation (lines 597-609): `allocateEpairIps()` — the `numToIp` lambda
 - Firewall rule setup (lines 634-748): `setupFirewallRules()` → returns cleanup callback
-- PF anchor setup (lines 750-780): `setupPfAnchor()` → returns cleanup callback
+- PF anchor setup: consolidated into `PfctlOps::loadContainerPolicy()` in `pfctl_ops.cpp`
 - Resolv.conf copy (lines 588-589)
 
 Interface:
@@ -131,8 +131,6 @@ namespace RunNet {
   void destroyEpair(const std::string &ifaceA);
   RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
                               const GatewayInfo &gw, int origIpForwarding);
-  RunAtEnd setupPfAnchor(const Spec &spec, const EpairInfo &epair,
-                         const std::string &jailXname);
 }
 ```
 

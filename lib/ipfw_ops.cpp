@@ -216,25 +216,11 @@ void deleteNat(unsigned natInstance) {
   try {
     Util::execCommand({CRATE_PATH_IPFW, "nat", std::to_string(natInstance), "delete"},
       "delete ipfw NAT");
+  } catch (const std::exception &e) {
+    WARN("failed to delete ipfw NAT instance " << natInstance << ": " << e.what())
   } catch (...) {
-    // NAT instance may not exist
+    WARN("failed to delete ipfw NAT instance " << natInstance)
   }
-}
-
-void addNatForJail(unsigned ruleNum, unsigned natInstance,
-                   const std::string &jailIp, const std::string &extIface) {
-  configureNat(natInstance, STR("if " << extIface << " same_ports unreg_only "
-                                << "redirect_addr " << jailIp << " 0.0.0.0"));
-  addRule(ruleNum, STR("nat " << natInstance << " ip from " << jailIp << " to any out"));
-  addRule(ruleNum, STR("nat " << natInstance << " ip from any to me in"));
-}
-
-void addPortForward(unsigned ruleNum, unsigned natInstance,
-                    const std::string &extIp, int extPort,
-                    const std::string &jailIp, int jailPort,
-                    const std::string &proto) {
-  addRule(ruleNum, STR("fwd " << jailIp << "," << jailPort
-                       << " " << proto << " from any to " << extIp << " " << extPort << " in"));
 }
 
 }

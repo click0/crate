@@ -20,6 +20,7 @@
 #include "run_jail.h"
 #include "run_gui.h"
 #include "run_services.h"
+#include "pfctl_ops.h"
 
 #include <rang.hpp>
 
@@ -873,40 +874,15 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
     // Per-container firewall policy via pf anchors (§3)
     if (spec.firewallPolicy) {
-      auto anchorName = STR("crate/" << jailXname);
-      std::ostringstream pfRules;
-      for (auto &cidr : spec.firewallPolicy->blockIp)
-        pfRules << "block drop quick from " << epair.ipB << " to " << cidr << std::endl;
-      if (optionNet->ipv6 && !epipeIp6B.empty()) {
-        for (auto &cidr : spec.firewallPolicy->blockIp)
-          if (Net::isIpv6Address(cidr.substr(0, cidr.find('/'))))
-            pfRules << "block drop quick from " << epipeIp6B << " to " << cidr << std::endl;
+      auto v6addr = (optionNet->ipv6 && !epipeIp6B.empty()) ? epipeIp6B : std::string();
+      auto anchorName = PfctlOps::loadContainerPolicy(spec, jailXname, epair.ipB, v6addr);
+      if (!anchorName.empty()) {
+        LOG("pf anchor '" << anchorName << "' loaded")
+        destroyPfAnchor.reset([anchorName, &args]() {
+          LOG("flushing pf anchor '" << anchorName << "'")
+          PfctlOps::flushRules(anchorName);
+        });
       }
-      for (auto port : spec.firewallPolicy->allowTcp) {
-        pfRules << "pass out quick proto tcp from " << epair.ipB << " to any port " << port << std::endl;
-        if (optionNet->ipv6 && !epipeIp6B.empty())
-          pfRules << "pass out quick inet6 proto tcp from " << epipeIp6B << " to any port " << port << std::endl;
-      }
-      for (auto port : spec.firewallPolicy->allowUdp) {
-        pfRules << "pass out quick proto udp from " << epair.ipB << " to any port " << port << std::endl;
-        if (optionNet->ipv6 && !epipeIp6B.empty())
-          pfRules << "pass out quick inet6 proto udp from " << epipeIp6B << " to any port " << port << std::endl;
-      }
-      if (spec.firewallPolicy->defaultPolicy == "block")
-        pfRules << "block drop all" << std::endl;
-      else
-        pfRules << "pass all" << std::endl;
-
-      auto tmpRules = STR("/tmp/crate-pf-" << jailXname << ".conf");
-      Util::Fs::writeFile(pfRules.str(), tmpRules);
-      Util::execCommand({CRATE_PATH_PFCTL, "-a", anchorName, "-f", tmpRules}, "load pf anchor rules");
-      Util::Fs::unlink(tmpRules);
-      LOG("pf anchor '" << anchorName << "' loaded")
-
-      destroyPfAnchor.reset([anchorName, &args]() {
-        LOG("flushing pf anchor '" << anchorName << "'")
-        Util::execCommand({CRATE_PATH_PFCTL, "-a", anchorName, "-F", "all"}, "flush pf anchor");
-      });
     }
   }
 

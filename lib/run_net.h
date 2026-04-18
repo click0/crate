@@ -51,10 +51,6 @@ RunAtEnd setupFirewallRules(const class Spec &spec, const EpairInfo &epair,
                             const std::string &nameserverIp,
                             int origIpForwarding, bool logProgress);
 
-// Set up per-container pf anchor rules, returns cleanup callback
-RunAtEnd setupPfAnchor(const class Spec &spec, const EpairInfo &epair,
-                       const std::string &jailXname, bool logProgress);
-
 struct PassthroughInfo {
   std::string iface;  // e.g. "vtnet1" — MUST reclaim before jail destruction
 };

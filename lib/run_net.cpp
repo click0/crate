@@ -212,42 +212,6 @@ RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
   });
 }
 
-RunAtEnd setupPfAnchor(const Spec &spec, const EpairInfo &epair,
-                       const std::string &jailXname, bool logProgress) {
-  if (!spec.firewallPolicy)
-    return RunAtEnd();
-
-  auto anchorName = STR("crate/" << jailXname);
-  std::ostringstream pfRules;
-
-  // Block IP ranges
-  for (auto &cidr : spec.firewallPolicy->blockIp)
-    pfRules << "block drop quick from " << epair.ipB << " to " << cidr << std::endl;
-  // Allow specific TCP ports
-  for (auto port : spec.firewallPolicy->allowTcp)
-    pfRules << "pass out quick proto tcp from " << epair.ipB << " to any port " << port << std::endl;
-  // Allow specific UDP ports
-  for (auto port : spec.firewallPolicy->allowUdp)
-    pfRules << "pass out quick proto udp from " << epair.ipB << " to any port " << port << std::endl;
-  // Default policy
-  if (spec.firewallPolicy->defaultPolicy == "block")
-    pfRules << "block drop all" << std::endl;
-  else
-    pfRules << "pass all" << std::endl;
-
-  // Load rules into pf anchor
-  PfctlOps::addRules(anchorName, pfRules.str());
-
-  if (logProgress)
-    std::cerr << rang::fg::gray << "pf anchor '" << anchorName << "' loaded" << rang::style::reset << std::endl;
-
-  return RunAtEnd([anchorName, logProgress]() {
-    if (logProgress)
-      std::cerr << rang::fg::gray << "flushing pf anchor '" << anchorName << "'" << rang::style::reset << std::endl;
-    PfctlOps::flushRules(anchorName);
-  });
-}
-
 //
 // Passthrough mode
 //

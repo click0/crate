@@ -190,7 +190,7 @@ graph TB
 | VLAN 802.1Q | ✅ | ID 1-4094 |
 | Статичний MAC (SHA-256) | ✅ | `run_net.cpp::generateStaticMac()` |
 | Port forwarding (TCP/UDP) | ✅ | ipfw redirect rules |
-| pf anchor per-container | ✅ | `run_net.cpp::setupPfAnchor()` |
+| pf anchor per-container | ✅ | `run.cpp` + `PfctlOps::addRules()` |
 | Stack bridge creation | ✅ | `stack.cpp` bridge setup |
 | /etc/hosts DNS інжекція | ✅ | `stack.cpp` hosts generation |
 | **Вбудований DNS-сервіс для стеків** | ❌ | Тільки /etc/hosts, немає unbound per-stack |
