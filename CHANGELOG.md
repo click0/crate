@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.1] — 2026-04-19
+
+### Fixed
+- **Build error in full `gmake crate`**: `const class Spec &spec`
+  forward declarations inside `RunNet`, `RunJail`, `RunGui`,
+  `RunServices` namespaces created `RunNet::Spec` (etc.) instead of
+  referencing the global `::Spec`, causing "member access into
+  incomplete type" errors. Replaced with proper `#include "spec.h"`
+  in all five headers (`run_net.h`, `run_jail.h`, `run_gui.h`,
+  `run_services.h`, `pfctl_ops.h`). This bug was hidden by the old
+  CI (which compiled only 5 files) and surfaced once the new
+  `freebsd-build.yml` ran the full `gmake crate`.
+
+---
+
 ## [0.3.0] — 2026-04-19
 
 ### Added
