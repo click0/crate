@@ -566,6 +566,7 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
     }
 
     // Check actual resolution vs requested and warn if different
+#ifdef HAVE_X11
     unsigned actualW = 0, actualH = 0;
     if (X11Ops::getResolution(dispStr, actualW, actualH)) {
       auto reqXpos = resolution.find('x');
@@ -582,6 +583,7 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
         }
       }
     }
+#endif
 
     auto cleanup = setupVncAndRegister(dispNum, xorgPid, "gpu", jailXname,
                                         jailPath, mounts, setJailEnv, spec, logProgress);

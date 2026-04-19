@@ -42,17 +42,16 @@ Spec::Spec(const Spec &o)
     limits(o.limits), diskQuota(o.diskQuota),
     encrypted(o.encrypted), encryptionMethod(o.encryptionMethod),
     encryptionKeyformat(o.encryptionKeyformat), encryptionCipher(o.encryptionCipher),
+    dnsFilter(clonePtr(o.dnsFilter)),
     enforceStatfs(o.enforceStatfs),
     allowQuotas(o.allowQuotas), allowSetHostname(o.allowSetHostname),
     allowChflags(o.allowChflags), allowMlock(o.allowMlock),
     securelevel(o.securelevel), childrenMax(o.childrenMax), cpuset(o.cpuset),
-    managedServices(o.managedServices),
-    depends(o.depends), cronJobs(o.cronJobs), scripts(o.scripts),
-    dnsFilter(clonePtr(o.dnsFilter)),
     cowOptions(clonePtr(o.cowOptions)),
     x11Options(clonePtr(o.x11Options)),
     clipboardOptions(clonePtr(o.clipboardOptions)),
     dbusOptions(clonePtr(o.dbusOptions)),
+    managedServices(o.managedServices),
     socketProxy(clonePtr(o.socketProxy)),
     firewallPolicy(clonePtr(o.firewallPolicy)),
     securityAdvanced(clonePtr(o.securityAdvanced)),
@@ -60,7 +59,8 @@ Spec::Spec(const Spec &o)
     guiOptions(clonePtr(o.guiOptions)),
     healthcheck(clonePtr(o.healthcheck)),
     restartPolicy(clonePtr(o.restartPolicy)),
-    baseContainer(clonePtr(o.baseContainer))
+    baseContainer(clonePtr(o.baseContainer)),
+    depends(o.depends), cronJobs(o.cronJobs), scripts(o.scripts)
 {
 }
 
