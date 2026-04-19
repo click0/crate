@@ -11,6 +11,7 @@
 #include <libifconfig.h>
 #endif
 
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <net/if_bridgevar.h>

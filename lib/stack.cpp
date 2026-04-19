@@ -25,6 +25,7 @@
 #include <sstream>
 #include <filesystem>
 
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <signal.h>
@@ -304,32 +305,6 @@ static void stopStackDns(const std::string &networkName, pid_t unboundPid) {
   // Clean up config directory
   auto confDir = STR("/var/run/crate/dns-" << networkName);
   std::filesystem::remove_all(confDir);
-}
-
-// Update per-stack DNS when containers are hot-added/removed from a running stack.
-// Regenerates the unbound config and sends SIGHUP to reload without restart.
-static bool updateStackDns(
-    const StackNetwork &network,
-    const std::map<std::string, std::string> &nameToIp,
-    pid_t unboundPid) {
-
-  if (!network.dns || network.gateway.empty() || unboundPid <= 0)
-    return false;
-
-  auto upstreamDns = Net::getNameserverIp();
-  auto confDir = STR("/var/run/crate/dns-" << network.name);
-  auto confPath = STR(confDir << "/unbound.conf");
-
-  auto conf = generateUnboundConf(network.gateway, network.subnet, nameToIp, upstreamDns, network.name);
-  Util::Fs::writeFile(conf, confPath);
-
-  if (::kill(unboundPid, SIGHUP) != 0) {
-    WARN("failed to send SIGHUP to unbound (pid=" << unboundPid
-         << ") for network '" << network.name << "': " << strerror(errno))
-    return false;
-  }
-
-  return true;
 }
 
 // --- Network Policies (§27.2) ---
