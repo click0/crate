@@ -45,7 +45,6 @@ private:
 static bool ipfw3Set(int fd, uint32_t opcode, void *data, socklen_t len) {
   ip_fw3_opheader *op = (ip_fw3_opheader *)data;
   op->opcode = opcode;
-  op->ctxid = 0;  // default context
   return ::setsockopt(fd, IPPROTO_IP, IP_FW3, data, len) == 0;
 }
 
@@ -53,7 +52,6 @@ static bool ipfw3Set(int fd, uint32_t opcode, void *data, socklen_t len) {
 static bool ipfw3Get(int fd, uint32_t opcode, void *data, socklen_t *len) {
   ip_fw3_opheader *op = (ip_fw3_opheader *)data;
   op->opcode = opcode;
-  op->ctxid = 0;
   return ::getsockopt(fd, IPPROTO_IP, IP_FW3, data, len) == 0;
 }
 
