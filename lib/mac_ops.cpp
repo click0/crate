@@ -7,6 +7,8 @@
 #include "util.h"
 #include "err.h"
 
+#include <sys/param.h>
+#include <sys/mount.h>
 #include <sys/ioctl.h>
 #include <sys/sysctl.h>
 #include <security/mac_bsdextended/mac_bsdextended.h>
