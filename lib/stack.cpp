@@ -26,6 +26,7 @@
 #include <filesystem>
 
 #include <arpa/inet.h>
+#include <sys/socket.h>
 #include <signal.h>
 #include <sys/wait.h>
 
@@ -339,7 +340,7 @@ static Spec::NetworkPolicy parseNetworkPolicy(const YAML::Node &top) {
   if (!top["network_policy"] || !top["network_policy"].IsMap())
     return policy;
 
-  auto &np = top["network_policy"];
+  auto np = top["network_policy"];
   if (np["default"])
     policy.defaultAction = np["default"].as<std::string>();
 
@@ -581,7 +582,7 @@ static ParsedStack parseStackFile(const std::string &fname, const std::map<std::
       ERR("containers/" << entry.name << " must have either 'crate' or 'spec' field")
 
     if (c.second["depends"]) {
-      auto &deps = c.second["depends"];
+      auto deps = c.second["depends"];
       if (deps.IsSequence()) {
         for (auto d : deps)
           entry.depends.push_back(d.as<std::string>());
@@ -613,7 +614,7 @@ static ParsedStack parseStackFile(const std::string &fname, const std::map<std::
 
     // Parse volume mounts: "volumes: [certs:/etc/letsencrypt:ro]"
     if (c.second["volumes"]) {
-      auto &vols = c.second["volumes"];
+      auto vols = c.second["volumes"];
       if (!vols.IsSequence())
         ERR("containers/" << entry.name << "/volumes must be a list")
       for (auto vm : vols) {
