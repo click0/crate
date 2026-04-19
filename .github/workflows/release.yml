@@ -1,0 +1,119 @@
+name: Release binaries
+
+# Triggered when a version tag is pushed. Builds `crate`, `crated`, and
+# `crate-snmpd` on a FreeBSD VM for each supported release, packages
+# them into a tarball, and attaches it to the GitHub Release created
+# from the tag.
+#
+# Expected tag format: v0.3.1, v1.0.0, etc.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v0.3.1)'
+        required: true
+        type: string
+
+permissions:
+  contents: write  # needed by softprops/action-gh-release to upload assets
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        freebsd-version: ['14.2', '15.0']
+    name: Build FreeBSD ${{ matrix.freebsd-version }} binaries
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: ver
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building tag=$TAG version=$VERSION for FreeBSD ${{ matrix.freebsd-version }}"
+
+      - name: Build on FreeBSD
+        uses: cross-platform-actions/action@v0.32.0
+        timeout-minutes: 45
+        with:
+          operating_system: freebsd
+          version: ${{ matrix.freebsd-version }}
+          shell: sh
+          memory: 6G
+          cpu_count: 3
+          run: |
+            set -ex
+
+            echo "::group::Install dependencies"
+            sudo pkg install -y pkgconf yaml-cpp rang gmake
+            echo "::endgroup::"
+
+            echo "::group::System info"
+            uname -a
+            c++ --version
+            echo "::endgroup::"
+
+            echo "::group::Build crate + crated + crate-snmpd"
+            NCPU=$(sysctl -n hw.ncpu)
+            JOBS=$(( NCPU < 3 ? NCPU : 2 ))
+            gmake -j"$JOBS" crate
+            gmake -j"$JOBS" crated
+            gmake -j"$JOBS" crate-snmpd
+            echo "::endgroup::"
+
+            echo "::group::Strip and summarize"
+            strip crate crated crate-snmpd
+            ls -la crate crated crate-snmpd
+            file crate crated crate-snmpd || true
+            echo "::endgroup::"
+
+            echo "::group::Package tarball"
+            PKGDIR="crate-${{ steps.ver.outputs.version }}-freebsd-${{ matrix.freebsd-version }}-amd64"
+            mkdir -p "$PKGDIR/bin" "$PKGDIR/sbin" "$PKGDIR/man/man5" "$PKGDIR/share/examples/crate" "$PKGDIR/share/snmp/mibs"
+            cp crate         "$PKGDIR/bin/"
+            cp crated        "$PKGDIR/sbin/"
+            cp crate-snmpd   "$PKGDIR/sbin/"
+            gzip -9 < crate.5 > "$PKGDIR/man/man5/crate.5.gz"
+            cp daemon/crated.conf.sample "$PKGDIR/" 2>/dev/null || true
+            cp daemon/crated.rc          "$PKGDIR/" 2>/dev/null || true
+            cp snmpd/CRATE-MIB.txt       "$PKGDIR/share/snmp/mibs/" 2>/dev/null || true
+            cp README.md LICENSE CHANGELOG.md "$PKGDIR/" 2>/dev/null || true
+
+            TARBALL="${PKGDIR}.tar.xz"
+            tar -cJf "$TARBALL" "$PKGDIR"
+            sha256 "$TARBALL" > "${TARBALL}.sha256"
+            ls -la "$TARBALL" "${TARBALL}.sha256"
+            echo "::endgroup::"
+
+      - name: Upload as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: crate-${{ steps.ver.outputs.version }}-freebsd-${{ matrix.freebsd-version }}-amd64
+          path: |
+            crate-${{ steps.ver.outputs.version }}-freebsd-${{ matrix.freebsd-version }}-amd64.tar.xz
+            crate-${{ steps.ver.outputs.version }}-freebsd-${{ matrix.freebsd-version }}-amd64.tar.xz.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Attach to GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          files: |
+            crate-${{ steps.ver.outputs.version }}-freebsd-${{ matrix.freebsd-version }}-amd64.tar.xz
+            crate-${{ steps.ver.outputs.version }}-freebsd-${{ matrix.freebsd-version }}-amd64.tar.xz.sha256
+          fail_on_unmatched_files: true
