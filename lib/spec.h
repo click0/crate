@@ -243,6 +243,14 @@ public:
   };
   std::unique_ptr<Healthcheck>                           healthcheck;
 
+  // Restart policy (§23)
+  struct RestartPolicy {
+    std::string policy = "no";
+    unsigned maxRetries = 3;
+    unsigned delaySec = 5;
+  };
+  std::unique_ptr<RestartPolicy>                         restartPolicy;
+
   // Base container cloning (§22): ZFS-clone from existing running jail
   struct BaseContainer {
     std::string type;     // "jail" (clone from running jail)
@@ -275,6 +283,12 @@ public:
   std::vector<CronJob>                                   cronJobs;
 
   std::map<std::string, std::map<std::string, std::string>> scripts;          // by section, by script name
+
+  Spec(const Spec &other);
+  Spec& operator=(const Spec &other);
+  Spec(Spec &&) = default;
+  Spec& operator=(Spec &&) = default;
+  Spec() = default;
 
   Spec preprocess() const;
   void validate() const;

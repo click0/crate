@@ -25,6 +25,53 @@
 #define ERR(msg...) \
   ERR2("spec parser", msg)
 
+// Deep-copy helper for unique_ptr members
+template<typename T>
+static std::unique_ptr<T> clonePtr(const std::unique_ptr<T> &p) {
+  return p ? std::make_unique<T>(*p) : nullptr;
+}
+
+Spec::Spec(const Spec &o)
+  : baseKeep(o.baseKeep), baseKeepWildcard(o.baseKeepWildcard), baseRemove(o.baseRemove),
+    pkgInstall(o.pkgInstall), pkgLocalOverride(o.pkgLocalOverride), pkgAdd(o.pkgAdd), pkgNuke(o.pkgNuke),
+    runCmdExecutable(o.runCmdExecutable), runCmdArgs(o.runCmdArgs),
+    runServices(o.runServices), dirsShare(o.dirsShare), filesShare(o.filesShare),
+    options(o.options), zfsDatasets(o.zfsDatasets),
+    allowSysvipc(o.allowSysvipc), allowMqueue(o.allowMqueue),
+    ipcRawSocketsOverride(o.ipcRawSocketsOverride), ipcRawSocketsValue(o.ipcRawSocketsValue),
+    limits(o.limits), diskQuota(o.diskQuota),
+    encrypted(o.encrypted), encryptionMethod(o.encryptionMethod),
+    encryptionKeyformat(o.encryptionKeyformat), encryptionCipher(o.encryptionCipher),
+    enforceStatfs(o.enforceStatfs),
+    allowQuotas(o.allowQuotas), allowSetHostname(o.allowSetHostname),
+    allowChflags(o.allowChflags), allowMlock(o.allowMlock),
+    securelevel(o.securelevel), childrenMax(o.childrenMax), cpuset(o.cpuset),
+    managedServices(o.managedServices),
+    depends(o.depends), cronJobs(o.cronJobs), scripts(o.scripts),
+    dnsFilter(clonePtr(o.dnsFilter)),
+    cowOptions(clonePtr(o.cowOptions)),
+    x11Options(clonePtr(o.x11Options)),
+    clipboardOptions(clonePtr(o.clipboardOptions)),
+    dbusOptions(clonePtr(o.dbusOptions)),
+    socketProxy(clonePtr(o.socketProxy)),
+    firewallPolicy(clonePtr(o.firewallPolicy)),
+    securityAdvanced(clonePtr(o.securityAdvanced)),
+    terminalOptions(clonePtr(o.terminalOptions)),
+    guiOptions(clonePtr(o.guiOptions)),
+    healthcheck(clonePtr(o.healthcheck)),
+    restartPolicy(clonePtr(o.restartPolicy)),
+    baseContainer(clonePtr(o.baseContainer))
+{
+}
+
+Spec& Spec::operator=(const Spec &o) {
+  if (this != &o) {
+    Spec tmp(o);
+    *this = std::move(tmp);
+  }
+  return *this;
+}
+
 // all options
 static std::list<std::string> allOptionsLst = {"x11", "net", "ssl-certs", "tor", "video", "gl", "no-rm-static-libs", "dbg-ktrace"}; // the order is important for option processing
 static std::set<std::string> allOptionsSet(std::begin(allOptionsLst), std::end(allOptionsLst));

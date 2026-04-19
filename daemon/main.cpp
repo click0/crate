@@ -13,6 +13,7 @@
 
 #include <rang.hpp>
 
+#include <fcntl.h>
 #include <paths.h>
 #include <signal.h>
 #include <stdlib.h>

@@ -18,6 +18,7 @@
 #endif
 
 #include <string.h>
+#include <syslog.h>
 
 #define WARN(msg...) \
   std::cerr << rang::fg::yellow << msg << rang::style::reset << std::endl;
