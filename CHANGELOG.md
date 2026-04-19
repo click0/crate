@@ -6,6 +6,70 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.0] — 2026-04-19
+
+### Added
+- **Per-container firewall policy** — full IPv4+IPv6 support:
+  - IPv6 outbound rules consolidated into `RunNet::setupFirewallRules()`
+    (previously inline in `run.cpp`).
+  - IPv6 inbound port forwarding via `ipfw fwd` (global IPv6 addresses,
+    no NAT needed).
+  - Unified cleanup lambda handles both IPv4 and IPv6 rule deletion.
+- **`PfctlOps::loadContainerPolicy()`** — single authoritative place to
+  build per-container pf rules from `spec.firewallPolicy`, with dual
+  IPv4/IPv6 output.
+- **Neighbor-safe firewall operations**:
+  - `pfctl -s Anchors` probe on first use — `WARN` if
+    `anchor "crate/*"` is missing from `/etc/pf.conf`.
+  - `ipfw nat N show` probe before `configureNat()` — `WARN` on
+    collision with other jail managers.
+  - `CRATE_IPFW_RULE_BASE_IN`, `CRATE_IPFW_RULE_BASE_OUT`,
+    `CRATE_IPFW_SLOT_SIZE` environment variables override the default
+    ipfw rule ranges (10000 / 50000 / 10) so operators can avoid
+    collisions with bastille/appjail/custom rulesets.
+  - `PfLock` RAII (`O_EXLOCK` on `/var/run/crate/pfctl.lock`) serializes
+    concurrent pfctl operations from parallel `crate run` processes.
+- **CI workflows**:
+  - `linux-unit.yml` — ~30 s unit-test job on `ubuntu-latest` using
+    `kyua` + `libatf-dev` from Ubuntu universe.
+  - `freebsd-build-lite.yml` — fast smoke check on feature branches.
+  - `freebsd-build.yml` — full gated build (matrix 14.2 + 15.0) on
+    master / PRs / weekly cron, with artifact upload.
+- `make test-unit` target — runs `kyua test unit` (skips FreeBSD-only
+  `functional/crate_info_test`), enabling local Linux development.
+
+### Changed
+- **`Util::toUInt()`** now wraps `std::stoul` and converts
+  `std::invalid_argument` / `std::out_of_range` into the project's
+  `Exception` via `ERR2`. No more raw stdlib exceptions leaking from
+  YAML config parsing.
+- Applied the same wrapping idiom across **9 additional call sites**:
+  `cli/args.cpp` (logs/stop/restart timeout args), `lib/stack.cpp`
+  `parseCidr()`, `lib/net.cpp` netmask, `lib/run_net.cpp` epair+CIDR,
+  `lib/run_gui.cpp` resolution, `lib/lifecycle.cpp` rctl output,
+  `snmpd/main.cpp` `-i interval`, `lib/spec.cpp` `children_max`,
+  `lib/ctx.cpp` pid-file reader.
+- `PfctlOps::flushRules()` and `IpfwOps::deleteNat()` now emit `WARN`
+  on failure instead of silently swallowing exceptions.
+
+### Removed
+- Dead code: `RunNet::setupPfAnchor()` (never called, superseded by
+  inline code in `run.cpp` which is now in `PfctlOps::loadContainerPolicy`).
+- Dead code: `PfctlOps::addNatRule()`, `PfctlOps::addRdrRule()` — never
+  called from anywhere in the tree.
+- Dead code: `IpfwOps::addNatForJail()`, `IpfwOps::addPortForward()` —
+  never called from anywhere in the tree.
+- Duplicate `fwSlotSize` / `fwRuleRangeOutBase` statics in `run.cpp`
+  (single source of truth is now `run_net.cpp`, configurable via env).
+
+### Fixed
+- Failing ATF tests `parsePortRange_invalid_throws`,
+  `toUInt_empty_throws`, `toUInt_negative_throws`,
+  `toUInt_trailing_chars_throws` (expected `std::runtime_error` but
+  received `std::invalid_argument` from unwrapped `stoul`).
+
+---
+
 ## [0.2.5] — 2026-03-07
 
 ### Added
