@@ -4,6 +4,7 @@
 #pragma once
 
 #include "util.h"
+#include "spec.h"
 
 #include <string>
 #include <functional>
@@ -48,7 +49,7 @@ std::string epairNumToIp(unsigned epairNum, unsigned ipIdx);
 // fwSlot is allocated from Ctx::FwSlots.
 // ipv6Addr / ipv6Iface: jail-side IPv6 address and outbound interface
 // (pass empty strings to skip IPv6 rules).
-RunAtEnd setupFirewallRules(const class Spec &spec, const EpairInfo &epair,
+RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
                             const GatewayInfo &gw, unsigned fwSlot,
                             const std::string &nameserverIp,
                             int origIpForwarding, bool logProgress,

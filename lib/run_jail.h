@@ -4,6 +4,7 @@
 #pragma once
 
 #include "util.h"
+#include "spec.h"
 
 #include <string>
 #include <vector>
@@ -19,13 +20,13 @@ struct JailInfo {
 };
 
 // Create a jail using jail_setv() C API
-JailInfo createJail(const class Spec &spec, const std::string &jailPath, bool logProgress);
+JailInfo createJail(const Spec &spec, const std::string &jailPath, bool logProgress);
 
 // Remove a jail (race-free via descriptor if available)
 void removeJail(const JailInfo &info);
 
 // Apply RCTL resource limits (with verification), returns cleanup callback
-RunAtEnd applyRctlLimits(const class Spec &spec, int jid, bool logProgress);
+RunAtEnd applyRctlLimits(const Spec &spec, int jid, bool logProgress);
 
 // Diagnose cause of container death (OOM, signal, exit code)
 std::string diagnoseExitReason(int jid, int exitStatus);
@@ -41,13 +42,13 @@ bool wasKilledByRctl(int jid, int exitStatus);
 int getRctlUsagePercent(int jid, const std::string &resource);
 
 // Apply ZFS disk quota (refquota) to container dataset
-void applyDiskQuota(const class Spec &spec, const std::string &jailPath, bool logProgress);
+void applyDiskQuota(const Spec &spec, const std::string &jailPath, bool logProgress);
 
 // Attach ZFS datasets to jail, returns cleanup callback
-RunAtEnd attachZfsDatasets(const class Spec &spec, int jid, bool logProgress);
+RunAtEnd attachZfsDatasets(const Spec &spec, int jid, bool logProgress);
 
 // Create user, group, home directory inside jail
-void createUserInJail(const class Spec &spec, const std::string &jailPath, int jid,
+void createUserInJail(const Spec &spec, const std::string &jailPath, int jid,
                       const std::string &user, const std::string &homeDir,
                       uid_t uid, gid_t gid,
                       const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail,
