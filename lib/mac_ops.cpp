@@ -7,11 +7,8 @@
 #include "util.h"
 #include "err.h"
 
-#include <sys/param.h>
-#include <sys/mount.h>
 #include <sys/ioctl.h>
 #include <sys/sysctl.h>
-#include <security/mac_bsdextended/mac_bsdextended.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
@@ -54,83 +51,12 @@ private:
   int fd_;
 };
 
-// Try native ioctl, return true on success
-static bool nativeAddRule(const UgidfwRule &rule) {
-  if (!useNativeUgidfw())
-    return false;
+// Native ugidfw ioctl path is not available on stock FreeBSD —
+// mac_bsdextended uses sysctl, not /dev/ugidfw ioctls.
+// Always fall through to the ugidfw(8) command fallback.
+static bool nativeAddRule(const UgidfwRule &) { return false; }
 
-  UgidfwDev dev;
-  if (!dev.valid())
-    return false;
-
-  struct mac_bsdextended_rule mbr;
-  memset(&mbr, 0, sizeof(mbr));
-
-  // Subject: jail ID
-  if (rule.jailJid >= 0) {
-    mbr.mbr_subject.mbs_flags |= MBS_PRISON_DEFINED;
-    mbr.mbr_subject.mbs_prison = rule.jailJid;
-  }
-
-  // Subject: UID
-  if (rule.subjectUid >= 0) {
-    mbr.mbr_subject.mbs_flags |= MBS_UID_DEFINED;
-    mbr.mbr_subject.mbs_uid_min = rule.subjectUid;
-    mbr.mbr_subject.mbs_uid_max = rule.subjectUid;
-  }
-
-  // Object: UID
-  if (rule.objectUid >= 0) {
-    mbr.mbr_object.mbo_flags |= MBO_UID_DEFINED;
-    mbr.mbr_object.mbo_uid_min = rule.objectUid;
-    mbr.mbr_object.mbo_uid_max = rule.objectUid;
-  }
-
-  // Object: filesystem path
-  if (!rule.objectPath.empty()) {
-    mbr.mbr_object.mbo_flags |= MBO_FSID_DEFINED;
-    // Resolve fsid from path via statfs
-    struct statfs sfs;
-    if (::statfs(rule.objectPath.c_str(), &sfs) == 0) {
-      mbr.mbr_object.mbo_fsid = sfs.f_fsid;
-    }
-  }
-
-  // Mode: convert bitmask to mac_bsdextended mode flags
-  mbr.mbr_mode = 0;
-  if (!(rule.mode & 4)) mbr.mbr_mode |= MBI_READ;
-  if (!(rule.mode & 2)) mbr.mbr_mode |= MBI_WRITE;
-  if (!(rule.mode & 1)) mbr.mbr_mode |= MBI_EXEC;
-
-  // Get current rule count to determine next slot
-  int ruleCount = 0;
-  size_t len = sizeof(ruleCount);
-  ::sysctlbyname("security.mac.bsdextended.rule_count", &ruleCount, &len, nullptr, 0);
-
-  // Use ioctl to add rule at the next available slot
-  struct {
-    int slot;
-    struct mac_bsdextended_rule rule;
-  } iocReq;
-  iocReq.slot = ruleCount;
-  iocReq.rule = mbr;
-
-  if (::ioctl(dev.fd(), MAC_BSDEXTENDED_ADD_RULE, &iocReq) == 0)
-    return true;
-
-  return false;
-}
-
-static bool nativeRemoveRule(int slot) {
-  if (!useNativeUgidfw())
-    return false;
-
-  UgidfwDev dev;
-  if (!dev.valid())
-    return false;
-
-  return ::ioctl(dev.fd(), MAC_BSDEXTENDED_REMOVE_RULE, &slot) == 0;
-}
+static bool nativeRemoveRule(int) { return false; }
 
 // --- Public API ---
 
