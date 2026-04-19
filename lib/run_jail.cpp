@@ -11,12 +11,15 @@
 #include <rang.hpp>
 
 // sys/jail.h isn't C++-safe: https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=238928
+#include <sys/param.h>
 extern "C" {
 #include <sys/jail.h>
 }
 #include <jail.h>
 #include <pwd.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #include <iostream>
 #include <string>

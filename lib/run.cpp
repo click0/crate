@@ -449,7 +449,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         LOG("adding MAC rule: " << rule)
         MacOps::addUgidfwRuleRaw(rule);
       }
-      removeMacRules.reset([&spec, &args]() {
+      removeMacRules.reset([&args]() {
         LOG("removing MAC bsdextended rules")
         std::vector<std::string> rules;
         MacOps::listUgidfwRules(rules);

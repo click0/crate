@@ -25,14 +25,6 @@
 #define ERR(msg...) \
   ERR2("clean", msg)
 
-// Collect JIDs of all running jails (uses libjail API)
-static std::set<int> getRunningJailJids() {
-  std::set<int> jids;
-  for (auto &j : JailQuery::getAllJails())
-    jids.insert(j.jid);
-  return jids;
-}
-
 // Collect paths of all running jail roots (uses libjail API)
 static std::set<std::string> getRunningJailPaths() {
   std::set<std::string> paths;
@@ -40,11 +32,6 @@ static std::set<std::string> getRunningJailPaths() {
     if (!j.path.empty())
       paths.insert(j.path);
   return paths;
-}
-
-// Check if a PID is alive
-static bool pidAlive(pid_t pid) {
-  return (::kill(pid, 0) == 0);
 }
 
 bool cleanCrates(const Args &args) {
