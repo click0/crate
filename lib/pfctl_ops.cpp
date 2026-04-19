@@ -3,7 +3,6 @@
 // PF firewall operations using libpfctl with pfctl(8) fallback.
 
 #include "pfctl_ops.h"
-#include "spec.h"
 #include "net.h"
 #include "pathnames.h"
 #include "util.h"

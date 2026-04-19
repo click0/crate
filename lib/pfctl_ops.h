@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include "spec.h"
+
 #include <string>
 #include <vector>
-
-class Spec;
 
 namespace PfctlOps {
 
