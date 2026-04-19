@@ -85,7 +85,7 @@ static std::mutex g_mibMutex;
 static std::vector<ContainerMetrics> g_containers;
 static unsigned g_totalCount = 0;
 static unsigned g_runningCount = 0;
-static std::string g_version = "0.3.0";
+static std::string g_version = "0.3.1";
 static std::string g_hostname;
 
 // --- AgentX PDU helpers ---
