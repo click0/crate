@@ -6,6 +6,9 @@
 #include "err.h"
 
 #ifdef HAVE_CAPSICUM
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <sys/capsicum.h>
 #include <libcasper.h>
 #include <casper/cap_dns.h>
