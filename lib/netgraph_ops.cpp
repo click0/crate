@@ -9,6 +9,7 @@
 
 // Netgraph headers (FreeBSD base)
 #ifdef __FreeBSD__
+#include <sys/socket.h>
 #include <netgraph.h>
 #include <netgraph/ng_message.h>
 #include <netgraph/ng_socket.h>
@@ -128,8 +129,6 @@ std::string show(const std::string &path) {
 #ifdef __FreeBSD__
   if (ensureSocket()) {
     char name[NG_NODESIZ];
-    char type[NG_TYPESIZ];
-    ng_ID_t id;
     if (NgNameNode(g_csock, path.c_str(), "%s", name) >= 0)
       return std::string(name);
   }
