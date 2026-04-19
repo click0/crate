@@ -17,8 +17,8 @@ class FwUsers {
   std::set<pid_t> pids;
   bool inMemory;
   bool changed;
-  FwUsers();
 public:
+  FwUsers();
   ~FwUsers();
   static std::unique_ptr<FwUsers> lock();  // lock, open, and read
   void unlock();            // unlock, close, and possibly save
@@ -39,8 +39,8 @@ class FwSlots {
   std::map<pid_t, unsigned> slots; // pid -> slot number
   bool inMemory;
   bool changed;
-  FwSlots();
 public:
+  FwSlots();
   ~FwSlots();
   static std::unique_ptr<FwSlots> lock();
   void unlock();

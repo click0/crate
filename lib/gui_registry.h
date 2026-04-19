@@ -30,8 +30,8 @@ class GuiRegistry {
   std::map<pid_t, GuiEntry> entries; // ownerPid -> entry
   bool inMemory;
   bool changed;
-  GuiRegistry();
 public:
+  GuiRegistry();
   ~GuiRegistry();
   static std::unique_ptr<GuiRegistry> lock();
   void unlock();
