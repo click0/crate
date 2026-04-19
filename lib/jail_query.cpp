@@ -10,6 +10,7 @@
 #include "err.h"
 
 // sys/jail.h isn't C++-safe: https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=238928
+#include <sys/param.h>
 extern "C" {
 #include <sys/jail.h>
 }
