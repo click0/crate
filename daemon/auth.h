@@ -9,7 +9,7 @@
 
 #include <string>
 
-namespace httplib { class Request; }
+namespace httplib { struct Request; }
 
 namespace Crated {
 
