@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env atf-sh
 # ATF functional tests for 'crate' CLI commands
 #
 # Run: cd tests && kyua test
