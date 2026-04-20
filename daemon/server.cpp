@@ -6,6 +6,7 @@
 #include "server.h"
 #include "routes.h"
 
+#define CPPHTTPLIB_OPENSSL_SUPPORT
 #include <httplib.h>
 
 #include <sys/un.h>
