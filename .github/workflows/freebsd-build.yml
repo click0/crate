@@ -61,7 +61,7 @@ jobs:
             set -ex
 
             echo "::group::Install dependencies"
-            sudo pkg install -y pkgconf yaml-cpp rang kyua gmake
+            sudo pkg install -y pkgconf yaml-cpp rang kyua gmake cpp-httplib
             echo "::endgroup::"
 
             echo "::group::System info"

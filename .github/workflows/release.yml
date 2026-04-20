@@ -58,7 +58,7 @@ jobs:
             set -ex
 
             echo "::group::Install dependencies"
-            sudo pkg install -y pkgconf yaml-cpp rang gmake
+            sudo pkg install -y pkgconf yaml-cpp rang gmake cpp-httplib
             echo "::endgroup::"
 
             echo "::group::System info"
