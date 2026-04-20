@@ -51,7 +51,7 @@ Spec::Spec(const Spec &o)
     x11Options(clonePtr(o.x11Options)),
     clipboardOptions(clonePtr(o.clipboardOptions)),
     dbusOptions(clonePtr(o.dbusOptions)),
-    managedServices(o.managedServices),
+    managedServices(o.managedServices), servicesAutoStart(o.servicesAutoStart),
     socketProxy(clonePtr(o.socketProxy)),
     firewallPolicy(clonePtr(o.firewallPolicy)),
     securityAdvanced(clonePtr(o.securityAdvanced)),

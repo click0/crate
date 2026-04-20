@@ -42,6 +42,7 @@
 #include <string.h>
 #include <arpa/inet.h>
 
+#include <cstdint>
 #include <mutex>
 #include <iostream>
 #include <vector>
