@@ -26,7 +26,7 @@ VmOptions parseVmOptions(const void *yamlNodePtr) {
   if (node["audio"])        opts.audio = node["audio"].as<std::string>();
 
   if (node["display"] && node["display"].IsMap()) {
-    auto &d = node["display"];
+    auto d = node["display"];
     if (d["mode"])       opts.display.mode = d["mode"].as<std::string>();
     if (d["port"])       opts.display.port = d["port"].as<unsigned>();
     if (d["resolution"]) opts.display.resolution = d["resolution"].as<std::string>();
@@ -34,7 +34,7 @@ VmOptions parseVmOptions(const void *yamlNodePtr) {
   }
 
   if (node["network"] && node["network"].IsMap()) {
-    auto &n = node["network"];
+    auto n = node["network"];
     if (n["type"])    opts.network.type = n["type"].as<std::string>();
     if (n["rxcsum"])  opts.network.rxcsum = n["rxcsum"].as<bool>();
     if (n["txcsum"])  opts.network.txcsum = n["txcsum"].as<bool>();

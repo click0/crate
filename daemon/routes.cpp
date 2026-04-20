@@ -6,6 +6,7 @@
 #include "auth.h"
 #include "metrics.h"
 
+#define CPPHTTPLIB_OPENSSL_SUPPORT
 #include <httplib.h>
 
 #include "args.h"
