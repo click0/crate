@@ -6,6 +6,126 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.15] — 2026-04-22
+
+Full FreeBSD build restoration. After the 0.3.0 firewall rewrite,
+the new CI matrix (14.2 + 15.0, full `gmake crate`) surfaced a
+large backlog of latent compile/link issues that had been hidden
+by the old CI (which only built a subset of files). This patch
+release fixes every one of them so `gmake crate`, `gmake crated`,
+and `gmake crate-snmpd` succeed cleanly on both FreeBSD versions.
+
+### Added
+- `.github/workflows/release.yml` — on tag push, builds on FreeBSD
+  14.2 + 15.0 and attaches `crate-<ver>-freebsd-<rel>-amd64.tar.xz`
+  (with SHA256) as GitHub Release assets. Previously the Release
+  page only had auto-generated source tarballs.
+- Release tarball layout: `bin/crate`, `sbin/crated`,
+  `sbin/crate-snmpd`, `man/man5/crate.5.gz`,
+  `share/snmp/mibs/CRATE-MIB.txt`, `crated.conf.sample`,
+  `crated.rc`, `README.md`, `LICENSE`, `CHANGELOG.md`.
+- `cpp-httplib` added to CI `pkg install` for the `crated` daemon.
+
+### Fixed — missing system headers (FreeBSD 14.2 / 15.0 clang)
+- `run_jail.cpp` — add `<sys/param.h>` before `<sys/jail.h>` (for
+  `MAXPATHLEN`, `MAXHOSTNAMELEN`); add `<sys/wait.h>` for
+  `WIFSIGNALED`/`WIFEXITED`/`WEXITSTATUS`; add `<signal.h>` for
+  `SIGKILL`.
+- `jail_query.cpp` — add `<sys/param.h>` before `<sys/jail.h>`.
+- `zfs_ops.cpp` — add `<sys/wait.h>` for `waitpid`.
+- `capsicum_ops.cpp` — add `<sys/socket.h>`, `<netinet/in.h>`,
+  `<arpa/inet.h>`, `<syslog.h>`.
+- `ifconfig_ops.cpp`, `stack.cpp` — add `<netinet/in.h>` for
+  `struct in_addr`/`sockaddr_in`.
+- `stack.cpp` — add `<sys/socket.h>` for `AF_INET`.
+- `mac_ops.cpp` — add `<sys/param.h>` + `<sys/mount.h>` for
+  `fsid_t` / `struct statfs`.
+- `netgraph_ops.cpp` — add `<sys/socket.h>` before netgraph
+  headers (for `sa_family_t`).
+- `daemon/main.cpp` — add `<fcntl.h>` for `::open()`.
+- `import.cpp` — add `<iomanip>` for `std::setprecision`.
+- `snmpd/collector.h`, `snmpd/mib.cpp` — add `<cstdint>` for
+  `uint8_t`/`uint16_t`/`uint32_t`/`uint64_t`.
+
+### Fixed — language / standards issues
+- `cli/args.cpp`, `lib/stack.cpp` — wrap raw `std::stoul` /
+  `std::stoi` to throw `Exception` via `ERR2` instead of leaking
+  `std::invalid_argument`/`std::out_of_range` (continuation of
+  0.3.0 Util::toUInt fix).
+- `run_net.h`, `run_jail.h`, `run_gui.h`, `run_services.h`,
+  `pfctl_ops.h` — replace `const class Spec &spec` in-namespace
+  forward declarations with proper `#include "spec.h"`. The
+  in-namespace form silently created `RunNet::Spec` etc. instead
+  of referencing the global `::Spec`.
+- `lib/spec.h` + `lib/spec.cpp` — add `Spec` copy constructor
+  and copy-assignment with deep-copy of 13 `unique_ptr` members.
+  Required by `preprocess()` and `mergeSpecs()`. Previously
+  silently relied on compiler-specific copy-elision behaviour.
+- `lib/spec.h` — add missing `RestartPolicy` struct + `unique_ptr`
+  member that were referenced in the parser but never declared.
+- `lib/spec.cpp` — include `servicesAutoStart` field in copy
+  constructor (was silently defaulted to `true` on copy).
+- `ctx.h`, `gui_registry.h` — move `FwUsers` / `FwSlots` /
+  `GuiRegistry` default constructors from `private` to `public`.
+  FreeBSD 15.0 libc++ (clang 19) enforces that `std::make_unique`
+  requires a public constructor.
+- `lib/stack.cpp`, `lib/vm_spec.cpp` — fix yaml-cpp temp-ref
+  binding (`auto &x = node["key"]`) → `auto x = ...`.
+- `ipfw_ops.cpp` — remove explicit `op->ctxid = 0`. The `ctxid`
+  field only exists in FreeBSD 15.0+ `ip_fw3_opheader`; callers
+  already zero the struct with `memset`.
+- `daemon/auth.cpp`, `daemon/routes.cpp`, `daemon/server.cpp` —
+  define `CPPHTTPLIB_OPENSSL_SUPPORT` before `#include <httplib.h>`
+  in every translation unit that uses httplib (ODR violation
+  otherwise — different `httplib::Server` layout).
+- `daemon/auth.h` — change forward declaration of `httplib::Request`
+  from `class` to `struct` (`-Wmismatched-tags`).
+- `run_gui.cpp` — guard `X11Ops::getResolution()` call with
+  `#ifdef HAVE_X11` (was unconditional but `x11_ops.cpp` only
+  compiles with `WITH_X11`).
+- `cli/args.cpp` — remove `const` from scalar return type
+  (`-Wignored-qualifiers`).
+- `lib/spec.cpp` — add braces around ambiguous `if ... ERR ...` /
+  `for` block (`-Wmisleading-indentation`).
+
+### Fixed — linker
+- `Makefile` — add `-lnetgraph` (NgMkSockNode etc.), `-lmd`
+  (SHA256_Data), `-lpthread` (std::thread) to base `LIBS`. These
+  are transitively required by always-compiled lib/ files.
+
+### Fixed — tests
+- `tests/functional/crate_info_test` — change shebang from
+  `#!/bin/sh` to `#!/usr/bin/env atf-sh`. ATF shell functions
+  (`atf_test_case`, `atf_check`) require the atf-sh interpreter;
+  plain `sh` produced no ATF protocol output and kyua reported
+  "broken: Invalid header for test case list".
+
+### Removed — dead / non-functional code
+- `RunNet::setupPfAnchor()` — never called; superseded by
+  `PfctlOps::loadContainerPolicy()` introduced in 0.3.0.
+- `PfctlOps::addNatRule()`, `PfctlOps::addRdrRule()`,
+  `IpfwOps::addNatForJail()`, `IpfwOps::addPortForward()` — never
+  called.
+- `MacOps::nativeAddRule()` / `nativeRemoveRule()` ioctl path (79
+  lines): `MAC_BSDEXTENDED_ADD_RULE` / `_REMOVE_RULE` are not
+  defined in any public FreeBSD header, and `/dev/ugidfw` does
+  not exist on stock FreeBSD. The `ugidfw(8)` command fallback
+  is preserved and is the correct interface.
+- `lib/stack.cpp::updateStackDns()` — defined but never called.
+- `lib/clean.cpp::getRunningJailJids()`, `pidAlive()` — defined
+  but never called.
+- Duplicate `fwSlotSize` / `fwRuleRangeOutBase` statics in
+  `lib/run.cpp` — single source of truth is `run_net.cpp`.
+
+### Verification
+- 39/39 non-FreeBSD files pass `-Wall -Wextra -Werror=reorder
+  -Werror=return-type -Werror=mismatched-tags`.
+- 16 FreeBSD-only files compile on FreeBSD CI (require
+  `<sys/jail.h>`, `<libzfs.h>`, `<libpfctl.h>`, etc.).
+- 82/82 kyua unit tests pass on both Linux (libatf) and FreeBSD.
+
+---
+
 ## [0.3.1] — 2026-04-19
 
 ### Fixed
