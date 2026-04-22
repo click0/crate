@@ -324,7 +324,7 @@ static void err(const char *fmt, const char *arg) {
   exit(1);
 }
 
-static const char isShort(const char* arg) {
+static char isShort(const char* arg) {
   if (arg[0] == '-' && (isalpha(arg[1]) || isdigit(arg[1])) && arg[2] == 0)
     return arg[1];
   return 0;

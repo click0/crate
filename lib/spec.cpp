@@ -1480,9 +1480,10 @@ static Spec parseSpecFromNode(YAML::Node top) {
       if (p != "no" && p != "on-failure" && p != "always" && p != "unless-stopped")
         ERR("restart/policy must be one of: no, on-failure, always, unless-stopped")
     } else if (isKey(k, "scripts")) {
-      if (!k.second.IsMap())
+      if (!k.second.IsMap()) {
         ERR("scripts must be a map")
-        for (auto secScripts : k.second) {
+      }
+      for (auto secScripts : k.second) {
           const auto section = AsString(secScripts.first);
           if (spec.scripts.find(section) != spec.scripts.end())
             ERR("duplicate 'scripts/" << section << "'")
