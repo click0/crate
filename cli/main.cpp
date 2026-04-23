@@ -9,6 +9,7 @@
 #include "commands.h"
 
 #include <rang.hpp>
+#include <yaml-cpp/yaml.h>
 
 #include <paths.h>
 #include <stdlib.h>
@@ -134,7 +135,70 @@ static int mainGuarded(int argc, char** argv) {
       Util::Fs::rmdirHier(tmpDir);
     break;
   } case CmdRun: {
-    succ = runCrate(args, argc - numArgsProcessed, argv + numArgsProcessed, returnCode);
+    // Extract restart policy from the crate spec (if any) before running.
+    // The spec is inside the .crate archive at +CRATE.SPEC — extract it
+    // via a lightweight tar pipe without unpacking the whole archive.
+    std::unique_ptr<Spec::RestartPolicy> restartPolicy;
+    try {
+      auto specYaml = Util::execCommandGetOutput(
+        {"/usr/bin/tar", "xf", args.runCrateFile, "-O", "+CRATE.SPEC"},
+        "extract spec for restart policy");
+      auto specNode = YAML::Load(specYaml);
+      if (specNode["restart"] || specNode["restart_policy"]) {
+        auto key = specNode["restart"] ? "restart" : "restart_policy";
+        restartPolicy = std::make_unique<Spec::RestartPolicy>();
+        if (specNode[key].IsScalar()) {
+          restartPolicy->policy = specNode[key].as<std::string>();
+        } else if (specNode[key].IsMap()) {
+          if (specNode[key]["policy"])
+            restartPolicy->policy = specNode[key]["policy"].as<std::string>();
+          if (specNode[key]["max_retries"])
+            restartPolicy->maxRetries = specNode[key]["max_retries"].as<unsigned>();
+          if (specNode[key]["delay"])
+            restartPolicy->delaySec = specNode[key]["delay"].as<unsigned>();
+        }
+      }
+    } catch (...) {
+      // If spec extraction fails, no restart policy — run once.
+    }
+
+    unsigned attempt = 0;
+    for (;;) {
+      attempt++;
+      succ = runCrate(args, argc - numArgsProcessed, argv + numArgsProcessed, returnCode);
+
+      if (!restartPolicy || restartPolicy->policy == "no")
+        break;
+
+      // "always" restarts on any exit (except explicit crate stop via SIGTERM)
+      // "on-failure" restarts only on non-zero exit
+      bool shouldRestart = false;
+      if (restartPolicy->policy == "always") {
+        shouldRestart = true;
+      } else if (restartPolicy->policy == "on-failure") {
+        shouldRestart = (returnCode != 0);
+      } else if (restartPolicy->policy == "unless-stopped") {
+        shouldRestart = true;
+      }
+
+      if (!shouldRestart)
+        break;
+
+      if (attempt > restartPolicy->maxRetries) {
+        std::cerr << rang::fg::yellow << "restart policy: max retries ("
+                  << restartPolicy->maxRetries << ") reached, giving up"
+                  << rang::style::reset << std::endl;
+        break;
+      }
+
+      std::cerr << rang::fg::yellow << "restart policy (" << restartPolicy->policy
+                << "): restarting container (attempt " << attempt
+                << "/" << restartPolicy->maxRetries << ") in "
+                << restartPolicy->delaySec << "s..."
+                << rang::style::reset << std::endl;
+
+      ::sleep(restartPolicy->delaySec);
+    }
     break;
   } case CmdValidate: {
     succ = validateCrateSpec(args);
