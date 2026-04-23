@@ -19,22 +19,6 @@ not yet fixed. Items are grouped by priority for production readiness.
 
 === High priority — blocking production use ===
 
-* (feature) crate stop TARGET — explicit stop command.
-  Currently the only way to stop a container is SIGTERM to the crate run
-  process. Need a standalone stop command that finds the running jail and
-  tears it down.
-
-* (feature) crate restart TARGET — stop + start in one step.
-
-* (feature) Restart policy for automatic recovery on crash:
-    restart:
-        policy: on-failure   # never | on-failure | always
-        max_retries: 3
-        delay: 5s
-
-* (feature) Graceful shutdown — configurable stop timeout and ordered
-  service teardown (reverse dependency order) before SIGKILL.
-
 * (feature) Container image signing — .crate archives have SHA256
   checksums but no cryptographic signature. Production deployments need
   ed25519 or GPG signing for integrity verification.
@@ -42,27 +26,14 @@ not yet fixed. Items are grouped by priority for production readiness.
 * (feature) Audit logging — record who started which container, when,
   and with what parameters. Essential for compliance.
 
-* (feature) crate logs TARGET — stream/tail container logs from
-  /var/log/crate/. Currently logs exist but there is no CLI to view them.
-
 === Medium priority — operational quality ===
-
-* (feature) crate stats TARGET — real-time resource usage (CPU, memory,
-  network I/O, disk I/O). Data is available via rctl -u, needs
-  presentation layer.
 
 * (feature) crate top — live resource monitor across all running
   containers (like htop).
 
-* (feature) Base system caching — base.txz is downloaded on every create.
-  Cache in /var/cache/crate/base/ with SHA256 verification.
-
 * (feature) Auto-create bridge — if the specified bridge interface does
   not exist, create it automatically (opt-in via
   auto_create_bridge: true in crate.yml).
-
-* (feature) IP pool for named networks — add ip_range to network
-  definitions for automatic IP assignment when ip: auto.
 
 * (feature) Cross-device folder and file shares need to be implemented.
   (nullfs cannot cross device boundaries.)
@@ -70,10 +41,6 @@ not yet fixed. Items are grouped by priority for production readiness.
 * (feature) crated F2 write API — the daemon currently only has read-only
   endpoints. Need POST/DELETE for container lifecycle, WebSocket console,
   stats streaming, snapshot and export/import management.
-
-* (feature) Unit tests — only integration tests exist (tests/).
-  Need unit tests for spec parsing, config loading, network IP calculation,
-  MAC generation, spec merging, and port range parsing.
 
 === Low priority — future enhancements ===
 
@@ -120,3 +87,19 @@ Items completed and removed from this file:
 - Enhanced crate list with ports/mounts/healthcheck columns (0.2.3)
 - CHANGELOG.md (0.2.0)
 - Native FreeBSD API wrappers replacing shell commands (0.2.5)
+- crate stop TARGET (0.3.0 — lifecycle.cpp)
+- crate restart TARGET (0.3.0 — lifecycle.cpp)
+- crate stats TARGET with JSON support (0.3.0 — lifecycle.cpp)
+- crate logs TARGET with follow/tail (0.3.0 — lifecycle.cpp)
+- Restart policy (on-failure/always/unless-stopped) with retry loop (0.3.15)
+- Graceful shutdown with configurable timeout (0.3.0 — lifecycle.cpp)
+- Per-container firewall policy with IPv4+IPv6 (0.3.0 — PfctlOps)
+- Per-stack DNS via unbound (0.3.0 — stack.cpp)
+- Inter-container network policies (0.3.0 — stack.cpp)
+- IP pool allocator for stacks (0.3.0 — stack.cpp)
+- RCTL I/O enforcement with verification (0.3.0 — run_jail.cpp)
+- OOM detection and exit diagnostics (0.3.0 — run_jail.cpp)
+- Per-container Prometheus metrics (0.3.0 — daemon/metrics.cpp)
+- ZFS disk quotas per-container (0.3.0 — zfs_ops.cpp)
+- Base system caching with SHA256 (0.3.0 — create.cpp)
+- CI: Linux unit tests, FreeBSD lite/full build, release binary workflow
