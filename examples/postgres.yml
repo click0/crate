@@ -26,7 +26,7 @@ run:
 
 dirs:
   share:
-    - [/var/db/postgres/data${PG_VERSION:-16}, $HOME/postgres/data]
+    - ["/var/db/postgres/data${PG_VERSION:-16}", "$HOME/postgres/data"]
 
 options:
   net:
