@@ -51,7 +51,7 @@ LIBS     += -lcasper -lcap_dns -lcap_syslog
 endif
 ifdef WITH_LIBVIRT
 CXXFLAGS += -DHAVE_LIBVIRT
-LIB_SRCS += lib/vm_spec.cpp lib/vm_run.cpp
+LIB_SRCS += lib/vm_spec.cpp lib/vm_run.cpp lib/vm_stack.cpp
 LIBS     += -lvirt
 endif
 ifdef WITH_LIBVNCSERVER
