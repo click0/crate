@@ -12,3 +12,8 @@ tests/unit/lifecycle_test
 tests/unit/network_test
 tests/unit/network_ipv6_test
 tests/unit/err_test
+tests/unit/snmpd_mib_test
+tests/unit/daemon_metrics_test
+tests/unit/stack_test
+tests/unit/util_security_test
+tests/unit/import_test

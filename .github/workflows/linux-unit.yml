@@ -53,27 +53,17 @@ jobs:
           kyua help >/dev/null
           echo "Toolchain ready."
 
-      - name: Build unit test binaries
+      - name: Build + run unit suite
         run: |
           set -ex
-          # Drive the Makefile so the link recipe stays in one place.
-          # -L/usr/local/lib is harmless on Linux; libatf-c++ resolves via
-          # the default loader search path.
-          make -j"$(nproc)" \
-            tests/unit/util_test \
-            tests/unit/spec_test \
-            tests/unit/spec_netopt_test \
-            tests/unit/lifecycle_test \
-            tests/unit/network_test \
-            tests/unit/network_ipv6_test \
-            tests/unit/err_test
-
-      - name: Run kyua unit suite
-        run: |
-          set -ex
-          # `make test-unit` runs `kyua test unit` which scopes to the
-          # unit Kyuafile and skips the FreeBSD-only functional tests.
-          make test-unit
+          # `make test-unit` depends on $(UNIT_TEST_BINS), so it builds
+          # every unit-test binary listed in the Makefile and then runs
+          # `kyua test unit` (scoped to the unit Kyuafile, skipping the
+          # FreeBSD-only functional tests). Adding a new test requires
+          # only one edit (UNIT_TESTS in the Makefile).
+          # -L/usr/local/lib is harmless on Linux; libatf-c++ resolves
+          # via the default loader search path.
+          make -j"$(nproc)" test-unit
 
       - name: Kyua report on failure
         if: failure()

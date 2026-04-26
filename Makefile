@@ -135,7 +135,9 @@ install-snmpd: crate-snmpd
 	install -m 0644 snmpd/CRATE-MIB.txt $(DESTDIR)$(PREFIX)/share/snmp/mibs/CRATE-MIB.txt
 
 UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
-             network_test network_ipv6_test err_test
+             network_test network_ipv6_test err_test \
+             snmpd_mib_test daemon_metrics_test stack_test \
+             util_security_test import_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)
@@ -146,6 +148,11 @@ test: $(UNIT_TEST_BINS)
 # requires a FreeBSD jail and will otherwise be reported as broken.
 test-unit: $(UNIT_TEST_BINS)
 	cd tests && kyua test unit
+
+# build-unit-tests: build every unit test binary without running anything.
+# Useful in CI where the build runs as a regular user but kyua must run
+# with elevated privileges (FreeBSD jail tests).
+build-unit-tests: $(UNIT_TEST_BINS)
 
 tests/unit/%: tests/unit/%.cpp
 	$(CXX) -std=c++17 -Ilib -o $@ $< -L/usr/local/lib -latf-c++ -latf-c
