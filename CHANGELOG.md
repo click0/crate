@@ -6,6 +6,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.4.0] — 2026-04-26
+
+Test-coverage and CLI argument parser hardening release. Two real
+bugs were caught by new unit tests during this cycle (one CLI parser,
+one path-validation) and fixed in the same commit.
+
+### Security
+
+- **`Util::safePath()`** (lib/util.cpp) — the canonical-path prefix
+  guard used a raw string-prefix comparison without requiring a path
+  separator after the prefix. With `requiredPrefix = "/var/run/crate"`,
+  the path `"/var/run/crate_attacker/payload"` was wrongly accepted as
+  inside the prefix. One-line fix: also require
+  `canonical[prefix.size()] == '/'`. `crate` is installed setuid root,
+  so the impact is real if any caller relies on `safePath()` to scope
+  filesystem access.
+
+### Fixed
+
+- **`isLong()`** (cli/args.cpp) — long-option parser had a logically
+  impossible loop condition (`!islower || !isdigit`, which always
+  evaluates true since no character is *both* lowercase AND a digit).
+  Result: every long option (`--help`, `--log-progress`, command-level
+  `--help`, etc.) returned `nullptr` from `isLong()` and silently fell
+  through to "unknown argument". The CLI worked only for the few options
+  with explicit `strEq` checks before `isLong` (`--no-color`,
+  `--version`, `--use-pkgbase`, `--var`). Fix accepts `[a-z0-9-]+`,
+  matching the documented surface.
+
+### Added — tests
+
+Added 6 new unit-test files, **83 new ATF cases**, all passing.
+Total kyua suite: **165/165** (was 82).
+
+| File | Cases | Covers |
+|---|---|---|
+| `snmpd_mib_test`      | 14 | AgentX wire encoders byte-exact vs RFC 2741 |
+| `daemon_metrics_test` |  9 | `parseRctlUsage` parser |
+| `stack_test`          | 17 | `ipFromCidr`, `buildHostsEntries`, `topoSort` (cycles, duplicates, missing deps, diamond, disconnected) |
+| `util_security_test`  | 11 | `safePath` traversal guard + `shellQuote` injection escaping (with `/bin/sh` round-trip) |
+| `import_test`         | 14 | `.sha256` parsing (BSD/GNU formats), tar-listing `..` detection, archive entry normalisation |
+| `cli_args_test`       | 18 | `strEq`, `isShort`, `isLong`, `isCommand` |
+
+### Added — build
+
+- `make build-unit-tests` — builds every unit-test binary without
+  running anything (handy when CI builds as user but runs kyua as root).
+- `make coverage` — gcov/lcov instrumented build + HTML report at
+  `coverage-html/index.html`. Note: tests embed local copies of the
+  functions under test, so the report measures coverage of the test-
+  local copies — useful for spotting un-exercised branches in test
+  logic, less useful as production-code coverage.
+- `.github/workflows/{linux-unit,freebsd-build-lite}.yml` now drive
+  the test build through the Makefile (`make test-unit` /
+  `gmake build-unit-tests`) so adding a new test takes a single edit
+  (`UNIT_TESTS` in `Makefile`) instead of three (Makefile + Kyuafile +
+  workflow).
+
+---
+
 ## [0.3.15] — 2026-04-22
 
 Full FreeBSD build restoration. After the 0.3.0 firewall rewrite,

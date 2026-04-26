@@ -331,9 +331,14 @@ static char isShort(const char* arg) {
 }
 
 static const char* isLong(const char* arg) {
+  // Accept --foo where foo is a sequence of [a-z0-9-]+
+  // The previous condition `!islower || !isdigit` is logically wrong
+  // (no character is both lowercase AND a digit) — it rejected every
+  // long option, so every '--help'/'--log-progress' fall-through silently
+  // hit the "unknown argument" error. Accept lowercase, digits and dash.
   if (arg[0] == '-' && arg[1] == '-') {
     for (int i = 2; arg[i]; i++)
-      if (!islower(arg[i]) || !isdigit(arg[i]))
+      if (!islower(arg[i]) && !isdigit(arg[i]) && arg[i] != '-')
         return nullptr;
     return arg + 2;
   }
@@ -512,7 +517,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.3.15" << std::endl;
+        std::cout << "crate 0.4.0" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -523,7 +528,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.3.15" << std::endl;
+          std::cout << "crate 0.4.0" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);

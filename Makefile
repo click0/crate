@@ -137,7 +137,7 @@ install-snmpd: crate-snmpd
 UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              network_test network_ipv6_test err_test \
              snmpd_mib_test daemon_metrics_test stack_test \
-             util_security_test import_test
+             util_security_test import_test cli_args_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)
@@ -155,12 +155,51 @@ test-unit: $(UNIT_TEST_BINS)
 build-unit-tests: $(UNIT_TEST_BINS)
 
 tests/unit/%: tests/unit/%.cpp
-	$(CXX) -std=c++17 -Ilib -o $@ $< -L/usr/local/lib -latf-c++ -latf-c
+	$(CXX) -std=c++17 -Ilib $(COVERAGE_CXXFLAGS) -o $@ $< $(COVERAGE_LDFLAGS) -L/usr/local/lib -latf-c++ -latf-c
+
+# coverage: build unit tests with gcov instrumentation, run them, and
+# render an HTML report under coverage-html/. Requires lcov + genhtml.
+#
+# Usage:
+#   gmake coverage           # build, run, report
+#   gmake coverage-clean     # remove .gcda/.gcno + report
+#
+# Note: tests currently embed local copies of the functions under test
+# (see tests/unit/*.cpp). gcov measures coverage of those *test-local*
+# copies — useful for spotting un-exercised branches in test logic, less
+# useful as production-code coverage. A future change to link tests
+# against libcrate.a would make this report fully accurate.
+COVERAGE_CXXFLAGS ?=
+COVERAGE_LDFLAGS  ?=
+
+coverage: clean-tests
+	@$(MAKE) COVERAGE_CXXFLAGS="-O0 -g --coverage -fprofile-arcs -ftest-coverage" \
+	         COVERAGE_LDFLAGS="--coverage" \
+	         build-unit-tests
+	cd tests && kyua test unit || true
+	@command -v lcov >/dev/null 2>&1 || { echo "lcov not installed: apt install lcov / pkg install lcov"; exit 1; }
+	@command -v genhtml >/dev/null 2>&1 || { echo "genhtml not installed (ships with lcov)"; exit 1; }
+	lcov --capture --directory tests/unit --output-file coverage.info \
+	     --rc geninfo_unexecuted_blocks=1 \
+	     --ignore-errors source,inconsistent,mismatch,negative
+	lcov --remove coverage.info '/usr/*' '*/atf-c++.hpp' \
+	     --output-file coverage.info \
+	     --ignore-errors unused
+	genhtml coverage.info --output-directory coverage-html \
+	        --ignore-errors source,inconsistent,corrupt
+	@echo
+	@echo "  Coverage report: coverage-html/index.html"
+
+coverage-clean:
+	rm -f coverage.info
+	rm -rf coverage-html
+	find tests/unit -name '*.gcda' -delete
+	find tests/unit -name '*.gcno' -delete
 
 clean-tests:
 	rm -f $(UNIT_TEST_BINS)
 
-clean: clean-tests
+clean: clean-tests coverage-clean
 	rm -f $(LIB_OBJS) $(CLI_OBJS) $(DAEMON_OBJS) $(SNMPD_OBJS) libcrate.a crate crated crate-snmpd lib/lst-all-script-sections.h
 
 # --- Generated sources ---

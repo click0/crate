@@ -471,8 +471,13 @@ std::string shellQuote(const std::string &arg) {
 std::string safePath(const std::string &path, const std::string &requiredPrefix, const std::string &what) {
   namespace fs = std::filesystem;
   auto canonical = fs::weakly_canonical(path).string();
+  // Require both: prefix match AND a path-separator immediately after.
+  // Without the separator check, prefix "/foo" would wrongly accept the
+  // unrelated path "/foobar/x".
   if (canonical.size() < requiredPrefix.size() ||
-      canonical.compare(0, requiredPrefix.size(), requiredPrefix) != 0)
+      canonical.compare(0, requiredPrefix.size(), requiredPrefix) != 0 ||
+      (canonical.size() > requiredPrefix.size() &&
+       canonical[requiredPrefix.size()] != '/'))
     ERR2("path validation", "'" << what << "' path '" << path << "' resolves to '"
          << canonical << "' which is outside required prefix '" << requiredPrefix << "'")
   return canonical;

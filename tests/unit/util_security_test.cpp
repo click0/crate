@@ -34,7 +34,9 @@ static std::string safePath(const std::string &path,
 	namespace fs = std::filesystem;
 	auto canonical = fs::weakly_canonical(path).string();
 	if (canonical.size() < requiredPrefix.size() ||
-	    canonical.compare(0, requiredPrefix.size(), requiredPrefix) != 0)
+	    canonical.compare(0, requiredPrefix.size(), requiredPrefix) != 0 ||
+	    (canonical.size() > requiredPrefix.size() &&
+	     canonical[requiredPrefix.size()] != '/'))
 		ERR2("path validation", "'" << what << "' path '" << path << "' resolves to '"
 		     << canonical << "' which is outside required prefix '" << requiredPrefix << "'");
 	return canonical;
@@ -83,28 +85,13 @@ ATF_TEST_CASE_BODY(safePath_traversal_rejected)
 	ATF_REQUIRE_THROW(std::runtime_error, safePath(evil, dir, "spec"));
 }
 
-ATF_TEST_CASE_WITHOUT_HEAD(safePath_sibling_documents_bug);
-ATF_TEST_CASE_BODY(safePath_sibling_documents_bug)
+ATF_TEST_CASE_WITHOUT_HEAD(safePath_sibling_rejected);
+ATF_TEST_CASE_BODY(safePath_sibling_rejected)
 {
-	// FIXME(security): safePath uses a raw string-prefix comparison and does
-	// not require a path separator after the prefix. Therefore, with
-	//     requiredPrefix = "/var/run/crate"
-	// it accepts
-	//     "/var/run/crate_attacker/payload"
-	// as "inside" the prefix.
-	//
-	// The fix is one line: also require canonical[prefix.size()] == '/'
-	// (or canonical.size() == prefix.size()).
-	//
-	// This test currently asserts the *buggy* behaviour so the suite stays
-	// green; once the fix lands, swap ATF_REQUIRE for ATF_REQUIRE_THROW.
+	// String prefix /foo would naively match /foobar — guard against it.
 	auto dir = makeTempDir("sibling");
 	auto bad = dir + "_neighbour/file";
-	std::string out;
-	bool threw = false;
-	try { out = safePath(bad, dir, "spec"); }
-	catch (const std::runtime_error &) { threw = true; }
-	ATF_REQUIRE(!threw);   // <-- WRONG behaviour, kept until the bug is fixed
+	ATF_REQUIRE_THROW(std::runtime_error, safePath(bad, dir, "spec"));
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(safePath_absolute_outside_rejected);
@@ -228,7 +215,7 @@ ATF_INIT_TEST_CASES(tcs)
 	// safePath
 	ATF_ADD_TEST_CASE(tcs, safePath_inside_prefix_ok);
 	ATF_ADD_TEST_CASE(tcs, safePath_traversal_rejected);
-	ATF_ADD_TEST_CASE(tcs, safePath_sibling_documents_bug);
+	ATF_ADD_TEST_CASE(tcs, safePath_sibling_rejected);
 	ATF_ADD_TEST_CASE(tcs, safePath_absolute_outside_rejected);
 	ATF_ADD_TEST_CASE(tcs, safePath_dot_segments_normalized);
 	ATF_ADD_TEST_CASE(tcs, safePath_symlink_escape_rejected);
