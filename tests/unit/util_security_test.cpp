@@ -137,8 +137,7 @@ ATF_TEST_CASE_BODY(safePath_symlink_escape_rejected)
 	fs::create_symlink("/etc", link, ec);
 	if (ec) {
 		// Symlink creation can fail in restricted environments; skip rather than fail
-		atf::utils::report_skipped("cannot create symlink: " + ec.message());
-		return;
+		ATF_SKIP(("cannot create symlink: " + ec.message()).c_str());
 	}
 	// safePath uses weakly_canonical which resolves symlinks → must reject
 	ATF_REQUIRE_THROW(std::runtime_error,
@@ -197,10 +196,8 @@ ATF_TEST_CASE_BODY(shellQuote_round_trip_through_sh)
 {
 	// Black-box check: feed the quoted output into `sh -c "printf %s ..."`
 	// and verify the input survives unchanged. Skips if /bin/sh missing.
-	if (!std::filesystem::exists("/bin/sh")) {
-		atf::utils::report_skipped("/bin/sh not available");
-		return;
-	}
+	if (!std::filesystem::exists("/bin/sh"))
+		ATF_SKIP("/bin/sh not available");
 	auto temp = std::filesystem::temp_directory_path() / "crate_shellquote_out";
 	const std::string inputs[] = {
 		"hello",
