@@ -62,18 +62,11 @@ jobs:
             done
             echo "::endgroup::"
 
-            echo "::group::Build unit tests"
-            ATF_LIBS="-L/usr/local/lib -latf-c++ -latf-c"
-            for t in util_test spec_test spec_netopt_test lifecycle_test \
-                     network_test network_ipv6_test err_test; do
-              echo "  Compiling tests/unit/${t} ..."
-              c++ -std=c++17 -Ilib -o "tests/unit/${t}" \
-                  "tests/unit/${t}.cpp" $ATF_LIBS
-            done
-            echo "::endgroup::"
-
-            echo "::group::Run kyua unit tests"
+            echo "::group::Build + run unit tests"
+            # Drive via gmake so the test list lives in one place (Makefile's
+            # UNIT_TESTS variable). The test-unit target depends on
+            # $(UNIT_TEST_BINS), so adding a new test requires only one edit.
             # Без `|| true` — провал юніт-тесту має валити CI.
-            cd tests && sudo kyua test unit
+            sudo gmake -j"$NCPU" test-unit
             sudo kyua report --verbose
             echo "::endgroup::"
