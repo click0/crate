@@ -44,7 +44,7 @@ jobs:
             set -ex
 
             echo "::group::Install dependencies"
-            sudo pkg install -y pkgconf yaml-cpp rang kyua
+            sudo pkg install -y pkgconf yaml-cpp rang kyua gmake
             echo "::endgroup::"
 
             echo "::group::System info"
@@ -62,11 +62,15 @@ jobs:
             done
             echo "::endgroup::"
 
-            echo "::group::Build + run unit tests"
-            # Drive via gmake so the test list lives in one place (Makefile's
-            # UNIT_TESTS variable). The test-unit target depends on
-            # $(UNIT_TEST_BINS), so adding a new test requires only one edit.
+            echo "::group::Build unit tests"
+            # Drive via gmake so the test list lives in one place
+            # (Makefile's UNIT_TESTS variable). Adding a new test requires
+            # only one edit (UNIT_TESTS in the Makefile).
+            gmake -j"$NCPU" build-unit-tests
+            echo "::endgroup::"
+
+            echo "::group::Run kyua unit tests"
             # Без `|| true` — провал юніт-тесту має валити CI.
-            sudo gmake -j"$NCPU" test-unit
+            cd tests && sudo kyua test unit
             sudo kyua report --verbose
             echo "::endgroup::"

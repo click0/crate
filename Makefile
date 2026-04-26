@@ -149,6 +149,11 @@ test: $(UNIT_TEST_BINS)
 test-unit: $(UNIT_TEST_BINS)
 	cd tests && kyua test unit
 
+# build-unit-tests: build every unit test binary without running anything.
+# Useful in CI where the build runs as a regular user but kyua must run
+# with elevated privileges (FreeBSD jail tests).
+build-unit-tests: $(UNIT_TEST_BINS)
+
 tests/unit/%: tests/unit/%.cpp
 	$(CXX) -std=c++17 -Ilib -o $@ $< -L/usr/local/lib -latf-c++ -latf-c
 
