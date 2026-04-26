@@ -14,3 +14,4 @@ atf_test_program{name="daemon_metrics_test"}
 atf_test_program{name="stack_test"}
 atf_test_program{name="util_security_test"}
 atf_test_program{name="import_test"}
+atf_test_program{name="cli_args_test"}

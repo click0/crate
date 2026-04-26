@@ -17,3 +17,8 @@ tests/unit/daemon_metrics_test
 tests/unit/stack_test
 tests/unit/util_security_test
 tests/unit/import_test
+tests/unit/cli_args_test
+*.gcda
+*.gcno
+coverage.info
+coverage-html/
