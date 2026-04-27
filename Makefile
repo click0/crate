@@ -6,8 +6,8 @@ LIB_SRCS = lib/spec.cpp lib/create.cpp lib/run.cpp lib/list.cpp lib/info.cpp \
            lib/gui.cpp lib/run_net.cpp lib/run_jail.cpp lib/run_gui.cpp \
            lib/run_services.cpp lib/locs.cpp lib/cmd.cpp lib/mount.cpp \
            lib/net.cpp lib/ctx.cpp lib/gui_registry.cpp lib/scripts.cpp \
-           lib/misc.cpp lib/util.cpp lib/err.cpp lib/validate.cpp \
-           lib/snapshot.cpp lib/config.cpp lib/stack.cpp \
+           lib/misc.cpp lib/util.cpp lib/util_pure.cpp lib/err.cpp \
+           lib/validate.cpp lib/snapshot.cpp lib/config.cpp lib/stack.cpp \
            lib/jail_query.cpp lib/zfs_ops.cpp lib/ifconfig_ops.cpp \
            lib/pfctl_ops.cpp lib/mac_ops.cpp lib/ipfw_ops.cpp \
            lib/capsicum_ops.cpp lib/netgraph_ops.cpp lib/nv_protocol.cpp \
@@ -154,8 +154,13 @@ test-unit: $(UNIT_TEST_BINS)
 # with elevated privileges (FreeBSD jail tests).
 build-unit-tests: $(UNIT_TEST_BINS)
 
-tests/unit/%: tests/unit/%.cpp
-	$(CXX) -std=c++17 -Ilib $(COVERAGE_CXXFLAGS) -o $@ $< $(COVERAGE_LDFLAGS) -L/usr/local/lib -latf-c++ -latf-c
+# Pure platform-independent sources tests can safely link against.
+# Compiled inline (no separate .o) to avoid colliding with the
+# main lib/*.o build that uses different CXXFLAGS.
+TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp
+
+tests/unit/%: tests/unit/%.cpp $(TEST_LINK_SRCS)
+	$(CXX) -std=c++17 -Ilib $(COVERAGE_CXXFLAGS) -o $@ $< $(TEST_LINK_SRCS) $(COVERAGE_LDFLAGS) -L/usr/local/lib -latf-c++ -latf-c
 
 # coverage: build unit tests with gcov instrumentation, run them, and
 # render an HTML report under coverage-html/. Requires lcov + genhtml.

@@ -4,6 +4,7 @@
 #include "mount.h"
 #include "util.h"
 #include "err.h"
+#include <rang.hpp>
 
 #include <sys/param.h>
 #include <sys/mount.h>

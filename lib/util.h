@@ -15,7 +15,10 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-#include <rang.hpp>
+// NOTE: <rang.hpp> intentionally NOT included here. Files that need
+// rang::fg / rang::style include it directly. Keeping rang out of this
+// header lets unit tests on Linux (where librang is absent) include
+// util.h without an extra dependency.
 
 //
 // utility macros useful throughout the program

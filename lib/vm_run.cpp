@@ -6,6 +6,7 @@
 #include "ifconfig_ops.h"
 #include "util.h"
 #include "err.h"
+#include <rang.hpp>
 
 #ifdef HAVE_LIBVIRT
 #include <libvirt/libvirt.h>

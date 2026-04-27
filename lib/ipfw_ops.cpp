@@ -6,6 +6,7 @@
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
+#include <rang.hpp>
 
 #include <sys/socket.h>
 #include <sys/sockio.h>

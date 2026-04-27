@@ -13,6 +13,7 @@
 
 #include "util.h"
 #include "err.h"
+#include <rang.hpp>
 #include "locs.h"
 
 #define ERR(msg...) ERR2("gui registry", msg)
