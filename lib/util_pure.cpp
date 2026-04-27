@@ -17,6 +17,10 @@
 #include <filesystem>
 #include <sstream>
 
+#include <pwd.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 namespace Util {
 
 static const char sepFilePath = '/';
@@ -114,6 +118,23 @@ namespace Fs {
 bool hasExtension(const char *file, const char *extension) {
   auto ext = ::strrchr(file, '.');
   return ext != nullptr && ::strcmp(ext, extension) == 0;
+}
+
+bool fileExists(const std::string &path) {
+  struct stat sb;
+  return ::stat(path.c_str(), &sb) == 0 && sb.st_mode & S_IFREG;
+}
+
+bool dirExists(const std::string &path) {
+  struct stat sb;
+  return ::stat(path.c_str(), &sb) == 0 && sb.st_mode & S_IFDIR;
+}
+
+std::string getUserHomeDir() {
+  struct passwd *pw = ::getpwuid(::getuid());
+  if (pw && pw->pw_dir)
+    return pw->pw_dir;
+  return "";
 }
 
 }

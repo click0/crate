@@ -341,98 +341,9 @@ static const char* getArgParam(int aidx, int argc, char** argv) {
 // interface
 //
 
-void Args::validate() {
-  switch (cmd) {
-  case CmdCreate:
-    if (createSpec.empty() && createTemplate.empty())
-      ERR("the 'create' command requires either a spec file (-s, --spec) or a template (-t, --template)")
-    if (!createTemplate.empty() && createSpec.empty()) {
-      // resolve template path: check user dir, then system dir
-      auto tryUser = STR(Util::Fs::getUserHomeDir() << "/.config/crate/templates/" << createTemplate << ".yml");
-      auto trySys = STR("/usr/local/share/crate/templates/" << createTemplate << ".yml");
-      if (Util::Fs::fileExists(tryUser))
-        createSpec = tryUser;
-      else if (Util::Fs::fileExists(trySys))
-        createSpec = trySys;
-      else if (Util::Fs::fileExists(createTemplate))
-        createSpec = createTemplate; // treat as path
-      else
-        ERR("template '" << createTemplate << "' not found (searched " << tryUser << " and " << trySys << ")")
-    }
-    break;
-  case CmdRun:
-    if (runCrateFile.empty())
-      ERR("the 'run' command requires the crate file as an argument (-f, --file)")
-    if (!std::ifstream(runCrateFile).good())
-      ERR("the file passed to the 'run' command can't be opened: " << runCrateFile)
-    break;
-  case CmdValidate:
-    if (validateSpec.empty())
-      ERR("the 'validate' command requires a spec file argument")
-    break;
-  case CmdSnapshot:
-    if (snapshotSubcmd.empty())
-      ERR("the 'snapshot' command requires a subcommand (create, list, restore, delete, diff)")
-    if (snapshotDataset.empty())
-      ERR("the 'snapshot' command requires a ZFS dataset name")
-    if ((snapshotSubcmd == "restore" || snapshotSubcmd == "delete") && snapshotName.empty())
-      ERR("the 'snapshot " << snapshotSubcmd << "' command requires a snapshot name")
-    if (snapshotSubcmd == "diff" && snapshotName.empty())
-      ERR("the 'snapshot diff' command requires at least one snapshot name")
-    break;
-  case CmdList:
-    // no required arguments
-    break;
-  case CmdInfo:
-    if (infoTarget.empty())
-      ERR("the 'info' command requires a container name or JID")
-    break;
-  case CmdClean:
-    // no required arguments
-    break;
-  case CmdConsole:
-    if (consoleTarget.empty())
-      ERR("the 'console' command requires a container name or JID")
-    break;
-  case CmdGui:
-    if (guiSubcmd.empty())
-      ERR("the 'gui' command requires a subcommand (list, focus, attach, url, tile, screenshot, resize)")
-    if ((guiSubcmd == "focus" || guiSubcmd == "attach" || guiSubcmd == "url" ||
-         guiSubcmd == "screenshot" || guiSubcmd == "resize") && guiTarget.empty())
-      ERR("the 'gui " << guiSubcmd << "' command requires a target")
-    if (guiSubcmd == "resize" && guiResolution.empty())
-      ERR("the 'gui resize' command requires a resolution (e.g. 1920x1080)")
-    break;
-  case CmdStack:
-    if (stackSubcmd.empty())
-      ERR("the 'stack' command requires a subcommand (up, down, status, exec)")
-    if (stackFile.empty())
-      ERR("the 'stack' command requires a stack file")
-    if (stackSubcmd == "exec" && stackExecContainer.empty())
-      ERR("the 'stack exec' command requires a container name")
-    if (stackSubcmd == "exec" && stackExecArgs.empty())
-      ERR("the 'stack exec' command requires a command to execute")
-    break;
-  case CmdStats:
-    if (statsTarget.empty())
-      ERR("the 'stats' command requires a container name or JID")
-    break;
-  case CmdLogs:
-    if (logsTarget.empty())
-      ERR("the 'logs' command requires a container name or JID")
-    break;
-  case CmdStop:
-    if (stopTarget.empty())
-      ERR("the 'stop' command requires a container name or JID")
-    break;
-  case CmdRestart:
-    if (restartTarget.empty())
-      ERR("the 'restart' command requires a container name or JID")
-    break;
-  default:
-    err("no command was given");
-  }
-}
+// Args::validate moved to cli/args_pure.cpp so it can be unit-tested
+// against the real Args class without dragging in the rest of args.cpp
+// (which depends on rang/usage()/exit()).
 
 Args parseArguments(int argc, char** argv, unsigned &processed) {
   Args args;
@@ -463,7 +374,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.4.2" << std::endl;
+        std::cout << "crate 0.4.3" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -474,7 +385,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.4.2" << std::endl;
+          std::cout << "crate 0.4.3" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);

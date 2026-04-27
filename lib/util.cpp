@@ -454,15 +454,7 @@ namespace Fs {
 
 namespace fs = std::filesystem;
 
-bool fileExists(const std::string &path) {
-  struct stat sb;
-  return ::stat(path.c_str(), &sb) == 0 && sb.st_mode & S_IFREG;
-}
-
-bool dirExists(const std::string &path) {
-  struct stat sb;
-  return ::stat(path.c_str(), &sb) == 0 && sb.st_mode & S_IFDIR;
-}
+// fileExists, dirExists moved to lib/util_pure.cpp
 
 std::vector<std::string> readFileLines(int fd) {
   std::vector<std::string> lines;
@@ -760,12 +752,7 @@ bool isZfsKeyLoaded(const std::string &dataset) {
   return ZfsOps::isKeyLoaded(dataset);
 }
 
-std::string getUserHomeDir() {
-  struct passwd *pw = ::getpwuid(::getuid());
-  if (pw && pw->pw_dir)
-    return pw->pw_dir;
-  return "";
-}
+// getUserHomeDir moved to lib/util_pure.cpp
 
 }
 

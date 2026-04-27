@@ -1,9 +1,16 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "args_pure.h"
+#include "args.h"
+#include "util.h"
+#include "err.h"
 
 #include <cctype>
 #include <cstring>
+#include <fstream>
+
+#define ERR(msg...) \
+  ERR2("parse args", msg)
 
 namespace ArgsPure {
 
@@ -48,4 +55,103 @@ Command isCommand(const char *arg) {
   return CmdNone;
 }
 
+}
+
+// ===================================================================
+// Args::validate — moved from cli/args.cpp so it can be unit-tested
+// against the real Args class. Throws Exception on validation failure.
+// (The original CmdNone path called the static err() helper which
+// printed usage() and exit(1); switching to ERR() preserves
+// "stderr-and-exit-1" behaviour via cli/main.cpp's catch chain, at
+// the cost of losing the usage hint for that one path.)
+// ===================================================================
+
+void Args::validate() {
+  switch (cmd) {
+  case CmdCreate:
+    if (createSpec.empty() && createTemplate.empty())
+      ERR("the 'create' command requires either a spec file (-s, --spec) or a template (-t, --template)")
+    if (!createTemplate.empty() && createSpec.empty()) {
+      auto tryUser = STR(Util::Fs::getUserHomeDir() << "/.config/crate/templates/" << createTemplate << ".yml");
+      auto trySys = STR("/usr/local/share/crate/templates/" << createTemplate << ".yml");
+      if (Util::Fs::fileExists(tryUser))
+        createSpec = tryUser;
+      else if (Util::Fs::fileExists(trySys))
+        createSpec = trySys;
+      else if (Util::Fs::fileExists(createTemplate))
+        createSpec = createTemplate;
+      else
+        ERR("template '" << createTemplate << "' not found (searched " << tryUser << " and " << trySys << ")")
+    }
+    break;
+  case CmdRun:
+    if (runCrateFile.empty())
+      ERR("the 'run' command requires the crate file as an argument (-f, --file)")
+    if (!std::ifstream(runCrateFile).good())
+      ERR("the file passed to the 'run' command can't be opened: " << runCrateFile)
+    break;
+  case CmdValidate:
+    if (validateSpec.empty())
+      ERR("the 'validate' command requires a spec file argument")
+    break;
+  case CmdSnapshot:
+    if (snapshotSubcmd.empty())
+      ERR("the 'snapshot' command requires a subcommand (create, list, restore, delete, diff)")
+    if (snapshotDataset.empty())
+      ERR("the 'snapshot' command requires a ZFS dataset name")
+    if ((snapshotSubcmd == "restore" || snapshotSubcmd == "delete") && snapshotName.empty())
+      ERR("the 'snapshot " << snapshotSubcmd << "' command requires a snapshot name")
+    if (snapshotSubcmd == "diff" && snapshotName.empty())
+      ERR("the 'snapshot diff' command requires at least one snapshot name")
+    break;
+  case CmdList:
+    break;
+  case CmdInfo:
+    if (infoTarget.empty())
+      ERR("the 'info' command requires a container name or JID")
+    break;
+  case CmdClean:
+    break;
+  case CmdConsole:
+    if (consoleTarget.empty())
+      ERR("the 'console' command requires a container name or JID")
+    break;
+  case CmdGui:
+    if (guiSubcmd.empty())
+      ERR("the 'gui' command requires a subcommand (list, focus, attach, url, tile, screenshot, resize)")
+    if ((guiSubcmd == "focus" || guiSubcmd == "attach" || guiSubcmd == "url" ||
+         guiSubcmd == "screenshot" || guiSubcmd == "resize") && guiTarget.empty())
+      ERR("the 'gui " << guiSubcmd << "' command requires a target")
+    if (guiSubcmd == "resize" && guiResolution.empty())
+      ERR("the 'gui resize' command requires a resolution (e.g. 1920x1080)")
+    break;
+  case CmdStack:
+    if (stackSubcmd.empty())
+      ERR("the 'stack' command requires a subcommand (up, down, status, exec)")
+    if (stackFile.empty())
+      ERR("the 'stack' command requires a stack file")
+    if (stackSubcmd == "exec" && stackExecContainer.empty())
+      ERR("the 'stack exec' command requires a container name")
+    if (stackSubcmd == "exec" && stackExecArgs.empty())
+      ERR("the 'stack exec' command requires a command to execute")
+    break;
+  case CmdStats:
+    if (statsTarget.empty())
+      ERR("the 'stats' command requires a container name or JID")
+    break;
+  case CmdLogs:
+    if (logsTarget.empty())
+      ERR("the 'logs' command requires a container name or JID")
+    break;
+  case CmdStop:
+    if (stopTarget.empty())
+      ERR("the 'stop' command requires a container name or JID")
+    break;
+  case CmdRestart:
+    if (restartTarget.empty())
+      ERR("the 'restart' command requires a container name or JID")
+    break;
+  default:
+    ERR("no command was given")
+  }
 }
