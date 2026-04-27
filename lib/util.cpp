@@ -44,9 +44,7 @@
 
 static uid_t myuid = ::getuid();
 
-// consts
-static const char sepFilePath = '/';
-static const char sepFileExt = '.';
+// consts (sepFilePath/sepFileExt moved to lib/util_pure.cpp)
 
 // OnDestroy/RunAtEnd
 
@@ -328,17 +326,7 @@ std::string tmSecMs() {
   return STR(sec << "." << std::setw(3) << std::setfill('0') << usec/1000);
 }
 
-std::string filePathToBareName(const std::string &path) {
-  auto i = path.rfind(sepFilePath);
-  std::string p = (i != std::string::npos ? path.substr(i + 1) : path);
-  i = p.find(sepFileExt);
-  return i != std::string::npos ? p.substr(0, i) : p;
-}
-
-std::string filePathToFileName(const std::string &path) {
-  auto i = path.rfind(sepFilePath);
-  return i != std::string::npos ? path.substr(i + 1) : path;
-}
+// filePathToBareName, filePathToFileName moved to lib/util_pure.cpp
 
 int getSysctlInt(const char *name) {
   int value;
@@ -376,43 +364,7 @@ std::string gethostname() {
   return name;
 }
 
-std::vector<std::string> splitString(const std::string &str, const std::string &delimiter) {
-  std::vector<std::string> res;
-  std::string s = str;
-
-  size_t pos = 0;
-  while ((pos = s.find(delimiter)) != std::string::npos) {
-    if (pos > 0)
-      res.push_back(s.substr(0, pos));
-    s.erase(0, pos + delimiter.length());
-  }
-  if (!s.empty())
-    res.push_back(s);
-
-  return res;
-}
-
-std::string stripTrailingSpace(const std::string &str) {
-  unsigned sz = str.size();
-  while (sz > 0 && ::isspace(str[sz-1]))
-    sz--;
-  return str.substr(0, sz);
-}
-
-unsigned toUInt(const std::string &str) {
-  std::size_t pos = 0;
-  unsigned long u = 0;
-  try {
-    u = std::stoul(str, &pos);
-  } catch (const std::invalid_argument &) {
-    ERR2("convert string to unsigned", "invalid numeric string '" << str << "'")
-  } catch (const std::out_of_range &) {
-    ERR2("convert string to unsigned", "number out of range '" << str << "'")
-  }
-  if (pos != str.size())
-    ERR2("convert string to unsigned", "trailing characters in string '" << str << "'")
-  return u;
-}
+// splitString, stripTrailingSpace, toUInt moved to lib/util_pure.cpp
 
 std::string pathSubstituteVarsInPath(const std::string &path) {
   if (path.size() > 5 && path.substr(0, 5) == "$HOME") {
@@ -448,40 +400,7 @@ std::string pathSubstituteVarsInString(const std::string &str) {
   return s;
 }
 
-std::vector<std::string> reverseVector(const std::vector<std::string> &v) {
-  auto vc = v;
-  std::reverse(vc.begin(), vc.end());
-  return vc;
-}
-
-std::string shellQuote(const std::string &arg) {
-  // Wrap argument in single quotes for safe use in shell commands.
-  // Inside single quotes, only ' needs escaping: replace ' with '\''
-  std::ostringstream ss;
-  ss << '\'';
-  for (auto chr : arg)
-    if (chr == '\'')
-      ss << "'\\''";
-    else
-      ss << chr;
-  ss << '\'';
-  return ss.str();
-}
-
-std::string safePath(const std::string &path, const std::string &requiredPrefix, const std::string &what) {
-  namespace fs = std::filesystem;
-  auto canonical = fs::weakly_canonical(path).string();
-  // Require both: prefix match AND a path-separator immediately after.
-  // Without the separator check, prefix "/foo" would wrongly accept the
-  // unrelated path "/foobar/x".
-  if (canonical.size() < requiredPrefix.size() ||
-      canonical.compare(0, requiredPrefix.size(), requiredPrefix) != 0 ||
-      (canonical.size() > requiredPrefix.size() &&
-       canonical[requiredPrefix.size()] != '/'))
-    ERR2("path validation", "'" << what << "' path '" << path << "' resolves to '"
-         << canonical << "' which is outside required prefix '" << requiredPrefix << "'")
-  return canonical;
-}
+// reverseVector, shellQuote, safePath moved to lib/util_pure.cpp
 
 std::string randomHex(int bytes) {
   std::vector<unsigned char> buf(bytes);
@@ -499,9 +418,7 @@ std::string sha256hex(const std::string &input) {
   return std::string(hex);
 }
 
-bool isUrl(const std::string &str) {
-  return str.size() > 8 && (str.substr(0, 7) == "http://" || str.substr(0, 8) == "https://");
-}
+// isUrl moved to lib/util_pure.cpp
 
 std::string fetchUrl(const std::string &url, const std::string &destDir) {
   // Extract filename from URL
@@ -793,10 +710,7 @@ std::set<std::string> findElfFiles(const std::string &dir) {
   return s;
 }
 
-bool hasExtension(const char *file, const char *extension) {
-  auto ext = ::strrchr(file, '.');
-  return ext != nullptr && ::strcmp(ext, extension) == 0;
-}
+// hasExtension moved to lib/util_pure.cpp
 
 void copyFile(const std::string &srcFile, const std::string &dstFile) {
   try {

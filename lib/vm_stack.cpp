@@ -5,6 +5,7 @@
 #include "vm_stack.h"
 #include "vm_run.h"
 #include "err.h"
+#include <rang.hpp>
 
 #ifdef HAVE_LIBVIRT
 #include <libvirt/libvirt.h>

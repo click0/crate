@@ -5,6 +5,8 @@
 #include "capsicum_ops.h"
 #include "err.h"
 
+#include <rang.hpp>
+
 #ifdef HAVE_CAPSICUM
 #include <sys/socket.h>
 #include <netinet/in.h>

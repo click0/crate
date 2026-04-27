@@ -1,8 +1,11 @@
-// ATF unit tests for Exception class (lib/err.h)
+// ATF unit tests for Exception class (lib/err.h).
+//
+// Uses the real Exception type linked from lib/err.cpp + lib/util_pure.cpp.
 //
 // Build:
 //   c++ -std=c++17 -Ilib -o tests/unit/err_test \
-//       tests/unit/err_test.cpp -L/usr/local/lib -latf-c++ -latf-c
+//       tests/unit/err_test.cpp lib/util_pure.cpp lib/err.cpp \
+//       -L/usr/local/lib -latf-c++ -latf-c
 //
 // Run:
 //   cd tests && kyua test
@@ -12,22 +15,7 @@
 #include <exception>
 #include <string>
 
-// ===================================================================
-// Minimal reproduction of Exception from lib/err.h
-// (avoids pulling in rang.hpp and util.h)
-// ===================================================================
-
-class Exception : public std::exception {
-	std::string xmsg;
-public:
-	Exception(const std::string &loc, const std::string &msg)
-		: xmsg(loc + ": " + msg) {}
-	const char *what() const throw() { return xmsg.c_str(); }
-};
-
-// ===================================================================
-// Tests: Exception
-// ===================================================================
+#include "err.h"
 
 ATF_TEST_CASE_WITHOUT_HEAD(exception_what_contains_loc_and_msg);
 ATF_TEST_CASE_BODY(exception_what_contains_loc_and_msg)
@@ -66,9 +54,21 @@ ATF_TEST_CASE_BODY(exception_copy)
 	ATF_REQUIRE_EQ(std::string(e1.what()), std::string(e2.what()));
 }
 
-// ===================================================================
-// Registration
-// ===================================================================
+// ERR2 macro round-trip — verify the macro throws with both location
+// and a stream-formatted message. Catches a real-world regression
+// where the macro was accidentally dropping the message.
+ATF_TEST_CASE_WITHOUT_HEAD(err2_macro_throws_with_message);
+ATF_TEST_CASE_BODY(err2_macro_throws_with_message)
+{
+	try {
+		ERR2("test loc", "the answer is " << 42)
+		ATF_REQUIRE(false);  // unreachable
+	} catch (const Exception &e) {
+		std::string w = e.what();
+		ATF_REQUIRE(w.find("test loc") != std::string::npos);
+		ATF_REQUIRE(w.find("the answer is 42") != std::string::npos);
+	}
+}
 
 ATF_INIT_TEST_CASES(tcs)
 {
@@ -76,4 +76,5 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, exception_is_std_exception);
 	ATF_ADD_TEST_CASE(tcs, exception_empty_strings);
 	ATF_ADD_TEST_CASE(tcs, exception_copy);
+	ATF_ADD_TEST_CASE(tcs, err2_macro_throws_with_message);
 }

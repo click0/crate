@@ -15,6 +15,7 @@
 
 #include "util.h"
 #include "err.h"
+#include <rang.hpp>
 #include "locs.h"
 
 #define ERR(msg...) ERR2("managing context info", msg)

@@ -3,6 +3,7 @@
 
 #include "config.h"
 #include "err.h"
+#include <rang.hpp>
 #include "util.h"
 
 #include <yaml-cpp/yaml.h>

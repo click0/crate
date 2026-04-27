@@ -6,6 +6,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.4.1] — 2026-04-27
+
+Unit-test methodology fix: tests can now link against the production
+code instead of embedding frozen copies of the functions under test.
+
+### Changed
+
+- **Pure helpers extracted from `lib/util.cpp` into `lib/util_pure.cpp`**.
+  The platform-independent subset (`filePathToBareName`,
+  `filePathToFileName`, `splitString`, `stripTrailingSpace`, `toUInt`,
+  `reverseVector`, `shellQuote`, `safePath`, `isUrl`, `Fs::hasExtension`)
+  now lives in a separate translation unit with no FreeBSD-specific
+  dependencies. Production `crate`/`crated`/`crate-snmpd` still pull
+  these in via `LIB_SRCS` (Makefile updated), so behaviour is identical.
+- **`lib/util.h`** no longer `#include <rang.hpp>` — the include was
+  unused inside the header and blocked unit-test inclusion on Linux
+  (no `librang-dev`). Files that use `rang::fg` / `rang::style` now
+  include `<rang.hpp>` explicitly (`lib/capsicum_ops.cpp`).
+- **`lib/err.h`** no longer `#include <rang.hpp>`. The `WARN(...)` macro
+  still uses rang colours; callers that use `WARN` and didn't already
+  include `<rang.hpp>` had it added (`lib/{ctx,config,mount,pfctl_ops,
+  gui_registry,ipfw_ops,vm_run,vm_stack}.cpp`).
+- **Test build rule** now links every test against
+  `lib/util_pure.cpp + lib/err.cpp`. Tests can `#include "util.h"` /
+  `#include "err.h"` and call the real `Util::shellQuote` etc. instead
+  of duplicating the implementation.
+- **`tests/unit/util_security_test.cpp`** rewritten to use the real
+  `Util::safePath` and `Util::shellQuote` from `lib/util_pure.cpp`.
+  This is the proof-of-concept: a regression introduced into
+  `safePath` will now fail the suite (versus the previous pattern,
+  which only checked a frozen copy in the test source).
+- **`tests/unit/err_test.cpp`** rewritten to use the real `Exception`
+  class. Adds one new case (`err2_macro_throws_with_message`) that
+  exercises the `ERR2` macro directly.
+
+### Notes
+
+- 165/165 kyua unit tests pass on Linux.
+- The remaining test files still use the duplicate-the-function
+  pattern — they will be migrated incrementally as their target code
+  joins `lib/util_pure.cpp` or new pure modules.
+
+---
+
 ## [0.4.0] — 2026-04-26
 
 Test-coverage and CLI argument parser hardening release. Two real
