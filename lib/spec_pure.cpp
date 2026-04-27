@@ -15,6 +15,22 @@ PortRange parsePortRange(const std::string &str) {
                 Util::toUInt(str.substr(hyphen + 1)));
 }
 
+std::string substituteVars(const std::string &input,
+                           const std::map<std::string, std::string> &vars) {
+  if (vars.empty())
+    return input;
+  std::string result = input;
+  for (auto &kv : vars) {
+    std::string token = "${" + kv.first + "}";
+    size_t pos = 0;
+    while ((pos = result.find(token, pos)) != std::string::npos) {
+      result.replace(pos, token.length(), kv.second);
+      pos += kv.second.length();
+    }
+  }
+  return result;
+}
+
 }
 
 // ===================================================================

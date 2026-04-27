@@ -366,39 +366,7 @@ std::string gethostname() {
 
 // splitString, stripTrailingSpace, toUInt moved to lib/util_pure.cpp
 
-std::string pathSubstituteVarsInPath(const std::string &path) {
-  if (path.size() > 5 && path.substr(0, 5) == "$HOME") {
-    auto *pw = ::getpwuid(myuid);
-    if (pw == nullptr)
-      ERR2("path substitution", "getpwuid failed for uid " << myuid << ": " << strerror(errno))
-    return STR(pw->pw_dir << path.substr(5));
-  }
-
-  return path;
-}
-
-std::string pathSubstituteVarsInString(const std::string &str) {
-  auto substOne = [](const std::string &str, const std::string &key, const std::string &val) {
-    std::string s = str;
-    while (true) {
-      auto off = s.find(key);
-      if (off != std::string::npos && (off + key.size() == s.size() || !std::isalnum(s[off + key.size()])))
-        s = STR(s.substr(0, off) << val << s.substr(off + key.size()));
-      if (off == std::string::npos)
-        break;
-    }
-    return s;
-  };
-
-  auto *uidInfo = ::getpwuid(myuid);
-  if (uidInfo == nullptr)
-    ERR2("string substitution", "getpwuid failed for uid " << myuid << ": " << strerror(errno))
-  std::string s = str;
-  for (auto kv : std::map<std::string, std::string>({{"$HOME", uidInfo->pw_dir}, {"$USER", uidInfo->pw_name}}))
-    s = substOne(s, kv.first, kv.second);
-
-  return s;
-}
+// pathSubstituteVarsInPath, pathSubstituteVarsInString moved to lib/util_pure.cpp
 
 // reverseVector, shellQuote, safePath moved to lib/util_pure.cpp
 

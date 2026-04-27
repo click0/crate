@@ -6,6 +6,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.4.4] — 2026-04-27
+
+Variable-substitution coverage + a third real bug caught by new tests.
+
+### Fixed
+
+- **`Util::pathSubstituteVarsInString()`** had an infinite loop when
+  the input contained a token that matched `$HOME`/`$USER` as a prefix
+  but was followed by an alphanumeric (e.g. `"$HOMER"`, `"$USERNAME"`).
+  The loop's word-boundary check prevented substitution but did not
+  advance the cursor, so `s.find(key)` returned the same offset
+  forever. Fixed by walking with an explicit `pos` cursor that
+  advances past every match (substituted or not). Caught by the new
+  `stringSubst_word_boundary` test, which timed out at 300 s before
+  the fix.
+
+### Changed — extracted to pure modules
+
+- `Util::pathSubstituteVarsInPath`, `Util::pathSubstituteVarsInString`
+  moved from `lib/util.cpp` to `lib/util_pure.cpp`.
+- `substituteVars` moved from `lib/spec.cpp` to `lib/spec_pure.cpp`
+  (now `SpecPure::substituteVars`).
+
+### Added — tests (+22 cases)
+
+- `tests/unit/util_subst_test.cpp` (+11 cases) — `pathSubstituteVarsInPath`
+  and `pathSubstituteVarsInString` coverage, including the adversarial
+  `$HOMER` / `$USERNAME` cases that surfaced the infinite-loop bug.
+- `tests/unit/spec_subst_test.cpp` (+11 cases) — `${KEY}` substitution
+  used by `crate create --var KEY=VALUE`. Covers empty input, multiple
+  keys, repeated tokens, unknown keys, empty values, recursion guard
+  (a value containing `${X}` is not re-expanded), adjacent tokens,
+  `$X`-without-braces ignored.
+
+### Verification
+
+- `make build-unit-tests` → 16 binaries built
+- `cd tests && kyua test unit` → **222/222 pass** (was 200, +22)
+
+---
+
 ## [0.4.3] — 2026-04-27
 
 CLI input-validation hardening: 36 new test cases for `Args::validate`.
