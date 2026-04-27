@@ -82,14 +82,10 @@ jobs:
             echo "::endgroup::"
 
             echo "::group::Build unit tests"
-            gmake -j"$JOBS" \
-              tests/unit/util_test \
-              tests/unit/spec_test \
-              tests/unit/spec_netopt_test \
-              tests/unit/lifecycle_test \
-              tests/unit/network_test \
-              tests/unit/network_ipv6_test \
-              tests/unit/err_test
+            # Drive via gmake so the test list lives in one place
+            # (Makefile UNIT_TESTS). Adding a new test requires only
+            # one edit (the Makefile) instead of three.
+            gmake -j"$JOBS" build-unit-tests
             echo "::endgroup::"
 
             echo "::group::Ensure functional tests are executable"
