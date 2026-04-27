@@ -5,6 +5,7 @@
 #include "args.h"
 #include "commands.h"
 #include "jail_query.h"
+#include "lifecycle_pure.h"
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
@@ -43,16 +44,8 @@ static unsigned long long safeStoull(const std::string &s) {
 
 // --- crate stats TARGET ---
 
-// Format bytes into human-readable form (e.g., 1073741824 -> "1.0G")
-static std::string humanBytes(uint64_t bytes) {
-  if (bytes >= (1ULL << 30))
-    return STR(std::fixed << std::setprecision(1) << (double)bytes / (1ULL << 30) << "G");
-  if (bytes >= (1ULL << 20))
-    return STR(std::fixed << std::setprecision(1) << (double)bytes / (1ULL << 20) << "M");
-  if (bytes >= (1ULL << 10))
-    return STR(std::fixed << std::setprecision(1) << (double)bytes / (1ULL << 10) << "K");
-  return STR(bytes << "B");
-}
+// humanBytes moved to lib/lifecycle_pure.cpp
+using LifecyclePure::humanBytes;
 
 bool statsCrate(const Args &args) {
   // Resolve target to JID

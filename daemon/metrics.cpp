@@ -4,6 +4,7 @@
 // Queries jls, rctl, and GUI registry to produce exposition format.
 
 #include "metrics.h"
+#include "metrics_pure.h"
 
 #include "gui_registry.h"
 #include "pathnames.h"
@@ -14,19 +15,8 @@
 
 namespace Crated {
 
-// Parse rctl -u output ("resource=value\n" lines) into a key→value map.
-// Extracted so it can be reused by `crate stats` (Phase 4) and other callers.
-static std::map<std::string, std::string> parseRctlUsage(const std::string &rctlOutput) {
-  std::map<std::string, std::string> result;
-  std::istringstream is(rctlOutput);
-  std::string line;
-  while (std::getline(is, line)) {
-    auto eqPos = line.find('=');
-    if (eqPos == std::string::npos) continue;
-    result[line.substr(0, eqPos)] = line.substr(eqPos + 1);
-  }
-  return result;
-}
+// parseRctlUsage moved to daemon/metrics_pure.cpp
+using MetricsPure::parseRctlUsage;
 
 std::string collectPrometheusMetrics() {
   std::ostringstream ss;

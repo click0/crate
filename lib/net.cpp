@@ -11,6 +11,7 @@
 #include <errno.h>
 
 #include "net.h"
+#include "stack_pure.h"
 #include "util.h"
 #include "err.h"
 
@@ -143,8 +144,7 @@ std::vector<Ip6Info> getIfaceIp6Addresses(const std::string &ifaceName) {
 }
 
 bool isIpv6Address(const std::string &addr) {
-  struct in6_addr result;
-  return ::inet_pton(AF_INET6, addr.c_str(), &result) == 1;
+  return StackPure::isIpv6Address(addr);
 }
 
 std::string getNameserverIp() {

@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "spec.h"
+#include "spec_pure.h"
 #include "config.h"
 #include "util.h"
 #include "err.h"
@@ -170,28 +171,19 @@ static std::map<std::string, std::string> parseScriptsSection(const std::string 
   }
 }
 
-static Spec::NetOptDetails::PortRange parsePortRange(const std::string &str) {
-  auto hyphen = str.find('-');
-  return hyphen == std::string::npos ?
-    Spec::NetOptDetails::PortRange(Util::toUInt(str), Util::toUInt(str))
-    :
-    Spec::NetOptDetails::PortRange(Util::toUInt(str.substr(0, hyphen)), Util::toUInt(str.substr(hyphen + 1)));
+// parsePortRange moved to lib/spec_pure.cpp (SpecPure::parsePortRange).
+// Forwarder kept so existing call sites continue to work.
+static inline Spec::NetOptDetails::PortRange parsePortRange(const std::string &str) {
+  auto p = SpecPure::parsePortRange(str);
+  return Spec::NetOptDetails::PortRange(p.first, p.second);
 }
 
 //
 // methods
 //
 
-Spec::OptDetails::~OptDetails() {
-}
-
-Spec::NetOptDetails::NetOptDetails()
-: outboundWan(false),
-  outboundLan(false),
-  outboundHost(false),
-  outboundDns(false),
-  ipv6(false)
-{ }
+// Spec::OptDetails::~OptDetails and Spec::NetOptDetails::NetOptDetails()
+// moved to lib/spec_pure.cpp.
 
 std::shared_ptr<Spec::NetOptDetails> Spec::NetOptDetails::createDefault() {
   // default "net" options allow all outbound and no inbound
@@ -203,29 +195,9 @@ std::shared_ptr<Spec::NetOptDetails> Spec::NetOptDetails::createDefault() {
   return d;
 }
 
-bool Spec::NetOptDetails::allowOutbound() const {
-  return outboundWan || outboundLan || outboundHost || outboundDns;
-}
-
-bool Spec::NetOptDetails::allowInbound() const {
-  return !inboundPortsTcp.empty() || !inboundPortsUdp.empty();
-}
-
-bool Spec::NetOptDetails::isNatMode() const {
-  return mode == Mode::Nat;
-}
-
-bool Spec::NetOptDetails::needsIpfw() const {
-  return mode == Mode::Nat;
-}
-
-bool Spec::NetOptDetails::needsDhcp() const {
-  return ipMode == IpMode::Dhcp;
-}
-
-bool Spec::optionExists(const char* opt) const {
-  return options.find(opt) != options.end();
-}
+// Spec::NetOptDetails methods (allowOutbound, allowInbound, isNatMode,
+// needsIpfw, needsDhcp) and Spec::optionExists moved to
+// lib/spec_pure.cpp so unit tests can link against them.
 
 const Spec::NetOptDetails* Spec::optionNet() const {
   return getOptionDetails<Spec::NetOptDetails>("net");

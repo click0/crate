@@ -32,6 +32,7 @@
 //     .2.1.1.9.X — crateContainerUptime (TimeTicks) hundredths of a second
 
 #include "mib.h"
+#include "mib_pure.h"
 #include "collector.h"
 
 #include "util.h"
@@ -86,17 +87,14 @@ static std::mutex g_mibMutex;
 static std::vector<ContainerMetrics> g_containers;
 static unsigned g_totalCount = 0;
 static unsigned g_runningCount = 0;
-static std::string g_version = "0.4.1";
+static std::string g_version = "0.4.2";
 static std::string g_hostname;
 
 // --- AgentX PDU helpers ---
 
-// Encode a 4-byte network-order integer
-static void encodeUint32(std::vector<uint8_t> &buf, uint32_t val) {
-  buf.push_back((val >> 24) & 0xFF);
-  buf.push_back((val >> 16) & 0xFF);
-  buf.push_back((val >> 8) & 0xFF);
-  buf.push_back(val & 0xFF);
+// Encode a 4-byte network-order integer (forward to MibPure)
+static inline void encodeUint32(std::vector<uint8_t> &buf, uint32_t val) {
+  MibPure::encodeUint32(buf, val);
 }
 
 // Encode AgentX header (20 bytes)
@@ -113,39 +111,15 @@ static void encodeHeader(std::vector<uint8_t> &buf, uint8_t type,
   encodeUint32(buf, payloadLen);       // payload length
 }
 
-// Encode an OID in AgentX format
-static void encodeOid(std::vector<uint8_t> &buf, const std::vector<uint32_t> &oid,
-                       bool include = false) {
-  // AgentX OID encoding:
-  // n_subid (4 bytes), prefix (1 byte), include (1 byte), reserved (2 bytes)
-  // then n_subid × 4-byte sub-identifiers
-  // If OID starts with .1.3.6.1.4.1.X, use prefix=X for sub-ids 5..
-  uint8_t prefix = 0;
-  size_t start = 0;
-  if (oid.size() >= 5 &&
-      oid[0] == 1 && oid[1] == 3 && oid[2] == 6 && oid[3] == 1 && oid[4] <= 255) {
-    prefix = (uint8_t)oid[4];
-    start = 5;
-  }
-
-  uint32_t nSubid = (uint32_t)(oid.size() - start);
-  encodeUint32(buf, nSubid);
-  buf.push_back(prefix);
-  buf.push_back(include ? 1 : 0);
-  buf.push_back(0); // reserved
-  buf.push_back(0);
-  for (size_t i = start; i < oid.size(); i++)
-    encodeUint32(buf, oid[i]);
+// Encode an OID in AgentX format (forward to MibPure)
+static inline void encodeOid(std::vector<uint8_t> &buf, const std::vector<uint32_t> &oid,
+                              bool include = false) {
+  MibPure::encodeOid(buf, oid, include);
 }
 
-// Encode an Octet String
-static void encodeOctetString(std::vector<uint8_t> &buf, const std::string &s) {
-  encodeUint32(buf, (uint32_t)s.size());
-  for (char c : s)
-    buf.push_back((uint8_t)c);
-  // Pad to 4-byte boundary
-  while (buf.size() % 4 != 0)
-    buf.push_back(0);
+// Encode an Octet String (forward to MibPure)
+static inline void encodeOctetString(std::vector<uint8_t> &buf, const std::string &s) {
+  MibPure::encodeOctetString(buf, s);
 }
 
 // Send a PDU over the AgentX connection

@@ -1,57 +1,15 @@
-// ATF unit tests for network-related pure functions (CIDR parsing, IP formatting)
+// ATF unit tests for CIDR/IP helpers from lib/stack.cpp.
 //
-// Build:
-//   c++ -std=c++17 -Ilib -o tests/unit/network_test tests/unit/network_test.cpp \
-//       -L/usr/local/lib -latf-c++ -latf-c
-//
-// Run:
-//   cd tests && kyua test
+// Uses real StackPure:: symbols from lib/stack_pure.cpp.
 
 #include <atf-c++.hpp>
-#include <sys/socket.h>
-#include <arpa/inet.h>
 #include <cstdint>
 #include <string>
 
-// ===================================================================
-// Local copies of pure functions from lib/stack.cpp
-// ===================================================================
+#include "stack_pure.h"
 
-static bool parseCidr(const std::string &cidr, uint32_t &baseAddr,
-                      unsigned &prefixLen) {
-	auto slashPos = cidr.find('/');
-	if (slashPos == std::string::npos)
-		return false;
-	auto addrStr = cidr.substr(0, slashPos);
-	try {
-		std::size_t pos = 0;
-		auto suffix = cidr.substr(slashPos + 1);
-		prefixLen = std::stoul(suffix, &pos);
-		if (pos != suffix.size())
-			return false;
-	} catch (const std::invalid_argument &) {
-		return false;
-	} catch (const std::out_of_range &) {
-		return false;
-	}
-	struct in_addr addr;
-	if (inet_pton(AF_INET, addrStr.c_str(), &addr) != 1)
-		return false;
-	baseAddr = ntohl(addr.s_addr);
-	return true;
-}
-
-static std::string ipToString(uint32_t ip) {
-	struct in_addr addr;
-	addr.s_addr = htonl(ip);
-	char buf[INET_ADDRSTRLEN];
-	inet_ntop(AF_INET, &addr, buf, sizeof(buf));
-	return buf;
-}
-
-// ===================================================================
-// Tests: parseCidr
-// ===================================================================
+using StackPure::parseCidr;
+using StackPure::ipToString;
 
 ATF_TEST_CASE_WITHOUT_HEAD(parseCidr_class_c);
 ATF_TEST_CASE_BODY(parseCidr_class_c)
@@ -115,10 +73,6 @@ ATF_TEST_CASE_BODY(parseCidr_private_ranges)
 	ATF_REQUIRE_EQ(ipToString(base), "192.168.0.0");
 }
 
-// ===================================================================
-// Tests: ipToString
-// ===================================================================
-
 ATF_TEST_CASE_WITHOUT_HEAD(ipToString_zero);
 ATF_TEST_CASE_BODY(ipToString_zero)
 {
@@ -128,7 +82,6 @@ ATF_TEST_CASE_BODY(ipToString_zero)
 ATF_TEST_CASE_WITHOUT_HEAD(ipToString_loopback);
 ATF_TEST_CASE_BODY(ipToString_loopback)
 {
-	// 127.0.0.1 = 0x7F000001
 	ATF_REQUIRE_EQ(ipToString(0x7F000001), "127.0.0.1");
 }
 
@@ -147,21 +100,14 @@ ATF_TEST_CASE_BODY(ipToString_roundtrip)
 	ATF_REQUIRE_EQ(ipToString(base), "10.20.30.40");
 }
 
-// ===================================================================
-// Registration
-// ===================================================================
-
 ATF_INIT_TEST_CASES(tcs)
 {
-	// parseCidr
 	ATF_ADD_TEST_CASE(tcs, parseCidr_class_c);
 	ATF_ADD_TEST_CASE(tcs, parseCidr_class_a);
 	ATF_ADD_TEST_CASE(tcs, parseCidr_host);
 	ATF_ADD_TEST_CASE(tcs, parseCidr_no_slash_fails);
 	ATF_ADD_TEST_CASE(tcs, parseCidr_invalid_addr_fails);
 	ATF_ADD_TEST_CASE(tcs, parseCidr_private_ranges);
-
-	// ipToString
 	ATF_ADD_TEST_CASE(tcs, ipToString_zero);
 	ATF_ADD_TEST_CASE(tcs, ipToString_loopback);
 	ATF_ADD_TEST_CASE(tcs, ipToString_broadcast);

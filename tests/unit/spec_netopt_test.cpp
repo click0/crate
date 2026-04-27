@@ -1,77 +1,11 @@
-// ATF unit tests for Spec::NetOptDetails pure methods
+// ATF unit tests for Spec::NetOptDetails methods.
 //
-// Build:
-//   c++ -std=c++17 -Ilib -o tests/unit/spec_netopt_test \
-//       tests/unit/spec_netopt_test.cpp -L/usr/local/lib -latf-c++ -latf-c
-//
-// Run:
-//   cd tests && kyua test
+// Uses real Spec types from lib/spec.h, methods linked from lib/spec_pure.cpp.
 
 #include <atf-c++.hpp>
 #include <memory>
-#include <string>
-#include <utility>
-#include <vector>
-#include <map>
 
-// ===================================================================
-// Minimal reproduction of Spec types needed for testing
-// (avoids pulling in yaml-cpp, rang, and other heavy dependencies)
-// ===================================================================
-
-class Spec {
-public:
-	class OptDetails {
-	public:
-		virtual ~OptDetails() = 0;
-	};
-	class NetOptDetails : public OptDetails {
-	public:
-		typedef std::pair<unsigned,unsigned> PortRange;
-
-		enum class Mode { Nat, Bridge, Passthrough, Netgraph };
-		Mode mode = Mode::Nat;
-
-		bool outboundWan = false;
-		bool outboundLan = false;
-		bool outboundHost = false;
-		bool outboundDns = false;
-		bool ipv6 = false;
-		std::vector<std::pair<PortRange, PortRange>> inboundPortsTcp;
-		std::vector<std::pair<PortRange, PortRange>> inboundPortsUdp;
-
-		enum class IpMode { Auto, Static, Dhcp, None };
-		IpMode ipMode = IpMode::Auto;
-
-		bool allowOutbound() const {
-			return outboundWan || outboundLan || outboundHost || outboundDns;
-		}
-		bool allowInbound() const {
-			return !inboundPortsTcp.empty() || !inboundPortsUdp.empty();
-		}
-		bool isNatMode() const {
-			return mode == Mode::Nat;
-		}
-		bool needsIpfw() const {
-			return mode == Mode::Nat;
-		}
-		bool needsDhcp() const {
-			return ipMode == IpMode::Dhcp;
-		}
-	};
-
-	std::map<std::string, std::shared_ptr<OptDetails>> options;
-
-	bool optionExists(const char *opt) const {
-		return options.find(opt) != options.end();
-	}
-};
-
-Spec::OptDetails::~OptDetails() {}
-
-// ===================================================================
-// Tests: allowOutbound
-// ===================================================================
+#include "spec.h"
 
 ATF_TEST_CASE_WITHOUT_HEAD(allowOutbound_all_false);
 ATF_TEST_CASE_BODY(allowOutbound_all_false)
@@ -107,10 +41,6 @@ ATF_TEST_CASE_BODY(allowOutbound_all_true)
 	ATF_REQUIRE(n.allowOutbound());
 }
 
-// ===================================================================
-// Tests: allowInbound
-// ===================================================================
-
 ATF_TEST_CASE_WITHOUT_HEAD(allowInbound_empty);
 ATF_TEST_CASE_BODY(allowInbound_empty)
 {
@@ -142,10 +72,6 @@ ATF_TEST_CASE_BODY(allowInbound_both)
 	n.inboundPortsUdp.push_back({{5060, 5060}, {5060, 5060}});
 	ATF_REQUIRE(n.allowInbound());
 }
-
-// ===================================================================
-// Tests: isNatMode / needsIpfw
-// ===================================================================
 
 ATF_TEST_CASE_WITHOUT_HEAD(isNatMode_default);
 ATF_TEST_CASE_BODY(isNatMode_default)
@@ -182,10 +108,6 @@ ATF_TEST_CASE_BODY(isNatMode_netgraph)
 	ATF_REQUIRE(!n.needsIpfw());
 }
 
-// ===================================================================
-// Tests: needsDhcp
-// ===================================================================
-
 ATF_TEST_CASE_WITHOUT_HEAD(needsDhcp_auto);
 ATF_TEST_CASE_BODY(needsDhcp_auto)
 {
@@ -217,10 +139,6 @@ ATF_TEST_CASE_BODY(needsDhcp_none)
 	ATF_REQUIRE(!n.needsDhcp());
 }
 
-// ===================================================================
-// Tests: optionExists
-// ===================================================================
-
 ATF_TEST_CASE_WITHOUT_HEAD(optionExists_empty);
 ATF_TEST_CASE_BODY(optionExists_empty)
 {
@@ -238,37 +156,24 @@ ATF_TEST_CASE_BODY(optionExists_present)
 	ATF_REQUIRE(!s.optionExists("tor"));
 }
 
-// ===================================================================
-// Registration
-// ===================================================================
-
 ATF_INIT_TEST_CASES(tcs)
 {
-	// allowOutbound
 	ATF_ADD_TEST_CASE(tcs, allowOutbound_all_false);
 	ATF_ADD_TEST_CASE(tcs, allowOutbound_wan_only);
 	ATF_ADD_TEST_CASE(tcs, allowOutbound_dns_only);
 	ATF_ADD_TEST_CASE(tcs, allowOutbound_all_true);
-
-	// allowInbound
 	ATF_ADD_TEST_CASE(tcs, allowInbound_empty);
 	ATF_ADD_TEST_CASE(tcs, allowInbound_tcp);
 	ATF_ADD_TEST_CASE(tcs, allowInbound_udp);
 	ATF_ADD_TEST_CASE(tcs, allowInbound_both);
-
-	// isNatMode / needsIpfw
 	ATF_ADD_TEST_CASE(tcs, isNatMode_default);
 	ATF_ADD_TEST_CASE(tcs, isNatMode_bridge);
 	ATF_ADD_TEST_CASE(tcs, isNatMode_passthrough);
 	ATF_ADD_TEST_CASE(tcs, isNatMode_netgraph);
-
-	// needsDhcp
 	ATF_ADD_TEST_CASE(tcs, needsDhcp_auto);
 	ATF_ADD_TEST_CASE(tcs, needsDhcp_dhcp);
 	ATF_ADD_TEST_CASE(tcs, needsDhcp_static);
 	ATF_ADD_TEST_CASE(tcs, needsDhcp_none);
-
-	// optionExists
 	ATF_ADD_TEST_CASE(tcs, optionExists_empty);
 	ATF_ADD_TEST_CASE(tcs, optionExists_present);
 }
