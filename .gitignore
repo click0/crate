@@ -18,6 +18,9 @@ tests/unit/stack_test
 tests/unit/util_security_test
 tests/unit/import_test
 tests/unit/cli_args_test
+tests/unit/args_validate_test
+tests/unit/util_subst_test
+tests/unit/spec_subst_test
 *.gcda
 *.gcno
 coverage.info

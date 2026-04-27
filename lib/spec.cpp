@@ -607,20 +607,8 @@ void Spec::validate() const {
 // interface
 //
 
-static std::string substituteVars(const std::string &input, const std::map<std::string, std::string> &vars) {
-  if (vars.empty())
-    return input;
-  std::string result = input;
-  for (auto &kv : vars) {
-    std::string token = "${" + kv.first + "}";
-    size_t pos = 0;
-    while ((pos = result.find(token, pos)) != std::string::npos) {
-      result.replace(pos, token.length(), kv.second);
-      pos += kv.second.length();
-    }
-  }
-  return result;
-}
+// substituteVars moved to lib/spec_pure.cpp (SpecPure::substituteVars).
+using SpecPure::substituteVars;
 
 static Spec parseSpecFromNode(YAML::Node top) {
 

@@ -142,7 +142,7 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              network_test network_ipv6_test err_test \
              snmpd_mib_test daemon_metrics_test stack_test \
              util_security_test import_test cli_args_test \
-             args_validate_test
+             args_validate_test util_subst_test spec_subst_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)
