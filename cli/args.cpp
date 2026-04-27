@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "args.h"
+#include "args_pure.h"
 #include "util.h"
 #include "err.h"
 
@@ -21,9 +22,11 @@
 // internals
 //
 
-static bool strEq(const char *s1, const char *s2) {
-  return strcmp(s1, s2) == 0;
-}
+// Forward to pure helpers (definitions in cli/args_pure.cpp)
+static inline bool        strEq(const char *s1, const char *s2) { return ArgsPure::strEq(s1, s2); }
+static inline char        isShort(const char *arg)              { return ArgsPure::isShort(arg); }
+static inline const char *isLong(const char *arg)               { return ArgsPure::isLong(arg); }
+static inline Command     isCommand(const char *arg)            { return ArgsPure::isCommand(arg); }
 
 static void usage() {
   std::cout << "usage: crate [-h|--help] [--no-color] [--version] COMMAND [...command arguments...]" << std::endl;
@@ -324,64 +327,7 @@ static void err(const char *fmt, const char *arg) {
   exit(1);
 }
 
-static char isShort(const char* arg) {
-  if (arg[0] == '-' && (isalpha(arg[1]) || isdigit(arg[1])) && arg[2] == 0)
-    return arg[1];
-  return 0;
-}
-
-static const char* isLong(const char* arg) {
-  // Accept --foo where foo is a sequence of [a-z0-9-]+
-  // The previous condition `!islower || !isdigit` is logically wrong
-  // (no character is both lowercase AND a digit) — it rejected every
-  // long option, so every '--help'/'--log-progress' fall-through silently
-  // hit the "unknown argument" error. Accept lowercase, digits and dash.
-  if (arg[0] == '-' && arg[1] == '-') {
-    for (int i = 2; arg[i]; i++)
-      if (!islower(arg[i]) && !isdigit(arg[i]) && arg[i] != '-')
-        return nullptr;
-    return arg + 2;
-  }
-
-  return nullptr;
-}
-
-static Command isCommand(const char* arg) {
-  if (strEq(arg, "create"))
-    return CmdCreate;
-  if (strEq(arg, "run"))
-    return CmdRun;
-  if (strEq(arg, "validate"))
-    return CmdValidate;
-  if (strEq(arg, "snapshot"))
-    return CmdSnapshot;
-  if (strEq(arg, "list") || strEq(arg, "ls"))
-    return CmdList;
-  if (strEq(arg, "info"))
-    return CmdInfo;
-  if (strEq(arg, "clean"))
-    return CmdClean;
-  if (strEq(arg, "console"))
-    return CmdConsole;
-  if (strEq(arg, "export"))
-    return CmdExport;
-  if (strEq(arg, "import"))
-    return CmdImport;
-  if (strEq(arg, "gui"))
-    return CmdGui;
-  if (strEq(arg, "stack"))
-    return CmdStack;
-  if (strEq(arg, "stats"))
-    return CmdStats;
-  if (strEq(arg, "logs"))
-    return CmdLogs;
-  if (strEq(arg, "stop"))
-    return CmdStop;
-  if (strEq(arg, "restart"))
-    return CmdRestart;
-
-  return CmdNone;
-}
+// strEq, isShort, isLong, isCommand moved to cli/args_pure.cpp
 
 static const char* getArgParam(int aidx, int argc, char** argv) {
   if (aidx >= argc)
@@ -517,7 +463,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.4.1" << std::endl;
+        std::cout << "crate 0.4.2" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -528,7 +474,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.4.1" << std::endl;
+          std::cout << "crate 0.4.2" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);

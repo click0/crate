@@ -1,24 +1,28 @@
 
 # --- Source files ---
 
-LIB_SRCS = lib/spec.cpp lib/create.cpp lib/run.cpp lib/list.cpp lib/info.cpp \
-           lib/clean.cpp lib/console.cpp lib/export.cpp lib/import.cpp \
+LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/create.cpp lib/run.cpp \
+           lib/list.cpp lib/info.cpp lib/clean.cpp lib/console.cpp \
+           lib/export.cpp lib/import.cpp lib/import_pure.cpp \
            lib/gui.cpp lib/run_net.cpp lib/run_jail.cpp lib/run_gui.cpp \
            lib/run_services.cpp lib/locs.cpp lib/cmd.cpp lib/mount.cpp \
            lib/net.cpp lib/ctx.cpp lib/gui_registry.cpp lib/scripts.cpp \
            lib/misc.cpp lib/util.cpp lib/util_pure.cpp lib/err.cpp \
-           lib/validate.cpp lib/snapshot.cpp lib/config.cpp lib/stack.cpp \
+           lib/validate.cpp lib/snapshot.cpp lib/config.cpp \
+           lib/stack.cpp lib/stack_pure.cpp \
            lib/jail_query.cpp lib/zfs_ops.cpp lib/ifconfig_ops.cpp \
            lib/pfctl_ops.cpp lib/mac_ops.cpp lib/ipfw_ops.cpp \
            lib/capsicum_ops.cpp lib/netgraph_ops.cpp lib/nv_protocol.cpp \
-           lib/lifecycle.cpp
+           lib/lifecycle.cpp lib/lifecycle_pure.cpp
 
-CLI_SRCS = cli/main.cpp cli/args.cpp
+CLI_SRCS = cli/main.cpp cli/args.cpp cli/args_pure.cpp
 
 DAEMON_SRCS = daemon/main.cpp daemon/config.cpp daemon/server.cpp \
-              daemon/routes.cpp daemon/auth.cpp daemon/metrics.cpp
+              daemon/routes.cpp daemon/auth.cpp \
+              daemon/metrics.cpp daemon/metrics_pure.cpp
 
-SNMPD_SRCS = snmpd/main.cpp snmpd/collector.cpp snmpd/mib.cpp
+SNMPD_SRCS = snmpd/main.cpp snmpd/collector.cpp \
+             snmpd/mib.cpp snmpd/mib_pure.cpp
 
 LIB_OBJS = $(LIB_SRCS:.cpp=.o)
 CLI_OBJS = $(CLI_SRCS:.cpp=.o)
@@ -157,10 +161,17 @@ build-unit-tests: $(UNIT_TEST_BINS)
 # Pure platform-independent sources tests can safely link against.
 # Compiled inline (no separate .o) to avoid colliding with the
 # main lib/*.o build that uses different CXXFLAGS.
-TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp
+TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
+                 lib/spec_pure.cpp lib/stack_pure.cpp \
+                 lib/lifecycle_pure.cpp lib/import_pure.cpp \
+                 cli/args_pure.cpp daemon/metrics_pure.cpp \
+                 snmpd/mib_pure.cpp
+
+# -Icli/-Idaemon/-Isnmpd let tests #include the *_pure.h files directly.
+TEST_INCLUDES = -Ilib -Icli -Idaemon -Isnmpd
 
 tests/unit/%: tests/unit/%.cpp $(TEST_LINK_SRCS)
-	$(CXX) -std=c++17 -Ilib $(COVERAGE_CXXFLAGS) -o $@ $< $(TEST_LINK_SRCS) $(COVERAGE_LDFLAGS) -L/usr/local/lib -latf-c++ -latf-c
+	$(CXX) -std=c++17 $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -o $@ $< $(TEST_LINK_SRCS) $(COVERAGE_LDFLAGS) -L/usr/local/lib -latf-c++ -latf-c
 
 # coverage: build unit tests with gcov instrumentation, run them, and
 # render an HTML report under coverage-html/. Requires lcov + genhtml.

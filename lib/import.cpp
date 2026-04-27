@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "args.h"
+#include "import_pure.h"
 #include "pathnames.h"
 #include "cmd.h"
 #include "locs.h"
@@ -43,10 +44,7 @@ static bool validateChecksum(const std::string &archivePath, bool force) {
     ERR("cannot read checksum file: " << sha256File)
   std::string line;
   std::getline(ifs, line);
-  // Format: "hexhash  filename" or just "hexhash"
-  auto spacePos = line.find(' ');
-  auto expectedHash = (spacePos != std::string::npos) ? line.substr(0, spacePos) : line;
-  expectedHash = Util::stripTrailingSpace(expectedHash);
+  auto expectedHash = ImportPure::parseSha256File(line);
 
   // Compute actual checksum
   auto actualOutput = Util::execCommandGetOutput(
@@ -76,14 +74,8 @@ static void validateArchive(const std::string &archivePath) {
     {{CRATE_PATH_XZ, Cmd::xzThreadsArg, "--decompress"},
      {CRATE_PATH_TAR, "tf", "-"}},
     "list archive contents for validation", archivePath);
-
-  std::istringstream is(listing);
-  std::string entry;
-  while (std::getline(is, entry)) {
-    if (entry.find("..") != std::string::npos)
-      ERR("archive contains path with '..' component: " << entry
-          << " — refusing to import (directory traversal)")
-  }
+  if (ImportPure::archiveHasTraversal(listing))
+    ERR("archive contains path with '..' component — refusing to import (directory traversal)")
 }
 
 // Inspect the +CRATE.SPEC inside the archive without full extraction
@@ -95,15 +87,9 @@ static bool archiveHasSpec(const std::string &archivePath) {
 
   std::istringstream is(listing);
   std::string entry;
-  while (std::getline(is, entry)) {
-    // Strip leading "./" if present
-    auto name = entry;
-    if (name.substr(0, 2) == "./") name = name.substr(2);
-    // Strip trailing "/"
-    while (!name.empty() && name.back() == '/') name.pop_back();
-    if (name == "+CRATE.SPEC")
+  while (std::getline(is, entry))
+    if (ImportPure::normalizeArchiveEntry(entry) == "+CRATE.SPEC")
       return true;
-  }
   return false;
 }
 

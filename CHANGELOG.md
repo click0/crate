@@ -6,6 +6,61 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.4.2] — 2026-04-27
+
+Test methodology rollout: every unit test now links against the real
+production code. The old "duplicate the function under test into the
+test source" pattern is gone. A regression in any extracted helper
+will now actually fail the suite.
+
+### Changed — extraction of pure helpers into `*_pure.cpp` modules
+
+| New module | Function(s) extracted from |
+|---|---|
+| `cli/args_pure.cpp`        | `cli/args.cpp`        — `strEq`, `isShort`, `isLong`, `isCommand` |
+| `snmpd/mib_pure.cpp`       | `snmpd/mib.cpp`       — `encodeUint32`, `encodeOid`, `encodeOctetString` |
+| `daemon/metrics_pure.cpp`  | `daemon/metrics.cpp`  — `parseRctlUsage` |
+| `lib/stack_pure.cpp`       | `lib/stack.cpp`       — `parseCidr`, `ipToString`, `ipFromCidr`, `buildHostsEntries`; templated `topoSort<T>`. Also hosts `isIpv6Address` from `lib/net.cpp`. |
+| `lib/spec_pure.cpp`        | `lib/spec.cpp`        — `parsePortRange`; pure methods of `Spec::NetOptDetails` (`allowOutbound`, `allowInbound`, `isNatMode`, `needsIpfw`, `needsDhcp`); `Spec::optionExists`; ctors/dtors for `OptDetails` and `NetOptDetails` |
+| `lib/lifecycle_pure.cpp`   | `lib/lifecycle.cpp`   — `humanBytes` |
+| `lib/import_pure.cpp`      | `lib/import.cpp`      — `parseSha256File`, `archiveHasTraversal`, `normalizeArchiveEntry` |
+
+Every original `.cpp` keeps a thin forwarder (or `using` declaration)
+so existing call sites are unchanged.
+
+### Changed — tests
+
+All 13 unit-test files no longer duplicate the function under test.
+They `#include` the appropriate `*_pure.h` and link against the
+matching `*_pure.cpp`. Result: every test now exercises the real
+production symbol.
+
+### Build
+
+`Makefile` `tests/unit/%` rule links every test against the full set
+of pure modules:
+```
+TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp lib/spec_pure.cpp \
+                 lib/stack_pure.cpp lib/lifecycle_pure.cpp \
+                 lib/import_pure.cpp cli/args_pure.cpp \
+                 daemon/metrics_pure.cpp snmpd/mib_pure.cpp
+```
+
+`-Icli`/`-Idaemon`/`-Isnmpd` added to test include path so the
+respective `*_pure.h` files resolve.
+
+`topoSort` is now a header-only template (`StackPure::topoSort<T>`)
+so production and test code share one implementation.
+
+### Notes
+
+- 164/164 kyua unit tests pass on Linux.
+- Test-count dropped from 166 (0.4.1) to 164 because two duplicated
+  `toUInt` cases that used to live in both `util_test` and `spec_test`
+  now live only in `spec_test` (against the real `Util::toUInt`).
+
+---
+
 ## [0.4.1] — 2026-04-27
 
 Unit-test methodology fix: tests can now link against the production

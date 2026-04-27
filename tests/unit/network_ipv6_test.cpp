@@ -1,30 +1,14 @@
-// ATF unit tests for Net::isIpv6Address
+// ATF unit tests for IPv6 address validation.
 //
-// Build:
-//   c++ -std=c++17 -Ilib -o tests/unit/network_ipv6_test \
-//       tests/unit/network_ipv6_test.cpp -L/usr/local/lib -latf-c++ -latf-c
-//
-// Run:
-//   cd tests && kyua test
+// Uses real StackPure::isIpv6Address from lib/stack_pure.cpp
+// (mirror of Net::isIpv6Address).
 
 #include <atf-c++.hpp>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <string>
 
-// ===================================================================
-// Local copy of isIpv6Address from lib/net.cpp
-// ===================================================================
+#include "stack_pure.h"
 
-static bool isIpv6Address(const std::string &addr) {
-	struct in6_addr result;
-	return ::inet_pton(AF_INET6, addr.c_str(), &result) == 1;
-}
-
-// ===================================================================
-// Tests: isIpv6Address
-// ===================================================================
+using StackPure::isIpv6Address;
 
 ATF_TEST_CASE_WITHOUT_HEAD(ipv6_loopback);
 ATF_TEST_CASE_BODY(ipv6_loopback)
@@ -77,13 +61,8 @@ ATF_TEST_CASE_BODY(ipv6_not_garbage)
 ATF_TEST_CASE_WITHOUT_HEAD(ipv6_mapped_v4);
 ATF_TEST_CASE_BODY(ipv6_mapped_v4)
 {
-	// IPv4-mapped IPv6 address
 	ATF_REQUIRE(isIpv6Address("::ffff:192.168.1.1"));
 }
-
-// ===================================================================
-// Registration
-// ===================================================================
 
 ATF_INIT_TEST_CASES(tcs)
 {

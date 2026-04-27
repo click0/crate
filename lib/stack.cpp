@@ -9,6 +9,7 @@
 #include "ipfw_ops.h"
 #include "net.h"
 #include "pathnames.h"
+#include "stack_pure.h"
 
 #include <rang.hpp>
 #include <yaml-cpp/yaml.h>
@@ -96,38 +97,12 @@ static std::vector<StackNetwork> parseNetworks(const YAML::Node &top) {
 
 // --- IP Pool Allocator (§27.3) ---
 
-// Parse a CIDR subnet into base address and prefix length
-static bool parseCidr(const std::string &cidr, uint32_t &baseAddr, unsigned &prefixLen) {
-  auto slashPos = cidr.find('/');
-  if (slashPos == std::string::npos)
-    return false;
-  auto addrStr = cidr.substr(0, slashPos);
-  try {
-    std::size_t pos = 0;
-    auto suffix = cidr.substr(slashPos + 1);
-    prefixLen = std::stoul(suffix, &pos);
-    if (pos != suffix.size())
-      return false;
-  } catch (const std::invalid_argument &) {
-    return false;
-  } catch (const std::out_of_range &) {
-    return false;
-  }
-  struct in_addr addr;
-  if (inet_pton(AF_INET, addrStr.c_str(), &addr) != 1)
-    return false;
-  baseAddr = ntohl(addr.s_addr);
-  return true;
+// parseCidr, ipToString moved to lib/stack_pure.cpp; forward to keep
+// existing call sites unchanged.
+static inline bool parseCidr(const std::string &cidr, uint32_t &baseAddr, unsigned &prefixLen) {
+  return StackPure::parseCidr(cidr, baseAddr, prefixLen);
 }
-
-// Convert uint32_t IP to dotted string
-static std::string ipToString(uint32_t ip) {
-  struct in_addr addr;
-  addr.s_addr = htonl(ip);
-  char buf[INET_ADDRSTRLEN];
-  inet_ntop(AF_INET, &addr, buf, sizeof(buf));
-  return buf;
-}
+static inline std::string ipToString(uint32_t ip) { return StackPure::ipToString(ip); }
 
 // Allocate IPs from subnet for containers that don't have static IPs
 // Reserve .1 for gateway/bridge, allocate .2, .3, ... sequentially
@@ -438,11 +413,8 @@ static RunAtEnd applyNetworkPolicies(
   });
 }
 
-// Extract the IP address (without prefix length) from a CIDR string like "10.99.0.2/24"
-static std::string ipFromCidr(const std::string &cidr) {
-  auto pos = cidr.find('/');
-  return pos != std::string::npos ? cidr.substr(0, pos) : cidr;
-}
+// ipFromCidr moved to lib/stack_pure.cpp
+static inline std::string ipFromCidr(const std::string &cidr) { return StackPure::ipFromCidr(cidr); }
 
 // Collect container name -> IP mappings by parsing each spec's network config.
 // Returns a map of container name to IP address string.
@@ -467,12 +439,9 @@ static std::map<std::string, std::string> collectContainerIPs(const std::vector<
   return nameToIp;
 }
 
-// Build /etc/hosts content from container name->IP mappings
-static std::string buildHostsEntries(const std::map<std::string, std::string> &nameToIp) {
-  std::ostringstream ss;
-  for (auto &kv : nameToIp)
-    ss << kv.second << " " << kv.first << "\n";
-  return ss.str();
+// buildHostsEntries moved to lib/stack_pure.cpp
+static inline std::string buildHostsEntries(const std::map<std::string, std::string> &nameToIp) {
+  return StackPure::buildHostsEntries(nameToIp);
 }
 
 struct ParsedStack {
@@ -626,58 +595,10 @@ static ParsedStack parseStackFile(const std::string &fname, const std::map<std::
   return {entries, volumes};
 }
 
-// Topological sort using Kahn's algorithm; returns entries in dependency order.
-// Throws on cycles.
-static std::vector<StackEntry> topoSort(const std::vector<StackEntry> &entries) {
-  // Build name -> index map
-  std::map<std::string, size_t> nameIdx;
-  for (size_t i = 0; i < entries.size(); i++) {
-    if (nameIdx.count(entries[i].name))
-      ERR("duplicate container name '" << entries[i].name << "' in stack file")
-    nameIdx[entries[i].name] = i;
-  }
-
-  // Validate dependencies exist
-  for (auto &e : entries)
-    for (auto &d : e.depends)
-      if (!nameIdx.count(d))
-        ERR("container '" << e.name << "' depends on unknown container '" << d << "'")
-
-  // Compute in-degrees and adjacency
-  size_t n = entries.size();
-  std::vector<int> inDeg(n, 0);
-  std::vector<std::vector<size_t>> adj(n); // adj[i] = containers that depend on i
-
-  for (size_t i = 0; i < n; i++) {
-    for (auto &d : entries[i].depends) {
-      size_t di = nameIdx[d];
-      adj[di].push_back(i);
-      inDeg[i]++;
-    }
-  }
-
-  // Kahn's algorithm
-  std::queue<size_t> q;
-  for (size_t i = 0; i < n; i++)
-    if (inDeg[i] == 0)
-      q.push(i);
-
-  std::vector<StackEntry> sorted;
-  sorted.reserve(n);
-  while (!q.empty()) {
-    size_t cur = q.front();
-    q.pop();
-    sorted.push_back(entries[cur]);
-    for (auto next : adj[cur]) {
-      if (--inDeg[next] == 0)
-        q.push(next);
-    }
-  }
-
-  if (sorted.size() != n)
-    ERR("circular dependency detected in stack file")
-
-  return sorted;
+// Topological sort delegated to StackPure::topoSort<StackEntry>
+// (template lives in lib/stack_pure.h; works for any T with .name + .depends).
+static inline std::vector<StackEntry> topoSort(const std::vector<StackEntry> &entries) {
+  return StackPure::topoSort(entries);
 }
 
 // Print status table for a stack, querying runtime state from running jails
