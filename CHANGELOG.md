@@ -6,6 +6,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.4.3] — 2026-04-27
+
+CLI input-validation hardening: 36 new test cases for `Args::validate`.
+
+### Changed
+
+- **`Args::validate()`** moved from `cli/args.cpp` into `cli/args_pure.cpp`
+  so it can be linked into unit tests without dragging in
+  `cli/args.cpp`'s rang/usage()/exit() dependencies.
+- The default `CmdNone` branch now throws `Exception` (via `ERR(...)`)
+  instead of calling the static `err()` helper that printed `usage()`
+  and `exit(1)`. Net behaviour is the same — `cli/main.cpp`'s catch
+  chain prints `e.what()` in red and returns 1 — except that the
+  bare `crate` (no args) path no longer prints the usage hint.
+- `Util::Fs::fileExists`, `Util::Fs::dirExists`, `Util::Fs::getUserHomeDir`
+  moved from `lib/util.cpp` to `lib/util_pure.cpp`. All three are
+  POSIX (`stat`, `getpwuid`) so they compile and link on Linux too.
+
+### Added — tests
+
+`tests/unit/args_validate_test.cpp` (+36 cases) exercises every branch
+of `Args::validate()`:
+- `Create`: empty, spec-only, template-not-found
+- `Run`: empty, missing file, existing file
+- `Validate`: empty, with spec
+- `Snapshot`: each subcommand's required-arg combinations
+- `List` / `Clean`: no-arg paths
+- Target-only commands (`Info`, `Console`, `Stats`, `Logs`, `Stop`,
+  `Restart`): empty + set
+- `Gui`: subcommand variations (focus/attach/url/screenshot/resize
+  require target; resize requires resolution)
+- `Stack`: `up`/`exec` argument requirements
+- `CmdNone`: bare-crate path
+
+### Verification
+
+- `make build-unit-tests` → 14 binaries built
+- `cd tests && kyua test unit` → **200/200 pass** (was 164, +36)
+
+---
+
 ## [0.4.2] — 2026-04-27
 
 Test methodology rollout: every unit test now links against the real
