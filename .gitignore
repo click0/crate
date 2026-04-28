@@ -23,6 +23,7 @@ tests/unit/util_subst_test
 tests/unit/spec_subst_test
 tests/unit/scripts_test
 tests/unit/adversarial_test
+tests/unit/spec_validate_test
 *.gcda
 *.gcno
 coverage.info

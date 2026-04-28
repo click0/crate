@@ -144,7 +144,7 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              snmpd_mib_test daemon_metrics_test stack_test \
              util_security_test import_test cli_args_test \
              args_validate_test util_subst_test spec_subst_test \
-             scripts_test adversarial_test
+             scripts_test adversarial_test spec_validate_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)
@@ -174,8 +174,8 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
 # -Icli/-Idaemon/-Isnmpd let tests #include the *_pure.h files directly.
 TEST_INCLUDES = -Ilib -Icli -Idaemon -Isnmpd
 
-tests/unit/%: tests/unit/%.cpp $(TEST_LINK_SRCS)
-	$(CXX) -std=c++17 $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -o $@ $< $(TEST_LINK_SRCS) $(COVERAGE_LDFLAGS) -L/usr/local/lib -latf-c++ -latf-c
+tests/unit/%: tests/unit/%.cpp $(TEST_LINK_SRCS) lib/lst-all-script-sections.h tests/unit/_test_config_stub.cpp
+	$(CXX) -std=c++17 $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -o $@ $< $(TEST_LINK_SRCS) tests/unit/_test_config_stub.cpp $(COVERAGE_LDFLAGS) -L/usr/local/lib -latf-c++ -latf-c
 
 # coverage: build unit tests with gcov instrumentation, run them, and
 # render an HTML report under coverage-html/. Requires lcov + genhtml.
