@@ -15,6 +15,7 @@
 #include <cctype>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <map>
 #include <sstream>
 
@@ -68,6 +69,14 @@ std::string stripTrailingSpace(const std::string &str) {
 }
 
 unsigned toUInt(const std::string &str) {
+  // Reject leading '-' explicitly: std::stoul will silently wrap it
+  // around to ULONG_MAX, which would otherwise pass through as a
+  // huge "valid" unsigned. Whitespace is also rejected for
+  // consistency with the previous behaviour (stoul skipped it,
+  // which made " 80" parse as 80 — surprising for a port-number
+  // parser).
+  if (!str.empty() && (str.front() == '-' || std::isspace(str.front())))
+    ERR2("convert string to unsigned", "invalid numeric string '" << str << "'")
   std::size_t pos = 0;
   unsigned long u = 0;
   try {
@@ -79,7 +88,11 @@ unsigned toUInt(const std::string &str) {
   }
   if (pos != str.size())
     ERR2("convert string to unsigned", "trailing characters in string '" << str << "'")
-  return u;
+  // On 64-bit platforms unsigned long is 64-bit; reject values that
+  // would silently truncate when cast to unsigned (32-bit).
+  if (u > std::numeric_limits<unsigned>::max())
+    ERR2("convert string to unsigned", "number out of range '" << str << "'")
+  return static_cast<unsigned>(u);
 }
 
 std::vector<std::string> reverseVector(const std::vector<std::string> &v) {

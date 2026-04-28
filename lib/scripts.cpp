@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "scripts.h"
+#include "scripts_pure.h"
 #include "util.h"
 
 #include <rang.hpp>
@@ -13,23 +14,8 @@
 
 namespace Scripts {
 
-//
-// helpers
-//
-
-static std::string escape(const std::string &script) {
-  // Escape for embedding inside single quotes passed to /bin/sh -c '...'
-  // Inside single quotes, only the single quote itself needs escaping.
-  // We end the current single-quoted string, add an escaped literal quote,
-  // and reopen the single-quoted string: ' → '\''
-  std::ostringstream ss;
-  for (auto chr : script)
-    if (chr == '\'')
-      ss << "'\\''";
-    else
-      ss << chr;
-  return ss.str();
-}
+// escape moved to lib/scripts_pure.cpp (ScriptsPure::escape).
+using ScriptsPure::escape;
 
 //
 // interface

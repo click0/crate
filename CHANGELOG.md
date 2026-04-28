@@ -6,6 +6,69 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.4.5] — 2026-04-28
+
+Boundary / adversarial test pass. **Two more real bugs caught and fixed**
+— making this the fifth bug found by the tests added in this PR cycle.
+
+### Fixed
+
+- **`Util::toUInt`** silently truncated when the parsed value
+  exceeded `UINT_MAX`. On 64-bit platforms `unsigned long` is 64-bit
+  but `unsigned` is 32-bit, so e.g. `toUInt("99999999999")` returned
+  the low 32 bits instead of throwing. Practical impact: a port-range
+  spec like `99999999999` would parse as a random small port. Also
+  silently accepted leading-`-` and leading whitespace via `stoul`'s
+  permissiveness. Fix: explicit guard against `-`/whitespace and
+  range-check the parsed value before casting.
+- **`StackPure::parseCidr`** accepted any prefix length — including
+  `/64` for IPv4 (silently kept) and `/-1` (parsed by `std::stoul` as
+  `ULONG_MAX`). Fix: reject prefixes outside `0..32` and reject leading
+  `-`. `/-1` and `/64` now return `false`.
+
+### Changed — extracted to pure module
+
+- `Scripts::escape` moved from `lib/scripts.cpp` to
+  `lib/scripts_pure.cpp` (`ScriptsPure::escape`).
+
+### Added — tests (+36 cases)
+
+- `tests/unit/scripts_test.cpp` (+5) — covers `escape` with empty
+  input, plain text, single quote, classic injection attempt, and a
+  `/bin/sh` round-trip.
+- `tests/unit/adversarial_test.cpp` (+31) — boundary/edge tests
+  across the existing pure surface:
+  - `shellQuote`: 100KB input, 1000 single quotes, embedded null
+    bytes, high-byte (0x80–0xFF) bytes
+  - `splitString`: only-delimiters, 1000-element split, leading/
+    trailing delimiters
+  - `Fs::hasExtension`: case sensitivity, dotfile, no-dot
+  - `isUrl`: minimum-valid (8 vs 9 chars), uppercase scheme
+  - `parseCidr`: 0/32 boundaries, oversize, negative, extra text,
+    empty addr/prefix
+  - `parsePortRange`: overflow, negative, inverted range
+  - `humanBytes`: `UINT64_MAX`, just-below-1K
+  - `MibPure`: 1023-byte octet string, empty OID
+  - `topoSort`: 100-node chain, fan-out
+  - `isLong`: triple-dash, just `--`
+
+### Bug-discovery score so far this PR cycle
+
+| Release | Bug found | Severity |
+|---|---|---|
+| 0.4.0 | `safePath` accepts `/foo_neighbour` for prefix `/foo` | path-traversal in setuid binary |
+| 0.4.0 | `isLong` rejects every long option | every `--help`-style flag broken |
+| 0.4.4 | `pathSubstituteVarsInString` infinite loop on `$HOMER` | DoS |
+| 0.4.5 | `Util::toUInt` silent truncation past UINT_MAX | wrong port/limits silently accepted |
+| 0.4.5 | `parseCidr` accepts impossible prefixes (`/64`, `/-1`) | wrong netmask silently accepted |
+
+### Verification
+
+- `make build-unit-tests` → 18 binaries built
+- `cd tests && kyua test unit` → **258/258 pass** (was 222, +36)
+
+---
+
 ## [0.4.4] — 2026-04-27
 
 Variable-substitution coverage + a third real bug caught by new tests.
