@@ -7,6 +7,7 @@
 #include "cmd.h"
 #include "mount.h"
 #include "net.h"
+#include "run_pure.h"
 #include "scripts.h"
 #include "ctx.h"
 #include "jail_query.h"
@@ -100,11 +101,9 @@ static void signalHandler(int sig) { g_signalReceived = sig; }
 //
 // helpers
 //
-static std::string argsToString(int argc, char** argv) {
-  std::ostringstream ss;
-  for (int i = 0; i < argc; i++)
-    ss << " " << Util::shellQuote(argv[i]);
-  return ss.str();
+// argsToString moved to lib/run_pure.cpp (RunPure::argsToString).
+static inline std::string argsToString(int argc, char** argv) {
+  return RunPure::argsToString(argc, argv);
 }
 
 // Healthcheck (§20): run test command inside jail, return true if exit code == 0

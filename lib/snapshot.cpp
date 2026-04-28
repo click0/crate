@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "args.h"
+#include "autoname_pure.h"
 #include "zfs_ops.h"
 #include "pathnames.h"
 #include "util.h"
@@ -19,13 +20,8 @@
 #define ERR(msg...) \
   ERR2("snapshot", msg)
 
-static std::string autoSnapshotName() {
-  auto now = std::chrono::system_clock::now();
-  auto time = std::chrono::system_clock::to_time_t(now);
-  std::ostringstream ss;
-  ss << std::put_time(std::gmtime(&time), "%Y%m%dT%H%M%S");
-  return ss.str();
-}
+// autoSnapshotName moved to lib/autoname_pure.cpp (AutoNamePure::snapshotName).
+static inline std::string autoSnapshotName() { return AutoNamePure::snapshotName(); }
 
 bool snapshotCrate(const Args &args) {
   auto &ds = args.snapshotDataset;

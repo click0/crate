@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "args.h"
+#include "autoname_pure.h"
 #include "jail_query.h"
 #include "pathnames.h"
 #include "cmd.h"
@@ -57,12 +58,9 @@ static bool resolveContainer(const std::string &target, int &jid, std::string &p
   return false;
 }
 
-static std::string autoExportName(const std::string &baseName) {
-  auto now = std::chrono::system_clock::now();
-  auto time = std::chrono::system_clock::to_time_t(now);
-  std::ostringstream ss;
-  ss << baseName << "-" << std::put_time(std::gmtime(&time), "%Y%m%d-%H%M%S") << ".crate";
-  return ss.str();
+// autoExportName moved to lib/autoname_pure.cpp (AutoNamePure::exportName).
+static inline std::string autoExportName(const std::string &baseName) {
+  return AutoNamePure::exportName(baseName);
 }
 
 bool exportCrate(const Args &args) {

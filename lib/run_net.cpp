@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "run_net.h"
+#include "run_pure.h"
 #include "spec.h"
 #include "net.h"
 #include "ctx.h"
@@ -26,10 +27,9 @@
 // IN rules use range 10000-29999, OUT rules use range 50000-64999.
 // Override via environment: CRATE_IPFW_RULE_BASE_IN, CRATE_IPFW_RULE_BASE_OUT,
 // CRATE_IPFW_SLOT_SIZE to avoid collisions with other jail managers.
-static unsigned envOrDefault(const char *name, unsigned def) {
-  auto *val = ::getenv(name);
-  if (!val) return def;
-  try { return Util::toUInt(val); } catch (...) { return def; }
+// envOrDefault moved to lib/run_pure.cpp (RunPure::envOrDefault).
+static inline unsigned envOrDefault(const char *name, unsigned def) {
+  return RunPure::envOrDefault(name, def);
 }
 static const unsigned fwSlotSize          = envOrDefault("CRATE_IPFW_SLOT_SIZE", 10);
 static const unsigned fwRuleRangeInBase   = envOrDefault("CRATE_IPFW_RULE_BASE_IN", 10000);
