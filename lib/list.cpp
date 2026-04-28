@@ -22,6 +22,8 @@
 #include <string>
 #include <vector>
 
+#include "list_pure.h"
+
 #define ERR(msg...) \
   ERR2("list", msg)
 
@@ -94,71 +96,29 @@ static std::vector<CrateEntry> discoverRunningCrates() {
   return entries;
 }
 
+// listJson, listTable moved to lib/list_pure.cpp. This file's CrateEntry
+// struct is the discovery-side type; convert to ListPure::Entry when
+// rendering.
+static std::vector<ListPure::Entry> toPureEntries(const std::vector<CrateEntry> &src) {
+  std::vector<ListPure::Entry> out;
+  out.reserve(src.size());
+  for (auto &e : src)
+    out.push_back({e.jid, e.name, e.path, e.ip, e.hostname, e.ports, e.mounts, e.hasHealthcheck});
+  return out;
+}
+
 static void listJson(const std::vector<CrateEntry> &entries) {
-  std::cout << "[" << std::endl;
-  for (size_t i = 0; i < entries.size(); i++) {
-    auto &e = entries[i];
-    std::cout << "  {";
-    std::cout << "\"jid\":" << e.jid;
-    std::cout << ",\"name\":\"" << e.name << "\"";
-    std::cout << ",\"hostname\":\"" << e.hostname << "\"";
-    std::cout << ",\"ip\":\"" << e.ip << "\"";
-    std::cout << ",\"path\":\"" << e.path << "\"";
-    std::cout << ",\"ports\":\"" << e.ports << "\"";
-    std::cout << ",\"mounts\":\"" << e.mounts << "\"";
-    std::cout << ",\"healthcheck\":" << (e.hasHealthcheck ? "true" : "false");
-    std::cout << "}";
-    if (i + 1 < entries.size()) std::cout << ",";
-    std::cout << std::endl;
-  }
-  std::cout << "]" << std::endl;
+  ListPure::renderJson(std::cout, toPureEntries(entries));
 }
 
 static void listTable(const std::vector<CrateEntry> &entries) {
-  if (entries.empty()) {
-    std::cout << "No running crate containers." << std::endl;
-    return;
-  }
-
-  // Calculate column widths
-  size_t wJid = 3, wName = 4, wIp = 10, wHostname = 8, wPorts = 5, wMounts = 6;
-  for (auto &e : entries) {
-    wJid      = std::max(wJid, std::to_string(e.jid).size());
-    wName     = std::max(wName, e.name.size());
-    wIp       = std::max(wIp, e.ip.empty() ? size_t(1) : e.ip.size());
-    wHostname = std::max(wHostname, e.hostname.size());
-    wPorts    = std::max(wPorts, e.ports.empty() ? size_t(1) : e.ports.size());
-    wMounts   = std::max(wMounts, e.mounts.empty() ? size_t(1) : e.mounts.size());
-  }
-
-  // Header
-  std::cout << rang::style::bold
-            << std::left
-            << std::setw(wJid + 2) << "JID"
-            << std::setw(wName + 2) << "NAME"
-            << std::setw(wIp + 2) << "IP"
-            << std::setw(wHostname + 2) << "HOSTNAME"
-            << std::setw(wPorts + 2) << "PORTS"
-            << std::setw(wMounts + 2) << "MOUNTS"
-            << "HC"
-            << rang::style::reset << std::endl;
-
-  // Rows
-  for (auto &e : entries) {
-    std::cout << std::left
-              << std::setw(wJid + 2) << e.jid
-              << std::setw(wName + 2) << e.name
-              << std::setw(wIp + 2) << (e.ip.empty() ? "-" : e.ip)
-              << std::setw(wHostname + 2) << e.hostname
-              << std::setw(wPorts + 2) << (e.ports.empty() ? "-" : e.ports)
-              << std::setw(wMounts + 2) << (e.mounts.empty() ? "-" : e.mounts)
-              << (e.hasHealthcheck ? "Y" : "-")
-              << std::endl;
-  }
-
-  std::cout << std::endl
-            << entries.size() << " running container" << (entries.size() != 1 ? "s" : "")
-            << "." << std::endl;
+  // ListPure::renderTable handles bold-header decoration omission for
+  // testability; bold here for terminal aesthetics.
+  if (!entries.empty())
+    std::cout << rang::style::bold;
+  ListPure::renderTable(std::cout, toPureEntries(entries));
+  if (!entries.empty())
+    std::cout << rang::style::reset;
 }
 
 bool listCrates(const Args &args) {

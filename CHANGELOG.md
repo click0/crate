@@ -6,6 +6,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.5.0] — 2026-04-28
+
+Daemon Bearer-token auth and `crate list` rendering now under unit-test
+coverage. Both pieces touched user-facing behaviour that previously had
+zero direct tests.
+
+### Changed — extracted to pure modules
+
+- `lib/auth_pure.cpp` (new): `AuthPure::parseBearerToken`,
+  `AuthPure::checkTokenRole`, `AuthPure::checkBearerAuth`. The full
+  Bearer-token gate from `daemon/auth.cpp` is now in a tiny pure module
+  parameterised by an injected `sha256Fn` — production passes
+  `OpenSSL::SHA256` indirectly via `daemon/auth.cpp::sha256hex`, tests
+  pass an identity-mapping fake. No new CI dependencies needed.
+- `lib/list_pure.cpp` (new): `ListPure::renderJson`,
+  `ListPure::renderTable` and stream/string variants. The display logic
+  for `crate list` (and `crate list -j`) lives here as pure functions
+  taking a `vector<Entry>`. `lib/list.cpp` keeps the FreeBSD-jail
+  discovery side and forwards to these for output.
+
+### Added — tests (+24 cases)
+
+- `tests/unit/auth_pure_test.cpp` (+15) — Bearer-token parsing
+  (basic, empty, just-prefix, wrong-scheme, embedded spaces); role
+  gate (unknown hash, viewer-allows-any, admin-required, writer-required,
+  admin-as-superset, empty-tokens); end-to-end happy/missing-header/
+  wrong-scheme/role-escalation-blocked/admin-superset.
+- `tests/unit/list_pure_test.cpp` (+9) — JSON output (empty,
+  single entry, comma separator, healthcheck=false); Table output
+  (empty, headers, singular/plural footer, dash-for-empty fields,
+  `Y/-` healthcheck column).
+
+### Verification
+
+- `make build-unit-tests` → 24 binaries built
+- `cd tests && kyua test unit` → **373/373 pass** (was 349, +24)
+
+---
+
 ## [0.4.8] — 2026-04-28
 
 Four more small pure helpers extracted, 13 new test cases.

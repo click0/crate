@@ -27,6 +27,8 @@ tests/unit/spec_validate_test
 tests/unit/validate_pure_test
 tests/unit/run_pure_test
 tests/unit/autoname_test
+tests/unit/auth_pure_test
+tests/unit/list_pure_test
 *.gcda
 *.gcno
 coverage.info
