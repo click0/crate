@@ -6,6 +6,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.4.8] — 2026-04-28
+
+Four more small pure helpers extracted, 13 new test cases.
+
+### Changed — extracted to pure modules
+
+- `lib/run_pure.cpp` (new): `RunPure::argsToString` (from `lib/run.cpp`),
+  `RunPure::envOrDefault` (from `lib/run_net.cpp`).
+- `lib/autoname_pure.cpp` (new): `AutoNamePure::snapshotName` (from
+  `lib/snapshot.cpp::autoSnapshotName`), `AutoNamePure::exportName`
+  (from `lib/export.cpp::autoExportName`).
+
+The originals are now thin forwarders.
+
+### Added — tests (+13 cases)
+
+- `tests/unit/run_pure_test.cpp` (+8): `argsToString` empty/basic/
+  injection-quoting; `envOrDefault` unset/valid/garbage/empty/
+  overflow (verifies the 0.4.5 `toUInt` overflow guard does flow
+  through to `envOrDefault`).
+- `tests/unit/autoname_test.cpp` (+5): `snapshotName` format check
+  (15 chars `YYYYMMDDTHHMMSS`), year sanity; `exportName` regex
+  match, basename preservation, empty-basename edge case.
+
+### Verification
+
+- `make build-unit-tests` → 22 binaries built
+- `cd tests && kyua test unit` → **349/349 pass** (was 336, +13)
+
+---
+
 ## [0.4.7] — 2026-04-28
 
 `validateCrateSpec` warning logic now under unit-test coverage. The
