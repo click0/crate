@@ -9,6 +9,7 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/create.cpp lib/run.cpp \
            lib/net.cpp lib/ctx.cpp lib/gui_registry.cpp lib/scripts.cpp \
            lib/misc.cpp lib/util.cpp lib/util_pure.cpp lib/err.cpp \
            lib/validate.cpp lib/snapshot.cpp lib/config.cpp \
+           lib/scripts_pure.cpp \
            lib/stack.cpp lib/stack_pure.cpp \
            lib/jail_query.cpp lib/zfs_ops.cpp lib/ifconfig_ops.cpp \
            lib/pfctl_ops.cpp lib/mac_ops.cpp lib/ipfw_ops.cpp \
@@ -142,7 +143,8 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              network_test network_ipv6_test err_test \
              snmpd_mib_test daemon_metrics_test stack_test \
              util_security_test import_test cli_args_test \
-             args_validate_test util_subst_test spec_subst_test
+             args_validate_test util_subst_test spec_subst_test \
+             scripts_test adversarial_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)
@@ -165,6 +167,7 @@ build-unit-tests: $(UNIT_TEST_BINS)
 TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  lib/spec_pure.cpp lib/stack_pure.cpp \
                  lib/lifecycle_pure.cpp lib/import_pure.cpp \
+                 lib/scripts_pure.cpp \
                  cli/args_pure.cpp daemon/metrics_pure.cpp \
                  snmpd/mib_pure.cpp
 

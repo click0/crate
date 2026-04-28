@@ -18,3 +18,5 @@ atf_test_program{name="cli_args_test"}
 atf_test_program{name="args_validate_test"}
 atf_test_program{name="util_subst_test"}
 atf_test_program{name="spec_subst_test"}
+atf_test_program{name="scripts_test"}
+atf_test_program{name="adversarial_test"}
