@@ -21,3 +21,4 @@ atf_test_program{name="spec_subst_test"}
 atf_test_program{name="scripts_test"}
 atf_test_program{name="adversarial_test"}
 atf_test_program{name="spec_validate_test"}
+atf_test_program{name="validate_pure_test"}
