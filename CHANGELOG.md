@@ -6,6 +6,62 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.4.6] — 2026-04-28
+
+`Spec::validate()` now under unit-test coverage — the largest
+previously-untested function in the codebase (~200 lines, 30+ branches).
+
+### Changed — extracted to pure module
+
+- **`Spec::validate()`** moved from `lib/spec.cpp` to `lib/spec_pure.cpp`.
+  Pulls in: `allOptionsSet` constant, `lst-all-script-sections.h`
+  (generated header), and `Config::get()` (declared in
+  `lib/config.h`, stubbed for tests).
+- **`Spec::NetOptDetails::createDefault`**, **`Spec::TorOptDetails`
+  ctor + `createDefault`**, **`Spec::optionNet/optionNetWr/optionTor`**,
+  and the `getOptionDetails` template helpers also moved to
+  `spec_pure.cpp` so the test suite can construct/inspect Spec
+  objects without linking against yaml-cpp-bound `lib/spec.cpp`.
+
+### Added — Config test stub
+
+`tests/unit/_test_config_stub.cpp` provides minimal stubs for
+`Config::get`, `Config::load`, `Config::resolveCrateFile`. Returns an
+empty `Settings` object so `optNet->networkName` lookups in
+`Spec::validate()` always fail with "not found" — exactly the
+scenario tests want to assert.
+
+### Added — `tests/unit/spec_validate_test.cpp` (+48 cases)
+
+Covers **every branch** of `Spec::validate()`:
+- "must do something": `runCmdExecutable`, `runServices`, or `tor`
+- duplicate `pkg-local-override` entries
+- absolute-path checks for `runCmdExecutable`, `dirsShare`, `filesShare`
+- options whitelist (every documented option) + unknown rejected
+- script sections whitelist + empty section rejected
+- `inboundPortsTcp/Udp` span consistency
+- `networkName` lookup against (empty stub) Config
+- mode-specific validation:
+  - `bridge`/`passthrough`/`netgraph` need their iface fields
+  - `nat` rejects `bridge`/`dhcp`/`static`/`vlan`/`static-mac`/`ip6=slaac|static`
+  - non-NAT rejects `inbound-tcp/udp`
+  - `gateway` requires static IP
+  - `ip6=static` requires address
+  - `extra` interfaces require non-NAT primary; `extra mode=nat` rejected
+- ZFS dataset names: empty / absolute / `..`
+- RCTL limits: known list (~25 names), unknown rejected
+- Encryption: method/keyformat/cipher whitelists
+- `enforce_statfs` range `0..2`
+- Firewall ports `1..65535`
+- Terminal `devfs_ruleset` range `0..65535`
+
+### Verification
+
+- `make build-unit-tests` → 19 binaries built
+- `cd tests && kyua test unit` → **306/306 pass** (was 258, +48)
+
+---
+
 ## [0.4.5] — 2026-04-28
 
 Boundary / adversarial test pass. **Two more real bugs caught and fixed**
