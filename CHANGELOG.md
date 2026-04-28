@@ -6,6 +6,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.4.7] — 2026-04-28
+
+`validateCrateSpec` warning logic now under unit-test coverage. The
+`crate validate <spec>` CLI emits warnings for security-relevant
+configuration choices (sysvipc, allow_chflags, securelevel < 2, COW
+backend implications, X11 nested mode, etc.). A regression that
+silently drops a warning ships unannounced risk; this PR pins down
+each branch with a dedicated test.
+
+### Changed — extracted to pure module
+
+- The 30+ warning branches inside `validateCrateSpec()` (lib/validate.cpp)
+  moved into a new pure helper `ValidatePure::gatherWarnings(spec)` in
+  `lib/validate_pure.cpp`. The CLI now just calls that and prints
+  what it returns.
+
+### Added — `tests/unit/validate_pure_test.cpp` (+30 cases)
+
+Covers every warning branch:
+- ipc/sysvipc, net/lan-with-tor, ipv6 (no-outbound + with-tor)
+- limits-without-maxproc (positive + negative)
+- encrypted, dns_filter (empty rules + without-net)
+- allow_chflags, allow_mlock, securelevel < 2 (positive + negative)
+- children_max, cpuset (invalid char + valid)
+- COW backend=zfs / mode=persistent
+- x11 nested, clipboard isolated (without/with nested)
+- dbus session, socket_proxy empty
+- firewall (without net + block-no-allow)
+- capsicum, mac_bsdextended rules
+- terminal devfs_ruleset
+- multi-warning sanity check
+
+### Verification
+
+- `make build-unit-tests` → 20 binaries built
+- `cd tests && kyua test unit` → **336/336 pass** (was 306, +30)
+
+---
+
 ## [0.4.6] — 2026-04-28
 
 `Spec::validate()` now under unit-test coverage — the largest
