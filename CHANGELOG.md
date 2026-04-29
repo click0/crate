@@ -6,6 +6,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.5.2] — 2026-04-29
+
+`xorg.conf` generator and `crate snapshot list` renderer under test.
+
+### Changed — extracted to pure modules
+
+- `lib/run_gui_pure.cpp`: added `RunGuiPure::generateGpuXorgConf` —
+  full headless-GPU `xorg.conf` body builder. Now uses the
+  hardened `parseResolution` (so a malformed resolution like
+  `"abc"` falls back to `1280x720` instead of throwing via
+  `Util::toUInt`).
+- `lib/snapshot_pure.cpp` (new): `SnapshotPure::renderTable` for
+  `crate snapshot list` output.
+
+### Added — tests (+11 cases)
+
+- `run_gui_pure_test`: 6 new cases for `generateGpuXorgConf`
+  (default driver → `dummy`, explicit driver + BusID, NVIDIA
+  extras present, no NVIDIA extras for non-NVIDIA, all required
+  sections present, garbage resolution falls back to 1280x720).
+- `snapshot_pure_test` (new, 5): empty dataset, header presence,
+  data columns, multiple rows, long names don't crash padding.
+
+### Verification
+
+- `make build-unit-tests` → 26 binaries built
+- `cd tests && kyua test unit` → **397/397 pass** (was 386, +11)
+
+---
+
 ## [0.5.1] — 2026-04-29
 
 GUI mode VESA-CVT modeline math + resolution helpers under test.

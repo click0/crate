@@ -111,87 +111,12 @@ static inline CvtModeline computeCvtModeline(unsigned w, unsigned h, double refr
 }
 
 // Generate xorg.conf for headless GPU mode
-static std::string generateGpuXorgConf(unsigned displayNum,
-                                        const std::string &resolution,
-                                        const std::string &gpuDriver,
-                                        const std::string &gpuDevice) {
-  // Parse WxH
-  auto xpos = resolution.find('x');
-  auto width = (xpos != std::string::npos) ? resolution.substr(0, xpos) : "1280";
-  auto height = (xpos != std::string::npos) ? resolution.substr(xpos + 1) : "720";
-
-  unsigned w = Util::toUInt(width);
-  unsigned h = Util::toUInt(height);
-  auto cvt = computeCvtModeline(w, h);
-
-  // Determine effective driver
-  auto driver = gpuDriver.empty() ? std::string("dummy") : gpuDriver;
-
-  std::ostringstream conf;
-  conf << std::fixed << std::setprecision(2);
-
-  // Device section
-  conf << "Section \"Device\"" << std::endl;
-  conf << "    Identifier \"GPU0\"" << std::endl;
-  conf << "    Driver     \"" << driver << "\"" << std::endl;
-  if (!gpuDevice.empty())
-    conf << "    BusID      \"" << gpuDevice << "\"" << std::endl;
-  // NVIDIA headless options
-  if (driver == "nvidia") {
-    conf << "    Option     \"AllowEmptyInitialConfiguration\" \"True\"" << std::endl;
-    conf << "    Option     \"ConnectedMonitor\" \"DFP-0\"" << std::endl;
-    conf << "    Option     \"CustomEDID\" \"DFP-0:/usr/local/share/crate/edid/1080p.bin\"" << std::endl;
-  }
-  conf << "EndSection" << std::endl;
-  conf << std::endl;
-
-  // Monitor section (virtual) with CVT-computed modeline
-  conf << "Section \"Monitor\"" << std::endl;
-  conf << "    Identifier \"Monitor0\"" << std::endl;
-  conf << "    HorizSync   28.0-200.0" << std::endl;
-  conf << "    VertRefresh  48.0-75.0" << std::endl;
-  conf << "    Modeline \"" << resolution << "\" "
-       << cvt.pixelClock
-       << " " << cvt.hdisp << " " << cvt.hsyncStart << " " << cvt.hsyncEnd << " " << cvt.htotal
-       << " " << cvt.vdisp << " " << cvt.vsyncStart << " " << cvt.vsyncEnd << " " << cvt.vtotal
-       << " +hsync -vsync" << std::endl;
-  conf << "EndSection" << std::endl;
-  conf << std::endl;
-
-  // Screen section
-  conf << "Section \"Screen\"" << std::endl;
-  conf << "    Identifier \"Screen0\"" << std::endl;
-  conf << "    Device     \"GPU0\"" << std::endl;
-  conf << "    Monitor    \"Monitor0\"" << std::endl;
-  conf << "    DefaultDepth 24" << std::endl;
-  conf << "    SubSection \"Display\"" << std::endl;
-  conf << "        Depth      24" << std::endl;
-  conf << "        Modes      \"" << resolution << "\"" << std::endl;
-  conf << "        Virtual    " << width << " " << height << std::endl;
-  conf << "    EndSubSection" << std::endl;
-  conf << "EndSection" << std::endl;
-  conf << std::endl;
-
-  // ServerLayout
-  conf << "Section \"ServerLayout\"" << std::endl;
-  conf << "    Identifier \"Layout0\"" << std::endl;
-  conf << "    Screen 0   \"Screen0\"" << std::endl;
-  conf << "    Option     \"AllowMouseOpenFail\" \"true\"" << std::endl;
-  conf << "    Option     \"AutoAddDevices\" \"false\"" << std::endl;
-  conf << "    Option     \"AutoAddGPU\" \"false\"" << std::endl;
-  conf << "EndSection" << std::endl;
-  conf << std::endl;
-
-  // ServerFlags
-  conf << "Section \"ServerFlags\"" << std::endl;
-  conf << "    Option \"DontVTSwitch\" \"true\"" << std::endl;
-  conf << "    Option \"AllowMouseOpenFail\" \"true\"" << std::endl;
-  conf << "    Option \"PciForceNone\" \"true\"" << std::endl;
-  conf << "    Option \"AutoEnableDevices\" \"false\"" << std::endl;
-  conf << "    Option \"AutoAddDevices\" \"false\"" << std::endl;
-  conf << "EndSection" << std::endl;
-
-  return conf.str();
+// generateGpuXorgConf moved to lib/run_gui_pure.cpp.
+static inline std::string generateGpuXorgConf(unsigned displayNum,
+                                              const std::string &resolution,
+                                              const std::string &gpuDriver,
+                                              const std::string &gpuDevice) {
+  return RunGuiPure::generateGpuXorgConf(displayNum, resolution, gpuDriver, gpuDevice);
 }
 
 // Start x11vnc for a given display, return cleanup callback and set vncPort

@@ -3,6 +3,7 @@
 
 #include "args.h"
 #include "autoname_pure.h"
+#include "snapshot_pure.h"
 #include "zfs_ops.h"
 #include "pathnames.h"
 #include "util.h"
@@ -35,17 +36,11 @@ bool snapshotCrate(const Args &args) {
 
   } else if (subcmd == "list") {
     auto snaps = ZfsOps::listSnapshots(ds);
-    if (snaps.empty()) {
-      std::cout << "No snapshots found for " << ds << std::endl;
-    } else {
-      std::cout << "NAME" << std::string(40, ' ') << "CREATION" << std::string(16, ' ')
-                << "USED" << std::string(8, ' ') << "REFER" << std::endl;
-      for (auto &s : snaps)
-        std::cout << s.name << std::string(std::max(1, 44 - (int)s.name.size()), ' ')
-                  << s.creation << std::string(std::max(1, 24 - (int)s.creation.size()), ' ')
-                  << s.used << std::string(std::max(1, 12 - (int)s.used.size()), ' ')
-                  << s.refer << std::endl;
-    }
+    std::vector<SnapshotPure::Entry> entries;
+    entries.reserve(snaps.size());
+    for (auto &s : snaps)
+      entries.push_back({s.name, s.used, s.refer, s.creation});
+    SnapshotPure::renderTable(std::cout, ds, entries);
 
   } else if (subcmd == "restore") {
     auto snapName = STR(ds << "@" << args.snapshotName);

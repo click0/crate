@@ -30,6 +30,7 @@ tests/unit/autoname_test
 tests/unit/auth_pure_test
 tests/unit/list_pure_test
 tests/unit/run_gui_pure_test
+tests/unit/snapshot_pure_test
 *.gcda
 *.gcno
 coverage.info
