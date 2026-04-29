@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "run_gui.h"
+#include "run_gui_pure.h"
 #include "spec.h"
 #include "gui_registry.h"
 #include "pathnames.h"
@@ -98,52 +99,15 @@ static std::string resolveGuiMode(const Spec &spec) {
   return "shared";
 }
 
-// Determine effective resolution
-static std::string resolveResolution(const Spec &spec) {
-  if (spec.guiOptions && !spec.guiOptions->resolution.empty())
-    return spec.guiOptions->resolution;
-  if (spec.x11Options && !spec.x11Options->resolution.empty())
-    return spec.x11Options->resolution;
-  return "1280x720";
+// resolveResolution moved to lib/run_gui_pure.cpp.
+static inline std::string resolveResolution(const Spec &spec) {
+  return RunGuiPure::resolveResolution(spec);
 }
 
-// Compute CVT (Coordinated Video Timing) modeline for arbitrary resolution.
-// Based on VESA CVT standard v1.1, reduced blanking formula for 60Hz.
-struct CvtModeline {
-  double pixelClock;   // MHz
-  unsigned hdisp, hsyncStart, hsyncEnd, htotal;
-  unsigned vdisp, vsyncStart, vsyncEnd, vtotal;
-};
-
-static CvtModeline computeCvtModeline(unsigned w, unsigned h, double refresh = 60.0) {
-  CvtModeline m{};
-  m.hdisp = w;
-  m.vdisp = h;
-
-  // CVT reduced blanking (RB) for flat panels / virtual displays
-  constexpr double minVPorch = 3.0;
-  constexpr unsigned rbHBlank = 160;     // reduced blanking H blank pixels
-  constexpr unsigned rbVFrontPorch = 3;
-  constexpr unsigned rbVSync = 4;        // V sync width (lines)
-  constexpr double rbMinVBlank = 460.0;  // microseconds
-
-  double hPeriodEst = ((1000000.0 / refresh) - rbMinVBlank) / (h + minVPorch);
-  unsigned vbiLines = static_cast<unsigned>(rbMinVBlank / hPeriodEst) + 1;
-  unsigned rbMinVbi = static_cast<unsigned>(rbVFrontPorch + rbVSync + minVPorch);
-  if (vbiLines < rbMinVbi)
-    vbiLines = rbMinVbi;
-
-  m.vtotal = h + vbiLines;
-  m.htotal = w + rbHBlank;
-  m.pixelClock = (m.htotal * m.vtotal * refresh) / 1000000.0;
-
-  m.hsyncStart = w + 48;           // H front porch = 48 pixels (RB standard)
-  m.hsyncEnd = m.hsyncStart + 32;  // H sync = 32 pixels (RB standard)
-
-  m.vsyncStart = h + rbVFrontPorch;
-  m.vsyncEnd = m.vsyncStart + rbVSync;
-
-  return m;
+// computeCvtModeline + CvtModeline moved to lib/run_gui_pure.cpp.
+using CvtModeline = RunGuiPure::CvtModeline;
+static inline CvtModeline computeCvtModeline(unsigned w, unsigned h, double refresh = 60.0) {
+  return RunGuiPure::computeCvtModeline(w, h, refresh);
 }
 
 // Generate xorg.conf for headless GPU mode
