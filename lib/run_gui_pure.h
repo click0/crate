@@ -29,4 +29,11 @@ std::string resolveResolution(const Spec &spec);
 // Parse "WxH" → (w, h). Returns false on malformed input.
 bool parseResolution(const std::string &spec, unsigned &w, unsigned &h);
 
+// Generate the xorg.conf body for headless GPU mode.
+// Resolution is "WxH" (e.g. "1920x1080"); driver "" → "dummy".
+std::string generateGpuXorgConf(unsigned displayNum,
+                                const std::string &resolution,
+                                const std::string &gpuDriver,
+                                const std::string &gpuDevice);
+
 }

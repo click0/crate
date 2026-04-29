@@ -181,8 +181,73 @@ ATF_TEST_CASE_BODY(parseRes_extra_chars)
 	ATF_REQUIRE(!parseResolution("1920x1080 ", w, h));
 }
 
+// ===================================================================
+// generateGpuXorgConf — string-builder for headless GPU xorg.conf
+// ===================================================================
+
+ATF_TEST_CASE_WITHOUT_HEAD(xorg_conf_default_driver);
+ATF_TEST_CASE_BODY(xorg_conf_default_driver)
+{
+	auto out = RunGuiPure::generateGpuXorgConf(0, "1920x1080", "", "");
+	ATF_REQUIRE(out.find("Driver     \"dummy\"") != std::string::npos);
+	ATF_REQUIRE(out.find("\"1920x1080\"") != std::string::npos);
+	ATF_REQUIRE(out.find("Virtual    1920 1080") != std::string::npos);
+	// No BusID line when device is empty
+	ATF_REQUIRE(out.find("BusID") == std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(xorg_conf_explicit_driver);
+ATF_TEST_CASE_BODY(xorg_conf_explicit_driver)
+{
+	auto out = RunGuiPure::generateGpuXorgConf(0, "1280x720", "intel", "PCI:0:2:0");
+	ATF_REQUIRE(out.find("Driver     \"intel\"") != std::string::npos);
+	ATF_REQUIRE(out.find("BusID      \"PCI:0:2:0\"") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(xorg_conf_nvidia_extras);
+ATF_TEST_CASE_BODY(xorg_conf_nvidia_extras)
+{
+	auto out = RunGuiPure::generateGpuXorgConf(0, "1920x1080", "nvidia", "PCI:1:0:0");
+	ATF_REQUIRE(out.find("Driver     \"nvidia\"") != std::string::npos);
+	ATF_REQUIRE(out.find("AllowEmptyInitialConfiguration") != std::string::npos);
+	ATF_REQUIRE(out.find("ConnectedMonitor") != std::string::npos);
+	ATF_REQUIRE(out.find("CustomEDID") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(xorg_conf_no_nvidia_extras_for_dummy);
+ATF_TEST_CASE_BODY(xorg_conf_no_nvidia_extras_for_dummy)
+{
+	auto out = RunGuiPure::generateGpuXorgConf(0, "1920x1080", "dummy", "");
+	ATF_REQUIRE(out.find("AllowEmptyInitialConfiguration") == std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(xorg_conf_required_sections_present);
+ATF_TEST_CASE_BODY(xorg_conf_required_sections_present)
+{
+	auto out = RunGuiPure::generateGpuXorgConf(0, "1024x768", "", "");
+	for (auto sec : {"Section \"Device\"", "Section \"Monitor\"",
+	                 "Section \"Screen\"", "Section \"ServerLayout\"",
+	                 "Section \"ServerFlags\""}) {
+		ATF_REQUIRE(out.find(sec) != std::string::npos);
+	}
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(xorg_conf_garbage_resolution_falls_back);
+ATF_TEST_CASE_BODY(xorg_conf_garbage_resolution_falls_back)
+{
+	// Invalid resolution → falls back to 1280x720 internally.
+	auto out = RunGuiPure::generateGpuXorgConf(0, "garbage", "", "");
+	ATF_REQUIRE(out.find("Virtual    1280 720") != std::string::npos);
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
+	ATF_ADD_TEST_CASE(tcs, xorg_conf_default_driver);
+	ATF_ADD_TEST_CASE(tcs, xorg_conf_explicit_driver);
+	ATF_ADD_TEST_CASE(tcs, xorg_conf_nvidia_extras);
+	ATF_ADD_TEST_CASE(tcs, xorg_conf_no_nvidia_extras_for_dummy);
+	ATF_ADD_TEST_CASE(tcs, xorg_conf_required_sections_present);
+	ATF_ADD_TEST_CASE(tcs, xorg_conf_garbage_resolution_falls_back);
 	ATF_ADD_TEST_CASE(tcs, cvt_1080p_60);
 	ATF_ADD_TEST_CASE(tcs, cvt_720p_60);
 	ATF_ADD_TEST_CASE(tcs, cvt_4k_60);

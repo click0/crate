@@ -4,6 +4,8 @@
 #include "spec.h"
 
 #include <cstddef>
+#include <iomanip>
+#include <sstream>
 #include <string>
 
 namespace RunGuiPure {
@@ -45,6 +47,76 @@ std::string resolveResolution(const Spec &spec) {
   if (spec.x11Options && !spec.x11Options->resolution.empty())
     return spec.x11Options->resolution;
   return "1280x720";
+}
+
+std::string generateGpuXorgConf(unsigned displayNum,
+                                const std::string &resolution,
+                                const std::string &gpuDriver,
+                                const std::string &gpuDevice) {
+  (void)displayNum;
+  unsigned w = 0, h = 0;
+  if (!parseResolution(resolution, w, h)) {
+    w = 1280;
+    h = 720;
+  }
+  auto cvt = computeCvtModeline(w, h);
+  auto driver = gpuDriver.empty() ? std::string("dummy") : gpuDriver;
+
+  std::ostringstream conf;
+  conf << std::fixed << std::setprecision(2);
+
+  conf << "Section \"Device\"\n";
+  conf << "    Identifier \"GPU0\"\n";
+  conf << "    Driver     \"" << driver << "\"\n";
+  if (!gpuDevice.empty())
+    conf << "    BusID      \"" << gpuDevice << "\"\n";
+  if (driver == "nvidia") {
+    conf << "    Option     \"AllowEmptyInitialConfiguration\" \"True\"\n";
+    conf << "    Option     \"ConnectedMonitor\" \"DFP-0\"\n";
+    conf << "    Option     \"CustomEDID\" \"DFP-0:/usr/local/share/crate/edid/1080p.bin\"\n";
+  }
+  conf << "EndSection\n\n";
+
+  conf << "Section \"Monitor\"\n";
+  conf << "    Identifier \"Monitor0\"\n";
+  conf << "    HorizSync   28.0-200.0\n";
+  conf << "    VertRefresh  48.0-75.0\n";
+  conf << "    Modeline \"" << resolution << "\" "
+       << cvt.pixelClock
+       << " " << cvt.hdisp << " " << cvt.hsyncStart << " " << cvt.hsyncEnd << " " << cvt.htotal
+       << " " << cvt.vdisp << " " << cvt.vsyncStart << " " << cvt.vsyncEnd << " " << cvt.vtotal
+       << " +hsync -vsync\n";
+  conf << "EndSection\n\n";
+
+  conf << "Section \"Screen\"\n";
+  conf << "    Identifier \"Screen0\"\n";
+  conf << "    Device     \"GPU0\"\n";
+  conf << "    Monitor    \"Monitor0\"\n";
+  conf << "    DefaultDepth 24\n";
+  conf << "    SubSection \"Display\"\n";
+  conf << "        Depth      24\n";
+  conf << "        Modes      \"" << resolution << "\"\n";
+  conf << "        Virtual    " << w << " " << h << "\n";
+  conf << "    EndSubSection\n";
+  conf << "EndSection\n\n";
+
+  conf << "Section \"ServerLayout\"\n";
+  conf << "    Identifier \"Layout0\"\n";
+  conf << "    Screen 0   \"Screen0\"\n";
+  conf << "    Option     \"AllowMouseOpenFail\" \"true\"\n";
+  conf << "    Option     \"AutoAddDevices\" \"false\"\n";
+  conf << "    Option     \"AutoAddGPU\" \"false\"\n";
+  conf << "EndSection\n\n";
+
+  conf << "Section \"ServerFlags\"\n";
+  conf << "    Option \"DontVTSwitch\" \"true\"\n";
+  conf << "    Option \"AllowMouseOpenFail\" \"true\"\n";
+  conf << "    Option \"PciForceNone\" \"true\"\n";
+  conf << "    Option \"AutoEnableDevices\" \"false\"\n";
+  conf << "    Option \"AutoAddDevices\" \"false\"\n";
+  conf << "EndSection\n";
+
+  return conf.str();
 }
 
 bool parseResolution(const std::string &spec, unsigned &w, unsigned &h) {
