@@ -1,0 +1,199 @@
+// ATF unit tests for RunGuiPure (lib/run_gui_pure.cpp).
+//
+// VESA CVT modeline math + resolution helpers. The CVT formula is
+// well-defined (VESA CVT 1.1 RB), so we can pin down the output for
+// canonical resolutions. A regression here breaks `crate` GUI mode
+// (xrandr/Xephyr) for non-default sizes.
+
+#include <atf-c++.hpp>
+#include <cmath>
+#include <string>
+
+#include "run_gui_pure.h"
+#include "spec.h"
+
+using RunGuiPure::computeCvtModeline;
+using RunGuiPure::resolveResolution;
+using RunGuiPure::parseResolution;
+using RunGuiPure::CvtModeline;
+
+// ===================================================================
+// computeCvtModeline — pin known-good results
+// ===================================================================
+
+static bool approx(double a, double b, double eps = 0.5) {
+	return std::fabs(a - b) <= eps;
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(cvt_1080p_60);
+ATF_TEST_CASE_BODY(cvt_1080p_60)
+{
+	auto m = computeCvtModeline(1920, 1080, 60.0);
+	ATF_REQUIRE_EQ(m.hdisp, 1920u);
+	ATF_REQUIRE_EQ(m.vdisp, 1080u);
+	// htotal = w + 160 (RB H blank)
+	ATF_REQUIRE_EQ(m.htotal, 2080u);
+	// hsync_start = w + 48, hsync_end = +32
+	ATF_REQUIRE_EQ(m.hsyncStart, 1968u);
+	ATF_REQUIRE_EQ(m.hsyncEnd, 2000u);
+	// vsync timing
+	ATF_REQUIRE_EQ(m.vsyncStart, 1083u);
+	ATF_REQUIRE_EQ(m.vsyncEnd, 1087u);
+	// CVT-RB pixel clock for 1920x1080@60Hz is ~138.5 MHz
+	ATF_REQUIRE(approx(m.pixelClock, 138.5, 1.0));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(cvt_720p_60);
+ATF_TEST_CASE_BODY(cvt_720p_60)
+{
+	auto m = computeCvtModeline(1280, 720, 60.0);
+	ATF_REQUIRE_EQ(m.hdisp, 1280u);
+	ATF_REQUIRE_EQ(m.vdisp, 720u);
+	ATF_REQUIRE_EQ(m.htotal, 1440u);
+	// CVT-RB pixel clock for 1280x720@60Hz is ~64.0 MHz
+	ATF_REQUIRE(approx(m.pixelClock, 64.0, 1.0));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(cvt_4k_60);
+ATF_TEST_CASE_BODY(cvt_4k_60)
+{
+	auto m = computeCvtModeline(3840, 2160, 60.0);
+	ATF_REQUIRE_EQ(m.hdisp, 3840u);
+	ATF_REQUIRE_EQ(m.vdisp, 2160u);
+	ATF_REQUIRE_EQ(m.htotal, 4000u);
+	// 4K@60Hz CVT-RB ~533 MHz pixel clock
+	ATF_REQUIRE(m.pixelClock > 500.0 && m.pixelClock < 600.0);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(cvt_invariants);
+ATF_TEST_CASE_BODY(cvt_invariants)
+{
+	// Iterate a handful of common sizes; each must satisfy structural
+	// invariants of any CVT modeline.
+	struct { unsigned w, h; } sizes[] = {
+		{640, 480}, {800, 600}, {1024, 768},
+		{1280, 1024}, {1600, 900}, {2560, 1440},
+	};
+	for (auto &s : sizes) {
+		auto m = computeCvtModeline(s.w, s.h);
+		ATF_REQUIRE_EQ(m.hdisp, s.w);
+		ATF_REQUIRE_EQ(m.vdisp, s.h);
+		ATF_REQUIRE(m.htotal > m.hdisp);
+		ATF_REQUIRE(m.vtotal > m.vdisp);
+		ATF_REQUIRE(m.hsyncStart >= m.hdisp);
+		ATF_REQUIRE(m.hsyncEnd > m.hsyncStart);
+		ATF_REQUIRE(m.hsyncEnd <= m.htotal);
+		ATF_REQUIRE(m.vsyncStart >= m.vdisp);
+		ATF_REQUIRE(m.vsyncEnd > m.vsyncStart);
+		ATF_REQUIRE(m.vsyncEnd <= m.vtotal);
+		ATF_REQUIRE(m.pixelClock > 0.0);
+	}
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(cvt_higher_refresh_higher_clock);
+ATF_TEST_CASE_BODY(cvt_higher_refresh_higher_clock)
+{
+	// 1080p @ 60 vs @ 120 — 120Hz must produce higher pixel clock.
+	auto m60  = computeCvtModeline(1920, 1080, 60.0);
+	auto m120 = computeCvtModeline(1920, 1080, 120.0);
+	ATF_REQUIRE(m120.pixelClock > m60.pixelClock);
+}
+
+// ===================================================================
+// resolveResolution — Spec → string
+// ===================================================================
+
+ATF_TEST_CASE_WITHOUT_HEAD(resolveRes_default);
+ATF_TEST_CASE_BODY(resolveRes_default)
+{
+	Spec s;
+	ATF_REQUIRE_EQ(resolveResolution(s), "1280x720");
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(resolveRes_gui_overrides);
+ATF_TEST_CASE_BODY(resolveRes_gui_overrides)
+{
+	Spec s;
+	s.guiOptions = std::make_unique<Spec::GuiOptions>();
+	s.guiOptions->resolution = "1920x1080";
+	ATF_REQUIRE_EQ(resolveResolution(s), "1920x1080");
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(resolveRes_x11_fallback);
+ATF_TEST_CASE_BODY(resolveRes_x11_fallback)
+{
+	Spec s;
+	s.x11Options = std::make_unique<Spec::X11Options>();
+	s.x11Options->resolution = "1024x768";
+	ATF_REQUIRE_EQ(resolveResolution(s), "1024x768");
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(resolveRes_gui_wins_over_x11);
+ATF_TEST_CASE_BODY(resolveRes_gui_wins_over_x11)
+{
+	Spec s;
+	s.guiOptions = std::make_unique<Spec::GuiOptions>();
+	s.guiOptions->resolution = "1920x1080";
+	s.x11Options = std::make_unique<Spec::X11Options>();
+	s.x11Options->resolution = "1024x768";
+	ATF_REQUIRE_EQ(resolveResolution(s), "1920x1080");
+}
+
+// ===================================================================
+// parseResolution — "WxH"
+// ===================================================================
+
+ATF_TEST_CASE_WITHOUT_HEAD(parseRes_basic);
+ATF_TEST_CASE_BODY(parseRes_basic)
+{
+	unsigned w = 0, h = 0;
+	ATF_REQUIRE(parseResolution("1920x1080", w, h));
+	ATF_REQUIRE_EQ(w, 1920u);
+	ATF_REQUIRE_EQ(h, 1080u);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(parseRes_zero_rejected);
+ATF_TEST_CASE_BODY(parseRes_zero_rejected)
+{
+	unsigned w, h;
+	ATF_REQUIRE(!parseResolution("0x1080", w, h));
+	ATF_REQUIRE(!parseResolution("1920x0", w, h));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(parseRes_garbage);
+ATF_TEST_CASE_BODY(parseRes_garbage)
+{
+	unsigned w, h;
+	ATF_REQUIRE(!parseResolution("", w, h));
+	ATF_REQUIRE(!parseResolution("1920", w, h));
+	ATF_REQUIRE(!parseResolution("x1080", w, h));
+	ATF_REQUIRE(!parseResolution("1920x", w, h));
+	ATF_REQUIRE(!parseResolution("abc", w, h));
+	ATF_REQUIRE(!parseResolution("1920x1080xfoo", w, h));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(parseRes_extra_chars);
+ATF_TEST_CASE_BODY(parseRes_extra_chars)
+{
+	unsigned w, h;
+	ATF_REQUIRE(!parseResolution("1920px", w, h));
+	ATF_REQUIRE(!parseResolution(" 1920x1080", w, h));
+	ATF_REQUIRE(!parseResolution("1920x1080 ", w, h));
+}
+
+ATF_INIT_TEST_CASES(tcs)
+{
+	ATF_ADD_TEST_CASE(tcs, cvt_1080p_60);
+	ATF_ADD_TEST_CASE(tcs, cvt_720p_60);
+	ATF_ADD_TEST_CASE(tcs, cvt_4k_60);
+	ATF_ADD_TEST_CASE(tcs, cvt_invariants);
+	ATF_ADD_TEST_CASE(tcs, cvt_higher_refresh_higher_clock);
+	ATF_ADD_TEST_CASE(tcs, resolveRes_default);
+	ATF_ADD_TEST_CASE(tcs, resolveRes_gui_overrides);
+	ATF_ADD_TEST_CASE(tcs, resolveRes_x11_fallback);
+	ATF_ADD_TEST_CASE(tcs, resolveRes_gui_wins_over_x11);
+	ATF_ADD_TEST_CASE(tcs, parseRes_basic);
+	ATF_ADD_TEST_CASE(tcs, parseRes_zero_rejected);
+	ATF_ADD_TEST_CASE(tcs, parseRes_garbage);
+	ATF_ADD_TEST_CASE(tcs, parseRes_extra_chars);
+}

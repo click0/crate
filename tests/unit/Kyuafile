@@ -26,3 +26,4 @@ atf_test_program{name="run_pure_test"}
 atf_test_program{name="autoname_test"}
 atf_test_program{name="auth_pure_test"}
 atf_test_program{name="list_pure_test"}
+atf_test_program{name="run_gui_pure_test"}

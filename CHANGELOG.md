@@ -6,6 +6,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.5.1] — 2026-04-29
+
+GUI mode VESA-CVT modeline math + resolution helpers under test.
+
+### Changed — extracted to pure module
+
+- `lib/run_gui_pure.cpp` (new):
+  - `RunGuiPure::computeCvtModeline(w, h, refresh)` — VESA CVT v1.1
+    reduced-blanking timing calculation. Drives the `xrandr --newmode`
+    output for `crate gui` non-default resolutions.
+  - `RunGuiPure::resolveResolution(spec)` — picks effective resolution
+    from `guiOptions` / `x11Options`, fallback `1280x720`.
+  - `RunGuiPure::parseResolution("WxH", w, h)` — `WxH` parser.
+
+### Added — tests (+13 cases)
+
+`tests/unit/run_gui_pure_test.cpp` covers:
+- CVT modeline pinned values for 720p/1080p/4K@60Hz; structural
+  invariants across 6 common sizes; higher refresh → higher
+  pixel clock.
+- `resolveResolution` default / `guiOptions` overrides /
+  `x11Options` fallback / `guiOptions` wins over `x11Options`.
+- `parseResolution` basic / zero rejected / garbage / extra
+  chars (leading/trailing whitespace).
+
+### Hardened along the way
+
+`parseResolution` initially relied on `std::stoul`, which silently
+skips leading whitespace — so `" 1920x1080"` would parse as valid.
+Added explicit checks rejecting whitespace at position 0 and
+position-after-`x`. (Same kind of latent bug the 0.4.5 `Util::toUInt`
+fix addressed for unsigned overflow.)
+
+### Verification
+
+- `make build-unit-tests` → 25 binaries built
+- `cd tests && kyua test unit` → **386/386 pass** (was 373, +13)
+
+---
+
 ## [0.5.0] — 2026-04-28
 
 Daemon Bearer-token auth and `crate list` rendering now under unit-test
