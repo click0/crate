@@ -6,6 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.5.3] — 2026-04-29
+
+Version-string sync. Tag `v0.5.3` was published from the 0.5.2 merge
+commit (`aa5e6bf`); the release artefacts are named
+`crate-0.5.3-freebsd-*-amd64.tar.xz`, but the source still reported
+`0.5.2`. Bump the in-source version strings so `crate --version`,
+`port/Makefile` `PORTVERSION`, and the SNMP `crateVersion` MIB scalar
+all report `0.5.3` to match the release tag.
+
+No code changes — pure version-string synchronisation.
+
+---
+
 ## [0.5.2] — 2026-04-29
 
 `xorg.conf` generator and `crate snapshot list` renderer under test.
