@@ -28,3 +28,4 @@ atf_test_program{name="auth_pure_test"}
 atf_test_program{name="list_pure_test"}
 atf_test_program{name="run_gui_pure_test"}
 atf_test_program{name="snapshot_pure_test"}
+atf_test_program{name="crypto_pure_test"}

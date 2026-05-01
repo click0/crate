@@ -3,6 +3,7 @@
 
 #include "args.h"
 #include "autoname_pure.h"
+#include "crypto_pure.h"
 #include "jail_query.h"
 #include "pathnames.h"
 #include "cmd.h"
@@ -86,15 +87,29 @@ bool exportCrate(const Args &args) {
   if (Util::Fs::fileExists(outFile))
     ERR("output file '" << outFile << "' already exists — remove it first or specify a different output with -o")
 
-  std::cout << "Exporting container " << target << " (JID " << jid
-            << ") from " << path << " ..." << std::endl;
+  // If a passphrase file was supplied, validate it before doing any work.
+  bool encrypt = !args.exportPassphraseFile.empty();
+  if (encrypt)
+    CryptoPure::validatePassphraseFile(args.exportPassphraseFile);
 
-  // Pack the container's root filesystem into a .crate archive
-  // This captures the current state of the running container's filesystem
+  std::cout << "Exporting container " << target << " (JID " << jid
+            << ") from " << path
+            << (encrypt ? " (encrypted)" : "") << " ..." << std::endl;
+
+  // Pack the container's root filesystem into a .crate archive.
+  // tar -> xz -> [openssl enc] -> file
+  std::vector<std::vector<std::string>> pipeline = {
+    {CRATE_PATH_TAR, "cf", "-", "-C", path, "."},
+    {CRATE_PATH_XZ, Cmd::xzThreadsArg, "--extreme"},
+  };
+  if (encrypt)
+    pipeline.push_back(CryptoPure::buildEncryptArgv(args.exportPassphraseFile));
+
   Util::execPipeline(
-    {{CRATE_PATH_TAR, "cf", "-", "-C", path, "."},
-     {CRATE_PATH_XZ, Cmd::xzThreadsArg, "--extreme"}},
-    "export container filesystem to crate archive", "", outFile);
+    pipeline,
+    encrypt ? "export and encrypt container filesystem"
+            : "export container filesystem to crate archive",
+    "", outFile);
 
   // Set ownership to the calling user
   Util::Fs::chown(outFile, myuid, mygid);
@@ -113,7 +128,8 @@ bool exportCrate(const Args &args) {
   if (::stat(outFile.c_str(), &st) == 0) {
     double sizeMB = static_cast<double>(st.st_size) / (1024.0 * 1024.0);
     std::cout << rang::fg::green << "Exported: " << outFile
-              << " (" << std::fixed << std::setprecision(1) << sizeMB << " MB)"
+              << " (" << std::fixed << std::setprecision(1) << sizeMB << " MB"
+              << (encrypt ? ", AES-256-CBC encrypted" : "") << ")"
               << rang::style::reset << std::endl;
     std::cout << "Checksum: " << sha256File << std::endl;
   } else {

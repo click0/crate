@@ -6,6 +6,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.5.4] — 2026-05-01
+
+Optional **passphrase-based encryption** for `.crate` archives via
+`crate export -P <passphrase-file>` and `crate import -P
+<passphrase-file>`. Lets operators move container images privately
+between hosts — addressing the use case where reproducible
+applications travel as `.crate` artefacts.
+
+### Added — encryption envelope
+
+- `lib/crypto_pure.cpp`/`.h` (new): AES-256-CBC + PBKDF2 envelope
+  layered on top of the existing tar+xz pipeline using the standard
+  `openssl enc` CLI. No new build-time deps — `openssl(1)` is already
+  installed on FreeBSD by default.
+- New CLI flags:
+  - `crate export -P, --passphrase-file <path>`
+  - `crate import -P, --passphrase-file <path>`
+- Auto-detection on import via magic bytes:
+  - `Salted__` prefix (8 bytes) → encrypted, requires `-P`
+  - `\xFD7zXZ\x00` xz magic → plain
+  - anything else → reject
+- Passphrase files are validated: must be a regular non-empty file
+  with mode `0600` (owner-only). Loose permissions reject the
+  invocation before any work starts.
+- Passphrases are passed to `openssl` via `-kfile`, never on the
+  command line — so they don't leak via `ps`/`procfs`.
+
+### Security model
+
+- **Confidentiality**: AES-256-CBC with PBKDF2 key derivation (OpenSSL
+  default ≈ 10 000 iterations). Per-archive 8-byte random salt.
+- **Integrity**: provided by the existing `.sha256` sidecar, which is
+  computed over the encrypted ciphertext on export. Out-of-band
+  verification of that hash before decryption is the operator's
+  responsibility.
+- **Authenticity**: not yet provided. Asymmetric signing (ed25519/GPG)
+  remains open in TODO.
+- The passphrase itself is never embedded in the artefact — same
+  passphrase produces a different ciphertext each time (random salt).
+
+### Added — tests (+17 cases)
+
+`tests/unit/crypto_pure_test.cpp`:
+- Magic-byte detection: xz/Salted/short/garbage/almost-match.
+- File-level detection on real `mkstemp` fixtures (xz / Salted /
+  missing).
+- Passphrase-file validation: 0600 OK, world-readable rejected,
+  group-readable rejected, empty rejected, missing rejected, dir
+  rejected.
+- argv shape pinned for both encrypt and decrypt invocations,
+  including a regression guard that the passphrase is **never**
+  passed inline (no `-k`/`-pass`, only `-kfile <path>`).
+
+### Verification
+
+- `make build-unit-tests` → 27 binaries built
+- `cd tests && kyua test unit` → **414/414 pass** (was 397, +17)
+
+---
+
 ## [0.5.3] — 2026-04-29
 
 Version-string sync. Tag `v0.5.3` was published from the 0.5.2 merge

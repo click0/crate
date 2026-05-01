@@ -101,27 +101,31 @@ static void usageSnapshot() {
 }
 
 static void usageExport() {
-  std::cout << "usage: crate export [-h|--help] [-o <output-file>] <name|JID>" << std::endl;
+  std::cout << "usage: crate export [-h|--help] [-o <output-file>] [-P <passphrase-file>] <name|JID>" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Export a running container's filesystem to a .crate archive." << std::endl;
   std::cout << "The container must be running (created via 'crate run')." << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Options:" << std::endl;
-  std::cout << "  -o, --output <file>        output .crate file (default: <hostname>-<date>.crate)" << std::endl;
-  std::cout << "  -h, --help                 show this help screen" << std::endl;
+  std::cout << "  -o, --output <file>           output .crate file (default: <hostname>-<date>.crate)" << std::endl;
+  std::cout << "  -P, --passphrase-file <file>  encrypt archive with passphrase from file (mode 0600)" << std::endl;
+  std::cout << "                                AES-256-CBC + PBKDF2; integrity via .sha256 sidecar" << std::endl;
+  std::cout << "  -h, --help                    show this help screen" << std::endl;
   std::cout << "" << std::endl;
 }
 
 static void usageImport() {
-  std::cout << "usage: crate import [-h|--help] [-o <output-file>] [-f|--force] <archive>" << std::endl;
+  std::cout << "usage: crate import [-h|--help] [-o <output-file>] [-f|--force] [-P <passphrase-file>] <archive>" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Import and validate a .crate archive." << std::endl;
   std::cout << "Verifies checksum, archive integrity, and +CRATE.SPEC presence." << std::endl;
+  std::cout << "Encrypted archives are auto-detected; -P is required for those." << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Options:" << std::endl;
-  std::cout << "  -o, --output <file>        output .crate file (default: based on input name)" << std::endl;
-  std::cout << "  -f, --force                skip checksum and spec validation" << std::endl;
-  std::cout << "  -h, --help                 show this help screen" << std::endl;
+  std::cout << "  -o, --output <file>           output .crate file (default: based on input name)" << std::endl;
+  std::cout << "  -f, --force                   skip checksum and spec validation" << std::endl;
+  std::cout << "  -P, --passphrase-file <file>  decrypt archive with passphrase from file (mode 0600)" << std::endl;
+  std::cout << "  -h, --help                    show this help screen" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -374,7 +378,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.5.3" << std::endl;
+        std::cout << "crate 0.5.4" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -385,7 +389,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.5.3" << std::endl;
+          std::cout << "crate 0.5.4" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -521,13 +525,19 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         }
         break;
       case CmdExport:
-        if (auto argShort = isShort(argv[a])) {
+        if (strEq(argv[a], "--passphrase-file")) {
+          args.exportPassphraseFile = getArgParam(++a, argc, argv);
+          break;
+        } else if (auto argShort = isShort(argv[a])) {
           switch (argShort) {
           case 'h':
             usageExport();
             exit(0);
           case 'o':
             args.exportOutput = getArgParam(++a, argc, argv);
+            break;
+          case 'P':
+            args.exportPassphraseFile = getArgParam(++a, argc, argv);
             break;
           default:
             err("unsupported short option '%s'", argv[a]);
@@ -549,7 +559,10 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         }
         break;
       case CmdImport:
-        if (auto argShort = isShort(argv[a])) {
+        if (strEq(argv[a], "--passphrase-file")) {
+          args.importPassphraseFile = getArgParam(++a, argc, argv);
+          break;
+        } else if (auto argShort = isShort(argv[a])) {
           switch (argShort) {
           case 'h':
             usageImport();
@@ -559,6 +572,9 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
             break;
           case 'f':
             args.importForce = true;
+            break;
+          case 'P':
+            args.importPassphraseFile = getArgParam(++a, argc, argv);
             break;
           default:
             err("unsupported short option '%s'", argv[a]);
