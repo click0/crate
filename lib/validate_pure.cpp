@@ -75,6 +75,17 @@ std::vector<std::string> gatherWarnings(const Spec &spec) {
   if (spec.x11Options) {
     if (spec.x11Options->mode == "nested")
       w.push_back("x11/mode=nested requires Xephyr to be installed on the host");
+    if (spec.x11Options->mode == "shared")
+      w.push_back("x11/mode=shared provides NO display isolation — jail processes can "
+                  "read host keystrokes and manipulate windows; prefer mode=nested or "
+                  "mode=headless for security-sensitive workloads");
+  } else {
+    // No x11Options block at all: when GUI is implied, default mode is "shared".
+    // Only warn when the spec actually pulls in something that triggers GUI.
+    if (spec.optionExists("x11"))
+      w.push_back("x11 option without an explicit x11/mode defaults to 'shared', which "
+                  "provides NO display isolation; set x11/mode=nested or mode=headless "
+                  "for security-sensitive workloads");
   }
 
   if (spec.clipboardOptions) {

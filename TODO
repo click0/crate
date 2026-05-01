@@ -8,13 +8,6 @@ not yet fixed. Items are grouped by priority for production readiness.
   See bug#239590: ipfw rule doesn't forward TCP connections made through
   the host's LAN address.
 
-=== Security warnings ===
-
-* (security) X11 shared mode provides no display isolation.
-  Jail processes sharing the host X11 socket can read keystrokes and
-  manipulate windows. Users should prefer mode=nested or mode=headless for
-  security-sensitive workloads.
-
 === High priority — blocking production use ===
 
 * (feature) Container image signing — .crate archives have SHA256
@@ -104,3 +97,4 @@ Items completed and removed from this file:
 - Base system caching with SHA256 (0.3.0 — create.cpp)
 - CI: Linux unit tests, FreeBSD lite/full build, release binary workflow
 - pkg/add support — install pre-built .txz files via `pkg add` (0.5.5)
+- X11 shared-mode security warning at validate + run time (0.5.6)

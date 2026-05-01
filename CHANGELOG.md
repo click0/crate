@@ -6,6 +6,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.5.6] — 2026-05-01
+
+X11 shared-mode security hardening: the warning is now always
+visible (was previously gated behind the verbosity flag), the
+`crate validate` warnings list includes it, and the README documents
+all five X11 modes with their isolation properties.
+
+### Fixed
+
+- **Security warning for `x11/mode=shared` is now always shown at
+  runtime.** Previously the WARN sat under `if (logProgress)` in
+  `lib/run_gui.cpp`, so a user running `crate run app.crate` without
+  `-p` would silently start a shared-mode container with full
+  host-X access. The warning has real security implications and
+  must not be gated by a verbosity flag.
+- Operators who knowingly accept the risk can suppress the runtime
+  warning with `CRATE_X11_SHARED_ACK=1`.
+
+### Added — `crate validate` warnings
+
+`ValidatePure::gatherWarnings` now flags:
+- `x11/mode=shared` — explicit shared mode
+- `options: [x11]` without `x11/mode` block — implicit shared default
+
+### Added — tests (+3 cases)
+
+`tests/unit/validate_pure_test.cpp`:
+- `x11_shared_warns`
+- `x11_headless_no_warn` (negative — must NOT warn)
+- `x11_option_implicit_shared_warns` (no x11Options block)
+
+### Added — documentation
+
+`README.md` + `README_UK.md` gained an "X11 mode security" section
+with a comparison table of the 5 modes (nested/headless/gpu/shared/none),
+explanation of why `shared` is dangerous (keystroke leak, window
+manipulation, screen capture), and a do/don't YAML example.
+
+### Verification
+
+- `make build-unit-tests` → 27 binaries built
+- `cd tests && kyua test unit` → **420/420 pass** (was 417, +3)
+
+---
+
 ## [0.5.5] — 2026-05-01
 
 `pkg/add` spec section now works (was a stub returning a "not yet
