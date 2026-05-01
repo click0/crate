@@ -406,7 +406,10 @@ static Spec parseSpecFromNode(YAML::Node top) {
           for (auto lo : b.second)
             spec.pkgLocalOverride.push_back({AsString(lo.first), AsString(lo.second)});
         } else if (isKey(b, "add")) {
-          ERR("pkg/add is not yet implemented — use pkg/install instead")
+          // pkg/add is a list of host-side .txz files to copy into the jail
+          // and install via `pkg add`. Each entry MUST be an absolute path
+          // resolved on the host before the jail is sealed.
+          listOrScalarOnly(b.second, spec.pkgAdd, "pkg/add");
         } else if (isKey(b, "nuke")) {
           listOrScalarOnly(b.second, spec.pkgNuke, "pkg/nuke");
         } else {

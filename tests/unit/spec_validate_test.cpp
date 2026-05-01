@@ -118,6 +118,35 @@ ATF_TEST_CASE_BODY(dirsShare_absolute_ok)
 }
 
 // ===================================================================
+// pkg/add — paths must be absolute
+// ===================================================================
+
+ATF_TEST_CASE_WITHOUT_HEAD(pkg_add_relative_path_throws);
+ATF_TEST_CASE_BODY(pkg_add_relative_path_throws)
+{
+	auto s = mkValid();
+	s.pkgAdd.push_back("nginx-1.27.txz");
+	ATF_REQUIRE_THROW(Exception, s.validate());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(pkg_add_absolute_path_ok);
+ATF_TEST_CASE_BODY(pkg_add_absolute_path_ok)
+{
+	auto s = mkValid();
+	s.pkgAdd.push_back("/host/pkgs/nginx-1.27.txz");
+	s.validate();
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(pkg_add_multiple_one_relative_throws);
+ATF_TEST_CASE_BODY(pkg_add_multiple_one_relative_throws)
+{
+	auto s = mkValid();
+	s.pkgAdd.push_back("/host/a.txz");
+	s.pkgAdd.push_back("b.txz");  // relative — must reject
+	ATF_REQUIRE_THROW(Exception, s.validate());
+}
+
+// ===================================================================
 // options / scripts / unknown
 // ===================================================================
 
@@ -556,6 +585,11 @@ ATF_INIT_TEST_CASES(tcs)
 
 	// duplicate package overrides
 	ATF_ADD_TEST_CASE(tcs, duplicate_local_overrides_throw);
+
+	// pkg/add absolute-path validation
+	ATF_ADD_TEST_CASE(tcs, pkg_add_relative_path_throws);
+	ATF_ADD_TEST_CASE(tcs, pkg_add_absolute_path_ok);
+	ATF_ADD_TEST_CASE(tcs, pkg_add_multiple_one_relative_throws);
 
 	// path checks
 	ATF_ADD_TEST_CASE(tcs, executable_relative_path_throws);

@@ -8,8 +8,6 @@ not yet fixed. Items are grouped by priority for production readiness.
   See bug#239590: ipfw rule doesn't forward TCP connections made through
   the host's LAN address.
 
-* (bug) pkg/add: command is not yet implemented (returns a proper error).
-
 === Security warnings ===
 
 * (security) X11 shared mode provides no display isolation.
@@ -105,3 +103,4 @@ Items completed and removed from this file:
 - ZFS disk quotas per-container (0.3.0 — zfs_ops.cpp)
 - Base system caching with SHA256 (0.3.0 — create.cpp)
 - CI: Linux unit tests, FreeBSD lite/full build, release binary workflow
+- pkg/add support — install pre-built .txz files via `pkg add` (0.5.5)
