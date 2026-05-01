@@ -6,6 +6,96 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.5.9] — 2026-05-01
+
+Audit logging — closes the second-to-last "high priority" item in
+TODO. Every state-changing crate command now appends a one-line JSON
+record to `/var/log/crate/audit.log` so a multi-user host has a
+compliance-friendly trail of who did what, when.
+
+### Why
+
+Crate is installed setuid root. On a shared host, an unprivileged
+user invokes it; the kernel hands `crate` root via euid. Without
+explicit audit, there is no record of "user X did Y" — both
+`getuid()` (real) and `geteuid()` (effective, 0) are needed for a
+reviewer to map an action back to its initiator.
+
+### Format
+
+JSON Lines (one event per line), schema:
+
+```json
+{
+  "ts":      "2026-05-01T20:55:01Z",
+  "pid":     12345,
+  "uid":     1000,
+  "euid":    0,
+  "gid":     1000,
+  "egid":    0,
+  "user":    "alice",
+  "host":    "build-server",
+  "cmd":     "create",
+  "target":  "spec.yml",
+  "argv":    "'crate' 'create' '-s' 'spec.yml'",
+  "outcome": "started" | "ok" | "failed: <msg>"
+}
+```
+
+### Added
+
+- **`lib/audit_pure.cpp`/`.h`** (new):
+  - `Event` struct + `renderJson(Event)` with proper escapes
+    (`"`, `\`, control chars, `\u00XX` for low ASCII; UTF-8 above
+    0x7F passes through)
+  - `pickTarget(args)` — chooses the primary subject for each
+    command (spec/archive/dataset@snap/etc.)
+  - `formatTimestampUtc(time_t)` — ISO 8601 (`gmtime_r` + strftime)
+  - `joinArgv(argc, argv)` — shell-quoted replayable command line
+- **`lib/audit.cpp`/`.h`** (new):
+  - `Audit::logStart(argc, argv, args)` — emits `"started"` record
+    after `Args::validate()` succeeds.
+  - `Audit::logEnd(argc, argv, args, errMsg)` — emits `"ok"` or
+    `"failed: ..."` based on outcome.
+  - Read-only commands (`list`, `info`, `stats`, `logs`, `validate`)
+    skipped to keep the log lean.
+  - Single `write()` call per record (atomic per POSIX for size ≤
+    `PIPE_BUF`).
+  - File: mode 0640, `O_APPEND` — fits `auditd(8)` / `newsyslog(8)`.
+
+### Hooked in
+
+`cli/main.cpp` calls `logStart` after `args.validate()`, wraps the
+dispatch switch in try/catch + always-flushed lambda so:
+- Successful command → `outcome: "ok"`
+- `Exception` thrown → `outcome: "failed: <msg>"`, then re-throw
+- Any other `std::exception` → `outcome: "failed: std::exception: ..."`
+- `succ == false` from a command → `"failed: command returned failure"`
+
+### Added — tests (+17 cases)
+
+`tests/unit/audit_pure_test.cpp`:
+- JSON shape (all fields present, no embedded newlines)
+- Escapes: `"`, `\`, `\n`/`\r`/`\t`, low Unicode `\u00XX`, UTF-8 passthrough
+- Argv with embedded shell metacharacters → safely quoted
+- `pickTarget` for every command (create/run/snapshot/info/console/
+  export/import/stats/logs/stop/restart) + empty for list/clean/none
+- Timestamp formatting at UNIX epoch, Y2K, plus regex pattern check
+- `joinArgv` basic, special chars, empty
+
+### Documentation
+
+`README.md` + `README_UK.md` gained an "Audit log" / "Журнал аудиту"
+section with example record and operational notes (rotation, mode,
+correlating started/ok pairs by pid).
+
+### Verification
+
+- `make build-unit-tests` → 30 binaries built
+- `cd tests && kyua test unit` → **461/461 pass** (was 444, +17)
+
+---
+
 ## [0.5.8] — 2026-05-01
 
 ed25519 signatures for `.crate` archives via `crate export -K

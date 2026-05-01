@@ -10,8 +10,8 @@ not yet fixed. Items are grouped by priority for production readiness.
 
 === High priority — blocking production use ===
 
-* (feature) Audit logging — record who started which container, when,
-  and with what parameters. Essential for compliance.
+(High-priority items above are now complete; the next batch is
+operational quality.)
 
 === Medium priority — operational quality ===
 
@@ -95,3 +95,4 @@ Items completed and removed from this file:
 - pkg/chroot output captured to /var/log/crate/create-<jail>.log (0.5.7)
 - Symmetric encryption for .crate (AES-256-CBC + PBKDF2 via -P) (0.5.4)
 - ed25519 signing for .crate (-K to sign, -V to verify; .sig sidecar) (0.5.8)
+- Audit logging — JSONL append to /var/log/crate/audit.log (0.5.9)

@@ -6,6 +6,7 @@
 #include "util.h"
 #include "err.h"
 #include "misc.h"
+#include "audit.h"
 #include "commands.h"
 
 #include <rang.hpp>
@@ -92,6 +93,18 @@ static int mainGuarded(int argc, char** argv) {
   Args args = parseArguments(argc, argv, numArgsProcessed);
   args.validate();
 
+  // Audit: record the invocation now that args are valid. Read-only
+  // commands (list/info/stats/logs/validate) are skipped inside
+  // Audit::logStart to keep the log lean. The matching logEnd is
+  // emitted via the try/catch wrapping the dispatch switch below.
+  Audit::logStart(argc, argv, args);
+  bool auditFlushed = false;
+  auto auditOnce = [&](const std::string &errMsg) {
+    if (auditFlushed) return;
+    auditFlushed = true;
+    Audit::logEnd(argc, argv, args, errMsg);
+  };
+
   //
   // Handle NO_COLOR (https://no-color.org/) and --no-color flag.
   // When either is set, disable all colored output.
@@ -105,6 +118,7 @@ static int mainGuarded(int argc, char** argv) {
   bool succ = false;
   int returnCode = 0;
 
+  try {
   switch (args.cmd) {
   case CmdCreate: {
     // Support URL-based spec and template fetching (§23)
@@ -245,6 +259,17 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdNone: {
     break; // impossible
   }}
+  } catch (const Exception &e) {
+    auditOnce(e.what());
+    throw;
+  } catch (const std::exception &e) {
+    auditOnce(std::string("std::exception: ") + e.what());
+    throw;
+  } catch (...) {
+    auditOnce("unknown exception");
+    throw;
+  }
+  auditOnce(succ ? "" : "command returned failure");
 
   return succ ? returnCode : 1;
 }

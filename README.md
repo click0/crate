@@ -192,6 +192,45 @@ Notes:
 - The signature path is `<archive>.sig`. Verifier exit codes ≠ 0
   abort the import unless `--force`.
 
+### Audit log
+
+Every state-changing crate command (`create`, `run`, `stop`, `restart`,
+`snapshot`, `export`, `import`, `clean`, `console`, `gui`, `stack`)
+appends a one-line JSON record to `/var/log/crate/audit.log`. Read-only
+commands (`list`, `info`, `stats`, `logs`, `validate`) are skipped to
+keep the log lean.
+
+```sh
+$ crate create -s spec.yml -o myapp.crate
+...
+$ tail -1 /var/log/crate/audit.log | jq .
+{
+  "ts":      "2026-05-01T20:55:01Z",
+  "pid":     12345,
+  "uid":     1000,                          // real uid (the user)
+  "euid":    0,                             // effective uid (setuid root)
+  "gid":     1000,
+  "egid":    0,
+  "user":    "alice",
+  "host":    "build-server",
+  "cmd":     "create",
+  "target":  "spec.yml",
+  "argv":    "'crate' 'create' '-s' 'spec.yml' '-o' 'myapp.crate'",
+  "outcome": "ok"
+}
+```
+
+Notes:
+- The file lives under `Config::Settings::logs` (default
+  `/var/log/crate`); change it via `crate.yml`.
+- Mode 0640, append-only writes — fits the `auditd(8)` /
+  `syslogd(8)` model. Rotate with `newsyslog(8)`.
+- Captures **both** real and effective uid/gid so reviewers see
+  "user X (uid=1000) acted via euid=0" — important for setuid binaries.
+- Pair `outcome: "started"` and `outcome: "ok"` records by `pid` to
+  measure command duration; `failed: <msg>` records contain the
+  exception message for post-mortem.
+
 ### X11 mode security
 
 `crate` supports five X11 display modes — they are **not equivalent
