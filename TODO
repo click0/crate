@@ -22,9 +22,6 @@ operational quality.)
   not exist, create it automatically (opt-in via
   auto_create_bridge: true in crate.yml).
 
-* (feature) Cross-device folder and file shares need to be implemented.
-  (nullfs cannot cross device boundaries.)
-
 * (feature) crated F2 write API — the daemon currently only has read-only
   endpoints. Need POST/DELETE for container lifecycle, WebSocket console,
   stats streaming, snapshot and export/import management.
@@ -96,3 +93,5 @@ Items completed and removed from this file:
 - Symmetric encryption for .crate (AES-256-CBC + PBKDF2 via -P) (0.5.4)
 - ed25519 signing for .crate (-K to sign, -V to verify; .sig sidecar) (0.5.8)
 - Audit logging — JSONL append to /var/log/crate/audit.log (0.5.9)
+- Cross-device file shares — single-file nullfs bind fallback when host
+  and jail-side path are on different devices (0.6.0 — lib/share_pure.cpp)

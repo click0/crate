@@ -719,6 +719,38 @@ void copyFile(const std::string &srcFile, const std::string &dstFile) {
   }
 }
 
+namespace {
+// Walk up the path until stat() succeeds; return the device id of the
+// nearest existing ancestor. Returns -1 if even "/" cannot be stat'd
+// (which should be impossible on a healthy system).
+dev_t deviceOfNearestExisting(const std::string &path) {
+  std::string p = path;
+  for (;;) {
+    struct stat st;
+    if (::stat(p.c_str(), &st) == 0)
+      return st.st_dev;
+    auto slash = p.rfind('/');
+    if (slash == std::string::npos || slash == 0)
+      break;
+    p.resize(slash);
+  }
+  struct stat st;
+  if (::stat("/", &st) == 0)
+    return st.st_dev;
+  return (dev_t)-1;
+}
+}
+
+bool sameDevice(const std::string &a, const std::string &b) {
+  return deviceOfNearestExisting(a) == deviceOfNearestExisting(b);
+}
+
+void touchFile(const std::string &path, mode_t mode) {
+  int fd;
+  SYSCALL(fd = ::open(path.c_str(), O_WRONLY|O_CREAT|O_NOFOLLOW, mode), "open (touch)", path.c_str());
+  SYSCALL(::close(fd), "close (touch)", path.c_str());
+}
+
 std::vector<std::string> expandWildcards(const std::string &wildcardPath, const std::string &rootPrefix) {
   // Filesystem-based wildcard expansion using fnmatch (no shell involved)
   auto lastSlash = wildcardPath.rfind('/');
