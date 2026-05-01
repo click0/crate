@@ -3,11 +3,13 @@
 
 #include "args.h"
 #include "spec.h"
+#include "config.h"
 #include "locs.h"
 #include "cmd.h"
 #include "mount.h"
 #include "scripts.h"
 #include "pathnames.h"
+#include "log_pure.h"
 #include "util.h"
 #include "err.h"
 #include "commands.h"
@@ -67,15 +69,22 @@ static void notifyUserOfLongProcess(bool begin, const std::string &processName, 
   std::cout << "==" << rang::fg::reset << std::endl;
 }
 
-// exec-based chroot: for pkg commands and similar (argv array, no shell)
+// exec-based chroot: for pkg commands and similar (argv array, no shell).
+// `logFile`, when non-empty, captures BOTH stdout and stderr to that file
+// (append). On failure the thrown Exception's message includes the log
+// path so operators running crate non-interactively (cron, CI) can
+// recover the captured output.
 static void runChrootCommand(const std::string &jailPath, const std::vector<std::string> &argv,
-                             const char *descr, const std::string &stdoutFile = "") {
+                             const char *descr, const std::string &stdoutFile = "",
+                             const std::string &logFile = "") {
   auto fullArgv = std::vector<std::string>{"/usr/sbin/chroot", jailPath, "/usr/bin/env", "ASSUME_ALWAYS_YES=yes"};
   fullArgv.insert(fullArgv.end(), argv.begin(), argv.end());
-  if (stdoutFile.empty())
-    Util::execCommand(fullArgv, descr);
-  else
+  if (!stdoutFile.empty())
     Util::execPipeline({fullArgv}, descr, "", stdoutFile);
+  else if (!logFile.empty())
+    Util::execCommandLogged(fullArgv, descr, logFile);
+  else
+    Util::execCommand(fullArgv, descr);
 }
 
 // exec-based chroot with shell: for user scripts that need /bin/sh -c
@@ -130,7 +139,8 @@ static void installAndAddPackagesInJail(const std::string &jailPath,
                                         const std::vector<std::string> &pkgsInstall,
                                         const std::vector<std::string> &pkgsAdd,
                                         const std::vector<std::pair<std::string, std::string>> &pkgLocalOverride,
-                                        const std::vector<std::string> &pkgNuke) {
+                                        const std::vector<std::string> &pkgNuke,
+                                        const std::string &logFile = "") {
   // local helpers
   auto J = [&jailPath](auto subdir) {
     return STR(jailPath << subdir);
@@ -143,13 +153,13 @@ static void installAndAddPackagesInJail(const std::string &jailPath,
   if (!pkgsInstall.empty()) {
     auto argv = std::vector<std::string>{CRATE_PATH_PKG, "install"};
     argv.insert(argv.end(), pkgsInstall.begin(), pkgsInstall.end());
-    runChrootCommand(jailPath, argv, "install the requested packages into the jail");
+    runChrootCommand(jailPath, argv, "install the requested packages into the jail", "", logFile);
   }
   if (!pkgsAdd.empty()) {
     for (auto &p : pkgsAdd) {
       Util::Fs::copyFile(p, STR(J("/tmp/") << Util::filePathToFileName(p)));
       runChrootCommand(jailPath, {CRATE_PATH_PKG, "add", STR("/tmp/" << Util::filePathToFileName(p))},
-                       "add the package file in jail");
+                       "add the package file in jail", "", logFile);
     }
   }
 
@@ -158,22 +168,25 @@ static void installAndAddPackagesInJail(const std::string &jailPath,
     if (!Util::Fs::fileExists(lo.second))
       ERR("package override: failed to find the package file '" << lo.second << "'")
     runChrootCommand(jailPath, {CRATE_PATH_PKG, "delete", lo.first},
-                     CSTR("remove the package '" << lo.first << "' for local override in jail"));
+                     CSTR("remove the package '" << lo.first << "' for local override in jail"),
+                     "", logFile);
     Util::Fs::copyFile(lo.second, STR(J("/tmp/") << Util::filePathToFileName(lo.second)));
     runChrootCommand(jailPath, {CRATE_PATH_PKG, "add", STR("/tmp/" << Util::filePathToFileName(lo.second))},
-                     CSTR("add the local override package '" << lo.second << "' in jail"));
+                     CSTR("add the local override package '" << lo.second << "' in jail"),
+                     "", logFile);
     Util::Fs::unlink(J(STR("/tmp/" << Util::filePathToFileName(lo.second))));
   }
 
   // nuke packages when requested
   for (auto &n : pkgNuke)
     runChrootCommand(jailPath, {"/usr/local/sbin/pkg-static", "delete", "-y", "-f", n},
-                     "nuke the package in the jail");
+                     "nuke the package in the jail", "", logFile);
 
-  // write the +CRATE.PKGS file
+  // write the +CRATE.PKGS file (stdout-redirected; not logged)
   runChrootCommand(jailPath, {CRATE_PATH_PKG, "info"}, "write +CRATE.PKGS file", J("/+CRATE.PKGS"));
   // cleanup: delete the pkg package: it will not be needed any more, and delete the added package files
-  runChrootCommand(jailPath, {CRATE_PATH_PKG, "delete", "-f", "pkg"}, "remove the 'pkg' package from jail");
+  runChrootCommand(jailPath, {CRATE_PATH_PKG, "delete", "-f", "pkg"}, "remove the 'pkg' package from jail",
+                   "", logFile);
   if (!pkgsAdd.empty())
     for (const auto &entry : std::filesystem::directory_iterator(STR(jailPath << "/tmp")))
       if (!entry.is_directory())
@@ -508,8 +521,18 @@ bool createCrate(const Args &args, const Spec &spec) {
 
   // install packages into the jail, if needed
   if (!spec.pkgInstall.empty() || !spec.pkgAdd.empty()) {
-    LOG("installing packages ...")
-    installAndAddPackagesInJail(jailPath, spec.pkgInstall, spec.pkgAdd, spec.pkgLocalOverride, spec.pkgNuke);
+    // Compute the per-jail log path for chroot/pkg output. The log
+    // directory comes from system config (default /var/log/crate);
+    // pkg stdout+stderr is appended so non-interactive runs (cron,
+    // CI) can recover the captured output on failure. The jail's
+    // basename is sanitised via LogPure::sanitizeName.
+    auto logsDir = Config::get().logs;
+    Util::Fs::mkdirIfNotExists(logsDir, 0750);
+    auto logFile = LogPure::createLogPath(logsDir, "create",
+                                           Util::filePathToBareName(crateFileName));
+    LOG("installing packages ... (output -> " << logFile << ")")
+    installAndAddPackagesInJail(jailPath, spec.pkgInstall, spec.pkgAdd,
+                                spec.pkgLocalOverride, spec.pkgNuke, logFile);
     LOG("done installing packages")
   }
 
