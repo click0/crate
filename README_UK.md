@@ -580,9 +580,31 @@ make HAVE_LIBZFS=1 HAVE_LIBIFCONFIG=1 HAVE_LIBPFCTL=1 HAVE_CAPSICUM=1 \
 | `GET /api/v1/containers/:name/logs` | так | Логи (`?follow=true`, `?tail=N`) |
 | `POST /api/v1/containers/:name/start` | так | Запустити контейнер з .crate |
 | `POST /api/v1/containers/:name/stop` | так | Зупинити контейнер (SIGTERM → SIGKILL) |
+| `POST /api/v1/containers/:name/restart` | так | Зупинка + запуск одним викликом |
 | `DELETE /api/v1/containers/:name` | так | Знищити контейнер |
+| `GET /api/v1/containers/:name/snapshots` | так | Перелік ZFS-снапшотів |
+| `POST /api/v1/containers/:name/snapshots` | так | Створити снапшот (тіло: `{"name":"<snap>"}` необов'язкове) |
+| `DELETE /api/v1/containers/:name/snapshots/:snap` | так | Видалити снапшот |
+| `GET /api/v1/containers/:name/stats/stream` | так | Server-Sent Events потік RCTL-лічильників (1 Гц) |
 | `GET /api/v1/host` | — | Інформація про хост-систему |
 | `GET /metrics` | — | Prometheus-метрики |
+
+#### Потік статистики SSE
+
+`/stats/stream` шле один кадр `data:` за секунду з полями
+`{name, jid, ip, ts, <RCTL-лічильники...>}`. Клієнти можуть споживати
+його чистим JavaScript через `new EventSource(...)` або через
+`curl --no-buffer`. Потік завершується сам подією `event: end`, коли
+клітка зникає.
+
+#### Снапшот-ендпоінти
+
+Імена снапшотів перевіряються на стороні сервера за регулярним виразом
+`[A-Za-z0-9._-]{1,64}` (значення `.` та `..` відхиляються).
+`POST /snapshots` без тіла генерує авто-ім'я виду
+`auto_2026-05-01_220000`. `DELETE /snapshots/:snap` не є ідемпотентним:
+повторний виклик повертає 500 з помилкою ZFS, бо й сам `zfs destroy`
+не ідемпотентний.
 
 ### Конфігурація
 

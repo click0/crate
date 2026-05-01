@@ -22,9 +22,10 @@ operational quality.)
   not exist, create it automatically (opt-in via
   auto_create_bridge: true in crate.yml).
 
-* (feature) crated F2 write API — the daemon currently only has read-only
-  endpoints. Need POST/DELETE for container lifecycle, WebSocket console,
-  stats streaming, snapshot and export/import management.
+* (feature) crated F2 write API — remaining surface: WebSocket console
+  (interactive shell over WS) and export/import endpoints (multipart
+  upload + .crate streaming). Container lifecycle (start/stop/restart/
+  destroy), snapshot CRUD, and SSE stats streaming are done as of 0.6.1.
 
 === Low priority — future enhancements ===
 
@@ -95,3 +96,6 @@ Items completed and removed from this file:
 - Audit logging — JSONL append to /var/log/crate/audit.log (0.5.9)
 - Cross-device file shares — single-file nullfs bind fallback when host
   and jail-side path are on different devices (0.6.0 — lib/share_pure.cpp)
+- crated F2 write API (partial) — POST /restart, snapshot CRUD
+  (GET/POST /snapshots, DELETE /snapshots/<name>), and SSE stats stream
+  (GET /stats/stream) (0.6.1 — daemon/routes.cpp + routes_pure.cpp)

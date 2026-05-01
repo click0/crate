@@ -24,7 +24,7 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/create.cpp lib/run.cpp \
 CLI_SRCS = cli/main.cpp cli/args.cpp cli/args_pure.cpp
 
 DAEMON_SRCS = daemon/main.cpp daemon/config.cpp daemon/server.cpp \
-              daemon/routes.cpp daemon/auth.cpp \
+              daemon/routes.cpp daemon/routes_pure.cpp daemon/auth.cpp \
               daemon/metrics.cpp daemon/metrics_pure.cpp
 
 SNMPD_SRCS = snmpd/main.cpp snmpd/collector.cpp \
@@ -153,7 +153,8 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              validate_pure_test run_pure_test autoname_test \
              auth_pure_test list_pure_test run_gui_pure_test \
              snapshot_pure_test crypto_pure_test log_pure_test \
-             sign_pure_test audit_pure_test share_pure_test
+             sign_pure_test audit_pure_test share_pure_test \
+             routes_pure_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)
@@ -183,6 +184,7 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  lib/sign_pure.cpp lib/audit_pure.cpp \
                  lib/share_pure.cpp \
                  cli/args_pure.cpp daemon/metrics_pure.cpp \
+                 daemon/routes_pure.cpp \
                  snmpd/mib_pure.cpp
 
 # -Icli/-Idaemon/-Isnmpd let tests #include the *_pure.h files directly.
