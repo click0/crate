@@ -192,6 +192,46 @@ crate import firefox.crate -V crate-sign.pub -P /etc/crate/secret
 - Шлях до підпису: `<archive>.sig`. Якщо verifier exit-код ≠ 0,
   імпорт переривається, якщо тільки не передано `--force`.
 
+### Журнал аудиту
+
+Кожна state-changing команда crate (`create`, `run`, `stop`,
+`restart`, `snapshot`, `export`, `import`, `clean`, `console`, `gui`,
+`stack`) дописує один рядок JSON у `/var/log/crate/audit.log`. Команди
+лише для читання (`list`, `info`, `stats`, `logs`, `validate`)
+пропускаються — щоб журнал лишався компактним.
+
+```sh
+$ crate create -s spec.yml -o myapp.crate
+...
+$ tail -1 /var/log/crate/audit.log | jq .
+{
+  "ts":      "2026-05-01T20:55:01Z",
+  "pid":     12345,
+  "uid":     1000,                          // реальний uid (користувач)
+  "euid":    0,                             // ефективний uid (setuid root)
+  "gid":     1000,
+  "egid":    0,
+  "user":    "alice",
+  "host":    "build-server",
+  "cmd":     "create",
+  "target":  "spec.yml",
+  "argv":    "'crate' 'create' '-s' 'spec.yml' '-o' 'myapp.crate'",
+  "outcome": "ok"
+}
+```
+
+Зауваги:
+- Файл живе під `Config::Settings::logs` (за замовчуванням
+  `/var/log/crate`); змінюється через `crate.yml`.
+- Mode 0640, append-only — готовий до `auditd(8)` / `syslogd(8)`.
+  Ротуйте через `newsyslog(8)`.
+- Захоплюються **обидва** uid/gid (real + effective), щоб ревізор
+  бачив "користувач X (uid=1000) діяв через euid=0" — важливо для
+  setuid-бінарників.
+- Спарювати записи `outcome: "started"` і `outcome: "ok"` за `pid`,
+  щоб міряти тривалість команди; `failed: <msg>` містить текст
+  винятку для post-mortem.
+
 ### Безпека X11-режимів
 
 `crate` підтримує п'ять режимів X11-дисплея — і **вони не рівнозначні
