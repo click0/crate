@@ -8,6 +8,7 @@
 #include "mount.h"
 #include "net.h"
 #include "run_pure.h"
+#include "share_pure.h"
 #include "scripts.h"
 #include "ctx.h"
 #include "jail_query.h"
@@ -960,17 +961,35 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     const auto fileJail = Util::pathSubstituteVarsInPath(fileShare.first);
     const auto fileHost = Util::pathSubstituteVarsInPath(fileShare.second);
     Util::safePath(J(fileJail), jailPath, "shared file (jail side)");
-    bool fileHostExists = Util::Fs::fileExists(fileHost);
-    bool fileJailExists = Util::Fs::fileExists(J(fileJail));
-    if (!fileHostExists && !fileJailExists) {
-      ERR("none of the files in a file-share exists: fileHost=" << fileHost << " fileJail=" << fileJail)
-    } else if (fileHostExists && fileJailExists) {
-      Util::Fs::unlink(J(fileJail));
-      Util::Fs::link(fileHost, J(fileJail));
-    } else if (fileHostExists) {
-      Util::Fs::link(fileHost, J(fileJail));
-    } else {
-      Util::Fs::link(J(fileJail), fileHost);
+    SharePure::FileShareInputs inp{
+      Util::Fs::fileExists(fileHost),
+      Util::Fs::fileExists(J(fileJail)),
+      Util::Fs::sameDevice(fileHost, J(fileJail)),
+    };
+    switch (SharePure::chooseFileStrategy(inp)) {
+      case SharePure::FileStrategy::Error:
+        ERR("none of the files in a file-share exists: fileHost=" << fileHost << " fileJail=" << fileJail)
+      case SharePure::FileStrategy::HardLinkHostToJail:
+        Util::Fs::unlink(J(fileJail));
+        Util::Fs::link(fileHost, J(fileJail));
+        break;
+      case SharePure::FileStrategy::HardLinkHostToJailNew:
+        Util::Fs::link(fileHost, J(fileJail));
+        break;
+      case SharePure::FileStrategy::HardLinkJailToHost:
+        Util::Fs::link(J(fileJail), fileHost);
+        break;
+      case SharePure::FileStrategy::CopyJailToHostThenBind:
+        Util::Fs::copyFile(J(fileJail), fileHost);
+        // fall through into NullfsBindHostToJail
+        [[fallthrough]];
+      case SharePure::FileStrategy::NullfsBindHostToJail:
+        if (Util::Fs::fileExists(J(fileJail)))
+          Util::Fs::unlink(J(fileJail));
+        Util::Fs::touchFile(J(fileJail));
+        mount(new Mount("nullfs", J(fileJail), fileHost, MNT_IGNORE));
+        LOG("file-share: cross-device path '" << fileHost << "' bound onto '" << J(fileJail) << "' via nullfs")
+        break;
     }
   }
 

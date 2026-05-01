@@ -171,6 +171,13 @@ char isElfFileOrDir(const std::string &file); // returns 'E'LF, 'D'ir, or 'N'o
 std::set<std::string> findElfFiles(const std::string &dir);
 bool hasExtension(const char *file, const char *extension);
 void copyFile(const std::string &srcFile, const std::string &dstFile);
+// Returns true iff both paths resolve to the same st_dev. If either path
+// is missing, falls back to the deepest existing ancestor (to allow callers
+// to ask "would these end up on the same device?" before creating files).
+bool sameDevice(const std::string &a, const std::string &b);
+// Create an empty regular file with the given mode. Fails if the parent
+// directory is missing or the path already exists as a non-regular file.
+void touchFile(const std::string &path, mode_t mode = 0644);
 std::vector<std::string> expandWildcards(const std::string &wildcardPath, const std::string &rootPrefix = "");
 bool isOnZfs(const std::string &path);
 std::string getZfsDataset(const std::string &path);

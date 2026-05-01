@@ -231,6 +231,31 @@ Notes:
   measure command duration; `failed: <msg>` records contain the
   exception message for post-mortem.
 
+### Cross-device file shares
+
+`files:` shares no longer require the host source and the jail-side
+mount point to live on the same filesystem. When `crate run` detects
+a cross-device path pair (host on tmpfs, jail dataset on a different
+ZFS pool, external disk, etc.), it automatically falls back to a
+single-file `nullfs` bind-mount instead of the hard-link path that
+returns `EXDEV`. The semantics inside the jail are identical:
+read/write, in-place edits, ownership and mode all reflect the
+underlying host file.
+
+```yaml
+# This now works regardless of whether /etc/resolv.conf and the
+# jail dataset share a device. crate decides per-file whether to
+# hard-link (same device) or nullfs-bind (cross device).
+files:
+  /etc/resolv.conf: /etc/resolv.conf
+  /var/log/myapp.log: /home/me/logs/myapp.log
+```
+
+The strategy table is published in `CHANGELOG.md` (0.6.0); the pure
+decision logic lives in `lib/share_pure.{h,cpp}` with a 9-case ATF
+test covering every cell of the (host_exists × jail_exists ×
+same_device) matrix.
+
 ### X11 mode security
 
 `crate` supports five X11 display modes — they are **not equivalent

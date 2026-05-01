@@ -6,6 +6,78 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.0] — 2026-05-01
+
+Cross-device file shares — drops the long-standing requirement that the
+host source and the jail-side mount point share a filesystem. `files:`
+shares now transparently fall back to a single-file nullfs bind-mount
+whenever a hard link would cross device boundaries.
+
+### Why
+
+`crate` previously implemented `files:` shares with `link(2)`. That
+syscall returns `EXDEV` whenever the two paths live on different
+devices — common in any setup where the jail dataset is on a separate
+ZFS pool, the host source is on tmpfs, or the user mounts an external
+disk. Symptom on the user side: a confusing `link: Cross-device link`
+error at run time, with no obvious workaround.
+
+### How
+
+The decision logic is centralised in `lib/share_pure.{h,cpp}`. Given
+three observable booleans — `hostExists`, `jailExists`, `sameDevice`
+— it picks one of:
+
+| host | jail | sameDev | strategy                       |
+| ---- | ---- | ------- | ------------------------------ |
+|  ✓   |  ✓   |    ✓    | unlink jail; hard-link host→jail |
+|  ✓   |  ✓   |    ✗    | unlink jail; touch jail; nullfs-bind host→jail |
+|  ✓   |  ✗   |    ✓    | hard-link host→jail            |
+|  ✓   |  ✗   |    ✗    | touch jail; nullfs-bind host→jail |
+|  ✗   |  ✓   |    ✓    | hard-link jail→host (creates host) |
+|  ✗   |  ✓   |    ✗    | copy jail→host; touch jail; nullfs-bind |
+|  ✗   |  ✗   |    —    | error (spec invalid)           |
+
+The same-device hard-link paths preserve existing semantics
+byte-for-byte. The new `nullfs-bind-host-to-jail` path is the one that
+unblocks cross-device specs: the jail-side path is created as an empty
+regular file, and `mount -t nullfs <host> <jail>` overlays the host
+file's vnode onto it. Single-file nullfs has been part of FreeBSD
+since 7.x; the in-jail process sees the file with full read/write
+fidelity, including in-place edits.
+
+### New helpers
+
+- `Util::Fs::sameDevice(a, b)` — `stat(2)`-based comparison that walks
+  up to the nearest existing ancestor when either path is missing, so
+  the runtime can ask "would these end up on the same device?" before
+  actually creating the file.
+- `Util::Fs::touchFile(path, mode)` — creates an empty regular file
+  with `O_NOFOLLOW`, used as a placeholder for the bind-mount.
+
+### Tests
+
+`tests/unit/share_pure_test.cpp` — 9 ATF cases covering all 7 cells of
+the decision table plus a 2×2×2 totality check (every input triple
+maps to a known strategy) and a name-uniqueness assertion to catch
+accidental collisions when the enum grows. **470/470** unit tests
+pass (was 461).
+
+### Files
+
+- `lib/share_pure.{h,cpp}` — pure decision module (new)
+- `lib/util.{h,cpp}` — `sameDevice`, `touchFile` (new)
+- `lib/run.cpp` — file-share loop refactored to dispatch on strategy
+- `tests/unit/share_pure_test.cpp` — coverage (new)
+
+### Compatibility
+
+Pure addition. Specs that already work continue to use the hard-link
+path. Cross-device specs that previously failed with `EXDEV` now
+succeed via nullfs.
+
+---
+
 ## [0.5.9] — 2026-05-01
 
 Audit logging — closes the second-to-last "high priority" item in
