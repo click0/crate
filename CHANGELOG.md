@@ -6,6 +6,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.5.5] — 2026-05-01
+
+`pkg/add` spec section now works (was a stub returning a "not yet
+implemented" error).
+
+### Fixed
+
+- **`pkg/add` is no longer rejected by the spec parser.** The
+  underlying executor `installAndAddPackagesInJail()` (lib/create.cpp)
+  has actually shipped support for adding pre-built `.txz` packages
+  via `pkg add` for a long time — it copies each listed file into
+  `/tmp/<basename>` inside the jail and invokes `pkg add`. The spec
+  parser was the one rejecting `pkg/add` entries with a
+  `not yet implemented` message. Replace the stub with a list parser
+  matching `pkg/install`.
+
+### Added — validation
+
+- `Spec::validate()` now requires every `pkg/add` entry to be an
+  absolute path. Relative paths are rejected before the jail is
+  created, with a clear error.
+
+### Added — tests (+3 cases)
+
+`tests/unit/spec_validate_test.cpp`:
+- `pkg_add_relative_path_throws`
+- `pkg_add_absolute_path_ok`
+- `pkg_add_multiple_one_relative_throws`
+
+### Spec example
+
+```yaml
+pkg:
+    add:
+      - /host/local/pkgs/myapp-1.0.txz
+      - /host/local/pkgs/mylib-2.3.txz
+```
+
+### Verification
+
+- `make build-unit-tests` → 27 binaries built
+- `cd tests && kyua test unit` → **417/417 pass** (was 414, +3)
+
+---
+
 ## [0.5.4] — 2026-05-01
 
 Optional **passphrase-based encryption** for `.crate` archives via

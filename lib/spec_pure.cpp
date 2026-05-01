@@ -178,6 +178,11 @@ void Spec::validate() const {
     if (!isFullPath(Util::pathSubstituteVarsInPath(fileShare.first)) || !isFullPath(Util::pathSubstituteVarsInPath(fileShare.second)))
       ERR("the shared directory paths have to be a full paths, share=" << fileShare.first << "->" << fileShare.second)
 
+  // pkg/add entries must be absolute paths to .txz package files on the host
+  for (auto &p : pkgAdd)
+    if (!isFullPath(Util::pathSubstituteVarsInPath(p)))
+      ERR("pkg/add entries must be absolute paths to .txz package files: " << p)
+
   // options must be from the supported set
   for (auto &o : options)
     if (allOptionsSet.find(o.first) == allOptionsSet.end())
