@@ -6,6 +6,67 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.5.8] — 2026-05-01
+
+ed25519 signatures for `.crate` archives via `crate export -K
+<secret-key>` and `crate import -V <public-key>`. Closes the last
+"high priority" item in TODO and pairs with the 0.5.4 symmetric
+encryption to give independent **confidentiality** + **authenticity**.
+
+### Added
+
+- **`lib/sign_pure.cpp`/`.h`** (new):
+  - `validateSecretKeyFile` — must be regular, non-empty, mode 0600.
+  - `validatePublicKeyFile` — must be regular, non-empty (mode irrelevant).
+  - `buildSignArgv(secretKey, archive, sigOut)` — pinned to
+    `openssl pkeyutl -sign -rawin -inkey ... -in ... -out ...`.
+  - `buildVerifyArgv(publicKey, archive, sigFile)` — pinned to
+    `openssl pkeyutl -verify -pubin -rawin -inkey ... -sigfile ...`.
+  - `sidecarPath(archive)` — `<archive>.sig`.
+- **CLI**:
+  - `crate export -K, --sign-key <file>` — sign with ed25519 secret key
+  - `crate import -V, --verify-key <file>` — verify with ed25519 public key
+- **Auto-detection on import**: if `<archive>.sig` exists, `-V` is
+  required (or `--force` to skip). If `-V` is given but no sidecar
+  exists, the import fails (or `--force` to skip).
+- The signature covers the **on-disk archive bytes**, including any
+  encryption layer added by 0.5.4. So a tampered ciphertext fails
+  signature check **before** the recipient enters their passphrase.
+
+### Threat model recap
+
+| Property | Provided by |
+|---|---|
+| Confidentiality | `-P` (AES-256-CBC + PBKDF2, 0.5.4) |
+| Content integrity | `.sha256` sidecar |
+| **Authenticity** | `-K` / `-V` (ed25519, 0.5.8) |
+
+The three are independent; combine as needed.
+
+### Added — tests (+13 cases)
+
+`tests/unit/sign_pure_test.cpp`:
+- Secret key file: 0600 OK; 0644 / 0640 / empty / missing / dir rejected
+- Public key file: 0644 OK; 0600 also OK; empty / missing rejected
+- argv shape pinned for sign + verify (positions 0–9 for sign, 0–10 for verify)
+- `-rawin` flag presence (ed25519 requires it)
+- Sidecar path computation
+
+### Added — documentation
+
+`README.md` + `README_UK.md` gain a "Signed export/import (ed25519)"
+section with:
+- One-time keypair generation (openssl genpkey)
+- Combined `-P` + `-K` example for confidentiality + authenticity
+- What gets signed (on-disk bytes including encryption layer)
+
+### Verification
+
+- `make build-unit-tests` → 29 binaries built
+- `cd tests && kyua test unit` → **444/444 pass** (was 431, +13)
+
+---
+
 ## [0.5.7] — 2026-05-01
 
 `pkg install` failure inside a jail no longer eats its own diagnostics.

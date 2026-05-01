@@ -30,3 +30,4 @@ atf_test_program{name="run_gui_pure_test"}
 atf_test_program{name="snapshot_pure_test"}
 atf_test_program{name="crypto_pure_test"}
 atf_test_program{name="log_pure_test"}
+atf_test_program{name="sign_pure_test"}
