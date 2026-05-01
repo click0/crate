@@ -36,6 +36,7 @@ tests/unit/log_pure_test
 tests/unit/sign_pure_test
 tests/unit/audit_pure_test
 tests/unit/share_pure_test
+tests/unit/routes_pure_test
 *.gcda
 *.gcno
 coverage.info

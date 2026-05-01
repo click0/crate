@@ -579,9 +579,29 @@ All native API wrappers fall back to shell commands when compiled without the co
 | `GET /api/v1/containers/:name/logs` | yes | Logs (`?follow=true`, `?tail=N`) |
 | `POST /api/v1/containers/:name/start` | yes | Start container from .crate |
 | `POST /api/v1/containers/:name/stop` | yes | Stop container (SIGTERM → SIGKILL) |
+| `POST /api/v1/containers/:name/restart` | yes | Stop + start in one call |
 | `DELETE /api/v1/containers/:name` | yes | Destroy container |
+| `GET /api/v1/containers/:name/snapshots` | yes | List ZFS snapshots |
+| `POST /api/v1/containers/:name/snapshots` | yes | Create snapshot (body: `{"name":"<snap>"}` optional) |
+| `DELETE /api/v1/containers/:name/snapshots/:snap` | yes | Delete a snapshot |
+| `GET /api/v1/containers/:name/stats/stream` | yes | Server-Sent Events stream of RCTL counters (1 Hz) |
 | `GET /api/v1/host` | — | Host system info |
 | `GET /metrics` | — | Prometheus metrics |
+
+#### SSE stats stream
+
+`/stats/stream` emits one `data:` frame per second containing
+`{name, jid, ip, ts, <rctl counters...>}`. Clients can consume it with
+plain JavaScript via `new EventSource(...)` or with `curl --no-buffer`.
+The stream self-terminates with `event: end` when the jail exits.
+
+#### Snapshot endpoints
+
+Snapshot names are validated server-side against `[A-Za-z0-9._-]{1,64}`
+(`.` and `..` rejected). `POST /snapshots` with no body generates an
+auto name like `auto_2026-05-01_220000`. `DELETE /snapshots/:snap` is
+idempotent — repeating it returns `500` with the underlying ZFS error,
+since `zfs destroy` itself is not idempotent.
 
 ### Configuration
 

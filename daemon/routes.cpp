@@ -5,6 +5,7 @@
 #include "routes.h"
 #include "auth.h"
 #include "metrics.h"
+#include "routes_pure.h"
 
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include <httplib.h>
@@ -16,6 +17,7 @@
 #include "locs.h"
 #include "pathnames.h"
 #include "util.h"
+#include "zfs_ops.h"
 
 #include <unistd.h>
 
@@ -441,6 +443,255 @@ static void handleContainerLogs(const httplib::Request &req, httplib::Response &
   );
 }
 
+// --- F2: POST /api/v1/containers/:name/restart ---
+
+static void handleContainerRestart(const httplib::Request &req, httplib::Response &res,
+                                    const Config &config) {
+  if (!isAuthorized(req, config, "admin")) {
+    jsonError(res, 403, "unauthorized");
+    return;
+  }
+
+  auto name = req.path_params.at("name");
+  auto jail = JailQuery::getJailByName(name);
+
+  // Stop phase: send SIGTERM, wait up to 10s, fall back to SIGKILL.
+  if (jail) {
+    try {
+      Util::execCommand({CRATE_PATH_JEXEC, std::to_string(jail->jid),
+                         "/bin/kill", "-TERM", "-1"},
+        "send SIGTERM to jail processes");
+    } catch (...) {}
+    bool gone = false;
+    for (int i = 0; i < 10; i++) {
+      auto check = JailQuery::getJailByJid(jail->jid);
+      if (!check) { gone = true; break; }
+      ::sleep(1);
+    }
+    if (!gone) {
+      try {
+        Util::execCommand({CRATE_PATH_JEXEC, std::to_string(jail->jid),
+                           "/bin/kill", "-KILL", "-1"},
+          "force kill jail processes");
+        ::sleep(1);
+        auto still = JailQuery::getJailByJid(jail->jid);
+        if (still) {
+          Util::execCommand({CRATE_PATH_JAIL, "-r", std::to_string(jail->jid)},
+            "force remove jail");
+        }
+      } catch (...) {}
+    }
+  }
+
+  // Start phase: must have a saved .crate file.
+  auto crateFile = "/var/run/crate/" + name + ".crate";
+  if (!Util::Fs::fileExists(crateFile)) {
+    jsonError(res, 404, "no saved .crate file for '" + name + "'; container stopped but cannot restart");
+    return;
+  }
+  try {
+    Args runArgs;
+    runArgs.cmd = CmdRun;
+    runArgs.runCrateFile = crateFile;
+    int returnCode = 0;
+    if (runCrate(runArgs, 0, nullptr, returnCode)) {
+      jsonOk(res, "{\"restarted\":true,\"name\":\"" + name + "\"}");
+    } else {
+      jsonError(res, 500, "failed to start container after stop");
+    }
+  } catch (const std::exception &e) {
+    jsonError(res, 500, e.what());
+  }
+}
+
+// --- Snapshot helpers ---
+
+static std::string datasetForJail(const std::string &name) {
+  // The snapshot endpoints accept either a running jail name or a dataset
+  // name. If a running jail matches, derive its dataset from the path;
+  // otherwise treat the URL parameter as a dataset name as-is, mirroring
+  // how the CLI's snapshot subcommand operates on raw datasets.
+  auto jail = JailQuery::getJailByName(name);
+  if (jail)
+    return Util::Fs::getZfsDataset(jail->path);
+  return name;
+}
+
+// --- F2: GET /api/v1/containers/:name/snapshots ---
+
+static void handleListSnapshots(const httplib::Request &req, httplib::Response &res,
+                                 const Config &config) {
+  if (!isAuthorized(req, config, "viewer")) {
+    jsonError(res, 403, "unauthorized");
+    return;
+  }
+  auto name = req.path_params.at("name");
+  auto ds = datasetForJail(name);
+  if (ds.empty()) {
+    jsonError(res, 404, "container or dataset not found");
+    return;
+  }
+  try {
+    auto snaps = ZfsOps::listSnapshots(ds);
+    std::ostringstream ss;
+    ss << "{\"dataset\":\"" << ds << "\",\"snapshots\":[";
+    bool first = true;
+    for (auto &s : snaps) {
+      if (!first) ss << ",";
+      first = false;
+      // ZfsOps emits "<dataset>@<snap>"; expose just the snap name to clients
+      // so they can pass it back to the DELETE endpoint without parsing.
+      auto at = s.name.find('@');
+      auto shortName = (at == std::string::npos) ? s.name : s.name.substr(at + 1);
+      ss << "{\"name\":\"" << shortName << "\""
+         << ",\"used\":\"" << s.used << "\""
+         << ",\"refer\":\"" << s.refer << "\""
+         << ",\"creation\":\"" << s.creation << "\"}";
+    }
+    ss << "]}";
+    jsonOk(res, ss.str());
+  } catch (const std::exception &e) {
+    jsonError(res, 500, e.what());
+  }
+}
+
+// --- F2: POST /api/v1/containers/:name/snapshots ---
+// Body: optional {"name":"<snap>"}; if absent, an auto-generated name is used.
+
+static void handleCreateSnapshot(const httplib::Request &req, httplib::Response &res,
+                                  const Config &config) {
+  if (!isAuthorized(req, config, "admin")) {
+    jsonError(res, 403, "unauthorized");
+    return;
+  }
+  auto name = req.path_params.at("name");
+  auto ds = datasetForJail(name);
+  if (ds.empty()) {
+    jsonError(res, 404, "container or dataset not found");
+    return;
+  }
+
+  std::string snapName = RoutesPure::extractStringField(req.body, "name");
+  if (snapName.empty()) {
+    // Generate a timestamp-based name.
+    auto t = ::time(nullptr);
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "auto_%Y-%m-%d_%H%M%S", ::gmtime(&t));
+    snapName = buf;
+  }
+  auto reason = RoutesPure::validateSnapshotName(snapName);
+  if (!reason.empty()) {
+    jsonError(res, 400, reason);
+    return;
+  }
+
+  try {
+    auto fullName = ds + "@" + snapName;
+    ZfsOps::snapshot(fullName);
+    jsonOk(res, "{\"created\":true,\"snapshot\":\"" + fullName + "\"}");
+  } catch (const std::exception &e) {
+    jsonError(res, 500, e.what());
+  }
+}
+
+// --- F2: DELETE /api/v1/containers/:name/snapshots/:snap ---
+
+static void handleDeleteSnapshot(const httplib::Request &req, httplib::Response &res,
+                                  const Config &config) {
+  if (!isAuthorized(req, config, "admin")) {
+    jsonError(res, 403, "unauthorized");
+    return;
+  }
+  auto name = req.path_params.at("name");
+  auto snap = req.path_params.at("snap");
+
+  auto reason = RoutesPure::validateSnapshotName(snap);
+  if (!reason.empty()) {
+    jsonError(res, 400, reason);
+    return;
+  }
+  auto ds = datasetForJail(name);
+  if (ds.empty()) {
+    jsonError(res, 404, "container or dataset not found");
+    return;
+  }
+
+  try {
+    auto fullName = ds + "@" + snap;
+    ZfsOps::destroy(fullName);
+    jsonOk(res, "{\"deleted\":true,\"snapshot\":\"" + fullName + "\"}");
+  } catch (const std::exception &e) {
+    jsonError(res, 500, e.what());
+  }
+}
+
+// --- F2: GET /api/v1/containers/:name/stats/stream ---
+// Server-Sent Events stream of RCTL usage. One event per second until
+// the client disconnects.
+
+static void handleStatsStream(const httplib::Request &req, httplib::Response &res,
+                               const Config &config) {
+  if (!isAuthorized(req, config, "viewer")) {
+    jsonError(res, 403, "unauthorized");
+    return;
+  }
+  auto name = req.path_params.at("name");
+  auto jail = JailQuery::getJailByName(name);
+  if (!jail) {
+    try { jail = JailQuery::getJailByJid(std::stoi(name)); } catch (...) {}
+  }
+  if (!jail) {
+    jsonError(res, 404, "container not found");
+    return;
+  }
+
+  res.set_header("Cache-Control", "no-cache");
+  res.set_header("X-Accel-Buffering", "no");
+
+  int jid = jail->jid;
+  std::string jailName = jail->name;
+  std::string jailIp = jail->ip4;
+
+  res.set_chunked_content_provider(
+    "text/event-stream",
+    [jid, jailName, jailIp](size_t /*offset*/, httplib::DataSink &sink) -> bool {
+      for (;;) {
+        // Bail out if the jail has exited.
+        auto current = JailQuery::getJailByJid(jid);
+        if (!current) {
+          std::string ev = "event: end\ndata: {\"reason\":\"jail-gone\"}\n\n";
+          sink.write(ev.c_str(), ev.size());
+          sink.done();
+          return true;
+        }
+
+        std::vector<std::pair<std::string, std::string>> usage;
+        try {
+          auto rctlOutput = Util::execCommandGetOutput(
+            {CRATE_PATH_RCTL, "-u", "jail:" + std::to_string(jid)},
+            "query RCTL usage");
+          std::istringstream is(rctlOutput);
+          std::string line;
+          while (std::getline(is, line)) {
+            auto eq = line.find('=');
+            if (eq != std::string::npos)
+              usage.emplace_back(line.substr(0, eq), line.substr(eq + 1));
+          }
+        } catch (...) {
+          // Skip this tick — keep the stream alive, the next tick may succeed.
+        }
+
+        RoutesPure::StatsInput in{jailName, jid, jailIp, usage};
+        auto frame = RoutesPure::formatStatsSseEvent(in, ::time(nullptr));
+        if (!sink.write(frame.c_str(), frame.size()))
+          return false; // client disconnected
+        ::sleep(1);
+      }
+    },
+    [](bool /*success*/) {}
+  );
+}
+
 // --- Route registration ---
 
 void registerRoutes(httplib::Server &srv, const Config &config) {
@@ -525,6 +776,46 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
         return;
       }
       handleContainerDestroy(req, res, config);
+    });
+  srv.Post("/api/v1/containers/:name/restart",
+    [&config](const httplib::Request &req, httplib::Response &res) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/restart", RATE_LIMIT_MUTATING)) {
+        jsonError(res, 429, "rate limit exceeded");
+        return;
+      }
+      handleContainerRestart(req, res, config);
+    });
+  srv.Get("/api/v1/containers/:name/snapshots",
+    [&config](const httplib::Request &req, httplib::Response &res) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/snapshots-list", RATE_LIMIT_READ)) {
+        jsonError(res, 429, "rate limit exceeded");
+        return;
+      }
+      handleListSnapshots(req, res, config);
+    });
+  srv.Post("/api/v1/containers/:name/snapshots",
+    [&config](const httplib::Request &req, httplib::Response &res) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/snapshots-create", RATE_LIMIT_MUTATING)) {
+        jsonError(res, 429, "rate limit exceeded");
+        return;
+      }
+      handleCreateSnapshot(req, res, config);
+    });
+  srv.Delete(R"(/api/v1/containers/:name/snapshots/:snap)",
+    [&config](const httplib::Request &req, httplib::Response &res) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/snapshots-delete", RATE_LIMIT_MUTATING)) {
+        jsonError(res, 429, "rate limit exceeded");
+        return;
+      }
+      handleDeleteSnapshot(req, res, config);
+    });
+  srv.Get("/api/v1/containers/:name/stats/stream",
+    [&config](const httplib::Request &req, httplib::Response &res) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/stats-stream", RATE_LIMIT_READ)) {
+        jsonError(res, 429, "rate limit exceeded");
+        return;
+      }
+      handleStatsStream(req, res, config);
     });
 }
 

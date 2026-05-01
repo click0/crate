@@ -6,6 +6,73 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.1] — 2026-05-01
+
+crated F2 write API expanded — five new endpoints land restart, full
+snapshot CRUD, and a server-sent-events stats stream so external
+tooling (the upcoming hub web dashboard, cron-driven snapshot scripts,
+Grafana/agent collectors) can drive `crate` over HTTPS without
+shelling into the host.
+
+### New endpoints
+
+| Method | Path                                             | Role   |
+| ------ | ------------------------------------------------ | ------ |
+| POST   | `/api/v1/containers/{name}/restart`              | admin  |
+| GET    | `/api/v1/containers/{name}/snapshots`            | viewer |
+| POST   | `/api/v1/containers/{name}/snapshots`            | admin  |
+| DELETE | `/api/v1/containers/{name}/snapshots/{snap}`     | admin  |
+| GET    | `/api/v1/containers/{name}/stats/stream`         | viewer |
+
+`POST /snapshots` accepts an optional JSON body `{"name":"<snap>"}`;
+when absent the daemon generates a UTC timestamp-based name
+(`auto_YYYY-MM-DD_HHMMSS`). Snapshot names are validated server-side
+against `[A-Za-z0-9._-]{1,64}` (rejecting `.` and `..`) before being
+passed to `zfs(8)`, so the API surface itself can't be coaxed into
+shell-injection or dataset-traversal even by a compromised admin
+token.
+
+`GET /stats/stream` opens a `text/event-stream` (SSE) connection. One
+JSON event per second carries `name`, `jid`, `ip`, `ts`, plus every
+RCTL counter (`cputime`, `memoryuse`, `pcpu`, ...). The handler
+self-terminates with `event: end` if the jail exits while the stream
+is open, so clients don't need separate liveness checks.
+
+### Implementation
+
+- **`daemon/routes_pure.{h,cpp}`** — testable formatting + validation:
+  `formatStatsSseEvent()` (renders one SSE frame), `validateSnapshotName()`
+  (returns "" if accepted, otherwise a one-line reason), and
+  `extractStringField()` (a tiny brace-/quote-aware extractor used
+  instead of pulling in a JSON parser for daemon request bodies).
+- **`daemon/routes.cpp`** — five new handlers wired into
+  `registerRoutes()`. Auth gates apply: read endpoints require the
+  `viewer` role, mutating endpoints require `admin`. Per-endpoint
+  rate limits reuse the existing buckets.
+
+### Tests
+
+`tests/unit/routes_pure_test.cpp` — 16 ATF cases:
+- 5 SSE shape/escape/numeric-detection tests (including JSON escaping
+  of `"`, `\`, `\n` in the jail name; numeric detection of `-7`/`1.5`
+  vs string fallback for `1.2.3`)
+- 5 snapshot-name validator tests (empty / 64+ chars / `.`/`..` /
+  forbidden characters / valid examples)
+- 6 JSON-field extractor tests (whitespace tolerance, escape decoding,
+  missing-field empty return, non-string value rejection,
+  unterminated-string safety)
+
+**486/486** unit tests pass (was 470).
+
+### What's still missing for full F2 parity
+
+Tracked in `TODO`: WebSocket console (interactive shell over WS) and
+export/import endpoints (multipart upload + `.crate` streaming). Both
+need substantial transport plumbing and will land in their own
+releases.
+
+---
+
 ## [0.6.0] — 2026-05-01
 
 Cross-device file shares — drops the long-standing requirement that the
