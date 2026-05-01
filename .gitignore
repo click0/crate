@@ -33,6 +33,7 @@ tests/unit/run_gui_pure_test
 tests/unit/snapshot_pure_test
 tests/unit/crypto_pure_test
 tests/unit/log_pure_test
+tests/unit/sign_pure_test
 *.gcda
 *.gcno
 coverage.info

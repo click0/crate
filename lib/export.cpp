@@ -4,6 +4,7 @@
 #include "args.h"
 #include "autoname_pure.h"
 #include "crypto_pure.h"
+#include "sign_pure.h"
 #include "jail_query.h"
 #include "pathnames.h"
 #include "cmd.h"
@@ -123,15 +124,33 @@ bool exportCrate(const Args &args) {
   Util::Fs::writeFile(STR(checksum << "  " << Util::filePathToFileName(outFile) << "\n"), sha256File);
   Util::Fs::chown(sha256File, myuid, mygid);
 
+  // Sign the on-disk archive with ed25519 if requested. The signature
+  // covers the encrypted bytes (when -P was used), so the public key
+  // can verify provenance without holding the passphrase.
+  bool sign = !args.exportSignKey.empty();
+  std::string sigFile;
+  if (sign) {
+    SignPure::validateSecretKeyFile(args.exportSignKey);
+    sigFile = SignPure::sidecarPath(outFile);
+    Util::execCommand(
+      SignPure::buildSignArgv(args.exportSignKey, outFile, sigFile),
+      "sign exported crate with ed25519 secret key");
+    Util::Fs::chown(sigFile, myuid, mygid);
+    Util::Fs::chmod(sigFile, 0644);
+  }
+
   // Report file size
   struct stat st;
   if (::stat(outFile.c_str(), &st) == 0) {
     double sizeMB = static_cast<double>(st.st_size) / (1024.0 * 1024.0);
     std::cout << rang::fg::green << "Exported: " << outFile
               << " (" << std::fixed << std::setprecision(1) << sizeMB << " MB"
-              << (encrypt ? ", AES-256-CBC encrypted" : "") << ")"
+              << (encrypt ? ", AES-256-CBC encrypted" : "")
+              << (sign ? ", ed25519-signed" : "") << ")"
               << rang::style::reset << std::endl;
     std::cout << "Checksum: " << sha256File << std::endl;
+    if (sign)
+      std::cout << "Signature: " << sigFile << std::endl;
   } else {
     std::cout << rang::fg::green << "Exported: " << outFile << rang::style::reset << std::endl;
   }

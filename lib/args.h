@@ -53,12 +53,14 @@ public:
   std::string exportTarget;     // container name or JID
   std::string exportOutput;     // -o/--output: output file path
   std::string exportPassphraseFile; // -P/--passphrase-file: encrypt with passphrase from file
+  std::string exportSignKey;    // -K/--sign-key: ed25519 secret key for .sig sidecar
 
   // import parameters
   std::string importFile;       // archive file to import
   std::string importOutput;     // -o/--output: output directory
   bool importForce = false;     // -f/--force: skip checksum verification
   std::string importPassphraseFile; // -P/--passphrase-file: decrypt with passphrase from file
+  std::string importVerifyKey;  // -V/--verify-key: ed25519 public key; required if .sig sidecar present
 
   // console parameters
   std::string consoleTarget;    // jail name or JID

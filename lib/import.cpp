@@ -4,6 +4,7 @@
 #include "args.h"
 #include "crypto_pure.h"
 #include "import_pure.h"
+#include "sign_pure.h"
 #include "pathnames.h"
 #include "cmd.h"
 #include "locs.h"
@@ -25,6 +26,59 @@
 
 static uid_t myuid = ::getuid();
 static gid_t mygid = ::getgid();
+
+// Verify ed25519 signature if a .sig sidecar exists.
+// Returns true if no .sig is present (caller decides whether to insist),
+// or if verification succeeds. Throws on mismatch unless force=true.
+static bool verifySignature(const std::string &archivePath,
+                            const std::string &verifyKey, bool force) {
+  auto sigFile = SignPure::sidecarPath(archivePath);
+  bool hasSig = Util::Fs::fileExists(sigFile);
+
+  if (!hasSig && verifyKey.empty())
+    return true;  // unsigned archive, no key requested — silent passthrough
+
+  if (hasSig && verifyKey.empty()) {
+    if (force) {
+      std::cerr << rang::fg::yellow << "WARNING: signature present (" << sigFile
+                << ") but --verify-key not given; --force: skipping verification"
+                << rang::style::reset << std::endl;
+      return true;
+    }
+    ERR("archive has ed25519 signature '" << sigFile
+        << "' but no --verify-key/-V was given; pass the public key, or --force to skip")
+  }
+
+  if (!hasSig && !verifyKey.empty()) {
+    if (force) {
+      std::cerr << rang::fg::yellow << "WARNING: --verify-key given but no .sig sidecar; "
+                << "--force: proceeding unsigned" << rang::style::reset << std::endl;
+      return true;
+    }
+    ERR("--verify-key given but no signature sidecar '" << sigFile
+        << "' was found; remove -V/--verify-key, or --force to skip")
+  }
+
+  // Both present — verify.
+  SignPure::validatePublicKeyFile(verifyKey);
+  try {
+    Util::execCommand(
+      SignPure::buildVerifyArgv(verifyKey, archivePath, sigFile),
+      "verify ed25519 signature");
+    std::cout << rang::fg::green << "Signature verified: " << sigFile
+              << rang::style::reset << std::endl;
+    return true;
+  } catch (const std::exception &e) {
+    if (force) {
+      std::cerr << rang::fg::red << "Signature verification FAILED: " << e.what()
+                << rang::style::reset << std::endl;
+      std::cerr << rang::fg::yellow << "  --force: proceeding despite invalid signature"
+                << rang::style::reset << std::endl;
+      return true;
+    }
+    ERR("ed25519 signature mismatch — refusing to import: " << e.what())
+  }
+}
 
 // Validate SHA256 checksum if .sha256 file exists alongside the archive
 static bool validateChecksum(const std::string &archivePath, bool force) {
@@ -174,17 +228,22 @@ bool importCrate(const Args &args) {
             << (fmt == CryptoPure::Format::Encrypted ? " (encrypted)" : "")
             << " ..." << std::endl;
 
-  // Step 1: Validate checksum (always against the on-disk file, including
+  // Step 1: Verify ed25519 signature (if .sig sidecar exists or
+  //         --verify-key was given). Done before checksum so a forged
+  //         archive with a freshly-recomputed sha256 still fails here.
+  verifySignature(archivePath, args.importVerifyKey, args.importForce);
+
+  // Step 2: Validate checksum (always against the on-disk file, including
   //         the encrypted ciphertext — the .sha256 sidecar is computed
   //         after encryption on the export side).
   if (!validateChecksum(archivePath, args.importForce))
     ERR("checksum validation failed — use --force to override")
 
-  // Step 2: Validate archive contents (no directory traversal)
+  // Step 3: Validate archive contents (no directory traversal)
   std::cout << "  Validating archive integrity ..." << std::endl;
   validateArchive(archivePath, passphraseFile);
 
-  // Step 3: Check if the archive contains +CRATE.SPEC
+  // Step 4: Check if the archive contains +CRATE.SPEC
   bool hasSpec = archiveHasSpec(archivePath, passphraseFile);
   if (!hasSpec) {
     std::cerr << rang::fg::yellow
@@ -196,7 +255,7 @@ bool importCrate(const Args &args) {
               << rang::style::reset << std::endl;
   }
 
-  // Step 4: Check OS version compatibility
+  // Step 5: Check OS version compatibility
   checkOsVersion(archivePath, passphraseFile);
 
   // Step 5: If the input file is already a .crate and output == input, just validate

@@ -87,8 +87,8 @@ Crate containers contain everything needed to run the containerized software —
 | `crate info TARGET` | Detailed container information |
 | `crate console TARGET [-u USER]` | Interactive shell in a container |
 | `crate clean [-n]` | Clean up orphaned resources (dry-run supported) |
-| `crate export TARGET [-o FILE] [-P PASSFILE]` | Export running container to .crate (optional encryption) |
-| `crate import FILE [-o FILE] [--force] [-P PASSFILE]` | Import .crate with validation (auto-decrypts) |
+| `crate export TARGET [-o FILE] [-P PASSFILE] [-K SIGNKEY]` | Export running container to .crate (optional encryption + ed25519 signature) |
+| `crate import FILE [-o FILE] [--force] [-P PASSFILE] [-V PUBKEY]` | Import .crate with validation (auto-decrypts, verifies signature) |
 | `crate gui list\|focus\|attach\|url\|tile\|screenshot\|resize` | GUI session manager |
 
 ## Quick Start
@@ -143,8 +143,54 @@ Notes:
 - `crate` refuses any passphrase file that isn't `0600`, regular, and non-empty.
 - The `.sha256` sidecar covers the **ciphertext**: verify it out-of-band
   before decrypting if you want detection of bit-flips on transport.
-- Authenticated/asymmetric signatures (ed25519, GPG) are still on the roadmap;
-  in the meantime use the SHA256 sidecar for integrity.
+- The `.sha256` sidecar covers the **ciphertext**: verify it out-of-band
+  before decrypting if you want detection of bit-flips on transport.
+- For authenticated provenance ("this archive really came from me"),
+  pair `-P` with `-K`/`-V` (ed25519 signing — see below).
+
+### Signed export/import (ed25519)
+
+Encryption (the `-P` flag above) gives you confidentiality. Signing
+gives you **authenticity** — a recipient can verify a `.crate` archive
+really came from the holder of the matching secret key, even if it
+travelled through untrusted intermediaries. The two are independent
+and can be combined.
+
+```sh
+# 1. One-time: generate an ed25519 keypair
+openssl genpkey -algorithm ED25519 -out crate-sign.key
+openssl pkey -in crate-sign.key -pubout -out crate-sign.pub
+chmod 0600 crate-sign.key
+# (publish crate-sign.pub anywhere; keep crate-sign.key secret)
+
+# 2. Sign on export. Combine with -P for confidentiality + authenticity.
+crate export firefox -K crate-sign.key -P /etc/crate/secret -o firefox.crate
+# -> firefox.crate         (AES-256-CBC ciphertext)
+# -> firefox.crate.sha256  (over the encrypted bytes)
+# -> firefox.crate.sig     (ed25519 signature over the encrypted bytes)
+
+# 3. On the recipient: verify with the public key.
+crate import firefox.crate -V crate-sign.pub -P /etc/crate/secret
+# Refuses to import if firefox.crate.sig is missing/mismatched —
+# unless --force.
+```
+
+What gets signed: the **on-disk archive bytes** (including any
+encryption layer). So:
+- A tampered ciphertext is detected by the signature, even before
+  the recipient enters the passphrase.
+- The public key can verify provenance without holding the
+  passphrase.
+- An unsigned archive imports normally; a *signed* archive without
+  `-V` refuses to import (intentionally — opt-in to the looser
+  unsigned mode with `--force`).
+
+Notes:
+- Implementation: `openssl pkeyutl -sign -rawin -inkey ed25519-key`.
+  ed25519 produces a fixed 64-byte signature; `.sig` is binary.
+- Secret-key file rejected unless mode `0600`, regular, non-empty.
+- The signature path is `<archive>.sig`. Verifier exit codes ≠ 0
+  abort the import unless `--force`.
 
 ### X11 mode security
 
