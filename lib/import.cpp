@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "args.h"
+#include "crypto_pure.h"
 #include "import_pure.h"
 #include "pathnames.h"
 #include "cmd.h"
@@ -68,21 +69,32 @@ static bool validateChecksum(const std::string &archivePath, bool force) {
   return true;
 }
 
+// Build the read-side pipeline. If passphraseFile is non-empty, the
+// archive is decrypted first; then xz, then the trailing tar command.
+static std::vector<std::vector<std::string>> readPipeline(
+    const std::string &passphraseFile,
+    const std::vector<std::string> &tarCmd) {
+  std::vector<std::vector<std::string>> p;
+  if (!passphraseFile.empty())
+    p.push_back(CryptoPure::buildDecryptArgv(passphraseFile));
+  p.push_back({CRATE_PATH_XZ, Cmd::xzThreadsArg, "--decompress"});
+  p.push_back(tarCmd);
+  return p;
+}
+
 // Validate the archive for directory traversal attacks
-static void validateArchive(const std::string &archivePath) {
+static void validateArchive(const std::string &archivePath, const std::string &passphraseFile) {
   auto listing = Util::execPipelineGetOutput(
-    {{CRATE_PATH_XZ, Cmd::xzThreadsArg, "--decompress"},
-     {CRATE_PATH_TAR, "tf", "-"}},
+    readPipeline(passphraseFile, {CRATE_PATH_TAR, "tf", "-"}),
     "list archive contents for validation", archivePath);
   if (ImportPure::archiveHasTraversal(listing))
     ERR("archive contains path with '..' component — refusing to import (directory traversal)")
 }
 
 // Inspect the +CRATE.SPEC inside the archive without full extraction
-static bool archiveHasSpec(const std::string &archivePath) {
+static bool archiveHasSpec(const std::string &archivePath, const std::string &passphraseFile) {
   auto listing = Util::execPipelineGetOutput(
-    {{CRATE_PATH_XZ, Cmd::xzThreadsArg, "--decompress"},
-     {CRATE_PATH_TAR, "tf", "-"}},
+    readPipeline(passphraseFile, {CRATE_PATH_TAR, "tf", "-"}),
     "list archive contents", archivePath);
 
   std::istringstream is(listing);
@@ -94,12 +106,11 @@ static bool archiveHasSpec(const std::string &archivePath) {
 }
 
 // Check the OS version in +CRATE.OSVERSION
-static void checkOsVersion(const std::string &archivePath) {
+static void checkOsVersion(const std::string &archivePath, const std::string &passphraseFile) {
   // Try to extract +CRATE.OSVERSION from the archive
   try {
     auto output = Util::execPipelineGetOutput(
-      {{CRATE_PATH_XZ, Cmd::xzThreadsArg, "--decompress"},
-       {CRATE_PATH_TAR, "xf", "-", "-O", "+CRATE.OSVERSION"}},
+      readPipeline(passphraseFile, {CRATE_PATH_TAR, "xf", "-", "-O", "+CRATE.OSVERSION"}),
       "extract OS version from archive", archivePath);
     auto ver = Util::stripTrailingSpace(output);
     if (!ver.empty()) {
@@ -123,9 +134,23 @@ bool importCrate(const Args &args) {
   if (!Util::Fs::fileExists(archivePath))
     ERR("archive file not found: " << archivePath)
 
-  // Validate file is a valid xz archive
-  if (!Util::Fs::isXzArchive(archivePath.c_str()))
-    ERR("file is not a valid xz archive: " << archivePath)
+  // Detect plain vs encrypted by inspecting the magic bytes.
+  auto fmt = CryptoPure::detectFile(archivePath);
+
+  std::string passphraseFile = args.importPassphraseFile;
+  if (fmt == CryptoPure::Format::Encrypted) {
+    if (passphraseFile.empty())
+      ERR("archive '" << archivePath << "' is encrypted; pass --passphrase-file <path>")
+    CryptoPure::validatePassphraseFile(passphraseFile);
+  } else if (fmt == CryptoPure::Format::Plain) {
+    if (!passphraseFile.empty())
+      std::cerr << rang::fg::yellow
+                << "WARNING: --passphrase-file given but archive is not encrypted"
+                << rang::style::reset << std::endl;
+    passphraseFile.clear();   // ensure pipeline stays plain
+  } else {
+    ERR("file '" << archivePath << "' is neither a valid xz archive nor an OpenSSL-encrypted blob")
+  }
 
   // Determine output filename
   std::string outFile;
@@ -145,18 +170,22 @@ bool importCrate(const Args &args) {
     }
   }
 
-  std::cout << "Importing " << archivePath << " ..." << std::endl;
+  std::cout << "Importing " << archivePath
+            << (fmt == CryptoPure::Format::Encrypted ? " (encrypted)" : "")
+            << " ..." << std::endl;
 
-  // Step 1: Validate checksum
+  // Step 1: Validate checksum (always against the on-disk file, including
+  //         the encrypted ciphertext — the .sha256 sidecar is computed
+  //         after encryption on the export side).
   if (!validateChecksum(archivePath, args.importForce))
     ERR("checksum validation failed — use --force to override")
 
   // Step 2: Validate archive contents (no directory traversal)
   std::cout << "  Validating archive integrity ..." << std::endl;
-  validateArchive(archivePath);
+  validateArchive(archivePath, passphraseFile);
 
   // Step 3: Check if the archive contains +CRATE.SPEC
-  bool hasSpec = archiveHasSpec(archivePath);
+  bool hasSpec = archiveHasSpec(archivePath, passphraseFile);
   if (!hasSpec) {
     std::cerr << rang::fg::yellow
               << "WARNING: archive does not contain +CRATE.SPEC — this is not a crate archive"
@@ -168,7 +197,7 @@ bool importCrate(const Args &args) {
   }
 
   // Step 4: Check OS version compatibility
-  checkOsVersion(archivePath);
+  checkOsVersion(archivePath, passphraseFile);
 
   // Step 5: If the input file is already a .crate and output == input, just validate
   if (outFile == archivePath) {
