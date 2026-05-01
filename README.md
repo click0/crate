@@ -87,8 +87,8 @@ Crate containers contain everything needed to run the containerized software —
 | `crate info TARGET` | Detailed container information |
 | `crate console TARGET [-u USER]` | Interactive shell in a container |
 | `crate clean [-n]` | Clean up orphaned resources (dry-run supported) |
-| `crate export TARGET [-o FILE]` | Export running container to .crate |
-| `crate import FILE [-o FILE] [--force]` | Import .crate with validation |
+| `crate export TARGET [-o FILE] [-P PASSFILE]` | Export running container to .crate (optional encryption) |
+| `crate import FILE [-o FILE] [--force] [-P PASSFILE]` | Import .crate with validation (auto-decrypts) |
 | `crate gui list\|focus\|attach\|url\|tile\|screenshot\|resize` | GUI session manager |
 
 ## Quick Start
@@ -109,6 +109,42 @@ crate console firefox
 # Export a running container
 crate export firefox -o backup.crate
 ```
+
+### Encrypted export/import
+
+`.crate` artefacts are portable — unlike Bastille's place-bound jails — and
+since 0.5.4 they can also be **private**. Exports are wrapped in
+`AES-256-CBC + PBKDF2` via `openssl enc(1)` so the same image can travel
+between hosts without leaking its filesystem to anyone with network or
+backup-storage access.
+
+```sh
+# 1. Write a passphrase to a file (must be mode 0600 — owner-only)
+printf 'cRatE2026craTE#UKR' > /etc/crate/secret
+chmod 0600 /etc/crate/secret
+
+# 2. Export, encrypted
+crate export firefox -P /etc/crate/secret -o firefox.crate
+# -> firefox.crate         (AES-256-CBC ciphertext)
+# -> firefox.crate.sha256  (over the encrypted bytes)
+
+# 3. scp/rsync to the target host …
+
+# 4. Import — encryption is auto-detected from magic bytes
+crate import firefox.crate -P /etc/crate/secret
+# Without -P on an encrypted archive, the import fails fast with a clear message.
+```
+
+Notes:
+- The example passphrase `cRatE2026craTE#UKR` is illustrative — pick your own.
+  PBKDF2 makes brute force expensive but a strong passphrase is still your job.
+- The passphrase file goes in via `-kfile <path>` to `openssl`, so the secret
+  never appears on the command line and is not visible via `ps`.
+- `crate` refuses any passphrase file that isn't `0600`, regular, and non-empty.
+- The `.sha256` sidecar covers the **ciphertext**: verify it out-of-band
+  before decrypting if you want detection of bit-flips on transport.
+- Authenticated/asymmetric signatures (ed25519, GPG) are still on the roadmap;
+  in the meantime use the SHA256 sidecar for integrity.
 
 ### Headless GUI with browser access
 
