@@ -6,6 +6,82 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.5.7] — 2026-05-01
+
+`pkg install` failure inside a jail no longer eats its own diagnostics.
+When `crate create` shells `pkg` inside a jail and `pkg` exits non-zero,
+the captured stdout/stderr is now appended to a per-jail log file so
+operators running crate non-interactively (cron, CI) can recover the
+output.
+
+### Why
+
+Previously, `runChrootCommand()` inherited the controlling terminal —
+so an interactive `crate create` user saw `pkg`'s output, but a
+background invocation (cron, CI, daemon) lost it entirely. The thrown
+`Exception` only said `'install the requested packages...' failed
+with exit status N` — no log path, no error context, nothing for
+post-mortem.
+
+### Added
+
+- **`Util::execCommandLogged(argv, what, logFile)`** — like
+  `execCommand` but redirects child stdout AND stderr to `logFile`
+  (open with `O_CREAT | O_APPEND`, mode 0640). On non-zero exit the
+  thrown Exception's message includes the log path:
+  ```
+  exec command: 'install the requested packages into the jail'
+    failed with exit status 1 — output captured in
+    /var/log/crate/create-myapp.log
+  ```
+- **`Util::Fs::mkdirIfNotExists(dir, mode)`** — `mkdir(2)` that
+  tolerates `EEXIST`; lets callers lazily create shared directories
+  like `/var/log/crate` without racing.
+- **`lib/log_pure.cpp`** (new): `LogPure::sanitizeName` and
+  `LogPure::createLogPath` — filesystem-safe path computation.
+  - `sanitizeName` replaces `/`, `\`, NUL with `_`; collapses
+    leading dots (`.` and `..` can't be valid log names); empty
+    name → `unnamed`.
+  - `createLogPath(logsDir, kind, name)` →
+    `<logsDir>/<kind>-<sanitized>.log`.
+
+### Changed
+
+- `lib/create.cpp::runChrootCommand` now takes an optional
+  `logFile` parameter. When set, it routes through
+  `execCommandLogged` and the captured pkg/script output is appended
+  to that file.
+- `installAndAddPackagesInJail` accepts the log path and threads it
+  through every chroot invocation in the function.
+- `createCrate` computes the log path from `Config::get().logs`
+  (default `/var/log/crate`) and the jail's basename, lazily
+  creating the log directory with `mkdirIfNotExists`.
+
+### Lifecycle on failure (recap)
+
+A `pkg` failure now leaves:
+- The jail directory **deleted** (existing `RunAtEnd destroyJailDir`
+  RAII at lib/create.cpp:447 — unchanged).
+- The captured pkg output **preserved** at
+  `/var/log/crate/create-<jail>.log` for post-mortem.
+- An Exception message that **points to the log path**.
+
+### Added — tests (+11 cases)
+
+`tests/unit/log_pure_test.cpp`:
+- `sanitizeName`: passthrough of safe names; replacement of `/`,
+  `\`, NUL; collapsing of leading dots; empty → `unnamed`; long
+  input passthrough; mid-string dots preserved.
+- `createLogPath`: basic shape; sanitisation removes path
+  separators (no traversal escape); `kind` distinguishes outputs.
+
+### Verification
+
+- `make build-unit-tests` → 28 binaries built
+- `cd tests && kyua test unit` → **431/431 pass** (was 420, +11)
+
+---
+
 ## [0.5.6] — 2026-05-01
 
 X11 shared-mode security hardening: the warning is now always

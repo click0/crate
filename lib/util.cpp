@@ -120,6 +120,37 @@ void execCommand(const std::vector<std::string> &argv, const std::string &what) 
   }
 }
 
+void execCommandLogged(const std::vector<std::string> &argv, const std::string &what,
+                       const std::string &logFile) {
+  if (argv.empty())
+    ERR2("exec command", "empty argv for: " << what)
+  if (logFile.empty()) { execCommand(argv, what); return; }
+  auto cargv = toExecArgv(argv);
+  pid_t pid = ::fork();
+  if (pid == -1)
+    ERR2("exec command", "fork failed for '" << what << "': " << strerror(errno))
+  if (pid == 0) {
+    int fd = ::open(logFile.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0640);
+    if (fd < 0)
+      ::_exit(126);
+    if (::dup2(fd, STDOUT_FILENO) < 0 || ::dup2(fd, STDERR_FILENO) < 0)
+      ::_exit(126);
+    ::close(fd);
+    ::execv(cargv[0], cargv.data());
+    ::_exit(127);
+  }
+  int status;
+  while (::waitpid(pid, &status, 0) == -1) {
+    if (errno != EINTR)
+      ERR2("exec command", "waitpid failed for '" << what << "': " << strerror(errno))
+  }
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    ERR2("exec command", "'" << what << "' failed with exit status " << code
+         << " — output captured in " << logFile)
+  }
+}
+
 int execCommandGetStatus(const std::vector<std::string> &argv, const std::string &what) {
   if (argv.empty())
     ERR2("exec command", "empty argv for: " << what)
@@ -522,6 +553,14 @@ void unlink(const std::string &file) {
 
 void mkdir(const std::string &dir, mode_t mode) {
   SYSCALL(::mkdir(dir.c_str(), mode), "mkdir", dir.c_str());
+}
+
+void mkdirIfNotExists(const std::string &dir, mode_t mode) {
+  if (::mkdir(dir.c_str(), mode) == 0)
+    return;
+  if (errno == EEXIST)
+    return;
+  SYSCALL(-1, "mkdir", dir.c_str());
 }
 
 void rmdir(const std::string &dir) {

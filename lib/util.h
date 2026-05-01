@@ -109,6 +109,12 @@ namespace Util {
 void execCommand(const std::vector<std::string> &argv, const std::string &what);
 int execCommandGetStatus(const std::vector<std::string> &argv, const std::string &what); // returns raw wait status
 std::string execCommandGetOutput(const std::vector<std::string> &argv, const std::string &what);
+// Like execCommand but redirects child stdout AND stderr to logFile
+// (opened with O_CREAT|O_APPEND, mode 0640). On non-zero exit the
+// thrown Exception's message includes the log path so the operator
+// can find the captured output.
+void execCommandLogged(const std::vector<std::string> &argv, const std::string &what,
+                       const std::string &logFile);
 // exec-based pipeline: chain of commands connected by pipes
 void execPipeline(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
                   const std::string &stdinFile = "", const std::string &stdoutFile = "");
@@ -152,6 +158,9 @@ void chown(const std::string &path, uid_t owner, gid_t group);
 void link(const std::string &name1, const std::string &name2);
 void unlink(const std::string &file);
 void mkdir(const std::string &dir, mode_t mode);
+// Like mkdir() but tolerates EEXIST so callers can lazily create
+// shared directories (e.g. /var/log/crate) without racing.
+void mkdirIfNotExists(const std::string &dir, mode_t mode);
 void rmdir(const std::string &dir);
 void rmdirFlat(const std::string &dir);
 void rmdirHier(const std::string &dir);
