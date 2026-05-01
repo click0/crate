@@ -146,6 +146,42 @@ Notes:
 - Authenticated/asymmetric signatures (ed25519, GPG) are still on the roadmap;
   in the meantime use the SHA256 sidecar for integrity.
 
+### X11 mode security
+
+`crate` supports five X11 display modes — they are **not equivalent
+from a security standpoint**. `crate validate` and `crate run` both
+emit warnings when an isolation-weak mode is selected.
+
+| Mode | Isolation | Use when |
+|---|---|---|
+| `nested` (Xephyr) | Strong: containers get a private X server | desktop apps, default for production |
+| `headless` (Xvfb) + VNC/noVNC | Strong: no host X access at all | server/automation/screenshot |
+| `gpu` (DRM leasing) | Strong: dedicated GPU, no host X | accelerated workloads |
+| `shared` | **None** — full read/write access to the host X server | only inside fully trusted jails |
+| `none` | n/a | no GUI |
+
+**Why `shared` is dangerous.** Mounting the host's `/tmp/.X11-unix`
+into a jail means any process inside that jail can:
+- Read every keystroke typed into any application on the host (X is
+  global, not per-window).
+- Move/raise/iconify/destroy any host window.
+- Take screenshots of the entire desktop.
+
+`crate` warns about this both at validate time (`crate validate spec.yml`)
+and at run time. Operators who deliberately accept the risk can suppress
+the runtime warning with `CRATE_X11_SHARED_ACK=1`.
+
+```yaml
+# DON'T (default behaviour for legacy specs)
+options: [x11]               # ⚠️ implicit mode=shared
+
+# DO
+options: [x11]
+x11:
+    mode: nested             # private Xephyr server per jail
+    resolution: 1920x1080
+```
+
 ### Headless GUI with browser access
 
 ```yaml

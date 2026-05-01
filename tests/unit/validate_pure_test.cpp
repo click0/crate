@@ -221,6 +221,38 @@ ATF_TEST_CASE_BODY(x11_nested_warns)
 	ATF_REQUIRE(hasMatch(w, "Xephyr"));
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(x11_shared_warns);
+ATF_TEST_CASE_BODY(x11_shared_warns)
+{
+	auto s = mkSpec();
+	s.x11Options = std::make_unique<Spec::X11Options>();
+	s.x11Options->mode = "shared";
+	auto w = gatherWarnings(s);
+	ATF_REQUIRE(hasMatch(w, "x11/mode=shared"));
+	ATF_REQUIRE(hasMatch(w, "NO display isolation"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(x11_headless_no_warn);
+ATF_TEST_CASE_BODY(x11_headless_no_warn)
+{
+	auto s = mkSpec();
+	s.x11Options = std::make_unique<Spec::X11Options>();
+	s.x11Options->mode = "headless";
+	auto w = gatherWarnings(s);
+	ATF_REQUIRE(!hasMatch(w, "NO display isolation"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(x11_option_implicit_shared_warns);
+ATF_TEST_CASE_BODY(x11_option_implicit_shared_warns)
+{
+	// No x11Options block, but options:[x11] triggers the implicit
+	// shared-mode warning.
+	auto s = mkSpec();
+	s.options["x11"] = std::make_shared<Spec::NetOptDetails>();  // any OptDetails works
+	auto w = gatherWarnings(s);
+	ATF_REQUIRE(hasMatch(w, "defaults to 'shared'"));
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(clipboard_isolated_without_nested_warns);
 ATF_TEST_CASE_BODY(clipboard_isolated_without_nested_warns)
 {
@@ -348,6 +380,9 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, cow_zfs_backend_warns);
 	ATF_ADD_TEST_CASE(tcs, cow_persistent_mode_warns);
 	ATF_ADD_TEST_CASE(tcs, x11_nested_warns);
+	ATF_ADD_TEST_CASE(tcs, x11_shared_warns);
+	ATF_ADD_TEST_CASE(tcs, x11_headless_no_warn);
+	ATF_ADD_TEST_CASE(tcs, x11_option_implicit_shared_warns);
 	ATF_ADD_TEST_CASE(tcs, clipboard_isolated_without_nested_warns);
 	ATF_ADD_TEST_CASE(tcs, clipboard_isolated_with_nested_no_warn);
 	ATF_ADD_TEST_CASE(tcs, dbus_session_warns);
