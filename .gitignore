@@ -40,6 +40,7 @@ tests/unit/routes_pure_test
 tests/unit/top_pure_test
 tests/unit/bridge_pure_test
 tests/unit/ws_pure_test
+tests/unit/transfer_pure_test
 *.gcda
 *.gcno
 coverage.info
