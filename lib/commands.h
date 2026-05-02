@@ -22,3 +22,4 @@ bool statsCrate(const Args &args);
 bool logsCrate(const Args &args);
 bool stopCrate(const Args &args);
 bool restartCrate(const Args &args);
+bool topCrate(const Args &args);

@@ -256,6 +256,9 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdRestart: {
     succ = restartCrate(args);
     break;
+  } case CmdTop: {
+    succ = topCrate(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}

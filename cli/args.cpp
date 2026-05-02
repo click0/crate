@@ -53,6 +53,7 @@ static void usage() {
   std::cout << "  logs                       view container logs (run 'crate logs -h' for details)" << std::endl;
   std::cout << "  stop                       stop a running container (run 'crate stop -h' for details)" << std::endl;
   std::cout << "  restart                    restart a running container (run 'crate restart -h' for details)" << std::endl;
+  std::cout << "  top                        live resource monitor across all running containers" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -319,6 +320,17 @@ static void usageRestart() {
   std::cout << "" << std::endl;
 }
 
+static void usageTop() {
+  std::cout << "usage: crate top [-h|--help]" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Live, htop-style resource monitor for crate-managed jails." << std::endl;
+  std::cout << "Refreshes once per second; press 'q' or Ctrl-C to quit." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "If stdout is not a terminal, prints a single frame and exits" << std::endl;
+  std::cout << "(useful for piping into watch(1), grep, etc.)." << std::endl;
+  std::cout << "" << std::endl;
+}
+
 static void err(const char *msg) {
   fprintf(stderr, "failed to parse arguments: %s\n", msg);
   std::cout << "" << std::endl;
@@ -382,7 +394,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.6.1" << std::endl;
+        std::cout << "crate 0.6.2" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -393,7 +405,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.6.1" << std::endl;
+          std::cout << "crate 0.6.2" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -904,6 +916,17 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.restartTarget = argv[a];
         } else {
           err("too many arguments for 'restart' command");
+        }
+        break;
+      case CmdTop:
+        if (auto argShort = isShort(argv[a])) {
+          if (argShort == 'h') { usageTop(); exit(0); }
+          err("unsupported short option '%s'", argv[a]);
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) { usageTop(); exit(0); }
+          err("unsupported long option '%s'", argv[a]);
+        } else {
+          err("'top' command takes no arguments");
         }
         break;
       }

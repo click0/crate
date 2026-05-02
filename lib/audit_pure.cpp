@@ -73,6 +73,7 @@ std::string pickTarget(const Args &args) {
   case CmdRestart:  return args.restartTarget;
   case CmdList:
   case CmdClean:
+  case CmdTop:
   case CmdNone:
   default:          return "";
   }

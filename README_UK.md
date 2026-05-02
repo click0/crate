@@ -90,6 +90,7 @@ Crate — контейнеризатор для FreeBSD. Пакує застос
 | `crate export TARGET [-o FILE] [-P PASSFILE] [-K SIGNKEY]` | Експорт запущеного контейнера в .crate (опціональне шифрування + ed25519-підпис) |
 | `crate import FILE [-o FILE] [--force] [-P PASSFILE] [-V PUBKEY]` | Імпорт .crate з валідацією (авто-розшифрування, перевірка підпису) |
 | `crate gui list\|focus\|attach\|url\|tile\|screenshot\|resize` | Менеджер GUI-сесій |
+| `crate top` | Інтерактивний моніторинг ресурсів у стилі htop по всіх запущених контейнерах (1 Гц; `q` — вихід) |
 
 ## Швидкий старт
 
@@ -231,6 +232,26 @@ $ tail -1 /var/log/crate/audit.log | jq .
 - Спарювати записи `outcome: "started"` і `outcome: "ok"` за `pid`,
   щоб міряти тривалість команди; `failed: <msg>` містить текст
   винятку для post-mortem.
+
+### Інтерактивний моніторинг ресурсів (`crate top`)
+
+`crate top` опитує всі crate-керовані клітки раз на секунду і малює
+таблицю з CPU%, пам'яттю, дисковим записом та кількістю процесів для
+кожного контейнера. Натисніть `q` (або Ctrl-C) для виходу. CPU% може
+перевищувати 100% на багатоядерних клітках — наприклад, рядок
+build-ci нижче використовує близько трьох ядер:
+
+```
+NAME               JID              IP    CPU%        MEM       DISK  PROC
+postgres            12      10.0.0.20    14.2    420.0 MB    12.5 MB    23
+nginx-edge          15      10.0.0.21     3.1     48.0 MB     0 B        7
+build-ci            18      10.0.0.22   210.5      1.2 GB    340.0 MB   42
+3 jails  CPU 227.8%  MEM 1.7 GB  DISK 352.5 MB  PROC 72
+```
+
+Якщо stdout не є терміналом (`crate top | grep`, `watch crate top`),
+рендер виводить один кадр і виходить. `crate top` — read-only команда
+і не потрапляє у `/var/log/crate/audit.log`.
 
 ### Кросдискові спільні файли
 

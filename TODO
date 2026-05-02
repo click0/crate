@@ -15,9 +15,6 @@ operational quality.)
 
 === Medium priority — operational quality ===
 
-* (feature) crate top — live resource monitor across all running
-  containers (like htop).
-
 * (feature) Auto-create bridge — if the specified bridge interface does
   not exist, create it automatically (opt-in via
   auto_create_bridge: true in crate.yml).
@@ -99,3 +96,7 @@ Items completed and removed from this file:
 - crated F2 write API (partial) — POST /restart, snapshot CRUD
   (GET/POST /snapshots, DELETE /snapshots/<name>), and SSE stats stream
   (GET /stats/stream) (0.6.1 — daemon/routes.cpp + routes_pure.cpp)
+- crate top — live, htop-style resource monitor for all crate-managed
+  jails: 1 Hz refresh, NAME/JID/IP/CPU%/MEM/DISK/PROC columns, alternate
+  screen + 'q' to quit; non-tty stdout emits one frame and exits
+  (0.6.2 — lib/top.cpp + lib/top_pure.cpp)
