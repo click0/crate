@@ -34,6 +34,11 @@ struct Config {
   std::string logFile = "/var/log/crated.log";
   std::string logLevel = "info";
 
+  // WebSocket console (opt-in: 0 disables). Handshakes are
+  // authenticated via `Authorization: Bearer <admin-token>`.
+  unsigned consoleWsPort = 0;
+  std::string consoleWsBind = "127.0.0.1";
+
   // Load from YAML file
   static Config load(const std::string &path);
 };

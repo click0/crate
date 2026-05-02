@@ -634,8 +634,30 @@ make HAVE_LIBZFS=1 HAVE_LIBIFCONFIG=1 HAVE_LIBPFCTL=1 HAVE_CAPSICUM=1 \
 | `POST /api/v1/containers/:name/snapshots` | так | Створити снапшот (тіло: `{"name":"<snap>"}` необов'язкове) |
 | `DELETE /api/v1/containers/:name/snapshots/:snap` | так | Видалити снапшот |
 | `GET /api/v1/containers/:name/stats/stream` | так | Server-Sent Events потік RCTL-лічильників (1 Гц) |
+| `GET /api/v1/containers/:name/console` (WS) | так | RFC 6455 WebSocket — інтерактивна `/bin/sh` через PTY (окремий listener; роль admin) |
 | `GET /api/v1/host` | — | Інформація про хост-систему |
 | `GET /metrics` | — | Prometheus-метрики |
+
+#### WebSocket-консоль
+
+Інтерактивна консоль слухає окремий TCP-сокет (`console_ws.port`
+у `crated.conf`; за замовчуванням 0 — вимкнено), не спільний з HTTP API.
+Реалізує RFC 6455 версії 13. Handshake вимагає
+`Authorization: Bearer <admin-token>`; далі daemon пропускає байти
+між WebSocket-з'єднанням і `/bin/sh -i` всередині клітки, запущеною
+через `jexec(8)`. Сервер→клієнт використовує binary-кадри, щоб
+TTY-escape-послідовності проходили без змін; клієнт→сервер кадри
+(text або binary) пишуться у stdin шелу. PING/PONG працюють, CLOSE
+завершує шел через SIGTERM.
+
+Адреса bind проходить через `getaddrinfo(3)`, тож приймається
+`127.0.0.1`, `::1`, `::` (dual-stack) або hostname:
+
+```yaml
+console_ws:
+    port: 9802
+    bind: "::"      # dual-stack, або 127.0.0.1 / ::1 для loopback
+```
 
 #### Потік статистики SSE
 
