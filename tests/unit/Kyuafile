@@ -40,3 +40,4 @@ atf_test_program{name="ws_pure_test"}
 atf_test_program{name="transfer_pure_test"}
 atf_test_program{name="snmpd_agentx_test"}
 atf_test_program{name="hub_aggregator_pure_test"}
+atf_test_program{name="inter_dns_pure_test"}

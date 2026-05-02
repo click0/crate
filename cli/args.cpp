@@ -54,6 +54,7 @@ static void usage() {
   std::cout << "  stop                       stop a running container (run 'crate stop -h' for details)" << std::endl;
   std::cout << "  restart                    restart a running container (run 'crate restart -h' for details)" << std::endl;
   std::cout << "  top                        live resource monitor across all running containers" << std::endl;
+  std::cout << "  inter-dns                  rebuild the global .crate DNS zone from running jails" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -331,6 +332,17 @@ static void usageTop() {
   std::cout << "" << std::endl;
 }
 
+static void usageInterDns() {
+  std::cout << "usage: crate inter-dns [-h|--help]" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Rebuild the global .crate DNS zone from currently running jails." << std::endl;
+  std::cout << "Updates /etc/hosts (between crate-marker comments) and writes" << std::endl;
+  std::cout << "/usr/local/etc/unbound/conf.d/crate.conf, then asks unbound to" << std::endl;
+  std::cout << "reload. Run after every container start/stop, or wire it into" << std::endl;
+  std::cout << "lifecycle hooks." << std::endl;
+  std::cout << "" << std::endl;
+}
+
 static void err(const char *msg) {
   fprintf(stderr, "failed to parse arguments: %s\n", msg);
   std::cout << "" << std::endl;
@@ -394,7 +406,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.6.7" << std::endl;
+        std::cout << "crate 0.6.8" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -405,7 +417,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.6.7" << std::endl;
+          std::cout << "crate 0.6.8" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -927,6 +939,17 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           err("unsupported long option '%s'", argv[a]);
         } else {
           err("'top' command takes no arguments");
+        }
+        break;
+      case CmdInterDns:
+        if (auto argShort = isShort(argv[a])) {
+          if (argShort == 'h') { usageInterDns(); exit(0); }
+          err("unsupported short option '%s'", argv[a]);
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) { usageInterDns(); exit(0); }
+          err("unsupported long option '%s'", argv[a]);
+        } else {
+          err("'inter-dns' command takes no arguments");
         }
         break;
       }

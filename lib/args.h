@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns};
 
 class Args {
 public:
