@@ -6,6 +6,80 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.2] — 2026-05-02
+
+`crate top` — live, htop-style resource monitor for all
+crate-managed jails. Refreshes once per second; press `q` (or Ctrl-C)
+to quit. Aimed at operators who need a quick "what's the cluster
+doing right now" view without spinning up Grafana.
+
+### Output
+
+```
+crate top    (press 'q' to quit)
+
+NAME               JID              IP    CPU%        MEM       DISK  PROC
+postgres            12      10.0.0.20    14.2    420.0 MB    12.5 MB    23
+nginx-edge          15      10.0.0.21     3.1     48.0 MB     0 B        7
+build-ci            18      10.0.0.22   210.5      1.2 GB    340.0 MB   42
+3 jails  CPU 227.8%  MEM 1.7 GB  DISK 352.5 MB  PROC 72
+```
+
+CPU is computed from RCTL `cputime` deltas across one-second samples,
+so values exceed 100% on multi-core jails (the build-ci row above is
+running on three cores). MEM/DISK come from RCTL `memoryuse` /
+`writebps` and are humanised with base-1024 suffixes. PROC is the
+RCTL `maxproc` usage counter.
+
+When stdout is not a terminal (`crate top | grep`, `watch crate top`,
+etc.) the renderer emits one plain-text frame and exits — handy for
+ad-hoc shell scripts and cron checks.
+
+### Implementation
+
+- **`lib/top_pure.{h,cpp}`** — pure formatting and arithmetic:
+  `humanCount`, `humanBytes` (base-1024), `cpuPercent` (handles
+  counter rollback on jail restart), `truncateForColumn` (ASCII-safe
+  with `~` marker), `formatHeader` / `formatRow` / `formatFooter` /
+  `formatFrame`, plus an `applyRctlOutput` that picks the curated
+  RCTL keys we care about and ignores the rest.
+- **`lib/top.cpp`** — runtime glue: signal handling (SIGINT/TERM/HUP
+  exit cleanly), terminal control via ANSI escapes (alternate screen
+  + hidden cursor; restored on every exit path), per-JID CPU sample
+  cache for delta calculation, RCTL polling via `execCommandGetOutput`,
+  and a `RawStdin` RAII wrapper that flips stdin into non-canonical
+  non-blocking mode so we can read 'q' without ncurses.
+- **`cli/main.cpp` + `cli/args.cpp`** — new `CmdTop` enumerator,
+  `usageTop()`, dispatch wiring. `crate top` takes no arguments.
+
+### Tests
+
+`tests/unit/top_pure_test.cpp` — 21 ATF cases covering:
+- `humanCount` boundary values (0, 999, 1K, 12.3K, 1M, 1.2T)
+- `humanBytes` boundary values (0 B, 1023 B, exact KB/MB/GB/TB,
+  intermediate 1.5 MiB)
+- `cpuPercent` basics, multi-core (>100%), zero/negative dt, counter
+  rollback on jail restart (must return 0, not wrap)
+- `truncateForColumn` shorter / longer / width=1 / zero/negative width
+- `formatHeader` column presence + no trailing whitespace
+- `formatRow` alignment + humanisation + name truncation
+- `formatFooter` totals aggregation across N rows + zero-jails edge
+- `formatFrame` shape (header + N rows + footer, exact newline count)
+- `applyRctlOutput` known-key picking, malformed-line tolerance,
+  non-numeric-value tolerance
+
+**507/507** unit tests pass (was 486).
+
+### Notes
+
+`crate top` is a read-only command and is therefore *not* recorded in
+`/var/log/crate/audit.log` (alongside `validate`/`list`/`info`/
+`stats`/`logs`). On a non-tty stdout the binary exits after one
+frame, so `watch -n5 crate top` works as a poor-man's auto-refresh
+without burning a server thread.
+
+---
+
 ## [0.6.1] — 2026-05-01
 
 crated F2 write API expanded — five new endpoints land restart, full

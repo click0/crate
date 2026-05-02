@@ -52,6 +52,7 @@ Command isCommand(const char *arg) {
   if (strEq(arg, "logs"))     return CmdLogs;
   if (strEq(arg, "stop"))     return CmdStop;
   if (strEq(arg, "restart"))  return CmdRestart;
+  if (strEq(arg, "top"))      return CmdTop;
   return CmdNone;
 }
 
@@ -150,6 +151,9 @@ void Args::validate() {
   case CmdRestart:
     if (restartTarget.empty())
       ERR("the 'restart' command requires a container name or JID")
+    break;
+  case CmdTop:
+    // No arguments — `crate top` polls all running jails.
     break;
   default:
     ERR("no command was given")

@@ -34,3 +34,4 @@ atf_test_program{name="sign_pure_test"}
 atf_test_program{name="audit_pure_test"}
 atf_test_program{name="share_pure_test"}
 atf_test_program{name="routes_pure_test"}
+atf_test_program{name="top_pure_test"}

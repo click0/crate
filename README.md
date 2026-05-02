@@ -90,6 +90,7 @@ Crate containers contain everything needed to run the containerized software —
 | `crate export TARGET [-o FILE] [-P PASSFILE] [-K SIGNKEY]` | Export running container to .crate (optional encryption + ed25519 signature) |
 | `crate import FILE [-o FILE] [--force] [-P PASSFILE] [-V PUBKEY]` | Import .crate with validation (auto-decrypts, verifies signature) |
 | `crate gui list\|focus\|attach\|url\|tile\|screenshot\|resize` | GUI session manager |
+| `crate top` | Live, htop-style resource monitor across all running containers (1 Hz; `q` to quit) |
 
 ## Quick Start
 
@@ -230,6 +231,26 @@ Notes:
 - Pair `outcome: "started"` and `outcome: "ok"` records by `pid` to
   measure command duration; `failed: <msg>` records contain the
   exception message for post-mortem.
+
+### Live resource monitor (`crate top`)
+
+`crate top` polls all crate-managed jails once per second and renders
+a table with per-container CPU%, memory, disk write throughput, and
+process count. Press `q` (or Ctrl-C) to quit. CPU% can exceed 100%
+on multi-core jails — the build-ci row in the example below is using
+about three cores' worth of CPU:
+
+```
+NAME               JID              IP    CPU%        MEM       DISK  PROC
+postgres            12      10.0.0.20    14.2    420.0 MB    12.5 MB    23
+nginx-edge          15      10.0.0.21     3.1     48.0 MB     0 B        7
+build-ci            18      10.0.0.22   210.5      1.2 GB    340.0 MB   42
+3 jails  CPU 227.8%  MEM 1.7 GB  DISK 352.5 MB  PROC 72
+```
+
+When stdout is not a terminal (`crate top | grep`, `watch crate top`),
+the renderer emits one frame and exits. `crate top` is a read-only
+command and does not appear in `/var/log/crate/audit.log`.
 
 ### Cross-device file shares
 
