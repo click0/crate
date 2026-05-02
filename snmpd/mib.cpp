@@ -87,7 +87,7 @@ static std::mutex g_mibMutex;
 static std::vector<ContainerMetrics> g_containers;
 static unsigned g_totalCount = 0;
 static unsigned g_runningCount = 0;
-static std::string g_version = "0.6.5";
+static std::string g_version = "0.6.6";
 static std::string g_hostname;
 
 // --- AgentX PDU helpers ---
@@ -97,18 +97,18 @@ static inline void encodeUint32(std::vector<uint8_t> &buf, uint32_t val) {
   MibPure::encodeUint32(buf, val);
 }
 
-// Encode AgentX header (20 bytes)
+// Encode AgentX header (20 bytes) — thin wrapper over MibPure.
 static void encodeHeader(std::vector<uint8_t> &buf, uint8_t type,
                           uint32_t sessionId, uint32_t transId,
                           uint32_t payloadLen) {
-  buf.push_back(AGENTX_VERSION);      // version
-  buf.push_back(type);                 // type
-  buf.push_back(0x10);                 // flags: NETWORK_BYTE_ORDER
-  buf.push_back(0);                    // reserved
-  encodeUint32(buf, sessionId);        // sessionID
-  encodeUint32(buf, transId);          // transactionID
-  encodeUint32(buf, transId);          // packetID (reuse transId)
-  encodeUint32(buf, payloadLen);       // payload length
+  MibPure::Header h;
+  h.version  = AGENTX_VERSION;
+  h.type     = type;
+  h.sessionId = sessionId;
+  h.transactionId = transId;
+  h.packetId = transId;       // reuse: simple subagent does no batching
+  h.payloadLen = payloadLen;
+  MibPure::encodeHeader(buf, h);
 }
 
 // Encode an OID in AgentX format (forward to MibPure)
@@ -317,6 +317,137 @@ void sendTrap(TrapType type, const std::string &containerName, int jid) {
   // For now, the trap is logged but not sent over SNMP
   // Full implementation requires encoding VarBindList with:
   //   sysUpTime.0, snmpTrapOID.0, and trap-specific varbinds
+}
+
+// --- AgentX resolver: look up an OID in our MIB and append the
+//     appropriate VarBind (or exception) to `out`. ---
+
+namespace {
+
+// All supported scalar OIDs in lexicographic order so GetNext walks
+// produce the right next-OID. Values come from the cached g_*
+// state under g_mibMutex.
+struct ScalarOid {
+  std::vector<uint32_t> oid;
+  uint16_t type;     // VarBind type tag (Integer32 / OctetString)
+};
+
+// Scalars under .1.3.6.1.4.1.59999.1.*
+const std::vector<ScalarOid> &scalarTable() {
+  static const std::vector<ScalarOid> t = {
+    {{1, 3, 6, 1, 4, 1, 59999, 1, 1, 0}, MibPure::VB_INTEGER},
+    {{1, 3, 6, 1, 4, 1, 59999, 1, 2, 0}, MibPure::VB_INTEGER},
+    {{1, 3, 6, 1, 4, 1, 59999, 1, 3, 0}, MibPure::VB_OCTETSTRING},
+    {{1, 3, 6, 1, 4, 1, 59999, 1, 4, 0}, MibPure::VB_OCTETSTRING},
+  };
+  return t;
+}
+
+// Append the value of a known scalar OID to `out` as a VarBind.
+// Caller already holds g_mibMutex.
+void encodeScalarValue(std::vector<uint8_t> &out, const ScalarOid &s) {
+  if (s.oid.size() == 10 && s.oid[7] == 1 && s.oid[8] == 1) {
+    MibPure::encodeVarBindInteger(out, s.oid, (int32_t)g_totalCount);
+  } else if (s.oid.size() == 10 && s.oid[7] == 1 && s.oid[8] == 2) {
+    MibPure::encodeVarBindInteger(out, s.oid, (int32_t)g_runningCount);
+  } else if (s.oid.size() == 10 && s.oid[7] == 1 && s.oid[8] == 3) {
+    MibPure::encodeVarBindOctetString(out, s.oid, g_version);
+  } else if (s.oid.size() == 10 && s.oid[7] == 1 && s.oid[8] == 4) {
+    MibPure::encodeVarBindOctetString(out, s.oid, g_hostname);
+  } else {
+    MibPure::encodeVarBindNoSuchObject(out, s.oid);
+  }
+}
+
+// --- Get-resolver: exact-match lookup. ---
+void resolveGet(const std::vector<uint32_t> &oid, std::vector<uint8_t> &out) {
+  std::lock_guard<std::mutex> lock(g_mibMutex);
+  for (auto &s : scalarTable()) {
+    if (MibPure::oidEquals(oid, s.oid)) {
+      encodeScalarValue(out, s);
+      return;
+    }
+  }
+  // Container table is not yet exposed through Get/GetNext (would need
+  // per-row resolution). Reply with noSuchInstance for table queries
+  // so the master agent reports the gap cleanly to the SNMP client.
+  MibPure::encodeVarBindNoSuchInstance(out, oid);
+}
+
+// --- GetNext-resolver: lexicographic next OID. ---
+void resolveGetNext(const std::vector<uint32_t> &oid, std::vector<uint8_t> &out) {
+  std::lock_guard<std::mutex> lock(g_mibMutex);
+  for (auto &s : scalarTable()) {
+    if (MibPure::compareOid(s.oid, oid) > 0) {
+      encodeScalarValue(out, s);
+      return;
+    }
+  }
+  // Walked off the end of our subtree.
+  MibPure::encodeVarBindEndOfMibView(out, oid);
+}
+
+// --- Read up to `n` bytes from g_agentxFd. Returns -1 on error. ---
+ssize_t readN(int fd, void *buf, size_t n) {
+  size_t off = 0;
+  while (off < n) {
+    ssize_t r = ::read(fd, (char*)buf + off, n - off);
+    if (r <= 0) return r < 0 ? -1 : (ssize_t)off;
+    off += (size_t)r;
+  }
+  return (ssize_t)n;
+}
+
+} // anon
+
+bool dispatchOnce(int timeoutMs) {
+  if (g_agentxFd < 0) return false;
+
+  fd_set rfds;
+  FD_ZERO(&rfds);
+  FD_SET(g_agentxFd, &rfds);
+  timeval tv{timeoutMs / 1000, (timeoutMs % 1000) * 1000};
+  int sel = ::select(g_agentxFd + 1, &rfds, nullptr, nullptr, &tv);
+  if (sel <= 0) return false;
+
+  uint8_t hdrBytes[20];
+  if (readN(g_agentxFd, hdrBytes, 20) != 20) return false;
+
+  std::vector<uint8_t> hdrVec(hdrBytes, hdrBytes + 20);
+  MibPure::Header h;
+  if (MibPure::decodeHeader(hdrVec, 0, h) != 20) return false;
+
+  std::vector<uint8_t> payload(h.payloadLen);
+  if (h.payloadLen > 0 && readN(g_agentxFd, payload.data(), h.payloadLen) != (ssize_t)h.payloadLen)
+    return false;
+
+  // Only Get and GetNext are handled; everything else is acknowledged
+  // with an empty Response so the master agent doesn't stall.
+  std::vector<uint8_t> respPayload;
+  MibPure::encodeResponseHeader(respPayload, /*sysUpTime*/0,
+                                MibPure::ERR_NO_ERROR, 0);
+
+  if (h.type == MibPure::PDU_GET || h.type == MibPure::PDU_GETNEXT) {
+    std::vector<std::vector<uint32_t>> oids;
+    MibPure::decodeGetRequest(payload, 0, h.flags, oids);
+    for (auto &oid : oids) {
+      if (h.type == MibPure::PDU_GET) resolveGet(oid, respPayload);
+      else                            resolveGetNext(oid, respPayload);
+    }
+  }
+
+  std::vector<uint8_t> respPdu;
+  MibPure::Header rh;
+  rh.version = AGENTX_VERSION;
+  rh.type = MibPure::PDU_RESPONSE;
+  rh.sessionId = h.sessionId;
+  rh.transactionId = h.transactionId;
+  rh.packetId = h.packetId;
+  rh.payloadLen = (uint32_t)respPayload.size();
+  MibPure::encodeHeader(respPdu, rh);
+  respPdu.insert(respPdu.end(), respPayload.begin(), respPayload.end());
+  ::write(g_agentxFd, respPdu.data(), respPdu.size());
+  return true;
 }
 
 void shutdownAgentX() {

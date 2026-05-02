@@ -73,17 +73,23 @@ int main(int argc, char **argv) {
 
   std::cerr << "crate-snmpd: started, polling every " << pollInterval << "s" << std::endl;
 
-  // Main loop: collect metrics periodically
+  // Main loop:
+  //   - Pump AgentX PDUs continuously (Get/GetNext) with a 100 ms select.
+  //   - Re-collect metrics every `pollInterval` seconds.
+  //   - Check for state-change traps after each collection.
   CrateSnmp::Collector collector;
+  collector.collect();
+  CrateSnmp::updateMibData(collector);
+  time_t lastCollect = ::time(nullptr);
   while (g_running) {
-    collector.collect();
-    CrateSnmp::updateMibData(collector);
-
-    // Check for state changes → send traps
-    collector.checkTraps();
-
-    for (unsigned i = 0; i < pollInterval && g_running; i++)
-      ::sleep(1);
+    CrateSnmp::dispatchOnce(100);     // 100 ms — cheap when idle
+    time_t now = ::time(nullptr);
+    if ((unsigned)(now - lastCollect) >= pollInterval) {
+      collector.collect();
+      CrateSnmp::updateMibData(collector);
+      collector.checkTraps();
+      lastCollect = now;
+    }
   }
 
   CrateSnmp::shutdownAgentX();

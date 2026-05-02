@@ -298,9 +298,10 @@ ATF_TEST_CASE_BODY(encodeOid_minimal)
 	// Empty OID — pin down the behaviour.
 	std::vector<uint8_t> buf;
 	MibPure::encodeOid(buf, {});
-	// Header (8 bytes) + 0 sub-ids
-	ATF_REQUIRE_EQ(buf.size(), 8u);
-	ATF_REQUIRE_EQ(buf[3], 0x00);
+	// 4-byte header (n_subid, prefix, include, reserved) + 0 sub-ids
+	// per RFC 2741 §5.1.
+	ATF_REQUIRE_EQ(buf.size(), 4u);
+	ATF_REQUIRE_EQ(buf[0], 0x00);    // n_subid = 0
 }
 
 // ===================================================================

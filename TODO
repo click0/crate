@@ -17,9 +17,6 @@ operational quality.)
 
 === Low priority — future enhancements ===
 
-* (feature) SNMP AgentX: the AgentX wire protocol is not yet implemented
-  (snmpd runs in stub mode).
-
 * (feature) Hub web dashboard — hub/web/ directory is empty. Need minimal
   HTML/JS UI: node list, container list by node, CPU/RAM metrics,
   start/stop controls (requires F2 API).
@@ -106,3 +103,11 @@ Items completed and removed from this file:
   xz/encrypted magic bytes, atomic-renames into place. F2 write API
   is now feature-complete (0.6.5 — daemon/transfer_pure.cpp +
   daemon/routes.cpp).
+- SNMP AgentX wire protocol — full Get/GetNext PDU dispatcher
+  replaces stub mode. Decoders for header (with little-endian flag
+  honoured), OID, OctetString, SearchRange, GetRequest payload;
+  VarBind encoders for Integer/Counter32/Counter64/Gauge32/
+  TimeTicks/OctetString/OID/Null + END_OF_MIB_VIEW/NO_SUCH_OBJECT/
+  NO_SUCH_INSTANCE exceptions. Fixed long-standing bug where OIDs
+  were encoded with a 4-byte n_subid (RFC 2741 §5.1 mandates 1).
+  (0.6.6 — snmpd/mib_pure.cpp + snmpd/mib.cpp dispatchOnce loop)

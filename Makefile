@@ -159,7 +159,7 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              snapshot_pure_test crypto_pure_test log_pure_test \
              sign_pure_test audit_pure_test share_pure_test \
              routes_pure_test top_pure_test bridge_pure_test \
-             ws_pure_test transfer_pure_test
+             ws_pure_test transfer_pure_test snmpd_agentx_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)

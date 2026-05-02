@@ -60,10 +60,11 @@ ATF_TEST_CASE_BODY(encodeOid_short_no_prefix)
 {
 	std::vector<uint8_t> buf;
 	encodeOid(buf, {1, 3, 6, 1});
-	ATF_REQUIRE_EQ(buf.size(), 8u + 4u * 4u);
-	ATF_REQUIRE_EQ(buf[3], 0x04);
-	ATF_REQUIRE_EQ(buf[4], 0x00);
-	ATF_REQUIRE_EQ(buf[5], 0x00);
+	// 4-byte header (nSubid, prefix, include, reserved) + 4 subids × 4 bytes
+	ATF_REQUIRE_EQ(buf.size(), 4u + 4u * 4u);
+	ATF_REQUIRE_EQ(buf[0], 0x04);    // n_subid = 4
+	ATF_REQUIRE_EQ(buf[1], 0x00);    // prefix
+	ATF_REQUIRE_EQ(buf[2], 0x00);    // include
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(encodeOid_with_prefix);
@@ -71,10 +72,11 @@ ATF_TEST_CASE_BODY(encodeOid_with_prefix)
 {
 	std::vector<uint8_t> buf;
 	encodeOid(buf, {1, 3, 6, 1, 4, 1, 59999, 1, 1, 0});
-	ATF_REQUIRE_EQ(buf.size(), 8u + 5u * 4u);
-	ATF_REQUIRE_EQ(buf[3], 0x05);
-	ATF_REQUIRE_EQ(buf[4], 0x04);
-	ATF_REQUIRE_EQ(buf[5], 0x00);
+	// First 5 sub-ids "1.3.6.1.4" become prefix=4; remaining 5 sub-ids encoded.
+	ATF_REQUIRE_EQ(buf.size(), 4u + 5u * 4u);
+	ATF_REQUIRE_EQ(buf[0], 0x05);    // n_subid = 5
+	ATF_REQUIRE_EQ(buf[1], 0x04);    // prefix = 4
+	ATF_REQUIRE_EQ(buf[2], 0x00);    // include
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(encodeOid_include_flag);
@@ -82,16 +84,17 @@ ATF_TEST_CASE_BODY(encodeOid_include_flag)
 {
 	std::vector<uint8_t> buf;
 	encodeOid(buf, {1, 3, 6, 1}, true);
-	ATF_REQUIRE_EQ(buf[5], 0x01);
+	ATF_REQUIRE_EQ(buf[2], 0x01);    // include
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(encodeOid_prefix_threshold);
 ATF_TEST_CASE_BODY(encodeOid_prefix_threshold)
 {
+	// oid[4] = 256 exceeds the 1-byte prefix range, so no prefix optimisation.
 	std::vector<uint8_t> buf;
 	encodeOid(buf, {1, 3, 6, 1, 256, 1, 2});
-	ATF_REQUIRE_EQ(buf[3], 0x07);
-	ATF_REQUIRE_EQ(buf[4], 0x00);
+	ATF_REQUIRE_EQ(buf[0], 0x07);    // n_subid = 7
+	ATF_REQUIRE_EQ(buf[1], 0x00);    // prefix = 0
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(encodeOid_subid_byte_order);
@@ -99,14 +102,15 @@ ATF_TEST_CASE_BODY(encodeOid_subid_byte_order)
 {
 	std::vector<uint8_t> buf;
 	encodeOid(buf, {1, 3, 6, 1, 4, 1, 59999});
-	ATF_REQUIRE_EQ(buf[8], 0x00);
-	ATF_REQUIRE_EQ(buf[9], 0x00);
-	ATF_REQUIRE_EQ(buf[10], 0x00);
-	ATF_REQUIRE_EQ(buf[11], 0x01);
-	ATF_REQUIRE_EQ(buf[12], 0x00);
-	ATF_REQUIRE_EQ(buf[13], 0x00);
-	ATF_REQUIRE_EQ(buf[14], 0xEA);
-	ATF_REQUIRE_EQ(buf[15], 0x5F);
+	// Header is 4 bytes; first subid (1) starts at offset 4.
+	ATF_REQUIRE_EQ(buf[4], 0x00);
+	ATF_REQUIRE_EQ(buf[5], 0x00);
+	ATF_REQUIRE_EQ(buf[6], 0x00);
+	ATF_REQUIRE_EQ(buf[7], 0x01);
+	ATF_REQUIRE_EQ(buf[8],  0x00);
+	ATF_REQUIRE_EQ(buf[9],  0x00);
+	ATF_REQUIRE_EQ(buf[10], 0xEA);
+	ATF_REQUIRE_EQ(buf[11], 0x5F);
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(encodeOctetString_empty);
