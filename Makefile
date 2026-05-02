@@ -159,7 +159,8 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              snapshot_pure_test crypto_pure_test log_pure_test \
              sign_pure_test audit_pure_test share_pure_test \
              routes_pure_test top_pure_test bridge_pure_test \
-             ws_pure_test transfer_pure_test snmpd_agentx_test
+             ws_pure_test transfer_pure_test snmpd_agentx_test \
+             hub_aggregator_pure_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)
@@ -190,11 +191,11 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  lib/share_pure.cpp lib/top_pure.cpp lib/bridge_pure.cpp \
                  cli/args_pure.cpp daemon/metrics_pure.cpp \
                  daemon/routes_pure.cpp daemon/ws_pure.cpp \
-                 daemon/transfer_pure.cpp \
+                 daemon/transfer_pure.cpp hub/aggregator_pure.cpp \
                  snmpd/mib_pure.cpp
 
 # -Icli/-Idaemon/-Isnmpd let tests #include the *_pure.h files directly.
-TEST_INCLUDES = -Ilib -Icli -Idaemon -Isnmpd
+TEST_INCLUDES = -Ilib -Icli -Idaemon -Isnmpd -Ihub
 
 tests/unit/%: tests/unit/%.cpp $(TEST_LINK_SRCS) lib/lst-all-script-sections.h tests/unit/_test_config_stub.cpp
 	$(CXX) -std=c++17 $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -o $@ $< $(TEST_LINK_SRCS) tests/unit/_test_config_stub.cpp $(COVERAGE_LDFLAGS) -L/usr/local/lib -latf-c++ -latf-c
