@@ -633,6 +633,9 @@ All native API wrappers fall back to shell commands when compiled without the co
 | `DELETE /api/v1/containers/:name/snapshots/:snap` | yes | Delete a snapshot |
 | `GET /api/v1/containers/:name/stats/stream` | yes | Server-Sent Events stream of RCTL counters (1 Hz) |
 | `GET /api/v1/containers/:name/console` (WS) | yes | RFC 6455 WebSocket — interactive `/bin/sh` over a PTY (separate listener; admin role) |
+| `POST /api/v1/containers/:name/export` | yes | Export running container to `/var/run/crate/<name>-<unixtime>.crate`; returns `{file,size,sha256}` |
+| `GET /api/v1/exports/:filename` | yes | Stream a previously-exported `.crate` back to the client |
+| `POST /api/v1/imports/:name` | yes | Upload a raw `.crate` body (octet-stream); atomic-rename into `/var/run/crate/<name>.crate` |
 | `GET /api/v1/host` | — | Host system info |
 | `GET /metrics` | — | Prometheus metrics |
 

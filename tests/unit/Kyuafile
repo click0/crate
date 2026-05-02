@@ -37,3 +37,4 @@ atf_test_program{name="routes_pure_test"}
 atf_test_program{name="top_pure_test"}
 atf_test_program{name="bridge_pure_test"}
 atf_test_program{name="ws_pure_test"}
+atf_test_program{name="transfer_pure_test"}

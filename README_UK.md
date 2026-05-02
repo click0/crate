@@ -635,6 +635,9 @@ make HAVE_LIBZFS=1 HAVE_LIBIFCONFIG=1 HAVE_LIBPFCTL=1 HAVE_CAPSICUM=1 \
 | `DELETE /api/v1/containers/:name/snapshots/:snap` | так | Видалити снапшот |
 | `GET /api/v1/containers/:name/stats/stream` | так | Server-Sent Events потік RCTL-лічильників (1 Гц) |
 | `GET /api/v1/containers/:name/console` (WS) | так | RFC 6455 WebSocket — інтерактивна `/bin/sh` через PTY (окремий listener; роль admin) |
+| `POST /api/v1/containers/:name/export` | так | Експорт активного контейнера в `/var/run/crate/<name>-<unixtime>.crate`; повертає `{file,size,sha256}` |
+| `GET /api/v1/exports/:filename` | так | Стрім раніше експортованого `.crate` до клієнта |
+| `POST /api/v1/imports/:name` | так | Завантаження raw `.crate` (octet-stream); атомарне rename у `/var/run/crate/<name>.crate` |
 | `GET /api/v1/host` | — | Інформація про хост-систему |
 | `GET /metrics` | — | Prometheus-метрики |
 

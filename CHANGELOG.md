@@ -6,6 +6,96 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.5] — 2026-05-02
+
+crated export/import endpoints — closes the last open item under
+the F2 write API. External tooling can now produce, fetch, and
+upload `.crate` archives over HTTPS without the operator having to
+SSH into the host.
+
+### New endpoints
+
+| Method | Path                                          | Role  |
+| ------ | --------------------------------------------- | ----- |
+| POST   | `/api/v1/containers/{name}/export`            | admin |
+| GET    | `/api/v1/exports/{filename}`                  | admin |
+| POST   | `/api/v1/imports/{name}`                      | admin |
+
+`POST /export` runs the same `tar | xz` pipeline the CLI uses,
+writing to `/var/run/crate/<name>-<unixtime>.crate`. The response
+JSON carries `file`, `size`, and `sha256` so a hub or CI can verify
+the artifact independently:
+
+```json
+{"status":"ok","data":{
+  "file":"myapp-1777698300.crate",
+  "size":24576123,
+  "sha256":"d4a..."
+}}
+```
+
+`GET /exports/<file>` streams the artifact back via cpp-httplib's
+`set_content_provider` (chunked, 64 KB at a time). The filename is
+validated server-side so the endpoint cannot be coaxed into reading
+arbitrary files — see "Path traversal" below.
+
+`POST /imports/<name>` accepts the raw archive body (Content-Type:
+`application/octet-stream`). The handler sniffs the leading 16
+bytes for the xz signature (`FD 37 7A 58 5A 00`) or the
+`Salted__` prefix from `openssl enc`, rejects anything else with
+400, atomically writes to `/var/run/crate/<name>.crate.tmp.<pid>`
+then renames into place — so a connection drop mid-upload doesn't
+leave a half-written `.crate` for the next `crate run` to choke on.
+
+### Path traversal
+
+`TransferPure::validateArtifactName()` enforces:
+- Length 1..128
+- Allowed: `[A-Za-z0-9._-]` only (so `.crate` suffix is fine)
+- Reserved: `.` and `..`
+- Forbidden: `/`, `\`, NUL, whitespace, shell metacharacters
+  (`;`, `` ` ``, `$`, `|`)
+
+This is dispatched **before** any filesystem access, so even with a
+compromised admin token the worst case is a 400 — never a leak of
+`/etc/passwd` via `/api/v1/exports/../../etc/passwd`.
+
+### Implementation
+
+- **`daemon/transfer_pure.{h,cpp}`** — pure helpers:
+  - `validateArtifactName()` — the rules listed above.
+  - `formatExportResponse` / `formatImportResponse` — JSON shapes.
+  - `sniffArchiveType()` — `"xz"` / `"encrypted"` / `"unknown"`
+    classifier from the leading bytes.
+  - `hexEncode()` — bytes → lowercase hex digest.
+- **`daemon/routes.cpp`** — three new handlers + route registration:
+  `handleContainerExport`, `handleExportDownload`,
+  `handleContainerImport`. SHA-256 via OpenSSL's `SHA256_*` API
+  (already linked for auth).
+
+### Tests
+
+`tests/unit/transfer_pure_test.cpp` — 13 ATF cases:
+- 7 `validateArtifactName` cases: empty, `.`, `..`, 128/129-char
+  boundary, `..` traversal, `/` and `\` rejection, whitespace,
+  metacharacters (`;`, `` ` ``, `$`, `|`), and a positive list
+  (`myapp.crate`, `backup_20260502.crate`, `v0.6.5.crate`)
+- 2 response-shape tests
+- 3 `sniffArchiveType` tests covering xz, encrypted, unknown +
+  truncated-signature edge case
+- 1 `hexEncode` vector test (empty, NUL, 0xff, ASCII, deadbeef)
+
+**553/553** unit tests pass (was 540).
+
+### Status
+
+The F2 write API is now feature-complete: lifecycle (start/stop/
+restart/destroy), snapshot CRUD, SSE stats stream, WebSocket
+console, and export/import are all in place. The TODO file no
+longer carries any F2-related entries.
+
+---
+
 ## [0.6.4] — 2026-05-02
 
 WebSocket console — RFC 6455-compliant interactive-shell endpoint

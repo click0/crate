@@ -6,6 +6,7 @@
 #include "auth.h"
 #include "metrics.h"
 #include "routes_pure.h"
+#include "transfer_pure.h"
 
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include <httplib.h>
@@ -19,6 +20,10 @@
 #include "util.h"
 #include "zfs_ops.h"
 
+#include <openssl/sha.h>
+
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <ctime>
@@ -692,6 +697,176 @@ static void handleStatsStream(const httplib::Request &req, httplib::Response &re
   );
 }
 
+// --- F2: export/import helpers ---
+
+static std::string sha256OfFile(const std::string &path) {
+  int fd = ::open(path.c_str(), O_RDONLY);
+  if (fd < 0) return "";
+  SHA256_CTX ctx;
+  SHA256_Init(&ctx);
+  unsigned char buf[64 * 1024];
+  ssize_t n;
+  while ((n = ::read(fd, buf, sizeof(buf))) > 0)
+    SHA256_Update(&ctx, buf, (size_t)n);
+  ::close(fd);
+  unsigned char hash[SHA256_DIGEST_LENGTH];
+  SHA256_Final(hash, &ctx);
+  return TransferPure::hexEncode(
+    std::string(reinterpret_cast<char*>(hash), SHA256_DIGEST_LENGTH));
+}
+
+// Where the daemon stores generated/uploaded artifacts.
+static const std::string ARTIFACT_DIR = "/var/run/crate";
+
+// --- F2: POST /api/v1/containers/:name/export ---
+// Synchronously exports the live container to
+// `/var/run/crate/<name>-<unixtime>.crate` (no encryption / no
+// signing — those would require the daemon to read user-supplied
+// key files, which is a separate authorisation problem). Returns
+// the artifact filename, byte size, and SHA-256 hex digest.
+
+static void handleContainerExport(const httplib::Request &req, httplib::Response &res,
+                                   const Config &config) {
+  if (!isAuthorized(req, config, "admin")) {
+    jsonError(res, 403, "unauthorized");
+    return;
+  }
+  auto name = req.path_params.at("name");
+  auto jail = JailQuery::getJailByName(name);
+  if (!jail) {
+    try { jail = JailQuery::getJailByJid(std::stoi(name)); } catch (...) {}
+  }
+  if (!jail) {
+    jsonError(res, 404, "container not found");
+    return;
+  }
+
+  // Build a deterministic-ish filename: <name>-<unixtime>.crate
+  auto filename = jail->name + "-" + std::to_string(::time(nullptr)) + ".crate";
+  auto reason = TransferPure::validateArtifactName(filename);
+  if (!reason.empty()) {
+    // Only triggers if jail name itself contains forbidden chars.
+    jsonError(res, 400, reason);
+    return;
+  }
+  auto outPath = ARTIFACT_DIR + "/" + filename;
+
+  try {
+    // Pipeline: tar cf - -C <path> . | xz --extreme > <outPath>
+    std::vector<std::vector<std::string>> pipeline = {
+      {"/usr/bin/tar", "cf", "-", "-C", jail->path, "."},
+      {"/usr/bin/xz", "--extreme"},
+    };
+    Util::execPipeline(pipeline, "export container filesystem", "", outPath);
+
+    struct stat st{};
+    if (::stat(outPath.c_str(), &st) != 0) {
+      jsonError(res, 500, "export pipeline produced no output file");
+      return;
+    }
+    auto digest = sha256OfFile(outPath);
+    jsonOk(res, TransferPure::formatExportResponse(filename, (uint64_t)st.st_size, digest));
+  } catch (const std::exception &e) {
+    jsonError(res, 500, e.what());
+  }
+}
+
+// --- F2: GET /api/v1/exports/:filename ---
+// Streams a previously-generated artifact back to the client. The
+// filename is validated against `validateArtifactName` so the
+// endpoint cannot be coaxed into reading arbitrary files.
+
+static void handleExportDownload(const httplib::Request &req, httplib::Response &res,
+                                  const Config &config) {
+  if (!isAuthorized(req, config, "admin")) {
+    jsonError(res, 403, "unauthorized");
+    return;
+  }
+  auto filename = req.path_params.at("filename");
+  auto reason = TransferPure::validateArtifactName(filename);
+  if (!reason.empty()) {
+    jsonError(res, 400, reason);
+    return;
+  }
+  auto path = ARTIFACT_DIR + "/" + filename;
+  struct stat st{};
+  if (::stat(path.c_str(), &st) != 0) {
+    jsonError(res, 404, "artifact not found");
+    return;
+  }
+
+  int fd = ::open(path.c_str(), O_RDONLY);
+  if (fd < 0) { jsonError(res, 500, "open failed"); return; }
+
+  res.set_header("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+  res.set_content_provider(
+    (size_t)st.st_size,
+    "application/octet-stream",
+    [fd](size_t offset, size_t length, httplib::DataSink &sink) -> bool {
+      char buf[64 * 1024];
+      ::lseek(fd, (off_t)offset, SEEK_SET);
+      ssize_t n = ::read(fd, buf, std::min(sizeof(buf), length));
+      if (n <= 0) { sink.done(); return true; }
+      return sink.write(buf, (size_t)n);
+    },
+    [fd](bool /*success*/) { ::close(fd); }
+  );
+}
+
+// --- F2: POST /api/v1/imports/:name ---
+// Accepts a raw `.crate` body (Content-Type: application/octet-stream),
+// writes it to `/var/run/crate/<name>.crate`, sniffs the magic bytes
+// to confirm it looks like a crate archive, and returns size + sha256.
+// The runtime caller is expected to subsequently invoke the local
+// `crate import` for full validation if it cares about contents.
+
+static void handleContainerImport(const httplib::Request &req, httplib::Response &res,
+                                   const Config &config) {
+  if (!isAuthorized(req, config, "admin")) {
+    jsonError(res, 403, "unauthorized");
+    return;
+  }
+  auto name = req.path_params.at("name");
+  auto reason = TransferPure::validateArtifactName(name + ".crate");
+  if (!reason.empty()) {
+    jsonError(res, 400, reason);
+    return;
+  }
+  if (req.body.empty()) {
+    jsonError(res, 400, "empty body — expected raw .crate octet-stream");
+    return;
+  }
+  auto kind = TransferPure::sniffArchiveType(req.body.substr(0, 16));
+  if (std::string(kind) == "unknown") {
+    jsonError(res, 400, "body is not a crate archive (xz or openssl-encrypted)");
+    return;
+  }
+
+  auto filename = name + ".crate";
+  auto outPath = ARTIFACT_DIR + "/" + filename;
+
+  // Atomic write: write to a temp file then rename. Avoids leaving a
+  // half-written .crate in place if the connection drops mid-upload.
+  auto tmpPath = outPath + ".tmp." + std::to_string(::getpid());
+  int fd = ::open(tmpPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+  if (fd < 0) { jsonError(res, 500, "open temp failed"); return; }
+  ssize_t off = 0;
+  while ((size_t)off < req.body.size()) {
+    ssize_t n = ::write(fd, req.body.data() + off, req.body.size() - (size_t)off);
+    if (n <= 0) { ::close(fd); ::unlink(tmpPath.c_str()); jsonError(res, 500, "write failed"); return; }
+    off += n;
+  }
+  ::close(fd);
+  if (::rename(tmpPath.c_str(), outPath.c_str()) != 0) {
+    ::unlink(tmpPath.c_str());
+    jsonError(res, 500, "rename failed");
+    return;
+  }
+
+  auto digest = sha256OfFile(outPath);
+  jsonOk(res, TransferPure::formatImportResponse(filename, (uint64_t)req.body.size(), digest));
+}
+
 // --- Route registration ---
 
 void registerRoutes(httplib::Server &srv, const Config &config) {
@@ -816,6 +991,30 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
         return;
       }
       handleStatsStream(req, res, config);
+    });
+  srv.Post("/api/v1/containers/:name/export",
+    [&config](const httplib::Request &req, httplib::Response &res) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/export", RATE_LIMIT_MUTATING)) {
+        jsonError(res, 429, "rate limit exceeded");
+        return;
+      }
+      handleContainerExport(req, res, config);
+    });
+  srv.Get(R"(/api/v1/exports/:filename)",
+    [&config](const httplib::Request &req, httplib::Response &res) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/exports/download", RATE_LIMIT_READ)) {
+        jsonError(res, 429, "rate limit exceeded");
+        return;
+      }
+      handleExportDownload(req, res, config);
+    });
+  srv.Post(R"(/api/v1/imports/:name)",
+    [&config](const httplib::Request &req, httplib::Response &res) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/imports", RATE_LIMIT_MUTATING)) {
+        jsonError(res, 429, "rate limit exceeded");
+        return;
+      }
+      handleContainerImport(req, res, config);
     });
 }
 
