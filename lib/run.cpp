@@ -9,6 +9,8 @@
 #include "net.h"
 #include "run_pure.h"
 #include "share_pure.h"
+#include "bridge_pure.h"
+#include "ifconfig_ops.h"
 #include "scripts.h"
 #include "ctx.h"
 #include "jail_query.h"
@@ -603,6 +605,25 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     //
     LOG("bridge mode: using bridge " << optionNet->bridgeIface)
 
+    // Auto-create the bridge if the spec opted in and it's missing.
+    bool weCreatedBridge = false;
+    {
+      auto reason = BridgePure::validateBridgeName(optionNet->bridgeIface);
+      if (!reason.empty())
+        ERR("bridge mode: " << reason << " (got '" << optionNet->bridgeIface << "')")
+      bool exists = Util::interfaceExists(optionNet->bridgeIface);
+      auto act = BridgePure::chooseAction({exists, optionNet->autoCreateBridge});
+      if (act == BridgePure::Action::Error) {
+        ERR("bridge mode: bridge '" << optionNet->bridgeIface
+            << "' does not exist; create it manually or set 'auto_create_bridge: true' in the spec")
+      } else if (act == BridgePure::Action::Create) {
+        IfconfigOps::createNamedInterface(optionNet->bridgeIface);
+        IfconfigOps::setUp(optionNet->bridgeIface);
+        weCreatedBridge = true;
+        LOG("bridge mode: auto-created bridge " << optionNet->bridgeIface)
+      }
+    }
+
     auto bridgeInfo = RunNet::createBridgeEpair(jid, jidStr, optionNet->bridgeIface, execInJail);
     jailSideIface = bridgeInfo.ifaceB;
 
@@ -621,8 +642,18 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       LOG("bridge mode: VLAN " << optionNet->vlanId << " on " << bridgeInfo.ifaceB)
     }
 
-    destroyBridgeEpairAtEnd.reset([bridgeInfo]() {
+    destroyBridgeEpairAtEnd.reset([bridgeInfo, weCreatedBridge, optionNet]() {
       RunNet::destroyBridgeEpair(bridgeInfo);
+      // Only destroy the bridge if we created it. If the user pre-existed
+      // it (the typical case), leave it intact for the next run.
+      if (weCreatedBridge) {
+        try {
+          IfconfigOps::destroyInterface(optionNet->bridgeIface);
+        } catch (...) {
+          // Best-effort: log but don't propagate (we may be unwinding
+          // from another error and a missing bridge isn't critical).
+        }
+      }
     });
 
     // Configure IP addressing

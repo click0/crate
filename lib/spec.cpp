@@ -575,6 +575,9 @@ static Spec parseSpecFromNode(YAML::Node top) {
                       ERR("options/net/mode must be 'nat', 'bridge', 'passthrough', or 'netgraph'")
                   } else if (AsString(netOpt.first) == "bridge") {
                     optNetDetails->bridgeIface = AsString(netOpt.second);
+                  } else if (AsString(netOpt.first) == "auto_create_bridge") {
+                    auto v = AsString(netOpt.second);
+                    optNetDetails->autoCreateBridge = (v == "true" || v == "yes" || v == "on" || v == "1");
                   } else if (AsString(netOpt.first) == "interface") {
                     // used for passthrough and netgraph modes
                     optNetDetails->passthroughIface = AsString(netOpt.second);

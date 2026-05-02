@@ -58,4 +58,11 @@ void setDescription(const std::string &iface, const std::string &desc);
 // Create a VLAN interface.
 std::string createVlan(const std::string &parentIface, int vlanId);
 
+// Create a named pseudo-interface (bridge0, lagg0, ...). The kernel
+// will accept either a bare driver name ("bridge") and assign a unit,
+// or a fully-specified name ("bridge17"). The latter is used by
+// `auto_create_bridge` so the resulting interface matches what the
+// spec asked for.
+void createNamedInterface(const std::string &name);
+
 }

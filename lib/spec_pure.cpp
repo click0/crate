@@ -227,6 +227,8 @@ void Spec::validate() const {
     using Mode = Spec::NetOptDetails::Mode;
     if (optNet->mode == Mode::Bridge && optNet->bridgeIface.empty())
       ERR("options/net/mode=bridge requires 'bridge' field (e.g. bridge: bridge0)")
+    if (optNet->autoCreateBridge && optNet->mode != Mode::Bridge)
+      ERR("options/net/auto_create_bridge: true is only meaningful in bridge mode")
     if (optNet->mode == Mode::Passthrough && optNet->passthroughIface.empty())
       ERR("options/net/mode=passthrough requires 'interface' field")
     if (optNet->mode == Mode::Netgraph && optNet->netgraphIface.empty())
