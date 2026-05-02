@@ -6,6 +6,91 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.6] — 2026-05-02
+
+SNMP AgentX wire protocol — full Get/GetNext PDU dispatcher replaces
+the stub mode that previously sent Open/Register PDUs and then
+ignored every incoming request from the master agent. CRATE-MIB
+scalars are now actually queryable from `snmpwalk`, `snmpget`, and
+NMS dashboards (Zabbix, Observium, LibreNMS).
+
+### What was wrong
+
+`snmpd/mib.cpp` had only encoders — every `Get`/`GetNext` from the
+master agent was silently dropped. Worse, `encodeOid()` emitted a
+**4-byte** `n_subid` field where RFC 2741 §5.1 mandates **1 byte**.
+A real master agent would either reject our PDUs as malformed or
+misinterpret the OID length. The bug had been there since 0.2.5.
+
+### What's now in place
+
+`snmpd/mib_pure.{h,cpp}` is the pure RFC 2741 §5 codec. It handles
+both directions of the wire protocol:
+
+- **Header**: 20-byte encode/decode, honours the `NETWORK_BYTE_ORDER`
+  flag (some older masters send little-endian, the bit is clear in
+  that case). PDU-type enum (Open/Close/Register/Get/GetNext/
+  GetBulk/Notify/Response).
+- **OID** (the bug fix): 1-byte `n_subid`, prefix optimization for
+  `1.3.6.1.<≤255>` paths, include-bit, encode/decode round-trip.
+- **OctetString**: 4-byte length + bytes + zero-padding to 4-byte
+  alignment.
+- **SearchRange + GetRequest payload**: skips a leading context
+  octet-string when the `NON_DEFAULT_CONTEXT` flag is set.
+- **VarBind encoders** for every type the MIB uses: `Integer32`,
+  `OctetString`, `Null`, `OID`, `Counter32`, `Gauge32`, `TimeTicks`,
+  `Counter64`, plus the three exception tags (`noSuchObject`,
+  `noSuchInstance`, `endOfMibView`).
+- **Response payload prefix**: `sysUpTime(4) + errStatus(2) +
+  errIndex(2)`.
+- **OID comparison + walking helpers**: `compareOid()`,
+  `oidIsChildOf()`, `oidEquals()` — needed to resolve `GetNext`.
+
+`snmpd/mib.cpp` gains a `dispatchOnce(timeoutMs)` loop:
+
+1. `select()` on the AgentX socket with a short timeout (100 ms).
+2. Read 20-byte header + payload.
+3. For `PDU_GET`: exact-match the OID against the scalar table
+   (`crateContainerTotal`, `crateContainerRunning`, `crateVersion`,
+   `crateHostname`); reply with the appropriate `VarBind` or
+   `noSuchInstance` for the container table (table walk is a future
+   release — listed in the comments).
+4. For `PDU_GETNEXT`: lexicographic next OID in the scalar table or
+   `endOfMibView`.
+5. Write the response PDU back.
+
+`snmpd/main.cpp` now drives `dispatchOnce(100)` in a tight loop and
+re-runs the metrics collector every `pollInterval` seconds — no more
+30-second blackout windows where the daemon is unresponsive to SNMP.
+
+### Tests
+
+`tests/unit/snmpd_agentx_test.cpp` — 20 ATF cases covering:
+- Header encode/decode round-trip + short-input safety + LE flag
+- OID round-trip (no-prefix, with-prefix, include-bit)
+- OctetString round-trip with multiple lengths
+- SearchRange round-trip
+- GetRequest payload decode (1 OID, 2 OIDs, with leading context
+  octet-string when `NON_DEFAULT_CONTEXT` flag set)
+- VarBind type tags for `Integer32`/`Counter64`/`OctetString`/`Null`/
+  `EndOfMibView` (eight-byte encoding of `Counter64`, 4-byte
+  alignment of `OctetString` padding)
+- Response header layout (`sysUpTime`, error status, error index)
+- `compareOid` (lexicographic, prefix-shorter-is-less, unsigned
+  32-bit subids)
+- `oidIsChildOf` (strict child only — equal OIDs return false)
+
+`tests/unit/snmpd_mib_test.cpp` — 6 existing cases updated to the
+correct RFC 2741 byte layout (had been pinning the buggy 4-byte
+`n_subid`).
+
+`tests/unit/adversarial_test.cpp:encodeOid_minimal` — likewise
+updated.
+
+**573/573** unit tests pass (was 553).
+
+---
+
 ## [0.6.5] — 2026-05-02
 
 crated export/import endpoints — closes the last open item under
