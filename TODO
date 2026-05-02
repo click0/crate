@@ -15,10 +15,6 @@ operational quality.)
 
 === Medium priority — operational quality ===
 
-* (feature) Auto-create bridge — if the specified bridge interface does
-  not exist, create it automatically (opt-in via
-  auto_create_bridge: true in crate.yml).
-
 * (feature) crated F2 write API — remaining surface: WebSocket console
   (interactive shell over WS) and export/import endpoints (multipart
   upload + .crate streaming). Container lifecycle (start/stop/restart/
@@ -100,3 +96,7 @@ Items completed and removed from this file:
   jails: 1 Hz refresh, NAME/JID/IP/CPU%/MEM/DISK/PROC columns, alternate
   screen + 'q' to quit; non-tty stdout emits one frame and exits
   (0.6.2 — lib/top.cpp + lib/top_pure.cpp)
+- Auto-create bridge — opt-in via `options.net.auto_create_bridge:
+  true` in the spec; runtime creates the bridge if missing and
+  destroys it on teardown only when crate created it
+  (0.6.3 — lib/bridge_pure.cpp + lib/run.cpp)

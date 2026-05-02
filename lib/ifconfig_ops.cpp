@@ -313,4 +313,21 @@ std::string createVlan(const std::string &parentIface, int vlanId) {
   return output.empty() ? STR(parentIface << "." << vlanId) : output;
 }
 
+void createNamedInterface(const std::string &name) {
+#ifdef HAVE_LIBIFCONFIG
+  auto *h = getHandle();
+  if (h) {
+    char buf[IFNAMSIZ];
+    std::strncpy(buf, name.c_str(), sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    if (ifconfig_create_interface(h, buf, &buf) == 0)
+      return;
+    // Fall through to ifconfig(8).
+  }
+#endif
+  Util::execCommand(
+    {CRATE_PATH_IFCONFIG, name, "create"},
+    "create named interface");
+}
+
 }

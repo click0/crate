@@ -38,6 +38,7 @@ public:
 
     // Bridge mode
     std::string bridgeIface;          // e.g. "bridge0"
+    bool autoCreateBridge = false;    // create bridgeIface if missing (bridge mode only)
 
     // Passthrough mode
     std::string passthroughIface;     // e.g. "vtnet1"

@@ -232,6 +232,32 @@ Notes:
   measure command duration; `failed: <msg>` records contain the
   exception message for post-mortem.
 
+### Auto-create bridge interfaces
+
+Bridge mode used to require an operator to pre-create `bridge0` (or
+whichever interface the spec named) before `crate run`. Specs can
+now opt into on-demand creation:
+
+```yaml
+options:
+    net:
+        mode: bridge
+        bridge: bridge0
+        auto_create_bridge: true
+        ip: dhcp
+```
+
+When the bridge already exists, `auto_create_bridge` is a no-op (so
+multiple containers can share `bridge0` without races). When the
+bridge is missing and the flag is set, crate creates it (`ifconfig
+bridge0 create up`) and destroys it on container teardown only if
+crate created it in this run. Without the flag, a missing bridge
+produces a clear error pointing at the option.
+
+The interface name is validated against `[A-Za-z0-9_]{1,15}` with a
+required driver prefix and a required unit number — typos like
+`brige0` are caught before they reach `ifconfig(8)`.
+
 ### Live resource monitor (`crate top`)
 
 `crate top` polls all crate-managed jails once per second and renders

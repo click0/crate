@@ -6,6 +6,86 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.3] — 2026-05-02
+
+Auto-create bridge interfaces — drops the requirement that an
+operator pre-create the `bridge0` (or whichever) interface before
+running a container in bridge mode. Specs that opt in with
+`options.net.auto_create_bridge: true` get the bridge created on
+demand and torn down with the container.
+
+### Why
+
+Bridge mode is the easiest way to expose a container on the host's
+LAN, but for years it required the operator to remember a one-line
+`ifconfig bridge create name=bridge0; ifconfig bridge0 up` ritual
+before `crate run` would succeed. Forgetting the ritual produced an
+opaque `cannot add to bridge: No such device` error from `ifconfig`.
+
+### How
+
+Opt-in stays opt-in: the default behaviour is unchanged, so existing
+specs that depend on a hand-managed bridge are unaffected. When
+`auto_create_bridge: true` is set:
+
+```yaml
+options:
+    net:
+        mode: bridge
+        bridge: bridge0
+        auto_create_bridge: true
+        ip: dhcp
+```
+
+…the runtime decision table picks one of three actions:
+
+| bridge exists | `auto_create_bridge` | action          |
+| ------------- | -------------------- | --------------- |
+|       ✓       |        any           | proceed (NoOp)  |
+|       ✗       |        true          | create + setUp  |
+|       ✗       |        false         | error           |
+
+Only bridges that **crate** created in this run are torn down on
+container exit. Pre-existing bridges are left alone — exactly what
+you want when several containers share `bridge0`.
+
+### Validation
+
+- `BridgePure::validateBridgeName()` rejects empty names, names
+  longer than IFNAMSIZ-1 (15 chars), names without a driver prefix,
+  names without a unit number, and names containing shell
+  metacharacters or `/`. Catches typos before they hit `ifconfig(8)`.
+- `Spec::NetOptDetails::validate()` rejects
+  `auto_create_bridge: true` outside bridge mode.
+
+### Implementation
+
+- **`lib/bridge_pure.{h,cpp}`** — pure decision module (`Action` enum
+  + `chooseAction()`) plus the name validator. No I/O.
+- **`lib/ifconfig_ops.cpp`** — new `createNamedInterface(name)` that
+  goes through `libifconfig` when available and falls back to
+  `ifconfig <name> create`.
+- **`lib/run.cpp`** — bridge mode now consults `chooseAction()` and
+  remembers `weCreatedBridge` so the `RunAtEnd` cleanup destroys the
+  bridge if and only if crate created it.
+- **`lib/spec.{h,cpp}` + `lib/spec_pure.cpp`** — `NetOptDetails`
+  gains a `bool autoCreateBridge`; YAML key `auto_create_bridge`
+  parsed as a relaxed boolean (`true`/`yes`/`on`/`1`).
+
+### Tests
+
+`tests/unit/bridge_pure_test.cpp` — 11 ATF cases:
+- `chooseAction` for all four cells of the decision table + a
+  totality check + name uniqueness.
+- `validateBridgeName` against empty, too long (15 vs 16 chars),
+  shell metacharacters (`;` `` ` `` `$` space `/` `..`), missing
+  driver prefix, missing unit number, and a positive list of
+  typical names (`bridge0`, `br0`, `vmbr0`, `br0a1`).
+
+**518/518** unit tests pass (was 507).
+
+---
+
 ## [0.6.2] — 2026-05-02
 
 `crate top` — live, htop-style resource monitor for all
