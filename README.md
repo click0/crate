@@ -632,8 +632,30 @@ All native API wrappers fall back to shell commands when compiled without the co
 | `POST /api/v1/containers/:name/snapshots` | yes | Create snapshot (body: `{"name":"<snap>"}` optional) |
 | `DELETE /api/v1/containers/:name/snapshots/:snap` | yes | Delete a snapshot |
 | `GET /api/v1/containers/:name/stats/stream` | yes | Server-Sent Events stream of RCTL counters (1 Hz) |
+| `GET /api/v1/containers/:name/console` (WS) | yes | RFC 6455 WebSocket — interactive `/bin/sh` over a PTY (separate listener; admin role) |
 | `GET /api/v1/host` | — | Host system info |
 | `GET /metrics` | — | Prometheus metrics |
+
+#### WebSocket console
+
+The interactive console listens on its own TCP socket (`console_ws.port`
+in `crated.conf`; default 0 = disabled), separate from the HTTP API.
+It speaks RFC 6455 with version 13. The handshake requires
+`Authorization: Bearer <admin-token>`; afterwards the daemon proxies
+bytes between the WebSocket and a `/bin/sh -i` running inside the
+target jail under `jexec(8)`. Server→client traffic uses binary
+frames so raw TTY escape sequences pass through; client→server
+frames (text or binary) are written to the shell's stdin. PING/PONG
+round-trip; CLOSE terminates the shell with SIGTERM.
+
+The bind address goes through `getaddrinfo(3)` so it accepts
+`127.0.0.1`, `::1`, `::` (dual-stack), or a hostname:
+
+```yaml
+console_ws:
+    port: 9802
+    bind: "::"      # dual-stack, or 127.0.0.1 / ::1 for loopback only
+```
 
 #### SSE stats stream
 

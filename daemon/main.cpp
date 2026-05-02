@@ -6,6 +6,7 @@
 
 #include "config.h"
 #include "server.h"
+#include "ws_console.h"
 
 #include "err.h"
 #include "misc.h"
@@ -102,17 +103,24 @@ int main(int argc, char **argv) {
     Crated::Server server(config);
     server.start();
 
+    // Start WebSocket console listener (opt-in via config.consoleWsPort).
+    bool wsStarted = Crated::WsConsole::start(config);
+
     std::cerr << "crated started";
     if (!config.unixSocket.empty())
       std::cerr << " unix=" << config.unixSocket;
     if (config.tcpPort != 0)
       std::cerr << " tcp=:" << config.tcpPort;
+    if (wsStarted)
+      std::cerr << " ws-console=[" << config.consoleWsBind
+                << "]:" << config.consoleWsPort;
     std::cerr << std::endl;
 
     // Main loop — server runs in threads, we just wait for signals
     while (g_running)
       ::sleep(1);
 
+    Crated::WsConsole::stop();
     server.stop();
     ::unlink("/var/run/crate/crated.pid");
 

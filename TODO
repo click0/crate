@@ -15,10 +15,10 @@ operational quality.)
 
 === Medium priority — operational quality ===
 
-* (feature) crated F2 write API — remaining surface: WebSocket console
-  (interactive shell over WS) and export/import endpoints (multipart
-  upload + .crate streaming). Container lifecycle (start/stop/restart/
-  destroy), snapshot CRUD, and SSE stats streaming are done as of 0.6.1.
+* (feature) crated F2 write API — remaining surface: export/import
+  endpoints (multipart upload + .crate streaming). Container lifecycle
+  (start/stop/restart/destroy), snapshot CRUD, SSE stats streaming
+  (0.6.1), and WebSocket console (0.6.4) are done.
 
 === Low priority — future enhancements ===
 
@@ -100,3 +100,8 @@ Items completed and removed from this file:
   true` in the spec; runtime creates the bridge if missing and
   destroys it on teardown only when crate created it
   (0.6.3 — lib/bridge_pure.cpp + lib/run.cpp)
+- WebSocket console — RFC 6455-compliant WS endpoint for interactive
+  shells in jails. Listens on a dedicated TCP/IPv6 socket
+  (`console_ws_port` in crated.conf), Bearer-token authenticated,
+  proxies bytes between the client and a jexec'd /bin/sh via PTY
+  (0.6.4 — daemon/ws_pure.cpp + daemon/ws_console.cpp)

@@ -6,6 +6,116 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.4] — 2026-05-02
+
+WebSocket console — RFC 6455-compliant interactive-shell endpoint
+for `crated`. Lets the upcoming hub web dashboard (and any
+EventSource-equivalent client) attach to a `/bin/sh` running inside
+a jail, with byte-faithful TTY output and full bidirectional input,
+without needing SSH access to the host.
+
+### Endpoint
+
+```
+GET /api/v1/containers/{name}/console HTTP/1.1
+Host: <consoleWsBind>:<consoleWsPort>
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: <16-byte-base64-nonce>
+Sec-WebSocket-Version: 13
+Authorization: Bearer <admin-token>
+```
+
+The handshake authenticates with the same admin Bearer token used by
+the F2 mutating endpoints. After the upgrade, the daemon proxies
+bytes between the WebSocket and a `/bin/sh -i` running under
+`jexec(8)` inside the target jail. Server→client traffic is sent as
+binary frames so raw TTY escape sequences pass through unchanged;
+client→server text or binary frames are written to the shell's
+stdin. PING/PONG round-trips work as expected; CLOSE terminates the
+shell with SIGTERM.
+
+### IPv6 + IPv4 dual stack
+
+The listener is opt-in via `console_ws_port` (default 0 = disabled)
+and binds via `getaddrinfo(3)`, accepting either IPv4 literals
+(`127.0.0.1`), IPv6 literals (`::1`, `::`), or hostnames. When the
+resolver returns an IPv6 candidate the socket sets `IPV6_V6ONLY=0`
+so a single `::` listener also accepts IPv4-mapped clients —
+matching the rest of the daemon.
+
+### crated.conf
+
+```yaml
+listen:
+    unix: /var/run/crate/crated.sock
+    tcp_port: 9800
+    tcp_bind: 0.0.0.0
+
+console_ws:
+    port: 9802
+    bind: "::"      # dual-stack, or 127.0.0.1 / ::1 for loopback only
+```
+
+### Implementation
+
+- **`daemon/ws_pure.{h,cpp}`** — pure WebSocket protocol module
+  (no OpenSSL, no sockets):
+  - `sha1Raw()` — RFC 3174 SHA-1 implementation, ~80 lines.
+  - `base64Encode()` — RFC 4648, no line breaks.
+  - `computeAcceptKey()` — RFC 6455 §1.3 handshake digest.
+  - `parseHandshakeRequest()` — case-insensitive header parsing,
+    rejects non-GET, missing Upgrade/Connection/Key/Version, wrong
+    version (must be 13).
+  - `buildHandshakeResponse()` / `buildHandshakeRejection()` —
+    101 Switching Protocols / 400 Bad Request templates.
+  - `parseFrame()` / `encodeFrame()` / `encodeCloseFrame()` —
+    full RFC 6455 §5 framing including 16-bit and 64-bit length
+    extensions, masking, control-frame validation (FIN=1, ≤125
+    bytes), reserved-opcode rejection.
+- **`daemon/ws_console.{h,cpp}`** — runtime: dedicated TCP listener
+  on its own thread (separate from cpp-httplib), per-connection
+  worker, PTY-based session. SIGCHLD ignored so disconnected
+  shells auto-reap.
+- **`daemon/main.cpp`** — `WsConsole::start(config)` after the HTTP
+  server starts; `WsConsole::stop()` before exit.
+- **`daemon/config.{h,cpp}`** — `consoleWsPort` (0 disables) and
+  `consoleWsBind` (default `127.0.0.1`).
+
+### Tests
+
+`tests/unit/ws_pure_test.cpp` — 22 ATF cases:
+- 3 SHA-1 vectors (empty, "abc", 56-byte FIPS vector, 1-million-byte
+  vector that crosses block boundaries)
+- 7 base64 RFC 4648 vectors (empty through "foobar")
+- RFC 6455 §1.3 canonical accept-key vector
+- 6 handshake parsing tests (valid, lowercase/mixed-case headers,
+  missing key, wrong version, missing Upgrade, non-GET method)
+- 2 handshake response/rejection format tests
+- 9 frame tests (short unmasked, short masked with RFC §5.7
+  "Hello" vector, 16-bit medium length, incomplete returns 0,
+  reserved opcode rejection, oversized control frame rejection,
+  short/medium/large round-trip, masked round-trip, CLOSE frame
+  status code encoding)
+
+**540/540** unit tests pass (was 518).
+
+### Security notes
+
+- Bearer-token authentication runs **before** the handshake is
+  accepted; an unauthenticated client receives 400 with no upgrade.
+- Body of the rejection 400 includes the failure reason (missing key,
+  wrong version, etc.) so legitimate clients can debug; this is not
+  a side channel because the failure modes are protocol-level, not
+  credential-level.
+- The endpoint is opt-in. Operators who don't run `console_ws.port`
+  see no listener at all — zero attack surface.
+- The session shell is started under `jexec(8)`, the same path the
+  CLI's `crate console` uses, so jail confinement guarantees apply
+  exactly as for an interactive operator session.
+
+---
+
 ## [0.6.3] — 2026-05-02
 
 Auto-create bridge interfaces — drops the requirement that an

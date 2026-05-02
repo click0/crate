@@ -50,6 +50,13 @@ Config Config::load(const std::string &path) {
       cfg.logLevel = log["level"].as<std::string>();
   }
 
+  if (auto cons = root["console_ws"]) {
+    if (cons["port"])
+      cfg.consoleWsPort = cons["port"].as<unsigned>();
+    if (cons["bind"])
+      cfg.consoleWsBind = cons["bind"].as<std::string>();
+  }
+
   return cfg;
 }
 
