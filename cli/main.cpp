@@ -259,6 +259,9 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdTop: {
     succ = topCrate(args);
     break;
+  } case CmdInterDns: {
+    succ = interDnsCommand(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}

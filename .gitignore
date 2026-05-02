@@ -43,6 +43,7 @@ tests/unit/ws_pure_test
 tests/unit/transfer_pure_test
 tests/unit/snmpd_agentx_test
 tests/unit/hub_aggregator_pure_test
+tests/unit/inter_dns_pure_test
 *.gcda
 *.gcno
 coverage.info

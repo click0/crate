@@ -17,6 +17,7 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/create.cpp lib/run.cpp \
            lib/share_pure.cpp \
            lib/top_pure.cpp lib/top.cpp \
            lib/bridge_pure.cpp \
+           lib/inter_dns_pure.cpp lib/inter_dns.cpp \
            lib/stack.cpp lib/stack_pure.cpp \
            lib/jail_query.cpp lib/zfs_ops.cpp lib/ifconfig_ops.cpp \
            lib/pfctl_ops.cpp lib/mac_ops.cpp lib/ipfw_ops.cpp \
@@ -160,7 +161,7 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              sign_pure_test audit_pure_test share_pure_test \
              routes_pure_test top_pure_test bridge_pure_test \
              ws_pure_test transfer_pure_test snmpd_agentx_test \
-             hub_aggregator_pure_test
+             hub_aggregator_pure_test inter_dns_pure_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)
@@ -189,6 +190,7 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  lib/snapshot_pure.cpp lib/crypto_pure.cpp lib/log_pure.cpp \
                  lib/sign_pure.cpp lib/audit_pure.cpp \
                  lib/share_pure.cpp lib/top_pure.cpp lib/bridge_pure.cpp \
+                 lib/inter_dns_pure.cpp \
                  cli/args_pure.cpp daemon/metrics_pure.cpp \
                  daemon/routes_pure.cpp daemon/ws_pure.cpp \
                  daemon/transfer_pure.cpp hub/aggregator_pure.cpp \

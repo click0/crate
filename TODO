@@ -17,9 +17,6 @@ operational quality.)
 
 === Low priority — future enhancements ===
 
-* (feature) Inter-container DNS — built-in DNS service for .crate zone
-  so containers can resolve each other by name without manual /etc/hosts.
-
 * (feature) WireGuard/IPsec tunnels — VPN support between hosts for
   multi-host container networking.
 
@@ -112,3 +109,8 @@ Items completed and removed from this file:
   destroy buttons (POST direct to per-node crated). Backed by new
   pure aggregator module + GET /api/v1/aggregate endpoint
   (0.6.7 — hub/aggregator_pure.cpp + hub/web/{index.html,app.js,style.css})
+- Inter-container DNS — host-wide .crate zone. New `crate inter-dns`
+  command rebuilds /etc/hosts (between crate-marker comments) and
+  /usr/local/etc/unbound/conf.d/crate.conf from JailQuery state and
+  triggers `unbound-control reload` (0.6.8 — lib/inter_dns_pure.cpp +
+  lib/inter_dns.cpp)

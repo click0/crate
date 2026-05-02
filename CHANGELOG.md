@@ -6,6 +6,88 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.8] — 2026-05-02
+
+Inter-container DNS — drops the manual-`/etc/hosts` ritual that
+operators previously had to do to make containers in different
+stacks (or no stack at all) resolve each other by name. The
+existing per-stack DNS (0.3.0) only covers containers within the
+same stack; this release adds a *host-wide* `.crate` zone.
+
+### Usage
+
+```sh
+# After starting / stopping any container:
+crate inter-dns
+
+# Or wire it into a lifecycle hook in your spec:
+hooks:
+    post-run: /usr/local/bin/crate inter-dns
+    post-stop: /usr/local/bin/crate inter-dns
+```
+
+The command walks `JailQuery::getAllJails(crateOnly=true)` and
+writes two files atomically:
+
+1. **`/etc/hosts`** — replaces the section between
+   `# >>> crate inter-container DNS <<<` and
+   `# <<< crate inter-container DNS >>>` markers, leaving the rest
+   of `/etc/hosts` (including `localhost`, your own static entries)
+   untouched. Recovers gracefully from a half-written block left
+   by a previous interrupted run.
+2. **`/usr/local/etc/unbound/conf.d/crate.conf`** — auto-generated
+   `local-zone: "crate." static` plus one `local-data:` line per
+   container per address family. After writing, the runtime tries
+   `unbound-control reload` first, falls back to `service unbound
+   reload`; both being unavailable is a non-fatal soft failure
+   (the file is still written).
+
+A jail named `alpha` with IPv4 `10.0.0.1` is now resolvable as both
+`alpha` and `alpha.crate` from any other jail that uses the host
+as its resolver (the default for NAT-mode containers).
+
+### Implementation
+
+- **`lib/inter_dns_pure.{h,cpp}`** — pure helpers:
+  - `validateHostname()` — RFC 1123 label rules: 1..63 chars, must
+    start and end with `[A-Za-z0-9]`, body adds `-`. Catches typos
+    before the runtime touches DNS files.
+  - `normalizeName()` — case-insensitive lower-casing for canonical
+    DNS records.
+  - `buildUnboundFragment()` — sorts entries by name, emits one
+    `local-data:` line per (name, family) pair. Empty IP is skipped
+    so a v4-only jail doesn't produce a stray AAAA.
+  - `buildHostsBlock()` — `/etc/hosts` block with stable
+    `>>> crate inter-container DNS <<<` markers.
+  - `replaceHostsBlock()` — atomic in-string replace; recovers from
+    a half-written block (BEGIN marker present, END missing) by
+    dropping everything from BEGIN forward.
+- **`lib/inter_dns.{h,cpp}`** — runtime: walks `JailQuery`, atomic
+  write via `<path>.tmp.<pid>` + `rename(2)`, best-effort
+  `unbound-control reload`. Returns a `RebuildResult` so callers
+  can report counts/paths.
+- **`cli/args.cpp` + `lib/audit*.cpp`** — new `CmdInterDns`,
+  `usageInterDns()`, dispatch in `cli/main.cpp`. Marked read-only
+  in the audit log (it doesn't mutate jails — only host config).
+
+### Tests
+
+`tests/unit/inter_dns_pure_test.cpp` — 19 ATF cases:
+- 6 `validateHostname` cases (empty, 63/64-char boundary, leading
+  `-` / `.` / `_`, trailing `-` / `.`, underscore + dot in body,
+  positive list with `MyJail-Prod-2026`)
+- `normalizeName` lower-casing + idempotent on already-lowercase
+- 6 `buildUnboundFragment` cases (empty zone marker, A only, AAAA
+  only, dual-stack, sort order across 3 names, lower-cases input)
+- 3 `buildHostsBlock` cases (markers present, v4-first preference,
+  v6 fallback when no v4)
+- 3 `replaceHostsBlock` cases (append when missing, preserve
+  surrounding lines, recover from truncated block)
+
+**601/601** unit tests pass (was 582).
+
+---
+
 ## [0.6.7] — 2026-05-02
 
 Hub web dashboard — populates the long-empty `hub/web/` directory

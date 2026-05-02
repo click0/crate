@@ -53,6 +53,7 @@ Command isCommand(const char *arg) {
   if (strEq(arg, "stop"))     return CmdStop;
   if (strEq(arg, "restart"))  return CmdRestart;
   if (strEq(arg, "top"))      return CmdTop;
+  if (strEq(arg, "inter-dns")) return CmdInterDns;
   return CmdNone;
 }
 
@@ -154,6 +155,9 @@ void Args::validate() {
     break;
   case CmdTop:
     // No arguments — `crate top` polls all running jails.
+    break;
+  case CmdInterDns:
+    // No arguments — rebuilds /etc/hosts + unbound from JailQuery.
     break;
   default:
     ERR("no command was given")
