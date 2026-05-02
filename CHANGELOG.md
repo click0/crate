@@ -6,6 +6,87 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.7] — 2026-05-02
+
+Hub web dashboard — populates the long-empty `hub/web/` directory
+with a minimal vanilla-JS dashboard: cluster summary banner, node
+table with reachability indicators, and a containers table with
+start/stop/restart/destroy buttons. Reuses the existing
+`set_mount_point("/", webDir)` static-file plumbing in `crate-hub`,
+so deployment is "drop the files in
+`/usr/local/share/crate-hub/web/` and reload".
+
+### What's there
+
+- **`hub/web/index.html`** — three sections (summary / nodes /
+  containers), polled every 5 s from the hub's read-only F1
+  endpoints. No bundler; one CSS file, one JS file.
+- **`hub/web/style.css`** — dark-mode-only minimal CSS, ~110 lines.
+  No framework dependencies.
+- **`hub/web/app.js`** — vanilla `fetch` + DOM rendering. Mutating
+  actions (start/stop/restart/destroy) hit the **per-node daemon's**
+  F2 API directly — the hub itself doesn't proxy mutations, so the
+  admin Bearer token stays in `localStorage` on the operator's
+  machine and never crosses through hub-side logging. The token is
+  prompted for on first action and remembered for the session.
+
+### New endpoint
+
+`GET /api/v1/aggregate` — single-shot summary that the dashboard's
+banner consumes:
+
+```json
+{
+  "status": "ok",
+  "data": {
+    "nodes_total": 4,
+    "nodes_reachable": 3,
+    "nodes_down": 1,
+    "containers_total": 17
+  }
+}
+```
+
+### Implementation
+
+- **`hub/aggregator_pure.{h,cpp}`** — pure helpers:
+  - `summarise(nodes)` — counts reachable / down nodes, sums
+    `containerCount` only for reachable nodes (so a stale cached
+    count for a freshly-down node doesn't inflate the total).
+  - `renderSummaryJson(s)` — stable JSON shape.
+  - `countTopLevelObjects(jsonArray)` — counts `{...}` entries in a
+    JSON array string without pulling in a parser; understands
+    string escaping so `{` inside a quoted value doesn't bump the
+    count. Used by the runtime to project each node's
+    `s.containers` blob into a single number.
+- **`hub/api.cpp`** — new `/api/v1/aggregate` route wired through
+  the pure helpers.
+- **`hub/web/`** — three new static files installed by deployment.
+
+### Tests
+
+`tests/unit/hub_aggregator_pure_test.cpp` — 9 ATF cases:
+- `summarise` for empty / mixed-reachability / unreachable-with-stale-
+  count input (the "stale count must be ignored" case is the
+  important one — it's why we lock the count behind `reachable`).
+- `renderSummaryJson` field-order pin.
+- `countTopLevelObjects`: empty array, simple objects, nested
+  objects (only top-level counted), brace-in-string (`{` inside a
+  quoted value), malformed-input safety (`""`, `[{`, `[`, raw
+  object).
+
+**582/582** unit tests pass (was 573).
+
+### Status
+
+The web dashboard is intentionally read-mostly: lifecycle buttons
+work but the dashboard does not include log streaming, console
+attachment, or snapshot management. Those need a richer UI shell
+(component framework, route management) and will land when somebody
+wants them — TODO already tracks the underlying API surface.
+
+---
+
 ## [0.6.6] — 2026-05-02
 
 SNMP AgentX wire protocol — full Get/GetNext PDU dispatcher replaces

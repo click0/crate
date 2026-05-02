@@ -17,10 +17,6 @@ operational quality.)
 
 === Low priority — future enhancements ===
 
-* (feature) Hub web dashboard — hub/web/ directory is empty. Need minimal
-  HTML/JS UI: node list, container list by node, CPU/RAM metrics,
-  start/stop controls (requires F2 API).
-
 * (feature) Inter-container DNS — built-in DNS service for .crate zone
   so containers can resolve each other by name without manual /etc/hosts.
 
@@ -111,3 +107,8 @@ Items completed and removed from this file:
   NO_SUCH_INSTANCE exceptions. Fixed long-standing bug where OIDs
   were encoded with a 4-byte n_subid (RFC 2741 §5.1 mandates 1).
   (0.6.6 — snmpd/mib_pure.cpp + snmpd/mib.cpp dispatchOnce loop)
+- Hub web dashboard — minimal vanilla-JS UI in hub/web/: cluster
+  summary, node table, container table with start/stop/restart/
+  destroy buttons (POST direct to per-node crated). Backed by new
+  pure aggregator module + GET /api/v1/aggregate endpoint
+  (0.6.7 — hub/aggregator_pure.cpp + hub/web/{index.html,app.js,style.css})

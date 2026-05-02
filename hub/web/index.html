@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>crate-hub dashboard</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>crate-hub</h1>
+    <span id="poll-indicator" class="dot" title="Polling status"></span>
+    <span id="last-update"></span>
+  </header>
+
+  <section id="summary" class="card">
+    <h2>Cluster summary</h2>
+    <dl class="kv">
+      <dt>Nodes total</dt>     <dd id="nodes-total">—</dd>
+      <dt>Nodes reachable</dt> <dd id="nodes-reachable">—</dd>
+      <dt>Nodes down</dt>      <dd id="nodes-down">—</dd>
+      <dt>Containers total</dt><dd id="containers-total">—</dd>
+    </dl>
+  </section>
+
+  <section id="nodes" class="card">
+    <h2>Nodes</h2>
+    <table>
+      <thead>
+        <tr><th>Name</th><th>Host</th><th>Status</th><th>Containers</th><th>Last error</th></tr>
+      </thead>
+      <tbody id="nodes-body">
+        <tr><td colspan="5" class="muted">Loading…</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="containers" class="card">
+    <h2>Containers</h2>
+    <p class="muted">Click a row to expand; mutating actions require an admin token.</p>
+    <table>
+      <thead>
+        <tr><th>Node</th><th>Name</th><th>JID</th><th>IP</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="containers-body">
+        <tr><td colspan="5" class="muted">Loading…</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>
+    <small>crate-hub web dashboard · refresh: <span id="refresh-period">5s</span></small>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

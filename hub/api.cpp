@@ -1,6 +1,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "api.h"
+#include "aggregator_pure.h"
 #include "poller.h"
 #include "store.h"
 
@@ -93,6 +94,25 @@ void registerApiRoutes(httplib::Server &srv, Store &store, Poller &poller) {
     }
 
     res.set_content(ss.str(), "text/plain; version=0.0.4");
+  });
+
+  // GET /api/v1/aggregate — single-shot summary for the web dashboard.
+  // Reuses the pure aggregator + countTopLevelObjects helpers.
+  srv.Get("/api/v1/aggregate", [&poller](const httplib::Request &, httplib::Response &res) {
+    auto statuses = poller.getNodeStatuses();
+    std::vector<AggregatorPure::NodeView> views;
+    views.reserve(statuses.size());
+    for (auto &s : statuses) {
+      AggregatorPure::NodeView v;
+      v.name = s.name;
+      v.host = s.host;
+      v.reachable = s.reachable;
+      v.containerCount = AggregatorPure::countTopLevelObjects(s.containers);
+      views.push_back(std::move(v));
+    }
+    auto sum = AggregatorPure::summarise(views);
+    auto json = AggregatorPure::renderSummaryJson(sum);
+    res.set_content("{\"status\":\"ok\",\"data\":" + json + "}", "application/json");
   });
 
   // Prune old data periodically (called by main loop or as endpoint)
