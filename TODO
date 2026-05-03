@@ -17,11 +17,6 @@ operational quality.)
 
 === Low priority — future enhancements ===
 
-* (feature) WireGuard runtime integration — apply rendered configs
-  automatically (`if_wg` interface creation, jail-side route
-  management, RAII teardown). The rendering helper lives in
-  `crate vpn wireguard render-conf` (0.6.9).
-
 * (feature) Rootless containers — crate is setuid root (04755). Explore
   rootless jail via jail(8) with allow.nfds.
 
@@ -148,3 +143,10 @@ Items completed and removed from this file:
   `make install-daemon` target (which now ships crated.8.gz too) and
   a new `make install-hub-man` target (0.6.12 — crated.8 +
   crate-hub.8)
+- WireGuard runtime — `options.wireguard.config: <path>` in the
+  spec runs `wg-quick up <path>` before the jail starts and
+  registers a RunAtEnd handler for `wg-quick down <path>` on
+  teardown. Path validated against shell metacharacters and `..`
+  segments (0.6.13 — lib/wireguard_runtime_pure.cpp + lib/run.cpp).
+  Full kernel-level integration without delegating to wg-quick
+  remains a future item.
