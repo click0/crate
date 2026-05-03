@@ -6,6 +6,84 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.10] — 2026-05-03
+
+IPsec config rendering — sister tool to 0.6.9's WireGuard renderer.
+`crate vpn ipsec render-conf <spec.yml>` reads a YAML spec and emits
+a strongSwan-style `ipsec.conf` on stdout, validating endpoints,
+subnets, cipher proposals, and the strongSwan keyword enums
+(`auto=`, `authby=`, `keyexchange=`) before rendering.
+
+### Usage
+
+```sh
+$ cat ipsec-spec.yml
+conns:
+    - name: dc1-dc2
+      description: "primary site link"
+      left: 203.0.113.5
+      leftsubnet: ["10.0.1.0/24"]
+      right: 198.51.100.7
+      rightsubnet: ["10.0.2.0/24"]
+      keyexchange: ikev2
+      ike: aes256-sha256-modp2048
+      esp: aes256-sha256
+      authby: psk
+      auto: start
+
+$ crate vpn ipsec render-conf ipsec-spec.yml | sudo tee /usr/local/etc/ipsec.conf
+$ sudo ipsec reload && sudo ipsec up dc1-dc2
+```
+
+### Validation
+
+- **Hosts** (`left=` / `right=`) accept IPv4 literal, bracketed IPv6,
+  RFC 1123 hostname, or `%any` (strongSwan road-warrior wildcard).
+  Dotted-numeric strings must validate as IPv4 — so `256.0.0.1`
+  fails with "host looks like IPv4 but has invalid octets" instead
+  of silently falling through to hostname validation.
+- **Subnets** — IPv4 (prefix 0..32) / IPv6 (prefix 0..128).
+- **Cipher proposals** — alnum + `-`/`_`, length 1..128. Catches
+  shell-injection-shaped typos before they reach `ipsec.conf`.
+- **`auto=`** ∈ `{ignore, add, route, start}`.
+- **`authby=`** ∈ `{psk, pubkey, rsasig, ecdsasig, never}`.
+- **`keyexchange=`** ∈ `{ike, ikev1, ikev2}`.
+- **Conn names** — alnum + `.`/`_`/`-`, length 1..32, `%default`
+  reserved.
+- Errors include a `conn #N: ...` prefix for multi-conn files.
+
+### Implementation
+
+- **`lib/ipsec_pure.{h,cpp}`** — pure validators + INI renderer.
+  Parallels `wireguard_pure` in spirit; the IP/hostname validators
+  are reimplemented locally so this header stays self-contained.
+- **`lib/vpn.cpp`** — extended: `vpn ipsec render-conf` dispatches
+  to `vpnIpsec()`; YAML adapter parses `conns:` list with
+  `left`/`leftsubnet`/`right`/`rightsubnet`/`ike`/`esp`/
+  `keyexchange`/`authby`/`auto`/`description`.
+- **`cli/args*.cpp`** — argument validation now accepts both
+  `wireguard` and `ipsec` subcommand keywords; usage updated with
+  side-by-side examples.
+
+### Tests
+
+`tests/unit/ipsec_pure_test.cpp` — 23 ATF cases:
+- 4 `validateHost` (v4, bracketed v6, hostname/`%any`, invalid)
+- 3 `validateSubnet` (v4 typical, v6 typical, invalid)
+- 2 `validateProposal` (typical, invalid metacharacters)
+- 2 enum keyword tests (`auto=`, `authby=`)
+- 2 `validateConnName` (typical, invalid: empty, 33-char, `%default`,
+  whitespace, metacharacters, `/`)
+- 4 `validateConfig` integration (minimal valid, no conns, invalid
+  `keyexchange`, conn-index in error message)
+- 6 `renderConf` (setup+conn block, CSV-joined subnets, optional-
+  field omission, `ike`/`esp` emission, description comment, multi-
+  conn separation)
+
+**650/650** unit tests pass (was 627).
+
+---
+
 ## [0.6.9] — 2026-05-03
 
 WireGuard config rendering — `crate vpn wireguard render-conf` reads
