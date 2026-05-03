@@ -8,6 +8,7 @@
 
 #include <openssl/evp.h>
 
+#include <ctime>
 #include <iomanip>
 #include <sstream>
 
@@ -46,11 +47,15 @@ bool isAuthorized(const httplib::Request &req, const Config &config,
   if (isUnixSocketPeer(req))
     return true;
 
-  // Bearer-token check via pure helper (lib/auth_pure.cpp).
-  return AuthPure::checkBearerAuth(
+  // Bearer-token check (with TTL + scope) via pure helper.
+  // Tokens with expiresAt=0 / empty scope are unrestricted, so
+  // pre-0.7.1 crated.conf files keep working untouched.
+  return AuthPure::checkBearerAuthFull(
     req.get_header_value("Authorization"),
     config.tokens,
     requiredRole,
+    req.path,
+    (long)::time(nullptr),
     sha256hex);
 }
 

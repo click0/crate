@@ -185,3 +185,9 @@ Items completed and removed from this file:
   `crate restore STREAM --to <pool/jails/name>` runs `zfs recv`.
   Pure module owns plan choice, argv builders, retention parser
   (0.7.0 — lib/backup_pure.cpp + lib/backup.cpp).
+- API tokens with TTL + scope — crated.conf tokens gain optional
+  `expires_at:` (UTC ISO 8601) and `scope:` (list of path globs:
+  exact match or trailing /* prefix). isAuthorized() runs the
+  expiry + scope check before the role gate. Pre-0.7.1 configs
+  keep working unchanged: missing fields = never-expires + no
+  restriction (0.7.1 — lib/auth_pure.cpp + daemon/auth.cpp).

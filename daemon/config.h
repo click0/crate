@@ -13,6 +13,15 @@ struct AuthToken {
   std::string name;
   std::string tokenHash;   // "sha256:<hex>"
   std::string role;         // "admin" or "viewer"
+  // Expiry: UNIX epoch seconds. 0 means "never expires" — preserves
+  // backward compatibility with existing crated.conf files that have
+  // no expires_at field.
+  long expiresAt = 0;
+  // Scope: list of glob patterns matched against the request path.
+  // Empty list means "no restriction" (any path the role allows).
+  // Patterns: literal path or trailing `/*`. See AuthPure::pathInScope.
+  //   ["/api/v1/containers", "/api/v1/containers/*"]
+  std::vector<std::string> scope;
 };
 
 struct Config {

@@ -1,6 +1,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "config.h"
+#include "../lib/auth_pure.h"
 
 #include <yaml-cpp/yaml.h>
 #include <stdexcept>
@@ -38,6 +39,22 @@ Config Config::load(const std::string &path) {
         at.name = t["name"].as<std::string>();
         at.tokenHash = t["token_hash"].as<std::string>();
         at.role = t["role"].as<std::string>("viewer");
+        if (t["expires_at"]) {
+          auto raw = t["expires_at"].as<std::string>();
+          auto parsed = AuthPure::parseIso8601Utc(raw);
+          if (parsed < 0)
+            throw std::runtime_error(
+              "auth.tokens[" + at.name + "].expires_at is not a valid ISO 8601 UTC timestamp: '" + raw + "'");
+          at.expiresAt = parsed;
+        }
+        if (t["scope"]) {
+          auto sc = t["scope"];
+          if (sc.IsSequence()) {
+            for (auto s : sc) at.scope.push_back(s.as<std::string>());
+          } else if (sc.IsScalar()) {
+            at.scope.push_back(sc.as<std::string>());
+          }
+        }
         cfg.tokens.push_back(at);
       }
     }
