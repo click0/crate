@@ -48,6 +48,7 @@ tests/unit/wireguard_pure_test
 tests/unit/ipsec_pure_test
 tests/unit/inspect_pure_test
 tests/unit/wireguard_runtime_pure_test
+tests/unit/migrate_pure_test
 *.gcda
 *.gcno
 coverage.info

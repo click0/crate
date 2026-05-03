@@ -70,6 +70,7 @@ static AuditPure::Event makeEvent(int argc, char **argv, const Args &args,
   case CmdInterDns: ev.cmd = "inter-dns"; break;
   case CmdVpn:      ev.cmd = "vpn";       break;
   case CmdInspect:  ev.cmd = "inspect";   break;
+  case CmdMigrate:  ev.cmd = "migrate";   break;
   default:          ev.cmd = "?";
   }
 

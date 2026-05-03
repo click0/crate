@@ -6,6 +6,102 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.14] — 2026-05-03
+
+`crate migrate` — orchestrate moving a container between two
+crated-managed hosts via the existing F2 API, in five strict-order
+steps. The source container keeps running until the destination
+reports a successful start, so a network blip between steps 1-4
+leaves the original alive.
+
+### Usage
+
+```sh
+crate migrate myjail \
+    --from alpha.example.com:9800  --from-token-file /root/tokens/alpha \
+    --to   beta.example.com:9800   --to-token-file   /root/tokens/beta
+```
+
+### Plan
+
+| Step | Method | URL                                                |
+| ---- | ------ | -------------------------------------------------- |
+|  1   | POST   | `{from}/api/v1/containers/{name}/export`           |
+|  2   | GET    | `{from}/api/v1/exports/{file}` → /tmp              |
+|  3   | POST   | `{to}/api/v1/imports/{name}` (octet-stream upload) |
+|  4   | POST   | `{to}/api/v1/containers/{name}/start`              |
+|  5   | POST   | `{from}/api/v1/containers/{name}/stop`             |
+
+Step 5 only fires after step 4 reports success — abort on any
+earlier failure leaves the source intact.
+
+### Why curl(1) for HTTP
+
+Pulling in a real HTTP/TLS client would mean either bundling
+cpp-httplib's client mode (untested at our auth-flow surface) or
+reimplementing the chunked + Bearer + cert-verification dance.
+`curl(1)` ships in FreeBSD base and on every Linux distro; the
+operator running migrations already has it.
+
+### Token handling
+
+Tokens are read from chmod-600 files instead of command-line flags
+so they never appear in `ps`/process listings. The runtime also
+adds the `Authorization: Bearer ...` header via curl's `-H`
+argument, which is the smallest token leak surface curl provides
+(short of the env-driven form, which FreeBSD base curl doesn't
+honour).
+
+### Defense in depth
+
+`MigratePure::validateEndpoint` rejects dotted-numeric strings that
+*look* like IPv4 but have invalid octets (e.g. `256.0.0.1:80`)
+instead of silently accepting them as hostnames — the same fix we
+landed for the IPsec validator in 0.6.10. Container names are
+checked against the same allowed-character set the daemon's F2
+endpoints use; bearer tokens reject whitespace/control chars that
+would corrupt the `Authorization` header.
+
+### Implementation
+
+- **`lib/migrate_pure.{h,cpp}`** — pure validators
+  (`validateEndpoint`, `validateBearerToken`,
+  `validateContainerName`), plan builders (`buildExportStep`,
+  `buildRemainingSteps`), `normalizeBaseUrl`, `describeStep`
+  (token-redacting), `redactToken`.
+- **`lib/migrate.cpp`** — runtime: `curl(1)` invocation,
+  `Authorization` header, JSON `file:` field extraction from the
+  export response, per-run `/tmp/crate-migrate-<pid>` work dir
+  with cleanup on success and on exception.
+- **`cli/args.cpp` + `cli/main.cpp`** — `CmdMigrate` enumerator,
+  `usageMigrate()`, dispatch.
+- **`lib/audit.cpp` + `audit_pure.cpp`** — `migrate` is recorded
+  in `/var/log/crate/audit.log` (it mutates state on two hosts);
+  the target field encodes `<name>@<from>-><to>`.
+
+### Tests
+
+`tests/unit/migrate_pure_test.cpp` — 13 ATF cases:
+- 2 `validateEndpoint` (typical incl. v4/v6/bracketed/scheme;
+  invalid incl. missing port, out-of-range port, `256.0.0.1:80`,
+  bare scheme)
+- 2 `validateBearerToken` (typical; invalid: empty, whitespace,
+  control char, 513 chars)
+- 2 `validateContainerName` (typical; invalid: empty, `.`, `..`,
+  65 chars, `/`, space, `;`)
+- 2 `normalizeBaseUrl` (adds `https://` when missing; preserves
+  `http://`/`https://` when present)
+- 1 `buildExportStep` shape
+- 2 `buildRemainingSteps` (full chain shape; **stop-source-after-
+  start-dest invariant** — the most important security/correctness
+  property of the plan)
+- 1 `describeStep` (token never appears in log description)
+- 1 `redactToken` (value never leaks; length OK to expose)
+
+**690/690** unit tests pass (was 677).
+
+---
+
 ## [0.6.13] — 2026-05-03
 
 WireGuard runtime — `crate run` now brings a tunnel up before the

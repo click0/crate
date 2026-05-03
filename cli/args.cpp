@@ -57,6 +57,7 @@ static void usage() {
   std::cout << "  inter-dns                  rebuild the global .crate DNS zone from running jails" << std::endl;
   std::cout << "  vpn                        VPN tooling — currently 'vpn wireguard render-conf <spec.yml>'" << std::endl;
   std::cout << "  inspect TARGET             print full JSON snapshot of a running container's state" << std::endl;
+  std::cout << "  migrate TARGET --from EP --to EP  move a container between hosts via the F2 API" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -345,6 +346,27 @@ static void usageInterDns() {
   std::cout << "" << std::endl;
 }
 
+static void usageMigrate() {
+  std::cout << "usage: crate migrate <name> --from <ep> --to <ep>" << std::endl;
+  std::cout << "                     --from-token-file <path> --to-token-file <path>" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Move a container between two crated-managed hosts via the F2 API." << std::endl;
+  std::cout << "Steps (executed in order; the source is stopped only after the" << std::endl;
+  std::cout << "destination has started):" << std::endl;
+  std::cout << "  1. POST {from}/api/v1/containers/<name>/export" << std::endl;
+  std::cout << "  2. GET  {from}/api/v1/exports/<file>            (download to /tmp)" << std::endl;
+  std::cout << "  3. POST {to}/api/v1/imports/<name>              (octet-stream upload)" << std::endl;
+  std::cout << "  4. POST {to}/api/v1/containers/<name>/start" << std::endl;
+  std::cout << "  5. POST {from}/api/v1/containers/<name>/stop" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Endpoint format: 'host:port' or 'https://host:port' or '[::1]:9800'." << std::endl;
+  std::cout << "Tokens are read from files (chmod 600) — never passed on the command" << std::endl;
+  std::cout << "line so they don't appear in 'ps' listings." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Requires curl(1)." << std::endl;
+  std::cout << "" << std::endl;
+}
+
 static void usageInspect() {
   std::cout << "usage: crate inspect <name|JID>" << std::endl;
   std::cout << "" << std::endl;
@@ -455,7 +477,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.6.13" << std::endl;
+        std::cout << "crate 0.6.14" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -466,7 +488,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.6.13" << std::endl;
+          std::cout << "crate 0.6.14" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -1029,6 +1051,23 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.inspectTarget = argv[a];
         } else {
           err("too many arguments for 'inspect' command");
+        }
+        break;
+      case CmdMigrate:
+        if (auto argShort = isShort(argv[a])) {
+          if (argShort == 'h') { usageMigrate(); exit(0); }
+          err("unsupported short option '%s'", argv[a]);
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) { usageMigrate(); exit(0); }
+          else if (strEq(argLong, "from"))             args.migrateFrom = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "to"))               args.migrateTo = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "from-token-file"))  args.migrateFromTokenFile = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "to-token-file"))    args.migrateToTokenFile = getArgParam(++a, argc, argv);
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.migrateTarget.empty()) {
+          args.migrateTarget = argv[a];
+        } else {
+          err("too many arguments for 'migrate' command");
         }
         break;
       }
