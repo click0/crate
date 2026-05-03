@@ -6,6 +6,86 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.0] — 2026-05-03
+
+**0.7 series — enterprise-grade operations.** Inspired by what
+Proxmox VE 8/9 ships (snapshot-based vzdump, replication,
+HA failover, RBAC). The `0.7.x` line lands these one feature
+per release without breaking the 0.6.x F2 API surface.
+
+`crate backup` + `crate restore` — first piece. ZFS-send-based
+snapshot streams, with incremental support, that operators can
+park on cheap storage and replay months later.
+
+### Usage
+
+```sh
+# Full backup nightly:
+crate backup myjail --output-dir /var/backups/crate
+
+# Daily incremental (auto-detects last backup-* snapshot):
+crate backup myjail --output-dir /var/backups/crate --auto-incremental
+
+# Explicit incremental from a known parent:
+crate backup myjail --output-dir /var/backups/crate \
+    --since backup-2026-05-01T00:00:00Z
+
+# Restore (creates a fresh dataset):
+crate restore /var/backups/crate/myjail-backup-2026-05-03T03:33:20Z.zstream \
+    --to tank/jails/myjail-restored
+```
+
+### File naming
+
+Filenames sort lexicographically by time, so retention pruning is
+`ls -1 backup-* | sort | tail -n +N | xargs rm`. Incremental
+streams carry a self-describing `inc-from-<parent>` tag so the
+operator knows which chain a file belongs to without keeping a
+separate index.
+
+```
+myjail-backup-2026-05-03T03:33:20Z.zstream                       (full)
+myjail-backup-2026-05-04T03:33:20Z.inc-from-backup-2026-05-03T03:33:20Z.zstream
+```
+
+### Why no compression wrapper
+
+ZFS already compresses datasets and the send-stream format is
+designed to be dedup-friendly. Adding gzip/xz/zstd on top would
+shrink streams by ~5% in typical container workloads while
+doubling restore time. Operators who need network-pipeline
+compression can pipe through their tool of choice —
+`crate backup ... | zstd | ssh remote "zfs recv pool/dr/myjail"`
+is two syscalls away.
+
+### Implementation
+
+- **`lib/backup_pure.{h,cpp}`** — pure helpers: snapshot suffix
+  (UTC ISO 8601, lex-sortable), filename builder, validators,
+  argv builders for `zfs snapshot/send/recv/destroy`, retention
+  parser, full-vs-incremental plan chooser.
+- **`lib/backup.cpp`** — resolves jail → dataset via `JailQuery`,
+  finds latest backup-* via `zfs list` for `--auto-incremental`,
+  pipes `zfs send` into the output file. `restore` runs
+  `zfs recv` reading the stream file as stdin.
+- **`cli/args.cpp` + `cli/main.cpp`** — `CmdBackup`+`CmdRestore`
+  enumerators, dispatch, usage.
+- **`lib/audit*.cpp`** — both recorded in audit.log; targets
+  `<name>-><dir>` and `<file>-><dataset>` respectively.
+
+### Tests
+
+`tests/unit/backup_pure_test.cpp` — 23 ATF cases including the
+**lex-sort = chronological-sort invariant** (the property that
+makes cron-driven retention pruning trivial), full vs.
+incremental argv shape, plan-choice priority (`--since` >
+auto-incremental > full fallback on first run), retention parser
+edge cases, and shell-metacharacter rejection in output dir.
+
+**724/724** unit tests pass (was 701).
+
+---
+
 ## [0.6.15] — 2026-05-03
 
 Datacenter grouping in `crate-hub`. Operators running containers

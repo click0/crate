@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore};
 
 class Args {
 public:
@@ -111,6 +111,16 @@ public:
   std::string migrateTo;            // destination crated endpoint host:port
   std::string migrateFromTokenFile; // chmod-600 file with source admin token
   std::string migrateToTokenFile;   // chmod-600 file with destination admin token
+
+  // backup parameters
+  std::string backupTarget;            // jail name
+  std::string backupOutputDir;         // absolute dir for the .zstream
+  std::string backupSince;             // optional explicit --since snapshot suffix
+  bool        backupAutoIncremental = false; // --auto-incremental: use latest backup-* if any
+
+  // restore parameters
+  std::string restoreFile;             // path to .zstream
+  std::string restoreDataset;          // ZFS dest dataset (pool/jails/name)
 
   void validate();
 };

@@ -57,6 +57,8 @@ Command isCommand(const char *arg) {
   if (strEq(arg, "vpn"))      return CmdVpn;
   if (strEq(arg, "inspect"))  return CmdInspect;
   if (strEq(arg, "migrate"))  return CmdMigrate;
+  if (strEq(arg, "backup"))   return CmdBackup;
+  if (strEq(arg, "restore"))  return CmdRestore;
   return CmdNone;
 }
 
@@ -189,6 +191,18 @@ void Args::validate() {
       ERR("the 'migrate' command requires --from-token-file <path>")
     if (migrateToTokenFile.empty())
       ERR("the 'migrate' command requires --to-token-file <path>")
+    break;
+  case CmdBackup:
+    if (backupTarget.empty())
+      ERR("the 'backup' command requires a jail name (positional arg)")
+    if (backupOutputDir.empty())
+      ERR("the 'backup' command requires --output-dir <path>")
+    break;
+  case CmdRestore:
+    if (restoreFile.empty())
+      ERR("the 'restore' command requires a stream file (positional arg)")
+    if (restoreDataset.empty())
+      ERR("the 'restore' command requires --to <pool/jails/name>")
     break;
   default:
     ERR("no command was given")

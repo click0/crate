@@ -71,6 +71,8 @@ static AuditPure::Event makeEvent(int argc, char **argv, const Args &args,
   case CmdVpn:      ev.cmd = "vpn";       break;
   case CmdInspect:  ev.cmd = "inspect";   break;
   case CmdMigrate:  ev.cmd = "migrate";   break;
+  case CmdBackup:   ev.cmd = "backup";    break;
+  case CmdRestore:  ev.cmd = "restore";   break;
   default:          ev.cmd = "?";
   }
 

@@ -58,6 +58,8 @@ static void usage() {
   std::cout << "  vpn                        VPN tooling — currently 'vpn wireguard render-conf <spec.yml>'" << std::endl;
   std::cout << "  inspect TARGET             print full JSON snapshot of a running container's state" << std::endl;
   std::cout << "  migrate TARGET --from EP --to EP  move a container between hosts via the F2 API" << std::endl;
+  std::cout << "  backup TARGET --output-dir DIR  take a ZFS-send stream of the jail (incremental supported)" << std::endl;
+  std::cout << "  restore STREAM --to DATASET     replay a backup stream into a fresh dataset" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -346,6 +348,38 @@ static void usageInterDns() {
   std::cout << "" << std::endl;
 }
 
+static void usageBackup() {
+  std::cout << "usage: crate backup <jail> --output-dir <dir>" << std::endl;
+  std::cout << "                    [--since <snapshot>] [--auto-incremental]" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Take a fresh ZFS snapshot of the jail's dataset and write a" << std::endl;
+  std::cout << "`zfs send` stream to <dir>/<jail>-<timestamp>.zstream." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Stream type:" << std::endl;
+  std::cout << "  default              full stream" << std::endl;
+  std::cout << "  --since <snap>       incremental from <snap> (zfs send -i)" << std::endl;
+  std::cout << "  --auto-incremental   incremental from the most recent backup-*" << std::endl;
+  std::cout << "                       snapshot on the dataset; falls back to full" << std::endl;
+  std::cout << "                       on first run." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Filenames sort lexicographically by time so retention pruning" << std::endl;
+  std::cout << "is trivial — `ls -1 | tail -n +N` keeps the latest N." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Restore with: crate restore <stream> --to <pool/jails/name>" << std::endl;
+  std::cout << "" << std::endl;
+}
+
+static void usageRestore() {
+  std::cout << "usage: crate restore <stream-file> --to <pool/jails/name>" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Replay a `crate backup` stream into a fresh ZFS dataset." << std::endl;
+  std::cout << "Equivalent to: zfs recv <dest> < <stream-file>" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "For incremental streams, the dataset must already contain the" << std::endl;
+  std::cout << "parent snapshot — apply chained incrementals in order." << std::endl;
+  std::cout << "" << std::endl;
+}
+
 static void usageMigrate() {
   std::cout << "usage: crate migrate <name> --from <ep> --to <ep>" << std::endl;
   std::cout << "                     --from-token-file <path> --to-token-file <path>" << std::endl;
@@ -477,7 +511,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.6.15" << std::endl;
+        std::cout << "crate 0.7.0" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -488,7 +522,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.6.15" << std::endl;
+          std::cout << "crate 0.7.0" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -1068,6 +1102,36 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.migrateTarget = argv[a];
         } else {
           err("too many arguments for 'migrate' command");
+        }
+        break;
+      case CmdBackup:
+        if (auto argShort = isShort(argv[a])) {
+          if (argShort == 'h') { usageBackup(); exit(0); }
+          err("unsupported short option '%s'", argv[a]);
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) { usageBackup(); exit(0); }
+          else if (strEq(argLong, "output-dir"))         args.backupOutputDir = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "since"))              args.backupSince = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "auto-incremental"))   args.backupAutoIncremental = true;
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.backupTarget.empty()) {
+          args.backupTarget = argv[a];
+        } else {
+          err("too many arguments for 'backup' command");
+        }
+        break;
+      case CmdRestore:
+        if (auto argShort = isShort(argv[a])) {
+          if (argShort == 'h') { usageRestore(); exit(0); }
+          err("unsupported short option '%s'", argv[a]);
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) { usageRestore(); exit(0); }
+          else if (strEq(argLong, "to"))   args.restoreDataset = getArgParam(++a, argc, argv);
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.restoreFile.empty()) {
+          args.restoreFile = argv[a];
+        } else {
+          err("too many arguments for 'restore' command");
         }
         break;
       }
