@@ -55,6 +55,7 @@ Command isCommand(const char *arg) {
   if (strEq(arg, "top"))      return CmdTop;
   if (strEq(arg, "inter-dns")) return CmdInterDns;
   if (strEq(arg, "vpn"))      return CmdVpn;
+  if (strEq(arg, "inspect"))  return CmdInspect;
   return CmdNone;
 }
 
@@ -171,6 +172,10 @@ void Args::validate() {
       ERR("'vpn " << vpnSubcmd << " " << vpnAction << "' is not supported (only 'render-conf')")
     if (vpnSpecFile.empty())
       ERR("the 'vpn " << vpnSubcmd << " render-conf' command requires a spec YAML file")
+    break;
+  case CmdInspect:
+    if (inspectTarget.empty())
+      ERR("the 'inspect' command requires a container name or JID")
     break;
   default:
     ERR("no command was given")

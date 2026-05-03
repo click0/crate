@@ -69,6 +69,7 @@ static AuditPure::Event makeEvent(int argc, char **argv, const Args &args,
   case CmdTop:      ev.cmd = "top";      break;
   case CmdInterDns: ev.cmd = "inter-dns"; break;
   case CmdVpn:      ev.cmd = "vpn";       break;
+  case CmdInspect:  ev.cmd = "inspect";   break;
   default:          ev.cmd = "?";
   }
 
@@ -89,6 +90,7 @@ static bool isReadOnly(Command c) {
   case CmdStats:
   case CmdLogs:
   case CmdTop:
+  case CmdInspect:
     return true;
   default:
     return false;

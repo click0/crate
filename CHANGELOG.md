@@ -6,6 +6,93 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.11] — 2026-05-03
+
+`crate inspect TARGET` — pretty-printed JSON snapshot of a running
+container's runtime state. Useful for `crate inspect myjail | jq`
+ad-hoc queries, for capturing pre/post-deploy state into
+revision-controlled diffs, and as the data source for the upcoming
+hub web dashboard's container detail page.
+
+### Output
+
+```json
+{
+  "name": "myjail",
+  "jid": 7,
+  "hostname": "myjail.local",
+  "path": "/jails/myjail",
+  "osrelease": "14.2-RELEASE",
+  "jail_params": {
+    "allow.mount.nullfs": "1",
+    "securelevel": "2",
+    "vnet": "1"
+  },
+  "interfaces": [
+    {"name": "primary", "ip4": "10.0.0.5", "ip6": "", "mac": ""}
+  ],
+  "mounts": [
+    {"source": "tmpfs", "target": "/jails/myjail/tmp", "fstype": "tmpfs"}
+  ],
+  "rctl_usage": {
+    "cputime": "120",
+    "memoryuse": "12345678"
+  },
+  "zfs_dataset": "tank/jails/myjail",
+  "zfs_origin": "",
+  "process_count": 14,
+  "has_gui": false,
+  "gui_display": 0,
+  "gui_vnc_port": 0,
+  "gui_ws_port": 0,
+  "gui_mode": "",
+  "started_at": 0,
+  "inspected_at": 1730000123
+}
+```
+
+### Implementation
+
+- **`lib/inspect_pure.{h,cpp}`** — pure JSON renderer + RFC 8259
+  `escapeJsonString` + `applyRctlOutput`/`applyMountOutput`
+  parsers. The `applyMountOutput` parser carefully avoids
+  prefix-collision false positives (`/jails/myjail-other` will not
+  match a `/jails/myjail` filter — the trailing-slash sentinel
+  catches it).
+- **`lib/inspect.cpp`** — runtime gather: `JailQuery::getJailParam`
+  for a curated set of jail params (the security-relevant +
+  name-mapping ones), `rctl(8)` for usage counters, `mount(8)` for
+  jail-rooted mounts, `zfs(8)` for dataset/origin (clones), `ps -J`
+  for process count, `Ctx::GuiRegistry` for any active GUI session.
+- **`cli/args.cpp` + `cli/main.cpp`** — `CmdInspect` enumerator,
+  `crate inspect <name|JID>` argument parsing, `usageInspect()`.
+- **`lib/audit*.cpp`** — `inspect` is read-only; not recorded in
+  `/var/log/crate/audit.log`.
+
+### Tests
+
+`tests/unit/inspect_pure_test.cpp` — 17 ATF cases:
+- 4 `escapeJsonString` (ASCII passthrough, `"`/`\\`, control chars
+  incl. ``/``, UTF-8 `Олексій` passthrough)
+- 6 `renderJson` shape/content (minimal-shape with stable keys,
+  jail-params alphabetic order, interfaces array, mounts array,
+  GUI fields, escape integration in fields)
+- 3 `applyRctlOutput` (typical, blank-line + malformed tolerance,
+  empty input)
+- 4 `applyMountOutput` (filter to jail subtree, jail-root itself
+  included, prefix-collision rejected, malformed-line tolerance)
+
+**667/667** unit tests pass (was 650).
+
+### Status
+
+`started_at` is left at 0 — libjail doesn't expose a creation
+timestamp, and we don't yet store our own. A future release will
+record this either via a per-jail metadata file written by
+`crate run` or via `kern.proc` of the jail's init process.
+
+---
+
 ## [0.6.10] — 2026-05-03
 
 IPsec config rendering — sister tool to 0.6.9's WireGuard renderer.

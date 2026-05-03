@@ -56,6 +56,7 @@ static void usage() {
   std::cout << "  top                        live resource monitor across all running containers" << std::endl;
   std::cout << "  inter-dns                  rebuild the global .crate DNS zone from running jails" << std::endl;
   std::cout << "  vpn                        VPN tooling — currently 'vpn wireguard render-conf <spec.yml>'" << std::endl;
+  std::cout << "  inspect TARGET             print full JSON snapshot of a running container's state" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -344,6 +345,22 @@ static void usageInterDns() {
   std::cout << "" << std::endl;
 }
 
+static void usageInspect() {
+  std::cout << "usage: crate inspect <name|JID>" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Print a JSON snapshot of the running container's runtime state:" << std::endl;
+  std::cout << "  - identity (name, JID, hostname, path, kernel release)" << std::endl;
+  std::cout << "  - jail params (allow.*, securelevel, vnet, ...)" << std::endl;
+  std::cout << "  - interfaces, mounts inside the jail rootfs" << std::endl;
+  std::cout << "  - RCTL counters (cputime, memoryuse, ...)" << std::endl;
+  std::cout << "  - ZFS dataset and origin (if cloned)" << std::endl;
+  std::cout << "  - GUI session (display, VNC/WS ports, mode)" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Output is pretty-printed with 2-space indent and a stable key" << std::endl;
+  std::cout << "order, so diffs across snapshots are clean." << std::endl;
+  std::cout << "" << std::endl;
+}
+
 static void usageVpn() {
   std::cout << "usage: crate vpn <wireguard|ipsec> render-conf <spec.yml>" << std::endl;
   std::cout << "" << std::endl;
@@ -438,7 +455,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.6.10" << std::endl;
+        std::cout << "crate 0.6.11" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -449,7 +466,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.6.10" << std::endl;
+          std::cout << "crate 0.6.11" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -999,6 +1016,19 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.vpnSpecFile = argv[a];
         } else {
           err("too many arguments for 'vpn' command");
+        }
+        break;
+      case CmdInspect:
+        if (auto argShort = isShort(argv[a])) {
+          if (argShort == 'h') { usageInspect(); exit(0); }
+          err("unsupported short option '%s'", argv[a]);
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) { usageInspect(); exit(0); }
+          err("unsupported long option '%s'", argv[a]);
+        } else if (args.inspectTarget.empty()) {
+          args.inspectTarget = argv[a];
+        } else {
+          err("too many arguments for 'inspect' command");
         }
         break;
       }
