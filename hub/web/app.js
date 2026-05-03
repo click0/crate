@@ -82,18 +82,35 @@ function renderSummary(s) {
 function renderNodes(nodes) {
   const body = $('nodes-body');
   if (!nodes.length) {
-    body.innerHTML = '<tr><td colspan="5" class="muted">No nodes configured</td></tr>';
+    body.innerHTML = '<tr><td colspan="6" class="muted">No nodes configured</td></tr>';
     return;
   }
   body.innerHTML = nodes.map(n => `
     <tr>
       <td>${escapeHtml(n.name)}</td>
+      <td>${escapeHtml(n.datacenter || 'default')}</td>
       <td><code>${escapeHtml(n.host)}</code></td>
       <td class="${n.reachable ? 'status-ok' : 'status-error'}">
         ${n.reachable ? 'reachable' : 'down'}
       </td>
       <td>—</td>
       <td class="muted">${n.error ? escapeHtml(n.error) : ''}</td>
+    </tr>`).join('');
+}
+
+function renderDatacenters(dcs) {
+  const body = $('datacenters-body');
+  if (!dcs.length) {
+    body.innerHTML = '<tr><td colspan="5" class="muted">No datacenters configured</td></tr>';
+    return;
+  }
+  body.innerHTML = dcs.map(d => `
+    <tr>
+      <td><strong>${escapeHtml(d.name)}</strong></td>
+      <td>${d.nodes_total}</td>
+      <td class="status-ok">${d.nodes_reachable}</td>
+      <td class="${d.nodes_down ? 'status-error' : 'muted'}">${d.nodes_down}</td>
+      <td>${d.containers_total}</td>
     </tr>`).join('');
 }
 
@@ -170,12 +187,14 @@ document.addEventListener('click', (ev) => {
 async function refresh() {
   const ind = $('poll-indicator');
   try {
-    const [agg, nodes, contGroups] = await Promise.all([
+    const [agg, dcs, nodes, contGroups] = await Promise.all([
       getJson('/api/v1/aggregate'),
+      getJson('/api/v1/datacenters'),
       getJson('/api/v1/nodes'),
       getJson('/api/v1/containers'),
     ]);
     renderSummary(agg);
+    renderDatacenters(dcs);
     renderNodes(nodes);
     renderContainers(contGroups);
     ind.className = 'dot ok';
