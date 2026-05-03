@@ -18,6 +18,15 @@ listen:
 
 ## API token authentication
 ## Generate hash: echo -n "your-token" | sha256
+##
+## Optional per-token fields (added in 0.7.1):
+##   expires_at  — UTC ISO 8601 (Z or +00:00). 0/missing = never expires.
+##                 Tokens loaded from pre-0.7.1 configs are unaffected.
+##   scope       — list of path globs. Empty/missing = no restriction.
+##                 Patterns: "/api/v1/host" (exact),
+##                           "/api/v1/containers/*" (prefix; the slash
+##                           is required so the bare prefix
+##                           "/api/v1/containers" does NOT match).
 # auth:
 #     tokens:
 #         - name: ansible
@@ -26,6 +35,13 @@ listen:
 #         - name: grafana
 #           token_hash: "sha256:..."
 #           role: viewer
+#         - name: ci-runner
+#           token_hash: "sha256:..."
+#           role: admin
+#           expires_at: "2026-12-31T23:59:59Z"
+#           scope:
+#               - /api/v1/containers/*
+#               - /api/v1/exports/*
 
 log:
     file: /var/log/crated.log

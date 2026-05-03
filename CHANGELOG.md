@@ -6,6 +6,88 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.1] — 2026-05-03
+
+API tokens gain optional **TTL** and **scope** fields — tighten the
+blast radius of a leaked CI runner token without rewriting the
+auth flow. Inspired by Proxmox's API token model (where each token
+carries an explicit expiry and a path-prefix ACL).
+
+### Configuration
+
+```yaml
+auth:
+    tokens:
+      - name: ci-runner
+        token_hash: "sha256:..."
+        role: admin
+        expires_at: "2026-12-31T23:59:59Z"
+        scope:
+          - /api/v1/containers/*
+          - /api/v1/exports/*
+```
+
+`expires_at` is a UTC ISO 8601 timestamp (`Z` or `+00:00`/`-00:00`
+suffix; non-UTC offsets rejected). `scope` is a list of path
+globs:
+
+- exact match: `/api/v1/host`
+- trailing prefix: `/api/v1/containers/*` matches any path that
+  starts with `/api/v1/containers/`. **The slash is required** —
+  the bare prefix `/api/v1/containers` does NOT match the glob,
+  so granting per-resource access doesn't accidentally leak the
+  collection-list endpoint.
+
+### Backward compatibility
+
+Pre-0.7.1 configs keep working unchanged. Missing `expires_at`
+parses to `0`, which `isExpired()` treats as "never expires".
+Missing `scope` parses to an empty list, which `pathInScope()`
+treats as "no restriction". So an existing token with just
+`name`/`token_hash`/`role` has identical behaviour after upgrade.
+
+### Implementation
+
+- **`lib/auth_pure.{h,cpp}`** — extends the pure module with
+  `parseIso8601Utc(s)` (returns `-1` on bad shape, bad month
+  range, or non-UTC offset; uses `timegm`), `isExpired(t, now)`
+  (strict-after; `expiresAt=0` always returns false),
+  `pathInScope(scope, path)` (empty scope → true; exact match or
+  `/*`-suffix prefix match), and the combined
+  `checkBearerAuthFull(...)` which folds expiry + scope into the
+  hash + role-check sequence.
+- **`daemon/config.{h,cpp}`** — `AuthToken` gains
+  `expiresAt: long` and `scope: vector<string>` (defaults `0` /
+  empty). YAML parser reads `expires_at:` (rejects malformed) and
+  `scope:` (scalar or sequence).
+- **`daemon/auth.cpp`** — `isAuthorized()` calls
+  `checkBearerAuthFull` with `req.path` and `time(nullptr)`.
+- **`daemon/crated.conf.sample`** — documents the new fields with
+  a `ci-runner` example.
+
+### Tests
+
+`tests/unit/auth_pure_test.cpp` — 13 new ATF cases on top of the
+existing 15:
+- 3 `parseIso8601Utc` (canonical epochs at 1970/2000/2026 with
+  exact UNIX values; invalid-shape rejection incl. bad month
+  `2026-13-31`; `+00:00`/`-00:00` accepted as UTC)
+- 2 `isExpired` (0 means never; strict-after at the boundary —
+  exact-second still alive)
+- 4 `pathInScope` (empty scope unrestricted; exact match without
+  partial prefix; trailing `/*` glob; **glob requires slash —
+  bare prefix doesn't match**, the property that gates
+  per-resource access)
+- 4 `checkBearerAuthFull` integration (expired-rejected even with
+  matching role+scope; out-of-scope-rejected even with matching
+  role; in-scope admin happy path; backward-compat with
+  expiresAt=0 + empty scope = pre-0.7.1 behaviour)
+
+**737/737** unit tests expected (was 724; pure tests verified at
+28/28 for auth_pure_test alone).
+
+---
+
 ## [0.7.0] — 2026-05-03
 
 **0.7 series — enterprise-grade operations.** Inspired by what
