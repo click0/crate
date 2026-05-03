@@ -23,6 +23,7 @@ std::vector<NodeConfig> loadNodes(const std::string &configPath) {
         nc.tlsCert = n["tls_cert"].as<std::string>("");
         nc.tlsKey = n["tls_key"].as<std::string>("");
         nc.token = n["token"].as<std::string>("");
+        nc.datacenter = n["datacenter"].as<std::string>("");
         nodes.push_back(nc);
       }
     }
@@ -41,6 +42,7 @@ Poller::Poller(const std::vector<NodeConfig> &nodes, Store &store)
   for (size_t i = 0; i < nodes.size(); i++) {
     statuses_[i].name = nodes[i].name;
     statuses_[i].host = nodes[i].host;
+    statuses_[i].datacenter = nodes[i].datacenter;
   }
 }
 

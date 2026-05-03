@@ -6,6 +6,90 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.15] — 2026-05-03
+
+Datacenter grouping in `crate-hub`. Operators running containers
+across multiple regions can now label each node with a `datacenter:`
+key in `crate-hub.conf`; the hub aggregates node + container counts
+per-DC and exposes a new endpoint for the dashboard:
+
+```
+GET /api/v1/datacenters
+```
+
+```yaml
+# /usr/local/etc/crate-hub.conf
+nodes:
+  - name:       alpha
+    host:       alpha.eu-west-1.example.com:9800
+    datacenter: eu-west-1
+    token:      <admin-token>
+  - name:       beta
+    host:       beta.us-east-1.example.com:9800
+    datacenter: us-east-1
+    token:      <admin-token>
+```
+
+Response shape:
+
+```json
+{
+  "status": "ok",
+  "data": [
+    {"name":"eu-west-1","nodes_total":1,"nodes_reachable":1,"nodes_down":0,"containers_total":5},
+    {"name":"us-east-1","nodes_total":1,"nodes_reachable":0,"nodes_down":1,"containers_total":0}
+  ]
+}
+```
+
+The web dashboard now renders a Datacenters table above the Nodes
+table; the Nodes table grew a "Datacenter" column. Nodes without
+an explicit `datacenter:` are canonicalised to `default` so
+upgrades from 0.6.14 don't see a phantom DC.
+
+### What's NOT in this release
+
+The DC admin UI — adding/renaming/deleting datacenters from the
+dashboard, drag-drop node moves, per-DC quotas — is intentionally
+deferred. The aggregation API and config-driven membership land
+first so an operator can group nodes today; the UI piece can layer
+on top later without touching the backend shape again.
+
+### Implementation
+
+- **`hub/datacenter_pure.{h,cpp}`** — pure helpers:
+  `validateName` (alnum + `.`/`_`/`-`, ≤32 chars),
+  `canonicalName` (empty → `default`), `groupAndSummarise`
+  (alphabetical by name, mirrors `AggregatorPure::summarise`'s
+  "stale containerCount on unreachable node is excluded" rule),
+  `renderJson` (stable field order).
+- **`hub/poller.h`** — `NodeConfig` and `NodeStatus` gain a
+  `datacenter:` field.
+- **`hub/poller.cpp`** — YAML parser reads `datacenter:`,
+  `Poller` constructor mirrors it into the status cache.
+- **`hub/api.cpp`** — `GET /api/v1/datacenters` route. Reuses
+  `AggregatorPure::countTopLevelObjects` for container counting
+  so the per-DC and the global aggregate stay byte-consistent.
+- **`hub/web/`** — `index.html` adds the Datacenters table and a
+  Datacenter column on the Nodes table; `app.js` fetches the new
+  endpoint and renders.
+
+### Tests
+
+`tests/unit/datacenter_pure_test.cpp` — 11 ATF cases:
+- 2 `validateName` (typical incl. `eu-west-1`/`default`/32-char
+  boundary; invalid: empty, 33-char, whitespace, `/`, `;`, `$`)
+- `canonicalName` empty → default
+- 5 `groupAndSummarise` cases including the **stale-count-on-
+  unreachable invariant** (the same correctness property we test
+  for in `AggregatorPure::summarise`)
+- 3 `renderJson` cases (empty, field-order pin, multi-DC
+  comma-separation)
+
+**701/701** unit tests pass (was 690).
+
+---
+
 ## [0.6.14] — 2026-05-03
 
 `crate migrate` — orchestrate moving a container between two

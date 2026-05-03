@@ -2,6 +2,7 @@
 
 #include "api.h"
 #include "aggregator_pure.h"
+#include "datacenter_pure.h"
 #include "poller.h"
 #include "store.h"
 
@@ -112,6 +113,26 @@ void registerApiRoutes(httplib::Server &srv, Store &store, Poller &poller) {
     }
     auto sum = AggregatorPure::summarise(views);
     auto json = AggregatorPure::renderSummaryJson(sum);
+    res.set_content("{\"status\":\"ok\",\"data\":" + json + "}", "application/json");
+  });
+
+  // GET /api/v1/datacenters — per-DC summary (nodes total/reachable/down,
+  // containers total). Reuses the pure aggregator for container counts.
+  srv.Get("/api/v1/datacenters", [&poller](const httplib::Request &, httplib::Response &res) {
+    auto statuses = poller.getNodeStatuses();
+    std::vector<DatacenterPure::DcView> views;
+    views.reserve(statuses.size());
+    for (auto &s : statuses) {
+      DatacenterPure::DcView v;
+      v.node.name = s.name;
+      v.node.host = s.host;
+      v.node.reachable = s.reachable;
+      v.node.containerCount = AggregatorPure::countTopLevelObjects(s.containers);
+      v.datacenter = s.datacenter;
+      views.push_back(std::move(v));
+    }
+    auto summaries = DatacenterPure::groupAndSummarise(views);
+    auto json = DatacenterPure::renderJson(summaries);
     res.set_content("{\"status\":\"ok\",\"data\":" + json + "}", "application/json");
   });
 

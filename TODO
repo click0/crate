@@ -156,3 +156,10 @@ Items completed and removed from this file:
   in `ps`. Endpoints validated for IPv4/IPv6/hostname forms; names
   validated for shell-safety (0.6.14 — lib/migrate_pure.cpp +
   lib/migrate.cpp + curl(1) for HTTP).
+- Datacenter grouping in hub — NodeConfig/NodeStatus gain a
+  `datacenter:` field; new GET /api/v1/datacenters endpoint returns
+  per-DC summary (nodes total/reachable/down + containers total).
+  Web dashboard shows a Datacenters table above the Nodes table.
+  Empty datacenter is canonicalised to "default". Admin UI for
+  editing DCs is left for later (0.6.15 — hub/datacenter_pure.cpp
+  + hub/api.cpp + hub/web/{index.html,app.js})

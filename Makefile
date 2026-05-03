@@ -178,7 +178,8 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              ws_pure_test transfer_pure_test snmpd_agentx_test \
              hub_aggregator_pure_test inter_dns_pure_test \
              wireguard_pure_test ipsec_pure_test inspect_pure_test \
-             wireguard_runtime_pure_test migrate_pure_test
+             wireguard_runtime_pure_test migrate_pure_test \
+             datacenter_pure_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)
@@ -213,6 +214,7 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  cli/args_pure.cpp daemon/metrics_pure.cpp \
                  daemon/routes_pure.cpp daemon/ws_pure.cpp \
                  daemon/transfer_pure.cpp hub/aggregator_pure.cpp \
+                 hub/datacenter_pure.cpp \
                  snmpd/mib_pure.cpp
 
 # -Icli/-Idaemon/-Isnmpd let tests #include the *_pure.h files directly.

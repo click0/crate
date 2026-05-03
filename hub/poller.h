@@ -19,6 +19,7 @@ struct NodeConfig {
   std::string tlsCert;     // client cert for mTLS (optional)
   std::string tlsKey;      // client key (optional)
   std::string token;       // Bearer token (optional)
+  std::string datacenter;  // logical group name; empty -> "default"
 };
 
 // Load node list from YAML config file
@@ -35,6 +36,7 @@ public:
   struct NodeStatus {
     std::string name;
     std::string host;
+    std::string datacenter;     // group label, mirrored from NodeConfig
     bool reachable = false;
     std::string hostInfo;       // raw JSON from /api/v1/host
     std::string containers;     // raw JSON from /api/v1/containers
