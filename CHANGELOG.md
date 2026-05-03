@@ -6,6 +6,111 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.2] — 2026-05-03
+
+`crate replicate` — ZFS storage replication over `ssh`. Streams a
+fresh snapshot of a jail's dataset to a remote host as a
+`zfs send | ssh ... 'zfs recv'` pipeline. Supports incremental
+sends (`--since` / `--auto-incremental`). All SSH transport options
+are operator-controllable.
+
+### Usage
+
+```sh
+# Daily snapshot to a DR host:
+crate replicate myjail \
+    --to backup@dr.example.com \
+    --dest-dataset tank/jails/myjail \
+    --auto-incremental \
+    --ssh-port 2222 \
+    --ssh-key /root/.ssh/id_ed25519 \
+    --ssh-opt StrictHostKeyChecking=accept-new \
+    --ssh-opt ConnectTimeout=30
+```
+
+### SSH transport — what operators can drive
+
+| Flag | Purpose |
+|---|---|
+| `--ssh-port N` | non-default port |
+| `--ssh-key PATH` | identity file (passed via `-i`) |
+| `--ssh-config PATH` | custom `ssh_config` (passed via `-F`) |
+| `--ssh-opt KEY=VAL` | repeatable; passed verbatim as `-o KEY=VAL` |
+
+`--ssh-opt` is the deliberate escape hatch — we don't enumerate
+every OpenSSH option in the CLI. Any of `StrictHostKeyChecking`,
+`UserKnownHostsFile`, `ProxyJump`, `ConnectTimeout`, ... can be
+threaded through.
+
+**Defaults set automatically**: `BatchMode=yes` (no password
+prompts in cron), `ServerAliveInterval=30` (keeps long sends
+alive across firewalls). Both can be overridden via `--ssh-opt`.
+
+### Defense in depth
+
+Every input passes through pure validators **before** any
+filesystem or process touchpoint:
+
+- `--to`: `[user@]host` — user must be alnum + `._-`, host must
+  be IPv4 (with octet bounds checked — `256.0.0.1` rejected) or
+  RFC 1123 hostname. Shell metacharacters rejected.
+- `--dest-dataset`: alnum + `._-/`, no `//`, no `.`/`..`
+  segments, no leading/trailing `/`. ZFS dataset alphabet only.
+- `--ssh-opt KEY=VAL`: KEY must be alnum (≤64 chars). VAL
+  rejects whitespace, control chars, and shell metacharacters
+  — values are passed unquoted to ssh, an unsanitised `;` would
+  break out of the command.
+- `--ssh-key` / `--ssh-config`: absolute paths only, no `..`
+  segments, no metacharacters.
+
+So even if `crated.conf` or a CI YAML is compromised, the worst
+case is a `crate validate`-style error — never `ssh
+host '...; rm -rf /'`.
+
+### Implementation
+
+- **`lib/replicate_pure.{h,cpp}`** — pure SSH-side helpers:
+  `validateSshRemote` / `parseSshRemote` (with the IPv4-shape
+  fix from 0.6.10 reused), `validateSshOpt` /
+  `validateSshKey` / `validateDestDataset`, `buildSshArgv`
+  (sets default `BatchMode=yes` + `ServerAliveInterval=30`,
+  threads `-p`/`-i`/`-F`/`-o`), `buildRemoteRecvCommand`,
+  `buildReplicationPipeline` (returns the two-stage argv-list
+  for `Util::execPipeline`).
+- **`lib/replicate.cpp`** — runtime: resolves jail → ZFS dataset
+  via `JailQuery` + `Util::Fs::getZfsDataset`, finds latest
+  `backup-*` snapshot for `--auto-incremental`, takes a fresh
+  snapshot, runs the pipeline. Reuses `BackupPure::choosePlan`
+  + `snapshotSuffix` from 0.7.0.
+- **`cli/args.cpp` + `main.cpp`** — `CmdReplicate`,
+  `usageReplicate()`, all flags wired.
+- **`lib/audit*.cpp`** — recorded; target is
+  `<jail>-><[user@]host>:<dest-dataset>`.
+
+### Tests
+
+`tests/unit/replicate_pure_test.cpp` — 15 ATF cases:
+- 2 `validateSshRemote` (typical incl. v4/v6/hostname/no-user;
+  invalid incl. empty user, empty host, `256.0.0.1`,
+  underscore-hostname, shell metacharacters)
+- 1 `parseSshRemote` user/host split
+- 2 `validateSshOpt` (typical incl. `StrictHostKeyChecking=no`,
+  `UserKnownHostsFile=/dev/null`, `ProxyJump=bastion`,
+  `ConnectTimeout=30`; invalid incl. empty key, dash in key,
+  whitespace in value, shell metas, control chars)
+- 2 `validateSshKey` (typical, invalid: relative, `..`, metas)
+- 2 `validateDestDataset` (typical, invalid: leading/trailing
+  slash, double slash, `.`/`..` segments, `:`, metas)
+- 3 `buildSshArgv` (minimal with defaults present, full options
+  stitched in correct positions, no-user shape)
+- 1 `buildRemoteRecvCommand` shape
+- 2 `buildReplicationPipeline` (full two-stage; incremental
+  uses `-i prev curr`)
+
+**Verified locally: 15/15** in `replicate_pure_test`.
+
+---
+
 ## [0.7.1] — 2026-05-03
 
 API tokens gain optional **TTL** and **scope** fields — tighten the

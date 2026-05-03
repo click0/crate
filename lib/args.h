@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdReplicate};
 
 class Args {
 public:
@@ -121,6 +121,17 @@ public:
   // restore parameters
   std::string restoreFile;             // path to .zstream
   std::string restoreDataset;          // ZFS dest dataset (pool/jails/name)
+
+  // replicate parameters
+  std::string replicateTarget;         // jail name (positional)
+  std::string replicateTo;             // user@host or host (--to)
+  std::string replicateDestDataset;    // pool/jails/name on remote (--dest-dataset)
+  std::string replicateSince;          // explicit --since snapshot suffix
+  bool        replicateAutoIncremental = false; // --auto-incremental
+  unsigned    replicateSshPort = 0;    // --ssh-port (0 = ssh default)
+  std::string replicateSshKey;         // --ssh-key /path/to/identity
+  std::string replicateSshConfig;      // --ssh-config /path/to/ssh_config
+  std::vector<std::string> replicateSshOpts; // repeatable --ssh-opt KEY=VAL
 
   void validate();
 };

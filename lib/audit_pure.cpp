@@ -75,6 +75,7 @@ std::string pickTarget(const Args &args) {
   case CmdMigrate:  return args.migrateTarget + "@" + args.migrateFrom + "->" + args.migrateTo;
   case CmdBackup:   return args.backupTarget + "->" + args.backupOutputDir;
   case CmdRestore:  return args.restoreFile + "->" + args.restoreDataset;
+  case CmdReplicate: return args.replicateTarget + "->" + args.replicateTo + ":" + args.replicateDestDataset;
   case CmdList:
   case CmdClean:
   case CmdTop:

@@ -60,6 +60,7 @@ static void usage() {
   std::cout << "  migrate TARGET --from EP --to EP  move a container between hosts via the F2 API" << std::endl;
   std::cout << "  backup TARGET --output-dir DIR  take a ZFS-send stream of the jail (incremental supported)" << std::endl;
   std::cout << "  restore STREAM --to DATASET     replay a backup stream into a fresh dataset" << std::endl;
+  std::cout << "  replicate TARGET --to HOST --dest-dataset DS  stream a ZFS snapshot to a remote host" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -369,6 +370,38 @@ static void usageBackup() {
   std::cout << "" << std::endl;
 }
 
+static void usageReplicate() {
+  std::cout << "usage: crate replicate <jail> --to <[user@]host>" << std::endl;
+  std::cout << "                       --dest-dataset <pool/jails/name>" << std::endl;
+  std::cout << "                       [--since <snap> | --auto-incremental]" << std::endl;
+  std::cout << "                       [--ssh-port N] [--ssh-key PATH]" << std::endl;
+  std::cout << "                       [--ssh-config PATH]" << std::endl;
+  std::cout << "                       [--ssh-opt KEY=VAL]..." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Stream a ZFS snapshot of <jail>'s dataset to a remote host:" << std::endl;
+  std::cout << "  zfs send <ds>@<snap> | ssh <opts> <host> 'zfs recv <dest>'" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Stream type:" << std::endl;
+  std::cout << "  default              full stream" << std::endl;
+  std::cout << "  --since <snap>       incremental from <snap> (zfs send -i)" << std::endl;
+  std::cout << "  --auto-incremental   incremental from the most recent backup-*" << std::endl;
+  std::cout << "                       snapshot on the source dataset; falls back" << std::endl;
+  std::cout << "                       to full on first run." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "SSH transport:" << std::endl;
+  std::cout << "  --ssh-port N         non-default port (otherwise: ssh's default 22)" << std::endl;
+  std::cout << "  --ssh-key PATH       absolute path to identity file (passed via -i)" << std::endl;
+  std::cout << "  --ssh-config PATH    absolute path to ssh_config (passed via -F)" << std::endl;
+  std::cout << "  --ssh-opt KEY=VAL    repeatable; passed verbatim as `-o KEY=VAL`." << std::endl;
+  std::cout << "                       Examples: StrictHostKeyChecking=no," << std::endl;
+  std::cout << "                                 UserKnownHostsFile=/dev/null," << std::endl;
+  std::cout << "                                 ProxyJump=bastion," << std::endl;
+  std::cout << "                                 ConnectTimeout=30." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "BatchMode=yes and ServerAliveInterval=30 are set as defaults." << std::endl;
+  std::cout << "" << std::endl;
+}
+
 static void usageRestore() {
   std::cout << "usage: crate restore <stream-file> --to <pool/jails/name>" << std::endl;
   std::cout << "" << std::endl;
@@ -511,7 +544,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.7.1" << std::endl;
+        std::cout << "crate 0.7.2" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -522,7 +555,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.7.1" << std::endl;
+          std::cout << "crate 0.7.2" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -1132,6 +1165,27 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.restoreFile = argv[a];
         } else {
           err("too many arguments for 'restore' command");
+        }
+        break;
+      case CmdReplicate:
+        if (auto argShort = isShort(argv[a])) {
+          if (argShort == 'h') { usageReplicate(); exit(0); }
+          err("unsupported short option '%s'", argv[a]);
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) { usageReplicate(); exit(0); }
+          else if (strEq(argLong, "to"))                  args.replicateTo = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "dest-dataset"))        args.replicateDestDataset = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "since"))               args.replicateSince = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "auto-incremental"))    args.replicateAutoIncremental = true;
+          else if (strEq(argLong, "ssh-port"))            args.replicateSshPort = Util::toUInt(getArgParam(++a, argc, argv));
+          else if (strEq(argLong, "ssh-key"))             args.replicateSshKey = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "ssh-config"))          args.replicateSshConfig = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "ssh-opt"))             args.replicateSshOpts.push_back(getArgParam(++a, argc, argv));
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.replicateTarget.empty()) {
+          args.replicateTarget = argv[a];
+        } else {
+          err("too many arguments for 'replicate' command");
         }
         break;
       }
