@@ -5,9 +5,12 @@
 
 #pragma once
 
+#include "ha_pure.h"
 #include "store.h"
 
 #include <atomic>
+#include <ctime>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -25,6 +28,20 @@ struct NodeConfig {
 // Load node list from YAML config file
 std::vector<NodeConfig> loadNodes(const std::string &configPath);
 
+// Load operator HA specs from the same crate-hub.conf:
+//   ha:
+//     threshold_seconds: 60
+//     specs:
+//       - container: foo
+//         primary: alpha
+//         partners: [beta, gamma]
+//
+// Returns the parsed specs (possibly empty if no `ha:` section).
+// The threshold value is written to `*outThresholdSeconds` if
+// non-null; default 60 if missing.
+std::vector<HaPure::HaSpec> loadHaSpecs(const std::string &configPath,
+                                        long *outThresholdSeconds = nullptr);
+
 class Poller {
 public:
   Poller(const std::vector<NodeConfig> &nodes, Store &store);
@@ -41,6 +58,11 @@ public:
     std::string hostInfo;       // raw JSON from /api/v1/host
     std::string containers;     // raw JSON from /api/v1/containers
     std::string lastError;
+    // Wall-clock UNIX epoch when the node first became unreachable
+    // in the current down-streak. 0 while reachable. Updated by
+    // pollNode() at each cycle. Used by the HA decision module to
+    // measure how long a node has been down.
+    time_t firstDownAt = 0;
   };
   std::vector<NodeStatus> getNodeStatuses() const;
 

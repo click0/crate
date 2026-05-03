@@ -3,16 +3,20 @@
 #include "api.h"
 #include "aggregator_pure.h"
 #include "datacenter_pure.h"
+#include "ha_pure.h"
 #include "poller.h"
 #include "store.h"
 
 #include <httplib.h>
 
+#include <ctime>
 #include <sstream>
 
 namespace CrateHub {
 
-void registerApiRoutes(httplib::Server &srv, Store &store, Poller &poller) {
+void registerApiRoutes(httplib::Server &srv, Store &store, Poller &poller,
+                       const std::vector<HaPure::HaSpec> &haSpecs,
+                       long haThresholdSeconds) {
   // Health check
   srv.Get("/healthz", [](const httplib::Request &, httplib::Response &res) {
     res.set_content("{\"status\":\"ok\"}", "application/json");
@@ -134,6 +138,37 @@ void registerApiRoutes(httplib::Server &srv, Store &store, Poller &poller) {
     auto summaries = DatacenterPure::groupAndSummarise(views);
     auto json = DatacenterPure::renderJson(summaries);
     res.set_content("{\"status\":\"ok\",\"data\":" + json + "}", "application/json");
+  });
+
+  // GET /api/v1/ha/orders — HA failover decisions for an external
+  // consumer (cron + `crate migrate`, or a future `crate ha-execute`).
+  // The hub does NOT execute migrations itself — it would need
+  // admin tokens for the per-node daemons, which violates the
+  // 0.6.7 architecture (tokens stay in operator localStorage / a
+  // chmod-600 file). The body is a list, possibly empty when no
+  // failovers are needed right now. Deterministic — calling this
+  // while node state is unchanged returns the same orders, so
+  // consumers won't see flapping.
+  srv.Get("/api/v1/ha/orders",
+          [&poller, &haSpecs, haThresholdSeconds]
+          (const httplib::Request &, httplib::Response &res) {
+    auto statuses = poller.getNodeStatuses();
+    long now = (long)::time(nullptr);
+    std::vector<HaPure::NodeView> views;
+    views.reserve(statuses.size());
+    for (auto &s : statuses) {
+      HaPure::NodeView v;
+      v.name = s.name;
+      v.reachable = s.reachable;
+      v.unreachableSeconds =
+        (s.firstDownAt > 0 && !s.reachable) ? (now - (long)s.firstDownAt) : 0;
+      views.push_back(std::move(v));
+    }
+    auto orders = HaPure::evaluateFailoverOrders(haSpecs, views,
+                                                 haThresholdSeconds);
+    auto json = HaPure::renderOrdersJson(orders);
+    res.set_content("{\"status\":\"ok\",\"data\":" + json + "}",
+                    "application/json");
   });
 
   // Prune old data periodically (called by main loop or as endpoint)
