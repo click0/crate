@@ -177,3 +177,11 @@ Items completed and removed from this file:
   Empty datacenter is canonicalised to "default". Admin UI for
   editing DCs is left for later (0.6.15 — hub/datacenter_pure.cpp
   + hub/api.cpp + hub/web/{index.html,app.js})
+- crate backup / crate restore — ZFS-send-based snapshot streams.
+  `crate backup <jail> --output-dir DIR` takes a fresh snapshot,
+  emits `zfs send` (or `zfs send -i` with --since/--auto-incremental)
+  into `<jail>-<timestamp>.zstream`. Filenames sort lexicographically
+  by time so `ls -1 | tail -n +N` retention works trivially.
+  `crate restore STREAM --to <pool/jails/name>` runs `zfs recv`.
+  Pure module owns plan choice, argv builders, retention parser
+  (0.7.0 — lib/backup_pure.cpp + lib/backup.cpp).

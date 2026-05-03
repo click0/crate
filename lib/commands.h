@@ -27,3 +27,5 @@ bool interDnsCommand(const Args &args);
 bool vpnCommand(const Args &args);
 bool inspectCrate(const Args &args);
 bool migrateCommand(const Args &args);
+bool backupCrate(const Args &args);
+bool restoreCrate(const Args &args);

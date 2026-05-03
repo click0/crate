@@ -271,6 +271,12 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdMigrate: {
     succ = migrateCommand(args);
     break;
+  } case CmdBackup: {
+    succ = backupCrate(args);
+    break;
+  } case CmdRestore: {
+    succ = restoreCrate(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}
