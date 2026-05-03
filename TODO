@@ -39,8 +39,6 @@ operational quality.)
 
 * (feature) Man pages for crated(8) and crate-hub(8).
 
-* (feature) crate inspect TARGET — full JSON dump of running container
-  configuration (spec, runtime, network, mounts).
 
 === Done (removed) ===
 
@@ -128,3 +126,8 @@ Items completed and removed from this file:
   Validates host (incl. dotted-numeric octet bounds), CIDR, proposal
   strings, keyexchange/authby/auto enums (0.6.10 — lib/ipsec_pure.cpp
   + lib/vpn.cpp)
+- crate inspect TARGET — pretty-printed JSON snapshot of a running
+  container's runtime state (identity, jail params, interfaces,
+  mounts, RCTL counters, ZFS dataset/origin, GUI session). Stable
+  key order so diffs across snapshots stay clean
+  (0.6.11 — lib/inspect_pure.cpp + lib/inspect.cpp)

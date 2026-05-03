@@ -71,6 +71,7 @@ std::string pickTarget(const Args &args) {
   case CmdLogs:     return args.logsTarget;
   case CmdStop:     return args.stopTarget;
   case CmdRestart:  return args.restartTarget;
+  case CmdInspect:  return args.inspectTarget;
   case CmdList:
   case CmdClean:
   case CmdTop:

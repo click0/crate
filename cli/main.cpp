@@ -265,6 +265,9 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdVpn: {
     succ = vpnCommand(args);
     break;
+  } case CmdInspect: {
+    succ = inspectCrate(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}

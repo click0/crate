@@ -46,6 +46,7 @@ tests/unit/hub_aggregator_pure_test
 tests/unit/inter_dns_pure_test
 tests/unit/wireguard_pure_test
 tests/unit/ipsec_pure_test
+tests/unit/inspect_pure_test
 *.gcda
 *.gcno
 coverage.info

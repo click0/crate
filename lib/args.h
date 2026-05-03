@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect};
 
 class Args {
 public:
@@ -101,6 +101,9 @@ public:
   std::string vpnSubcmd;        // "wireguard"
   std::string vpnAction;        // "render-conf"
   std::string vpnSpecFile;      // YAML spec file with [Interface]/[Peer] data
+
+  // inspect parameters
+  std::string inspectTarget;    // jail name or JID
 
   void validate();
 };
