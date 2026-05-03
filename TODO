@@ -20,9 +20,6 @@ operational quality.)
 * (feature) Rootless containers — crate is setuid root (04755). Explore
   rootless jail via jail(8) with allow.nfds.
 
-* (feature) Container migration — automated export → transfer → import
-  between hosts via crate-hub.
-
 * (feature) Hub scheduling — automatic container placement on the least
   loaded host.
 
@@ -150,3 +147,12 @@ Items completed and removed from this file:
   segments (0.6.13 — lib/wireguard_runtime_pure.cpp + lib/run.cpp).
   Full kernel-level integration without delegating to wg-quick
   remains a future item.
+- Container migration — `crate migrate <name> --from <ep> --to <ep>
+  --from-token-file <f> --to-token-file <f>` orchestrates a 5-step
+  move via the F2 API: export-on-source, download to /tmp,
+  upload-to-dest, start-on-dest, then stop-on-source. Source
+  container is stopped only AFTER the destination reports start
+  success. Tokens come from chmod-600 files so they don't appear
+  in `ps`. Endpoints validated for IPv4/IPv6/hostname forms; names
+  validated for shell-safety (0.6.14 — lib/migrate_pure.cpp +
+  lib/migrate.cpp + curl(1) for HTTP).

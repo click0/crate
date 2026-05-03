@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate};
 
 class Args {
 public:
@@ -104,6 +104,13 @@ public:
 
   // inspect parameters
   std::string inspectTarget;    // jail name or JID
+
+  // migrate parameters
+  std::string migrateTarget;        // container name on both ends
+  std::string migrateFrom;          // source crated endpoint host:port
+  std::string migrateTo;            // destination crated endpoint host:port
+  std::string migrateFromTokenFile; // chmod-600 file with source admin token
+  std::string migrateToTokenFile;   // chmod-600 file with destination admin token
 
   void validate();
 };

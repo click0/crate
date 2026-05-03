@@ -268,6 +268,9 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdInspect: {
     succ = inspectCrate(args);
     break;
+  } case CmdMigrate: {
+    succ = migrateCommand(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}

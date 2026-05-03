@@ -56,6 +56,7 @@ Command isCommand(const char *arg) {
   if (strEq(arg, "inter-dns")) return CmdInterDns;
   if (strEq(arg, "vpn"))      return CmdVpn;
   if (strEq(arg, "inspect"))  return CmdInspect;
+  if (strEq(arg, "migrate"))  return CmdMigrate;
   return CmdNone;
 }
 
@@ -176,6 +177,18 @@ void Args::validate() {
   case CmdInspect:
     if (inspectTarget.empty())
       ERR("the 'inspect' command requires a container name or JID")
+    break;
+  case CmdMigrate:
+    if (migrateTarget.empty())
+      ERR("the 'migrate' command requires a container name (positional arg)")
+    if (migrateFrom.empty())
+      ERR("the 'migrate' command requires --from <host:port>")
+    if (migrateTo.empty())
+      ERR("the 'migrate' command requires --to <host:port>")
+    if (migrateFromTokenFile.empty())
+      ERR("the 'migrate' command requires --from-token-file <path>")
+    if (migrateToTokenFile.empty())
+      ERR("the 'migrate' command requires --to-token-file <path>")
     break;
   default:
     ERR("no command was given")
