@@ -103,6 +103,7 @@ and
 .Pa style.css .
 The page polls
 .Pa /api/v1/aggregate ,
+.Pa /api/v1/datacenters ,
 .Pa /api/v1/nodes ,
 and
 .Pa /api/v1/containers
@@ -115,6 +116,14 @@ directly via
 the operator pastes an admin Bearer token on first use and the
 browser keeps it in
 .Ar localStorage .
+.Pp
+This embedded dashboard is intentionally minimal — node + container
+visibility, datacenter rollups, and one-click lifecycle buttons.
+A full datacenter administration UI
+.Pq DC create/rename, drag-drop node moves, per-DC quotas,
+.Pq attached logs/console
+will live in its own repository so the frontend can pick its own
+framework and release cadence independent of the C++ daemons.
 .Sh FILES
 .Bl -tag -width "/usr/local/share/crate-hub/web/index.html"
 .It Pa /usr/local/etc/crate-hub.conf

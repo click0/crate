@@ -15,6 +15,20 @@ operational quality.)
 
 === Medium priority — operational quality ===
 
+=== Out of scope (separate repository) ===
+
+* Admin/dashboard UI for the datacenter view. The hub already
+  exposes /api/v1/{nodes,datacenters,aggregate,containers} and
+  the per-node crated daemon owns the F2 mutating surface
+  (start/stop/restart/destroy, snapshot CRUD, export/import,
+  console-over-WS, stats SSE). A richer admin SPA — DC create/
+  rename, drag-drop node moves, per-DC quotas, log/console
+  attach — will live in its own repository so the frontend can
+  pick its own framework, build pipeline, and release cadence
+  without dragging the C++ side along. The minimal vanilla-JS
+  dashboard in hub/web/ stays as a built-in fallback for
+  tokenless local monitoring.
+
 === Low priority — future enhancements ===
 
 * (feature) Rootless containers — crate is setuid root (04755). Explore
