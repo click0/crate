@@ -9,7 +9,6 @@
 #include "util.h"
 
 #include <openssl/evp.h>
-#include <openssl/sha.h>
 
 #include <arpa/inet.h>
 #include <fcntl.h>

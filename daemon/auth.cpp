@@ -7,7 +7,6 @@
 #include <httplib.h>
 
 #include <openssl/evp.h>
-#include <openssl/sha.h>
 
 #include <sys/socket.h>
 #include <sys/ucred.h>
