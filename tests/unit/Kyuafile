@@ -44,3 +44,4 @@ atf_test_program{name="inter_dns_pure_test"}
 atf_test_program{name="wireguard_pure_test"}
 atf_test_program{name="ipsec_pure_test"}
 atf_test_program{name="inspect_pure_test"}
+atf_test_program{name="wireguard_runtime_pure_test"}

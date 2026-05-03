@@ -8,6 +8,7 @@
 #include "spec_pure.h"
 #include "spec.h"
 #include "config.h"
+#include "wireguard_runtime_pure.h"
 #include "lst-all-script-sections.h"   // generated: defines allScriptSections
 
 #include "util.h"   // Util::toUInt
@@ -109,6 +110,10 @@ const Spec::TorOptDetails* Spec::optionTor() const {
   return getOptionDetails<Spec::TorOptDetails>("tor");
 }
 
+const Spec::WireguardOptDetails* Spec::optionWireguard() const {
+  return getOptionDetails<Spec::WireguardOptDetails>("wireguard");
+}
+
 std::shared_ptr<Spec::NetOptDetails> Spec::NetOptDetails::createDefault() {
   // default "net" options allow all outbound and no inbound
   auto d = std::make_shared<NetOptDetails>();
@@ -127,6 +132,12 @@ std::shared_ptr<Spec::TorOptDetails> Spec::TorOptDetails::createDefault() {
   return std::make_shared<TorOptDetails>();
 }
 
+Spec::WireguardOptDetails::WireguardOptDetails() = default;
+
+std::shared_ptr<Spec::WireguardOptDetails> Spec::WireguardOptDetails::createDefault() {
+  return std::make_shared<WireguardOptDetails>();
+}
+
 // ===================================================================
 // Allowed-options set (also referenced by lib/spec.cpp's parser).
 // Keep in sync with the list in spec.cpp.
@@ -136,7 +147,7 @@ namespace {
 #define ERR(msg...) ERR2("crate spec validate", msg)
 
 static const std::list<std::string> allOptionsLst = {
-  "x11", "net", "ssl-certs", "tor", "video", "gl",
+  "x11", "net", "ssl-certs", "tor", "video", "gl", "wireguard",
   "no-rm-static-libs", "dbg-ktrace"
 };
 static const std::set<std::string> allOptionsSet(
@@ -362,6 +373,15 @@ void Spec::validate() const {
   if (terminalOptions) {
     if (terminalOptions->devfsRuleset != -1 && (terminalOptions->devfsRuleset < 0 || terminalOptions->devfsRuleset > 65535))
       ERR("terminal/devfs_ruleset must be 0-65535")
+  }
+
+  // wireguard option: a non-empty `config` path must be valid
+  if (auto *wg = optionWireguard()) {
+    if (!wg->configPath.empty()) {
+      auto reason = WireguardRuntimePure::validateConfigPath(wg->configPath);
+      if (!reason.empty())
+        ERR("options/wireguard/config: " << reason)
+    }
   }
 }
 

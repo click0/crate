@@ -6,6 +6,81 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.13] — 2026-05-03
+
+WireGuard runtime — `crate run` now brings a tunnel up before the
+jail starts and tears it down with the container, driven by a single
+`options.wireguard.config:` line in the spec:
+
+```yaml
+options:
+    wireguard:
+        config: /usr/local/etc/wireguard/wg0.conf
+```
+
+The runtime invokes `/usr/local/bin/wg-quick up <path>` after the
+spec is parsed and registers a `RunAtEnd` handler that calls
+`wg-quick down <path>` on every exit path — clean, exception, or
+signal. No new kernel touchpoints in this binary; we stand on the
+shoulders of `wg-quick(8)`.
+
+### Why delegate to wg-quick
+
+A from-scratch in-process WG client would need either the `if_wg`
+kmod's ioctl interface (FreeBSD 13+) or a userspace wg-go
+embedding. Both are substantial subsystems that need their own
+RAII for interface destruction, route fixup, jail-side IPv6 RA
+suppression, and idempotent reconciliation across crash recovery.
+Delegating the kernel/userspace plumbing to `wg-quick` and limiting
+this release to lifecycle wiring keeps the surface tractable. The
+TODO entry for full kernel-level integration is preserved as a
+future item.
+
+### Defense in depth
+
+`wireguard.config` paths are validated server-side before any I/O:
+- non-empty, ≤255 chars
+- absolute path (`/...`)
+- no `..` segments (defense against config traversal)
+- no shell metacharacters (`;`, `` ` ``, `$`, `|`, `&`, `<`, `>`,
+  `\\`, `\n`, `\r`)
+
+Even with a compromised spec, the worst case is a `crate validate`
+error — never `wg-quick up '/etc/foo;rm -rf /'`.
+
+### Implementation
+
+- **`lib/wireguard_runtime_pure.{h,cpp}`** — pure validators +
+  argv builders (`buildUpArgv`, `buildDownArgv`). Both argv lists
+  start with the absolute path to `wg-quick` so the runtime never
+  trusts `PATH` (which `crate(8)` re-sets at setuid-init time
+  anyway).
+- **`lib/spec.h`** + **`lib/spec.cpp`** + **`lib/spec_pure.cpp`** —
+  new `WireguardOptDetails` option class, `wireguard` added to the
+  allowed-options whitelist, YAML parser handles `config:` field,
+  `Spec::validate()` runs `validateConfigPath` when the option is
+  active.
+- **`lib/run.cpp`** — calls `wg-quick up` after `parseSpec` and
+  registers a RunAtEnd handler so all exit paths run `wg-quick
+  down`. Teardown is best-effort (try/catch swallowed) so a stuck
+  WG interface doesn't block jail destruction.
+
+### Tests
+
+`tests/unit/wireguard_runtime_pure_test.cpp` — 10 ATF cases:
+- 6 `validateConfigPath`: typical accepted, empty rejected,
+  relative rejected, 255/256-char boundary, `..` segment rejected
+  (with the carve-out that `..` *inside* a longer name like
+  `foo..bar.conf` is fine), all 10 shell metacharacters (`;`,
+  `` ` ``, `$`, `|`, `&`, `<`, `>`, `\\`, `\n`, `\r`)
+- 3 argv-shape tests for `buildUpArgv` / `buildDownArgv` plus an
+  invariant that argv[0] is the same absolute path in both.
+- 1 `isEnabled` predicate.
+
+**677/677** unit tests pass (was 667).
+
+---
+
 ## [0.6.12] — 2026-05-03
 
 Man pages for `crated(8)` and `crate-hub(8)`. Operators now have a

@@ -10,6 +10,7 @@
 #include "run_pure.h"
 #include "share_pure.h"
 #include "bridge_pure.h"
+#include "wireguard_runtime_pure.h"
 #include "ifconfig_ops.h"
 #include "scripts.h"
 #include "ctx.h"
@@ -284,6 +285,29 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // parse +CRATE.SPEC
   auto spec = parseSpec(J("/+CRATE.SPEC")).preprocess();
+
+  // WireGuard tunnel: if the spec opts in via options.wireguard.config,
+  // bring the tunnel up *before* the jail starts and register a
+  // RunAtEnd handler so a teardown (clean exit, exception, signal)
+  // tears it down in the reverse order. The actual command is
+  // wg-quick(8) — no kernel touchpoints in this binary.
+  RunAtEnd wgDownAtEnd;
+  if (auto *wg = spec.optionWireguard()) {
+    if (WireguardRuntimePure::isEnabled(wg->configPath)) {
+      auto upArgv = WireguardRuntimePure::buildUpArgv(wg->configPath);
+      LOG("wireguard: bringing tunnel up via " << upArgv[0] << " up " << wg->configPath)
+      Util::execCommand(upArgv, "wg-quick up");
+      auto downConfig = wg->configPath;
+      wgDownAtEnd.reset([downConfig]() {
+        try {
+          Util::execCommand(WireguardRuntimePure::buildDownArgv(downConfig),
+                            "wg-quick down");
+        } catch (...) {
+          // teardown is best-effort — log but don't propagate.
+        }
+      });
+    }
+  }
 
   // Base container cloning (§22): if spec references a running jail, ZFS-clone its filesystem
   RunAtEnd destroyBaseClone;

@@ -76,7 +76,7 @@ Spec& Spec::operator=(const Spec &o) {
 // all options — keep the parsing-order list here. The validation set
 // lives in lib/spec_pure.cpp (spec_pure also references the parser
 // list via re-declaration to keep things isolated).
-static std::list<std::string> allOptionsLst = {"x11", "net", "ssl-certs", "tor", "video", "gl", "no-rm-static-libs", "dbg-ktrace"};
+static std::list<std::string> allOptionsLst = {"x11", "net", "ssl-certs", "tor", "video", "gl", "no-rm-static-libs", "dbg-ktrace", "wireguard"};
 
 // helpers
 static std::string AsString(const YAML::Node &node) {
@@ -679,6 +679,17 @@ static Spec parseSpecFromNode(YAML::Node top) {
               if (!spec.optionExists("net"))
                 spec.options["net"] = std::make_shared<Spec::NetOptDetails>(); // blank "net" option details
               spec.optionNetWr()->outboundWan = true; // only WAN, DNS isn't needed for Tor
+            } else if (soptName == "wireguard") {
+              optVal = std::make_shared<Spec::WireguardOptDetails>();
+              if (soptVal.IsMap()) {
+                auto wg = static_cast<Spec::WireguardOptDetails*>(optVal.get());
+                for (auto wgOpt : soptVal) {
+                  if (AsString(wgOpt.first) == "config")
+                    wg->configPath = AsString(wgOpt.second);
+                  else
+                    ERR("the invalid value options/wireguard/" << wgOpt.first << " supplied")
+                }
+              }
             } else {
               if (!soptVal.IsNull())
                 ERR("options/* values must be empty when options are in the extended format")

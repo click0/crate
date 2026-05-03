@@ -90,6 +90,15 @@ public:
     static std::shared_ptr<TorOptDetails> createDefault();
     bool controlPort;                 // option to have control port created to be used from inside of the container
   };
+  class WireguardOptDetails : public OptDetails {
+  public:
+    WireguardOptDetails();
+    static std::shared_ptr<WireguardOptDetails> createDefault();
+    // Absolute path to a wg-quick(8) config file. The runtime calls
+    // `wg-quick up <path>` before starting the jail and registers a
+    // RunAtEnd handler for `wg-quick down <path>` on teardown.
+    std::string configPath;
+  };
   std::vector<std::string>                           baseKeep;
   std::vector<std::string>                           baseKeepWildcard;
   std::vector<std::string>                           baseRemove;
@@ -297,6 +306,7 @@ public:
   const NetOptDetails* optionNet() const;
   NetOptDetails* optionNetWr() const;
   const TorOptDetails* optionTor() const;
+  const WireguardOptDetails* optionWireguard() const;
 private:
   template<class OptDetailsClass>
   const OptDetailsClass* getOptionDetails(const char *opt) const;
