@@ -20,7 +20,6 @@
 #include "util.h"
 #include "zfs_ops.h"
 
-#include <openssl/sha.h>
 #include <openssl/evp.h>
 
 #include <fcntl.h>
