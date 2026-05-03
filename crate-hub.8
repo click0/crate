@@ -1,0 +1,137 @@
+.\" Copyright (c) 2026
+.\"     Vladyslav V. Prodan.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.Dd May 3, 2026
+.Dt CRATE-HUB 8
+.Os
+.Sh NAME
+.Nm crate-hub
+.Nd central aggregator for multi-host crate(8) deployments
+.Sh SYNOPSIS
+.Nm
+.Op Fl f
+.Op Fl c Ar config
+.Op Fl p Ar port
+.Op Fl w Ar webdir
+.Sh DESCRIPTION
+.Nm
+polls
+.Xr crated 8
+instances on a list of remote nodes, caches their state in a
+SQLite store, and serves an aggregated REST API plus an embedded
+web dashboard. It is the single pane of glass for an operator
+running containers on multiple hosts.
+.Pp
+The hub itself does not proxy mutating requests
+.Po
+.Ic POST
+to start/stop/restart a container, etc.
+.Pc :
+the dashboard hits each node's
+.Xr crated 8
+directly so the
+.Em admin
+Bearer token never leaves the operator's browser. The hub is
+read-mostly aggregator.
+.Pp
+The options are as follows:
+.Bl -tag -width Ds
+.It Fl f , Fl Fl foreground
+Stay in the foreground; do not fork.
+.It Fl c Ar config , Fl Fl config Ar config
+Path to the YAML configuration file. Default
+.Pa /usr/local/etc/crate-hub.conf .
+.It Fl p Ar port
+TCP port to listen on. Default
+.Ar 9810 .
+.It Fl w Ar webdir
+Directory served as the embedded dashboard. Default
+.Pa /usr/local/share/crate-hub/web .
+.El
+.Sh ENDPOINTS
+.Bl -tag -width "POST /api/v1/admin/prune                  "
+.It GET Pa /healthz
+Liveness check.
+.It GET Pa /api/v1/nodes
+List configured nodes with their last-poll reachability and
+last-error string.
+.It GET Pa /api/v1/nodes/:host/containers
+Container list reported by a specific node.
+.It GET Pa /api/v1/containers
+All containers across all nodes, grouped by node.
+.It GET Pa /api/v1/aggregate
+Single-shot summary for the dashboard banner: nodes total /
+reachable / down, containers total.
+.It GET Pa /metrics
+Prometheus exposition aggregating all nodes.
+.It POST Pa /api/v1/admin/prune
+Drop store entries older than 48 hours.
+.El
+.Sh CONFIGURATION
+.Bd -literal -offset indent
+listen_port: 9810
+
+# Polling interval for each node, seconds.
+poll_interval: 15
+
+nodes:
+  - name:  alpha
+    host:  alpha.example.com
+    port:  9800
+    token: <admin-token-for-alpha>
+  - name:  beta
+    host:  beta.example.com
+    port:  9800
+    token: <admin-token-for-beta>
+.Ed
+.Sh WEB DASHBOARD
+The
+.Pa /usr/local/share/crate-hub/web
+directory ships
+.Pa index.html ,
+.Pa app.js ,
+and
+.Pa style.css .
+The page polls
+.Pa /api/v1/aggregate ,
+.Pa /api/v1/nodes ,
+and
+.Pa /api/v1/containers
+every five seconds. Mutating actions
+.Pq Ic start , Ic stop , Ic restart , Ic destroy
+hit the per-node
+.Xr crated 8
+directly via
+.Ic fetch ;
+the operator pastes an admin Bearer token on first use and the
+browser keeps it in
+.Ar localStorage .
+.Sh FILES
+.Bl -tag -width "/usr/local/share/crate-hub/web/index.html"
+.It Pa /usr/local/etc/crate-hub.conf
+Operator-edited config file.
+.It Pa /var/db/crate-hub/metrics.db
+SQLite store of polled metrics.
+.It Pa /usr/local/share/crate-hub/web/index.html
+Embedded dashboard root.
+.El
+.Sh SEE ALSO
+.Xr crate 5 ,
+.Xr crated 8 ,
+.Xr jls 8
+.Sh HISTORY
+The
+.Nm
+service first appeared in crate version 0.4.0; the embedded web
+dashboard landed in 0.6.7.
+.Sh AUTHORS
+.An Vladyslav V. Prodan Aq Mt github.com/click0

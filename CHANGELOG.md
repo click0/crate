@@ -6,6 +6,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.12] — 2026-05-03
+
+Man pages for `crated(8)` and `crate-hub(8)`. Operators now have a
+proper offline reference for both daemons — endpoints, auth model,
+config keys, and file layout — so `man crated` works the way it
+should on a FreeBSD system.
+
+### What's there
+
+- **`crated.8`** — REST API daemon. Documents:
+  - The three independent listeners (unix socket, TCP/TLS,
+    WebSocket console) and how they relate to the auth model.
+  - Every F1 + F2 endpoint with one-line descriptions, in the
+    order they appear in `daemon/routes.cpp`.
+  - The full `crated.conf` shape with a sample.
+  - File paths (`/usr/local/etc/crated.conf`,
+    `/var/run/crate/crated.sock`, etc.).
+  - Caveats — explicitly calls out the "unix socket peer is
+    trusted as admin without `getpeereid(2)`" gap so operators
+    auditing the daemon find it from the man page first.
+- **`crate-hub.8`** — multi-host aggregator. Documents:
+  - Why the hub is read-mostly: mutating actions go direct to the
+    per-node `crated`, so admin tokens stay in the operator's
+    browser `localStorage`.
+  - All `/api/v1/*` aggregate endpoints.
+  - Sample `crate-hub.conf` with node + token list.
+  - Web dashboard layout under `/usr/local/share/crate-hub/web/`.
+
+Both pages follow the existing `crate.5` mdoc style — same
+copyright header, same `.Sh` section ordering, same `.Bl -tag`
+formatting.
+
+### Install
+
+- `make install-daemon` now also installs `crated.8.gz` into
+  `${PREFIX}/man/man8/`. Existing operators who run
+  `make install-daemon` after upgrade pick this up automatically.
+- `make install-hub-man` (new) installs `crate-hub.8.gz`. The hub
+  binary itself isn't built from this Makefile (separate build),
+  so this target ships only the documentation; the hub package
+  invokes it.
+
+### Tests
+
+Pure documentation; no test changes. **667/667** unit tests
+unchanged.
+
+---
+
 ## [0.6.11] — 2026-05-03
 
 `crate inspect TARGET` — pretty-printed JSON snapshot of a running

@@ -37,8 +37,6 @@ operational quality.)
 * (feature) crate update TARGET — in-place base system and package update
   inside a running jail without full recreate.
 
-* (feature) Man pages for crated(8) and crate-hub(8).
-
 * (security) Verify Unix-socket peer credentials in crated. Today
   daemon/auth.cpp::isUnixSocketPeer trusts an empty REMOTE_ADDR as
   proof of unix-socket origin and grants full admin access without
@@ -143,3 +141,10 @@ Items completed and removed from this file:
   mounts, RCTL counters, ZFS dataset/origin, GUI session). Stable
   key order so diffs across snapshots stay clean
   (0.6.11 — lib/inspect_pure.cpp + lib/inspect.cpp)
+- Man pages for crated(8) and crate-hub(8) — mdoc-format pages that
+  match the existing crate.5 style: NAME / SYNOPSIS / DESCRIPTION /
+  ENDPOINTS / AUTHENTICATION / CONFIGURATION / FILES / CAVEATS /
+  SEE ALSO / HISTORY / AUTHORS sections. Installed via the existing
+  `make install-daemon` target (which now ships crated.8.gz too) and
+  a new `make install-hub-man` target (0.6.12 — crated.8 +
+  crate-hub.8)

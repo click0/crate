@@ -1,0 +1,224 @@
+.\" Copyright (c) 2026
+.\"     Vladyslav V. Prodan.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.Dd May 3, 2026
+.Dt CRATED 8
+.Os
+.Sh NAME
+.Nm crated
+.Nd REST API daemon for remote crate(8) management
+.Sh SYNOPSIS
+.Nm
+.Op Fl f
+.Op Fl c Ar config
+.Sh DESCRIPTION
+.Nm
+exposes the read and write halves of the
+.Xr crate 8
+control surface over HTTP/HTTPS, so external tooling
+.Pq the hub web dashboard, CI runners, monitoring agents
+can drive container lifecycle without an interactive shell on the host.
+.Pp
+The daemon listens on three independent endpoints:
+.Bl -tag -width Ds
+.It Unix domain socket
+Local-only access, default
+.Pa /var/run/crate/crated.sock .
+A connecting peer is currently treated as
+.Em admin
+on the assumption that the socket file mode
+.Pq Pa root:wheel No 0660
+is the access control.
+.It TCP listener
+TLS-capable. Default port 9800. Authentication via
+.Ar Authorization: Bearer <token>
+header against the token list in
+.Pa crated.conf .
+.It WebSocket console
+Independent TCP listener on
+.Ar console_ws.port
+.Pq default 0, disabled .
+Implements RFC 6455 v13. After the upgrade handshake the daemon
+proxies bytes between the WebSocket and a
+.Xr jexec 8 Ns 'd
+.Pa /bin/sh -i
+running inside the target jail.
+.El
+.Pp
+The options are as follows:
+.Bl -tag -width Ds
+.It Fl f , Fl Fl foreground
+Stay in the foreground; do not fork off the controlling terminal.
+Useful when running under
+.Xr daemon 8
+or systemd-style supervisors.
+.It Fl c Ar config , Fl Fl config Ar config
+Path to the YAML configuration file. Default
+.Pa /usr/local/etc/crated.conf .
+.El
+.Sh ENDPOINTS
+.Bl -tag -width "DELETE /api/v1/exports/:filename                 "
+.It GET Pa /healthz
+Liveness check. No auth.
+.It GET Pa /api/v1/containers
+List running jails (delegates to
+.Xr jls 8
+.Fl Fl libxo Ar json ) .
+.It GET Pa /api/v1/host
+Host-level info: kernel release, hostname, ncpu, physmem.
+.It GET Pa /metrics
+Prometheus exposition. No auth, rate-limited.
+.It GET Pa /api/v1/containers/:name/stats
+Snapshot RCTL counters for the named container.
+.It GET Pa /api/v1/containers/:name/stats/stream
+Server-sent events stream of stats, 1 Hz.
+.It GET Pa /api/v1/containers/:name/logs
+Tail container console log;
+.Ar ?follow=true
+holds the connection open.
+.It POST Pa /api/v1/containers/:name/start
+Resume a container from its
+.Pa /var/run/crate/<name>.crate
+file.
+.It POST Pa /api/v1/containers/:name/stop
+Send SIGTERM, then SIGKILL after a grace window.
+.It POST Pa /api/v1/containers/:name/restart
+Stop + start in one call.
+.It DELETE Pa /api/v1/containers/:name
+Destroy the jail and remove its dataset.
+.It GET Pa /api/v1/containers/:name/snapshots
+List ZFS snapshots for the container.
+.It POST Pa /api/v1/containers/:name/snapshots
+Create a snapshot. Body
+.Pq optional :
+.Ic { Qq name : Qq <snap> } .
+Without a body, an
+.Ar auto_YYYY-MM-DD_HHMMSS
+name is generated.
+.It DELETE Pa /api/v1/containers/:name/snapshots/:snap
+Delete a snapshot.
+.It POST Pa /api/v1/containers/:name/export
+Run
+.Ic tar | xz
+on the live rootfs and write
+.Pa /var/run/crate/<name>-<unixtime>.crate .
+Returns
+.Ic { file , size , sha256 } .
+.It GET Pa /api/v1/exports/:filename
+Stream a previously-exported
+.Pa .crate
+back to the client.
+.It POST Pa /api/v1/imports/:name
+Accept a raw
+.Pa .crate
+body
+.Pq Ic Content-Type: application/octet-stream
+and atomic-rename into
+.Pa /var/run/crate/<name>.crate .
+.It GET Pa /api/v1/containers/:name/console
+.Pq WebSocket
+Interactive
+.Pa /bin/sh
+session inside the named jail.
+.El
+.Sh AUTHENTICATION
+Read endpoints are open to local socket peers and to any
+.Em viewer
+or
+.Em admin
+token holder. Mutating endpoints require an
+.Em admin
+token, except over the unix socket where
+.Po
+see
+.Sx CAVEATS
+.Pc
+all peers are currently admin.
+.Pp
+Tokens are stored as
+.Ar sha256:<hex>
+hashes in
+.Pa crated.conf ;
+the daemon never sees the plaintext after first run.
+.Sh CONFIGURATION
+The default config path is
+.Pa /usr/local/etc/crated.conf
+(YAML). Sample structure:
+.Bd -literal -offset indent
+listen:
+    unix: /var/run/crate/crated.sock
+    tcp_port: 9800
+    tcp_bind: 0.0.0.0
+
+tls:
+    cert: /usr/local/etc/crated.crt
+    key:  /usr/local/etc/crated.key
+    require_client_cert: false
+
+auth:
+    tokens:
+      - name:        ci-runner
+        token_hash:  sha256:abc123...
+        role:        admin
+
+console_ws:
+    port: 9802
+    bind: "::"
+
+log:
+    file:  /var/log/crated.log
+    level: info
+.Ed
+.Sh FILES
+.Bl -tag -width "/usr/local/etc/crated.conf.sample"
+.It Pa /usr/local/etc/crated.conf
+Operator-edited config file.
+.It Pa /usr/local/etc/crated.conf.sample
+Pristine reference shipped with the package.
+.It Pa /var/run/crate/crated.sock
+Unix domain control socket.
+.It Pa /var/run/crate/crated.pid
+Process id of the daemon.
+.It Pa /var/run/crate/<name>.crate
+Saved container archives produced by the export endpoint and
+consumed by the start endpoint.
+.It Pa /var/log/crated.log
+Default log file.
+.El
+.Sh CAVEATS
+.Bl -bullet
+.It
+Unix-socket peers are currently treated as admin without
+verifying their uid/gid via
+.Xr getpeereid 2 .
+The unix-socket file mode is the only access control. A future
+release will tighten this.
+.It
+The WebSocket console listener is disabled by default
+.Pq Ar console_ws.port = 0 .
+.It
+TLS configuration is operator-supplied. The daemon will not
+auto-generate certificates.
+.El
+.Sh SEE ALSO
+.Xr crate 5 ,
+.Xr crate-hub 8 ,
+.Xr crate-snmpd 8 ,
+.Xr jexec 8 ,
+.Xr jls 8
+.Sh HISTORY
+The
+.Nm
+daemon first appeared in crate version 0.4.0 and gained the full
+F2 write API in 0.6.5.
+.Sh AUTHORS
+.An Vladyslav V. Prodan Aq Mt github.com/click0
