@@ -191,3 +191,13 @@ Items completed and removed from this file:
   expiry + scope check before the role gate. Pre-0.7.1 configs
   keep working unchanged: missing fields = never-expires + no
   restriction (0.7.1 — lib/auth_pure.cpp + daemon/auth.cpp).
+- crate replicate — ZFS storage replication via ssh.
+  `crate replicate <jail> --to [user@]host --dest-dataset <ds>`
+  takes a fresh snapshot and streams `zfs send | ssh ... 'zfs
+  recv'`. Supports incremental (--since / --auto-incremental).
+  Operator-controllable SSH transport: --ssh-port, --ssh-key,
+  --ssh-config, repeatable --ssh-opt KEY=VAL (StrictHostKeyChecking,
+  UserKnownHostsFile, ProxyJump, ConnectTimeout, ...). All inputs
+  validated against shell metacharacters and `..` segments before
+  reaching execPipeline. BatchMode=yes + ServerAliveInterval=30
+  set as defaults (0.7.2 — lib/replicate_pure.cpp + lib/replicate.cpp).

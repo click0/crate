@@ -277,6 +277,9 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdRestore: {
     succ = restoreCrate(args);
     break;
+  } case CmdReplicate: {
+    succ = replicateCrate(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}

@@ -59,6 +59,7 @@ Command isCommand(const char *arg) {
   if (strEq(arg, "migrate"))  return CmdMigrate;
   if (strEq(arg, "backup"))   return CmdBackup;
   if (strEq(arg, "restore"))  return CmdRestore;
+  if (strEq(arg, "replicate")) return CmdReplicate;
   return CmdNone;
 }
 
@@ -203,6 +204,14 @@ void Args::validate() {
       ERR("the 'restore' command requires a stream file (positional arg)")
     if (restoreDataset.empty())
       ERR("the 'restore' command requires --to <pool/jails/name>")
+    break;
+  case CmdReplicate:
+    if (replicateTarget.empty())
+      ERR("the 'replicate' command requires a jail name (positional arg)")
+    if (replicateTo.empty())
+      ERR("the 'replicate' command requires --to <[user@]host>")
+    if (replicateDestDataset.empty())
+      ERR("the 'replicate' command requires --dest-dataset <pool/jails/name>")
     break;
   default:
     ERR("no command was given")
