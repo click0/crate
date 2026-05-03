@@ -6,6 +6,97 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.9] — 2026-05-03
+
+WireGuard config rendering — `crate vpn wireguard render-conf` reads
+a small YAML spec and emits a `wg-quick(8)`-compatible INI config.
+Validates keys, CIDRs, and endpoint forms before rendering, so
+operators see "PublicKey is too short" instead of a cryptic
+`wg(8)` error two screens later.
+
+### Why pure tooling, not auto-integrated runtime
+
+WireGuard kernel-level integration on FreeBSD requires the `if_wg`
+kmod, privileged interface creation, route management, and jail-side
+RA suppression — each of which is a separate, vetted-in-production
+piece of plumbing. Until that lands, the pragmatic step is a tested
+config-renderer the operator pipes into `wg-quick up`. The runtime
+TODO tracks the rest.
+
+### Usage
+
+```sh
+$ cat vpn-spec.yml
+interface:
+    private_key: "AAAA…AAAA="
+    addresses: ["10.0.0.1/24", "fd00::1/64"]
+    listen_port: 51820
+peers:
+    - public_key: "BBBB…BBBB="
+      allowed_ips: ["10.0.0.2/32"]
+      endpoint: "vpn.example.com:51820"
+      persistent_keepalive: 25
+      description: "edge router"
+
+$ crate vpn wireguard render-conf vpn-spec.yml | sudo tee /etc/wireguard/wg0.conf
+$ sudo wg-quick up wg0
+```
+
+### Validation
+
+- **Keys** (private/public/preshared) must be exactly 44 base64
+  characters ending with `=` — the canonical form for 32 raw bytes.
+  Stray whitespace or an alphabet typo is caught here, not by `wg`.
+- **CIDRs** accept both IPv4 (prefix 0..32) and IPv6 (prefix 0..128).
+  The IPv4 path enforces octets ≤ 255; the IPv6 path allows one `::`
+  shorthand and rejects two.
+- **Endpoints** support `host:port` (IPv4 / RFC 1123 hostname) and
+  bracketed `[ipv6]:port`. Port range 1..65535.
+- **Spec invariants**: `[Interface]` requires `private_key` and at
+  least one `addresses` entry; the file requires at least one
+  `[Peer]` section; each peer requires `public_key` and at least one
+  `allowed_ips` entry. The first error includes a `peer #N` index so
+  multi-peer files are easy to debug.
+
+### Implementation
+
+- **`lib/wireguard_pure.{h,cpp}`** — pure validators + INI renderer:
+  `validateKey()`, `validatePort()`, `validateCidr()`,
+  `validateEndpoint()`, `validateConfig()`, `renderConf()`. No
+  socket/kernel touchpoints — the entire module is unit-testable on
+  Linux.
+- **`lib/vpn.cpp`** — YAML adapter: parses the spec via yaml-cpp,
+  builds the pure structs, validates, prints the INI to stdout.
+- **`cli/args.cpp` + `cli/args_pure.cpp`** — new `CmdVpn` enumerator,
+  `crate vpn wireguard render-conf <spec>` argument parsing.
+- **`lib/audit*.cpp`** — `vpn` is read-only with respect to jails
+  (it only reads the spec file and writes to stdout), so it's not
+  recorded in `/var/log/crate/audit.log`.
+
+### Tests
+
+`tests/unit/wireguard_pure_test.cpp` — 26 ATF cases:
+- 4 `validateKey` (zero-bytes accepted, wrong-length rejected,
+  missing-padding rejected, non-base64-char rejected)
+- 2 `validatePort` (typical range, edge cases including `0`,
+  `65536`, negative, non-numeric)
+- 4 `validateCidr` (v4 typical, v4 invalid incl. octet > 255 and
+  prefix > 32, v6 typical, v6 invalid incl. double `::` and
+  prefix > 128)
+- 4 `validateEndpoint` (v4, bracketed v6, hostname, malformed —
+  no port, missing `]`, port out of range, illegal hostname char)
+- 4 `validateConfig` integration (minimal valid, no peers, no
+  addresses, peer-index in error message)
+- 8 `renderConf` (interface section emitted, CSV-joined addresses,
+  optional `ListenPort` omitted when empty, peer section with
+  description+endpoint+keepalive, `PresharedKey` emitted when set,
+  omitted when empty, multiple peers separated, output ends with
+  newline)
+
+**627/627** unit tests pass (was 601).
+
+---
+
 ## [0.6.8] — 2026-05-02
 
 Inter-container DNS — drops the manual-`/etc/hosts` ritual that

@@ -75,6 +75,7 @@ std::string pickTarget(const Args &args) {
   case CmdClean:
   case CmdTop:
   case CmdInterDns:
+  case CmdVpn:
   case CmdNone:
   default:          return "";
   }

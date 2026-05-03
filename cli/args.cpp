@@ -55,6 +55,7 @@ static void usage() {
   std::cout << "  restart                    restart a running container (run 'crate restart -h' for details)" << std::endl;
   std::cout << "  top                        live resource monitor across all running containers" << std::endl;
   std::cout << "  inter-dns                  rebuild the global .crate DNS zone from running jails" << std::endl;
+  std::cout << "  vpn                        VPN tooling — currently 'vpn wireguard render-conf <spec.yml>'" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -343,6 +344,27 @@ static void usageInterDns() {
   std::cout << "" << std::endl;
 }
 
+static void usageVpn() {
+  std::cout << "usage: crate vpn wireguard render-conf <spec.yml>" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Render a wg-quick(8)-compatible WireGuard configuration from a" << std::endl;
+  std::cout << "small YAML spec. Validates keys (44-char base64), CIDRs, and" << std::endl;
+  std::cout << "endpoint host:port forms before emitting the INI text on stdout." << std::endl;
+  std::cout << "Apply with: wg-quick up <output-file>" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Spec example:" << std::endl;
+  std::cout << "  interface:" << std::endl;
+  std::cout << "    private_key: <base64>" << std::endl;
+  std::cout << "    addresses: [10.0.0.1/24]" << std::endl;
+  std::cout << "    listen_port: 51820" << std::endl;
+  std::cout << "  peers:" << std::endl;
+  std::cout << "    - public_key: <base64>" << std::endl;
+  std::cout << "      allowed_ips: [10.0.0.2/32]" << std::endl;
+  std::cout << "      endpoint: vpn.example.com:51820" << std::endl;
+  std::cout << "      persistent_keepalive: 25" << std::endl;
+  std::cout << "" << std::endl;
+}
+
 static void err(const char *msg) {
   fprintf(stderr, "failed to parse arguments: %s\n", msg);
   std::cout << "" << std::endl;
@@ -406,7 +428,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.6.8" << std::endl;
+        std::cout << "crate 0.6.9" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -417,7 +439,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.6.8" << std::endl;
+          std::cout << "crate 0.6.9" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -950,6 +972,23 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           err("unsupported long option '%s'", argv[a]);
         } else {
           err("'inter-dns' command takes no arguments");
+        }
+        break;
+      case CmdVpn:
+        if (auto argShort = isShort(argv[a])) {
+          if (argShort == 'h') { usageVpn(); exit(0); }
+          err("unsupported short option '%s'", argv[a]);
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) { usageVpn(); exit(0); }
+          err("unsupported long option '%s'", argv[a]);
+        } else if (args.vpnSubcmd.empty()) {
+          args.vpnSubcmd = argv[a];
+        } else if (args.vpnAction.empty()) {
+          args.vpnAction = argv[a];
+        } else if (args.vpnSpecFile.empty()) {
+          args.vpnSpecFile = argv[a];
+        } else {
+          err("too many arguments for 'vpn' command");
         }
         break;
       }

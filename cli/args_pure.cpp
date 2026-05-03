@@ -54,6 +54,7 @@ Command isCommand(const char *arg) {
   if (strEq(arg, "restart"))  return CmdRestart;
   if (strEq(arg, "top"))      return CmdTop;
   if (strEq(arg, "inter-dns")) return CmdInterDns;
+  if (strEq(arg, "vpn"))      return CmdVpn;
   return CmdNone;
 }
 
@@ -158,6 +159,18 @@ void Args::validate() {
     break;
   case CmdInterDns:
     // No arguments — rebuilds /etc/hosts + unbound from JailQuery.
+    break;
+  case CmdVpn:
+    if (vpnSubcmd.empty())
+      ERR("the 'vpn' command requires a subcommand: 'wireguard'")
+    if (vpnSubcmd != "wireguard")
+      ERR("'vpn " << vpnSubcmd << "' is not supported (only 'wireguard')")
+    if (vpnAction.empty())
+      ERR("the 'vpn wireguard' command requires an action: 'render-conf'")
+    if (vpnAction != "render-conf")
+      ERR("'vpn wireguard " << vpnAction << "' is not supported (only 'render-conf')")
+    if (vpnSpecFile.empty())
+      ERR("the 'vpn wireguard render-conf' command requires a spec YAML file")
     break;
   default:
     ERR("no command was given")
