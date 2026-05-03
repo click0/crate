@@ -61,7 +61,12 @@ jobs:
             set -ex
 
             echo "::group::Install dependencies"
-            sudo pkg install -y pkgconf yaml-cpp rang kyua gmake cpp-httplib
+            # `atf` ships /usr/local/bin/atf-sh, the interpreter for our
+            # functional test scripts (#!/usr/bin/env atf-sh). It is NOT
+            # pulled in as a kyua dependency, so an explicit install
+            # avoids the "Invalid header for test case list; got ''"
+            # broken result.
+            sudo pkg install -y pkgconf yaml-cpp rang kyua atf gmake cpp-httplib
             echo "::endgroup::"
 
             echo "::group::System info"

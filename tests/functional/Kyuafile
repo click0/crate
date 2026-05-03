@@ -2,4 +2,14 @@ syntax(2)
 
 test_suite("crate")
 
-atf_test_program{name="crate_info_test", test_suite="crate"}
+-- The functional tests are atf-sh scripts (see the `#!/usr/bin/env
+-- atf-sh` shebang). atf-sh is shipped by the FreeBSD `atf` package but
+-- is not packaged on most Linux distros, so on Linux GitHub Actions
+-- runners kyua's `-l` query gets an empty stdout and reports the test
+-- as broken with "Invalid header for test case list".
+--
+-- `required_programs` makes kyua mark the test as *skipped* rather
+-- than broken when the interpreter is missing — the diagnostic is
+-- clean and the run still succeeds.
+atf_test_program{name="crate_info_test", test_suite="crate",
+                 required_programs="atf-sh"}
