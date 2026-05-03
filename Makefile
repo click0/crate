@@ -123,12 +123,14 @@ install: crate
 install-daemon: crated
 	@mkdir -p $(DESTDIR)$(PREFIX)/sbin
 	@mkdir -p $(DESTDIR)$(PREFIX)/etc/rc.d
+	@mkdir -p $(DESTDIR)$(PREFIX)/man/man8
 	install -s -m 0755 crated $(DESTDIR)$(PREFIX)/sbin/crated
 	install -m 0555 daemon/crated.rc $(DESTDIR)$(PREFIX)/etc/rc.d/crated
 	install -m 0640 daemon/crated.conf.sample $(DESTDIR)$(PREFIX)/etc/crated.conf.sample
 	@if [ ! -f $(DESTDIR)$(PREFIX)/etc/crated.conf ]; then \
 		install -m 0640 daemon/crated.conf.sample $(DESTDIR)$(PREFIX)/etc/crated.conf; \
 	fi
+	gzip -9 < crated.8 > $(DESTDIR)$(PREFIX)/man/man8/crated.8.gz
 
 install-local: crate.x
 
@@ -150,6 +152,15 @@ install-snmpd: crate-snmpd
 	install -s -m 0755 crate-snmpd $(DESTDIR)$(PREFIX)/sbin/crate-snmpd
 	@mkdir -p $(DESTDIR)$(PREFIX)/share/snmp/mibs
 	install -m 0644 snmpd/CRATE-MIB.txt $(DESTDIR)$(PREFIX)/share/snmp/mibs/CRATE-MIB.txt
+
+# Install only the crate-hub(8) man page. The hub binary itself is
+# built and installed separately (its build is not driven from this
+# Makefile yet). Splitting this target out lets the hub package — or
+# an operator running `make install-hub-man` by hand — ship the
+# documentation without otherwise touching the source tree.
+install-hub-man:
+	@mkdir -p $(DESTDIR)$(PREFIX)/man/man8
+	gzip -9 < crate-hub.8 > $(DESTDIR)$(PREFIX)/man/man8/crate-hub.8.gz
 
 UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              network_test network_ipv6_test err_test \
