@@ -6,6 +6,106 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.3] — 2026-05-03
+
+HA failover policy in hub — operators declare per-container HA
+specs in `crate-hub.conf`; hub poller tracks how long each node
+has been unreachable; new `GET /api/v1/ha/orders` publishes
+deterministic migration orders that an operator/cron consumes via
+`crate migrate`. Hub does NOT auto-execute, by design.
+
+### Configuration
+
+```yaml
+ha:
+    threshold_seconds: 60       # default; anti-flap window before HA fires
+    specs:
+      - container: postgres-prod
+        primary:   alpha
+        partners:  [beta, gamma]
+      - container: redis-cache
+        primary:   delta
+        partners:  [epsilon]
+```
+
+### New endpoint
+
+```
+GET /api/v1/ha/orders
+{ "status": "ok",
+  "data": [
+    { "container":"postgres-prod",
+      "from_node":"alpha",
+      "to_node":"beta",
+      "reason":"primary node 'alpha' down for 120s (>= threshold 60s)" }
+  ] }
+```
+
+Empty array when no failovers needed. **Deterministic**: same node
+state → same orders → consumers don't see flapping.
+
+### Why hub doesn't execute
+
+A hub that auto-executes failover would need admin tokens for the
+per-node daemons. That breaks the 0.6.7 architecture where admin
+tokens stay in operator localStorage / chmod-600 files and never
+cross hub-side logging. So hub publishes orders, operator runs:
+
+```sh
+curl -sf https://hub:9810/api/v1/ha/orders \
+  | jq -r '.data[] | "\(.container) \(.from_node) \(.to_node)"' \
+  | while read c from to; do
+      crate migrate "$c" \
+        --from "$from:9800" --from-token-file /etc/crate/tokens/"$from" \
+        --to   "$to:9800"   --to-token-file   /etc/crate/tokens/"$to"
+    done
+```
+
+A future `crate ha-execute` could wrap this; for now the shell
+recipe is documented and shipped.
+
+### Decision rules (deterministic)
+
+- Primary reachable → no order.
+- Primary unreachable for < `threshold_seconds` → no order
+  (anti-flap window).
+- Primary unreachable ≥ threshold → emit order to the **first
+  reachable partner in declared order**. Order matters: list
+  higher-priority hosts first.
+- No partners reachable → emit **no** order. Half-failovers (move
+  container off the dead primary into nowhere) are worse than
+  letting the operator notice.
+
+### Implementation
+
+- **`hub/ha_pure.{h,cpp}`** — pure decision module:
+  `evaluateFailoverOrders`, `renderOrdersJson` (stable shape,
+  escapes `reason`), `validateSpecs` (alphabet, no duplicates,
+  partner ≠ primary).
+- **`hub/poller.{h,cpp}`** — `NodeStatus.firstDownAt` (UNIX
+  epoch when current down-streak started; reset to 0 on
+  successful poll). New `loadHaSpecs(path, *thresholdOut)`.
+- **`hub/api.{h,cpp}`** — `registerApiRoutes` extended with
+  `haSpecs` + `haThresholdSeconds`; new `GET /api/v1/ha/orders`.
+- **`hub/main.cpp`** — loads + validates specs, wires through.
+
+### Tests
+
+`tests/unit/ha_pure_test.cpp` — 13 ATF cases:
+- 4 decision-table: no-order-reachable, no-order-below-threshold,
+  **emit at exact threshold** (boundary), partner pick order.
+- No-order-when-all-partners-down (no-half-failover invariant).
+- Missing primary skips silently.
+- Multi-spec independence.
+- **Deterministic invariant** (same input → same output —
+  consumer loop stability).
+- 3 JSON-render shape tests (incl. escape of `"`/`\n` in `reason`).
+- 2 `validateSpecs` cases incl. partner == primary rejection.
+
+**Verified locally: 13/13** in `ha_pure_test`.
+
+---
+
 ## [0.7.2] — 2026-05-03
 
 `crate replicate` — ZFS storage replication over `ssh`. Streams a

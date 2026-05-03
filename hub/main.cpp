@@ -50,6 +50,15 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  // Optional HA specs (added in 0.7.3). Empty when no `ha:`
+  // section present.
+  long haThresholdSeconds = 60;
+  auto haSpecs = CrateHub::loadHaSpecs(configPath, &haThresholdSeconds);
+  if (auto reason = HaPure::validateSpecs(haSpecs); !reason.empty()) {
+    std::cerr << "crate-hub: invalid HA spec: " << reason << std::endl;
+    return 1;
+  }
+
   // Initialize SQLite store
   CrateHub::Store store("/var/db/crate-hub/metrics.db");
 
@@ -59,7 +68,7 @@ int main(int argc, char **argv) {
 
   // Start HTTP server
   httplib::Server srv;
-  CrateHub::registerApiRoutes(srv, store, poller);
+  CrateHub::registerApiRoutes(srv, store, poller, haSpecs, haThresholdSeconds);
 
   // Serve static web dashboard
   srv.set_mount_point("/", webDir);

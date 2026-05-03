@@ -201,3 +201,15 @@ Items completed and removed from this file:
   validated against shell metacharacters and `..` segments before
   reaching execPipeline. BatchMode=yes + ServerAliveInterval=30
   set as defaults (0.7.2 — lib/replicate_pure.cpp + lib/replicate.cpp).
+- HA failover policy in hub — operator declares per-container HA
+  spec in crate-hub.conf (`ha.specs:` with primary + ordered
+  partner_nodes, `ha.threshold_seconds:` for the anti-flap
+  window). Hub poller tracks first-down-at timestamp. New
+  GET /api/v1/ha/orders returns deterministic MigrationOrder list
+  the operator/cron consumes via `crate migrate`. Hub does NOT
+  hold admin tokens or auto-execute (preserves the 0.6.7
+  architecture where tokens stay in operator localStorage).
+  Anti-flap: orders only emit after threshold; first reachable
+  partner in declared order wins; no order when all partners
+  down (no half-failovers). (0.7.3 — hub/ha_pure.cpp +
+  hub/api.cpp + hub/poller.cpp).

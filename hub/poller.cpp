@@ -11,6 +11,34 @@
 
 namespace CrateHub {
 
+std::vector<HaPure::HaSpec> loadHaSpecs(const std::string &configPath,
+                                        long *outThresholdSeconds) {
+  std::vector<HaPure::HaSpec> specs;
+  if (outThresholdSeconds) *outThresholdSeconds = 60;  // default
+  try {
+    YAML::Node root = YAML::LoadFile(configPath);
+    auto haNode = root["ha"];
+    if (!haNode) return specs;
+    if (outThresholdSeconds && haNode["threshold_seconds"])
+      *outThresholdSeconds = haNode["threshold_seconds"].as<long>();
+    if (auto specList = haNode["specs"]) {
+      for (auto s : specList) {
+        HaPure::HaSpec sp;
+        sp.containerName = s["container"].as<std::string>("");
+        sp.primaryNode   = s["primary"].as<std::string>("");
+        if (auto partners = s["partners"]) {
+          for (auto p : partners)
+            sp.partnerNodes.push_back(p.as<std::string>());
+        }
+        specs.push_back(std::move(sp));
+      }
+    }
+  } catch (const std::exception &e) {
+    std::cerr << "crate-hub: failed to load HA specs: " << e.what() << std::endl;
+  }
+  return specs;
+}
+
 std::vector<NodeConfig> loadNodes(const std::string &configPath) {
   std::vector<NodeConfig> nodes;
   try {
@@ -89,6 +117,13 @@ void Poller::pollNode(const NodeConfig &node, NodeStatus &status) {
       std::lock_guard<std::mutex> lock(statusMutex_);
       status.hostInfo = hostRes->body;
       status.reachable = true;
+      // Reset down-streak on a successful poll.
+      status.firstDownAt = 0;
+    } else {
+      std::lock_guard<std::mutex> lock(statusMutex_);
+      status.reachable = false;
+      if (status.firstDownAt == 0)
+        status.firstDownAt = ::time(nullptr);
     }
 
     // Fetch /api/v1/containers
@@ -106,6 +141,8 @@ void Poller::pollNode(const NodeConfig &node, NodeStatus &status) {
   } catch (const std::exception &e) {
     std::lock_guard<std::mutex> lock(statusMutex_);
     status.reachable = false;
+    if (status.firstDownAt == 0)
+      status.firstDownAt = ::time(nullptr);
     status.lastError = e.what();
   }
 }
