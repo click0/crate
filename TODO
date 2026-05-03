@@ -22,9 +22,6 @@ operational quality.)
   management, RAII teardown). The rendering helper lives in
   `crate vpn wireguard render-conf` (0.6.9).
 
-* (feature) IPsec tunnels — `crate vpn ipsec render-conf` for
-  setkey/ipsec.conf generation. Sister to WireGuard renderer.
-
 * (feature) Rootless containers — crate is setuid root (04755). Explore
   rootless jail via jail(8) with allow.nfds.
 
@@ -125,3 +122,9 @@ Items completed and removed from this file:
   CIDRs (with prefix bounds), and bracketed-IPv6 / hostname endpoint
   forms before rendering. Runtime kernel-level integration is tracked
   separately (0.6.9 — lib/wireguard_pure.cpp + lib/vpn.cpp)
+- IPsec config tooling — `crate vpn ipsec render-conf` reads a YAML
+  spec (conns list with left/right endpoints + subnets + IKE/ESP
+  proposals) and emits a strongSwan ipsec.conf-compatible config.
+  Validates host (incl. dotted-numeric octet bounds), CIDR, proposal
+  strings, keyexchange/authby/auto enums (0.6.10 — lib/ipsec_pure.cpp
+  + lib/vpn.cpp)

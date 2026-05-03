@@ -162,15 +162,15 @@ void Args::validate() {
     break;
   case CmdVpn:
     if (vpnSubcmd.empty())
-      ERR("the 'vpn' command requires a subcommand: 'wireguard'")
-    if (vpnSubcmd != "wireguard")
-      ERR("'vpn " << vpnSubcmd << "' is not supported (only 'wireguard')")
+      ERR("the 'vpn' command requires a subcommand: 'wireguard' or 'ipsec'")
+    if (vpnSubcmd != "wireguard" && vpnSubcmd != "ipsec")
+      ERR("'vpn " << vpnSubcmd << "' is not supported (only 'wireguard' or 'ipsec')")
     if (vpnAction.empty())
-      ERR("the 'vpn wireguard' command requires an action: 'render-conf'")
+      ERR("the 'vpn " << vpnSubcmd << "' command requires an action: 'render-conf'")
     if (vpnAction != "render-conf")
-      ERR("'vpn wireguard " << vpnAction << "' is not supported (only 'render-conf')")
+      ERR("'vpn " << vpnSubcmd << " " << vpnAction << "' is not supported (only 'render-conf')")
     if (vpnSpecFile.empty())
-      ERR("the 'vpn wireguard render-conf' command requires a spec YAML file")
+      ERR("the 'vpn " << vpnSubcmd << " render-conf' command requires a spec YAML file")
     break;
   default:
     ERR("no command was given")

@@ -3,6 +3,7 @@
 #include "args.h"
 #include "commands.h"
 #include "wireguard_pure.h"
+#include "ipsec_pure.h"
 #include "util.h"
 #include "err.h"
 
@@ -53,19 +54,33 @@ WireguardPure::PeerSpec parsePeer(const YAML::Node &n) {
   return p;
 }
 
+IpsecPure::ConnSpec parseConn(const YAML::Node &n) {
+  IpsecPure::ConnSpec c;
+  if (n["name"])         c.name        = n["name"].as<std::string>();
+  if (n["left"])         c.left        = n["left"].as<std::string>();
+  if (n["leftid"])       c.leftId      = n["leftid"].as<std::string>();
+  if (n["leftsubnet"])   c.leftSubnet  = readScalarOrSeq(n["leftsubnet"]);
+  if (n["right"])        c.right       = n["right"].as<std::string>();
+  if (n["rightid"])      c.rightId     = n["rightid"].as<std::string>();
+  if (n["rightsubnet"])  c.rightSubnet = readScalarOrSeq(n["rightsubnet"]);
+  if (n["ike"])          c.ike         = n["ike"].as<std::string>();
+  if (n["esp"])          c.esp         = n["esp"].as<std::string>();
+  if (n["keyexchange"])  c.keyExchange = n["keyexchange"].as<std::string>();
+  if (n["authby"])       c.authBy      = n["authby"].as<std::string>();
+  if (n["auto"])         c.autoStart   = n["auto"].as<std::string>();
+  if (n["description"])  c.description = n["description"].as<std::string>();
+  return c;
+}
+
 } // anon
 
-bool vpnCommand(const Args &args) {
-  if (args.vpnSubcmd != "wireguard" || args.vpnAction != "render-conf")
-    ERR("only 'vpn wireguard render-conf' is implemented")
-
+static bool vpnWireguard(const Args &args) {
   YAML::Node root;
   try {
     root = YAML::LoadFile(args.vpnSpecFile);
   } catch (const std::exception &e) {
     ERR("failed to load spec '" << args.vpnSpecFile << "': " << e.what())
   }
-
   if (!root["interface"]) ERR("spec must contain a top-level 'interface:' map")
   if (!root["peers"])     ERR("spec must contain a top-level 'peers:' list")
 
@@ -75,9 +90,34 @@ bool vpnCommand(const Args &args) {
     peers.push_back(parsePeer(p));
 
   auto err = WireguardPure::validateConfig(iface, peers);
-  if (!err.empty())
-    ERR(err)
-
+  if (!err.empty()) ERR(err)
   std::cout << WireguardPure::renderConf(iface, peers);
   return true;
+}
+
+static bool vpnIpsec(const Args &args) {
+  YAML::Node root;
+  try {
+    root = YAML::LoadFile(args.vpnSpecFile);
+  } catch (const std::exception &e) {
+    ERR("failed to load spec '" << args.vpnSpecFile << "': " << e.what())
+  }
+  if (!root["conns"]) ERR("spec must contain a top-level 'conns:' list")
+
+  std::vector<IpsecPure::ConnSpec> conns;
+  for (auto c : root["conns"])
+    conns.push_back(parseConn(c));
+
+  auto err = IpsecPure::validateConfig(conns);
+  if (!err.empty()) ERR(err)
+  std::cout << IpsecPure::renderConf(conns);
+  return true;
+}
+
+bool vpnCommand(const Args &args) {
+  if (args.vpnAction != "render-conf")
+    ERR("only 'render-conf' action is implemented")
+  if (args.vpnSubcmd == "wireguard") return vpnWireguard(args);
+  if (args.vpnSubcmd == "ipsec")     return vpnIpsec(args);
+  ERR("'vpn " << args.vpnSubcmd << "' is not supported (only 'wireguard' or 'ipsec')")
 }
