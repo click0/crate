@@ -33,8 +33,13 @@ public:
   // multiple times; safe to call when start() returned false.
   static void stop();
 
-private:
+  // Implementation detail exposed publicly because anon-namespace
+  // helper functions in ws_console.cpp need to read it. Strict
+  // compilers (clang++ on FreeBSD) reject the access otherwise.
+  // Treat as private for external callers.
   static std::atomic<bool> g_running;
+
+private:
   static std::thread g_thread;
   static int g_listenFd;
 };

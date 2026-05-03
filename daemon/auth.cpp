@@ -8,10 +8,6 @@
 
 #include <openssl/evp.h>
 
-#include <sys/socket.h>
-#include <sys/ucred.h>
-#include <unistd.h>
-
 #include <iomanip>
 #include <sstream>
 
@@ -32,24 +28,17 @@ static std::string sha256hex(const std::string &input) {
   return "sha256:" + ss.str();
 }
 
-// Check if request comes from a Unix socket by examining peer credentials.
-// FreeBSD provides getpeereid(2) for Unix domain sockets.
+// Check if request comes from a Unix socket. cpp-httplib leaves
+// REMOTE_ADDR empty for unix-socket peers; that's our signal.
+//
+// Tightening to actually verify the peer's uid/gid via
+// getpeereid(2) requires the connection's underlying fd, which
+// httplib doesn't expose. Until we fork that code path, the unix
+// socket file's mode (default 0660 owned by root:wheel) is the
+// effective access control.
 static bool isUnixSocketPeer(const httplib::Request &req) {
   auto remoteAddr = req.get_header_value("REMOTE_ADDR");
   return remoteAddr.empty();
-}
-
-// Verify Unix socket peer credentials using getpeereid(2).
-// Returns true if the peer is root (uid 0) or in the wheel group.
-static bool checkUnixPeerCredentials(int fd) {
-  if (fd < 0)
-    return false;
-
-  uid_t euid;
-  gid_t egid;
-  if (getpeereid(fd, &euid, &egid) == 0)
-    return euid == 0 || egid == 0;
-  return false;
 }
 
 bool isAuthorized(const httplib::Request &req, const Config &config,
