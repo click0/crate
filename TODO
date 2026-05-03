@@ -17,8 +17,13 @@ operational quality.)
 
 === Low priority — future enhancements ===
 
-* (feature) WireGuard/IPsec tunnels — VPN support between hosts for
-  multi-host container networking.
+* (feature) WireGuard runtime integration — apply rendered configs
+  automatically (`if_wg` interface creation, jail-side route
+  management, RAII teardown). The rendering helper lives in
+  `crate vpn wireguard render-conf` (0.6.9).
+
+* (feature) IPsec tunnels — `crate vpn ipsec render-conf` for
+  setkey/ipsec.conf generation. Sister to WireGuard renderer.
 
 * (feature) Rootless containers — crate is setuid root (04755). Explore
   rootless jail via jail(8) with allow.nfds.
@@ -114,3 +119,9 @@ Items completed and removed from this file:
   /usr/local/etc/unbound/conf.d/crate.conf from JailQuery state and
   triggers `unbound-control reload` (0.6.8 — lib/inter_dns_pure.cpp +
   lib/inter_dns.cpp)
+- WireGuard config tooling — `crate vpn wireguard render-conf` reads
+  a small YAML spec (interface + peers list) and emits a wg-quick(8)-
+  compatible INI config. Validates 44-char base64 keys, IPv4/IPv6
+  CIDRs (with prefix bounds), and bracketed-IPv6 / hostname endpoint
+  forms before rendering. Runtime kernel-level integration is tracked
+  separately (0.6.9 — lib/wireguard_pure.cpp + lib/vpn.cpp)

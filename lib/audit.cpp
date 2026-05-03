@@ -68,6 +68,7 @@ static AuditPure::Event makeEvent(int argc, char **argv, const Args &args,
   case CmdRestart:  ev.cmd = "restart";  break;
   case CmdTop:      ev.cmd = "top";      break;
   case CmdInterDns: ev.cmd = "inter-dns"; break;
+  case CmdVpn:      ev.cmd = "vpn";       break;
   default:          ev.cmd = "?";
   }
 

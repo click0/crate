@@ -262,6 +262,9 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdInterDns: {
     succ = interDnsCommand(args);
     break;
+  } case CmdVpn: {
+    succ = vpnCommand(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}
