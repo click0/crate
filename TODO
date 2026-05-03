@@ -39,6 +39,18 @@ operational quality.)
 
 * (feature) Man pages for crated(8) and crate-hub(8).
 
+* (security) Verify Unix-socket peer credentials in crated. Today
+  daemon/auth.cpp::isUnixSocketPeer trusts an empty REMOTE_ADDR as
+  proof of unix-socket origin and grants full admin access without
+  checking peer uid/gid. The unix-socket file mode (root:wheel
+  0660) is the only gate. A proper fix needs the underlying
+  connection fd to call getpeereid(2) — which cpp-httplib doesn't
+  expose — so this likely requires forking httplib's accept loop
+  or replacing the unix-socket transport with a hand-rolled
+  listener (similar to how WebSocket console got its own listener
+  in 0.6.4). The previous scaffolding for this lived as
+  `checkUnixPeerCredentials()` and was removed in PR #131 since it
+  was never wired up.
 
 === Done (removed) ===
 
