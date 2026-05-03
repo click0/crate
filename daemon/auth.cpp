@@ -6,6 +6,7 @@
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include <httplib.h>
 
+#include <openssl/evp.h>
 #include <openssl/sha.h>
 
 #include <sys/socket.h>
@@ -18,10 +19,16 @@
 namespace Crated {
 
 static std::string sha256hex(const std::string &input) {
-  unsigned char hash[SHA256_DIGEST_LENGTH];
-  SHA256(reinterpret_cast<const unsigned char*>(input.c_str()), input.size(), hash);
+  // EVP API (OpenSSL 3.0+ replaces the deprecated SHA256() one-shot).
+  unsigned char hash[EVP_MAX_MD_SIZE];
+  unsigned int hashLen = 0;
+  EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+  EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr);
+  EVP_DigestUpdate(ctx, input.data(), input.size());
+  EVP_DigestFinal_ex(ctx, hash, &hashLen);
+  EVP_MD_CTX_free(ctx);
   std::ostringstream ss;
-  for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
+  for (unsigned int i = 0; i < hashLen; i++)
     ss << std::hex << std::setfill('0') << std::setw(2) << (int)hash[i];
   return "sha256:" + ss.str();
 }

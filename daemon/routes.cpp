@@ -21,6 +21,7 @@
 #include "zfs_ops.h"
 
 #include <openssl/sha.h>
+#include <openssl/evp.h>
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -700,19 +701,27 @@ static void handleStatsStream(const httplib::Request &req, httplib::Response &re
 // --- F2: export/import helpers ---
 
 static std::string sha256OfFile(const std::string &path) {
+  // OpenSSL 3.0 deprecated the SHA256_* one-shot API in favour of the
+  // EVP interface. Use that here so the daemon compiles cleanly on
+  // FreeBSD 14+ (libcrypto 3.x).
   int fd = ::open(path.c_str(), O_RDONLY);
   if (fd < 0) return "";
-  SHA256_CTX ctx;
-  SHA256_Init(&ctx);
+  EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+  if (!ctx) { ::close(fd); return ""; }
+  if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1) {
+    EVP_MD_CTX_free(ctx); ::close(fd); return "";
+  }
   unsigned char buf[64 * 1024];
   ssize_t n;
   while ((n = ::read(fd, buf, sizeof(buf))) > 0)
-    SHA256_Update(&ctx, buf, (size_t)n);
+    EVP_DigestUpdate(ctx, buf, (size_t)n);
   ::close(fd);
-  unsigned char hash[SHA256_DIGEST_LENGTH];
-  SHA256_Final(hash, &ctx);
+  unsigned char hash[EVP_MAX_MD_SIZE];
+  unsigned int hashLen = 0;
+  EVP_DigestFinal_ex(ctx, hash, &hashLen);
+  EVP_MD_CTX_free(ctx);
   return TransferPure::hexEncode(
-    std::string(reinterpret_cast<char*>(hash), SHA256_DIGEST_LENGTH));
+    std::string(reinterpret_cast<char*>(hash), hashLen));
 }
 
 // Where the daemon stores generated/uploaded artifacts.
