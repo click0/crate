@@ -27,7 +27,24 @@ listen:
 ##                           "/api/v1/containers/*" (prefix; the slash
 ##                           is required so the bare prefix
 ##                           "/api/v1/containers" does NOT match).
+##
+## Optional per-token pool ACL (added in 0.7.4):
+##   pools       — list of pool names this token may touch. Empty/
+##                 missing = unrestricted (pre-0.7.4 behaviour).
+##                 "*" = explicit all-pools grant.
+##                 The pool of a container is inferred from its jail
+##                 name via `pool_separator`: with the default "-",
+##                 "dev-postgres" -> pool "dev". A token with
+##                 `pools: ["dev"]` may only access /api/v1/containers/
+##                 dev-* endpoints. Pool-less jails (no separator in
+##                 the name) are reachable only by unrestricted
+##                 tokens or tokens with "*".
+##
+## auth.pool_separator — single character used by inferPool. Default "-".
+##                       Use "_" or "." if your jail names already have
+##                       hyphens.
 # auth:
+#     pool_separator: "-"
 #     tokens:
 #         - name: ansible
 #           token_hash: "sha256:..."
@@ -42,6 +59,10 @@ listen:
 #           scope:
 #               - /api/v1/containers/*
 #               - /api/v1/exports/*
+#         - name: dev-team-token
+#           token_hash: "sha256:..."
+#           role: admin
+#           pools: ["dev", "stage"]    # may NOT touch prod-* jails
 
 log:
     file: /var/log/crated.log

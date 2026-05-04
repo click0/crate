@@ -33,6 +33,12 @@ Config Config::load(const std::string &path) {
   }
 
   if (auto auth = root["auth"]) {
+    if (auth["pool_separator"]) {
+      auto sep = auth["pool_separator"].as<std::string>();
+      if (sep.size() != 1)
+        throw std::runtime_error("auth.pool_separator must be a single character, got '" + sep + "'");
+      cfg.poolSeparator = sep[0];
+    }
     if (auto tokens = auth["tokens"]) {
       for (auto t : tokens) {
         AuthToken at;
@@ -53,6 +59,14 @@ Config Config::load(const std::string &path) {
             for (auto s : sc) at.scope.push_back(s.as<std::string>());
           } else if (sc.IsScalar()) {
             at.scope.push_back(sc.as<std::string>());
+          }
+        }
+        if (t["pools"]) {
+          auto pl = t["pools"];
+          if (pl.IsSequence()) {
+            for (auto p : pl) at.pools.push_back(p.as<std::string>());
+          } else if (pl.IsScalar()) {
+            at.pools.push_back(pl.as<std::string>());
           }
         }
         cfg.tokens.push_back(at);

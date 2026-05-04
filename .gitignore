@@ -53,6 +53,7 @@ tests/unit/datacenter_pure_test
 tests/unit/backup_pure_test
 tests/unit/replicate_pure_test
 tests/unit/ha_pure_test
+tests/unit/pool_pure_test
 *.gcda
 *.gcno
 coverage.info

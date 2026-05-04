@@ -22,6 +22,11 @@ struct AuthToken {
   // Patterns: literal path or trailing `/*`. See AuthPure::pathInScope.
   //   ["/api/v1/containers", "/api/v1/containers/*"]
   std::vector<std::string> scope;
+  // Pool ACL (added in 0.7.4): list of pool names the token may
+  // touch. The pool of a container is inferred from the jail name
+  // via PoolPure::inferPool. Empty = unrestricted (pre-0.7.4
+  // behaviour). "*" = explicit all-pools grant.
+  std::vector<std::string> pools;
 };
 
 struct Config {
@@ -38,6 +43,11 @@ struct Config {
 
   // Authentication
   std::vector<AuthToken> tokens;
+  // Separator used by PoolPure::inferPool to extract pool from a
+  // jail name. Default '-'. A single byte; YAML key
+  // `auth.pool_separator: "-"`. Operators who already have hyphens
+  // inside container names can use `_` or `.`.
+  char poolSeparator = '-';
 
   // Logging
   std::string logFile = "/var/log/crated.log";

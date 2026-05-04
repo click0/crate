@@ -6,6 +6,125 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.4] — 2026-05-04
+
+Resource pools + per-token ACL — operators carve their container
+fleet into pools (teams / tenants / environments) and bind each
+API token to a whitelist of pools it may touch. Inspired by
+Proxmox's resource pools + permissions model; the daemon-side ACL
+is the foundation that a future admin-UI repository will surface.
+
+### Configuration
+
+```yaml
+auth:
+    pool_separator: "-"     # default; use "_" or "." if jail names already use "-"
+    tokens:
+      - name: dev-team
+        token_hash: "sha256:..."
+        role: admin
+        pools: ["dev", "stage"]    # cannot touch prod-* jails
+      - name: ci-runner
+        token_hash: "sha256:..."
+        role: admin
+        pools: ["*"]               # explicit all-pools grant
+      - name: legacy
+        token_hash: "sha256:..."
+        role: admin
+        # `pools:` omitted -> unrestricted (pre-0.7.4 behaviour)
+```
+
+### Pool inference (no schema migration)
+
+We deliberately do NOT add a new `pool:` field to `crate.yml` —
+that would force every existing spec to be rewritten. Instead the
+pool is derived from the jail name using a configurable separator:
+
+| jail name           | inferred pool (separator: `-`) |
+| ------------------- | ------------------------------ |
+| `dev-postgres-1`    | `dev`                          |
+| `stage-redis`       | `stage`                        |
+| `prod-web`          | `prod`                         |
+| `monolithic`        | `""` (no pool)                 |
+
+Operators who already use hyphens in container names can switch
+the separator to `_` or `.`.
+
+### ACL semantics
+
+- `pools: []` (or omitted) → unrestricted; matches pre-0.7.4
+  behaviour, so existing configs need no changes.
+- `pools: ["*"]` → explicit all-pools grant; preferred over
+  leaving the field out when the operator wants the intent
+  visible in the config audit.
+- `pools: ["dev"]` → only jails inferred to pool `dev`. Jails
+  with no separator in the name (`monolithic`) are **invisible**
+  to this token — operators must add `*` to reach them. Silent
+  leakage of jails that don't follow the naming convention
+  would defeat the ACL.
+
+### Enforcement
+
+12 F2 endpoints that take a `:name` URL parameter (stats, logs,
+start, stop, restart, destroy, snapshot list/create/delete,
+stats stream, export, restart) now use
+`isAuthorizedForContainer(req, config, role, name)` instead of
+`isAuthorized(req, config, role)`. The new helper runs the
+existing role + TTL + scope chain, then consults the matching
+token's `pools:` against `PoolPure::inferPool(name, config.poolSeparator)`.
+
+The WebSocket console (`/api/v1/containers/<name>/console`)
+applies the same ACL after the bearer-token handshake but before
+opening the PTY — a token that can't see the pool gets
+`token not allowed for this container's pool` at upgrade time.
+
+`handleExportDownload` (which addresses an artifact `:filename`
+rather than a container) keeps plain `isAuthorized` — artifact
+filenames have their own validation and the pool concept doesn't
+apply there.
+
+Unix-socket peers bypass the pool ACL the same way they bypass
+the bearer-token check — the unix-socket file mode (root:wheel
+0660) is the gate, documented in CAVEATS in `crated.8`.
+
+### Implementation
+
+- **`lib/pool_pure.{h,cpp}`** — pure helpers: `inferPool`
+  (single-byte separator; leading separator yields no-pool, not
+  pool ""), `validatePoolName` (alnum bookend rules + `*`
+  carve-out), `tokenAllowsContainer` (the full ACL matrix).
+- **`daemon/config.{h,cpp}`** — `AuthToken.pools` and
+  `Config.poolSeparator`. YAML parser reads `pool_separator:` as
+  a single-char string; `pools:` as scalar or sequence.
+- **`daemon/auth.{h,cpp}`** — new `isAuthorizedForContainer`
+  wraps `isAuthorized` + the per-token pool check.
+- **`daemon/routes.cpp`** — 12 F2 handlers migrated from
+  `isAuthorized` to `isAuthorizedForContainer`.
+- **`daemon/ws_console.cpp`** — pool ACL applied before PTY
+  upgrade.
+- **`daemon/crated.conf.sample`** — documents `pool_separator:`
+  and `pools:` with a `dev-team` example.
+
+### Tests
+
+`tests/unit/pool_pure_test.cpp` — 13 ATF cases:
+- 5 `inferPool`: typical dash separator, alternative `_`/`.`,
+  no-separator-is-no-pool, **leading-separator-is-no-pool** (the
+  property that prevents pool-restricted tokens from reaching
+  `-foo` as pool `""`), empty input.
+- 3 `validatePoolName`: typical accepted, wildcard accepted,
+  invalid rejected (empty, 33 chars, leading `-`/`_`, dots,
+  slashes, shell metas).
+- 5 `tokenAllowsContainer`: empty = unrestricted (backward
+  compat), wildcard = unrestricted, pool match allowed, pool
+  mismatch denied, **no-pool jail reachable only by
+  unrestricted/wildcard tokens** (the property that gates
+  silent leakage).
+
+**Verified locally: 13/13** in `pool_pure_test`.
+
+---
+
 ## [0.7.3] — 2026-05-03
 
 HA failover policy in hub — operators declare per-container HA
