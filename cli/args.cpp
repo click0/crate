@@ -62,6 +62,7 @@ static void usage() {
   std::cout << "  restore STREAM --to DATASET     replay a backup stream into a fresh dataset" << std::endl;
   std::cout << "  replicate TARGET --to HOST --dest-dataset DS  stream a ZFS snapshot to a remote host" << std::endl;
   std::cout << "  template warm TARGET --output DS  capture jail's on-disk state as a ZFS warm template" << std::endl;
+  std::cout << "  retune TARGET --rctl K=V...   live-tune jail RCTL limits without restart (--show, --clear)" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -371,6 +372,27 @@ static void usageBackup() {
   std::cout << "" << std::endl;
 }
 
+static void usageRetune() {
+  std::cout << "usage: crate retune <jail> [--rctl KEY=VALUE]... [--clear KEY]... [--show]" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Live RCTL adjustment for a running jail — no restart required." << std::endl;
+  std::cout << "Throttle a runaway container (torrent client suddenly sucking the" << std::endl;
+  std::cout << "disk) without losing its in-memory state." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Supported keys (whitelisted; typos give a helpful diagnostic):" << std::endl;
+  std::cout << "  pcpu                       integer 0..100 (percent of one core)" << std::endl;
+  std::cout << "  memoryuse, vmemoryuse      integer with K/M/G/T suffix (1024-based)" << std::endl;
+  std::cout << "  readbps, writebps          byte rate, K/M/G/T suffix" << std::endl;
+  std::cout << "  readiops, writeiops        operations per second (no suffix)" << std::endl;
+  std::cout << "  maxproc, openfiles, nthr   plain integer counts" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Examples:" << std::endl;
+  std::cout << "  crate retune torrent --rctl writebps=2M --rctl readbps=2M" << std::endl;
+  std::cout << "  crate retune torrent --rctl pcpu=20 --show" << std::endl;
+  std::cout << "  crate retune ide      --clear pcpu --clear writebps" << std::endl;
+  std::cout << "" << std::endl;
+}
+
 static void usageTemplate() {
   std::cout << "usage: crate template warm <jail> --output <dataset> [--promote]" << std::endl;
   std::cout << "" << std::endl;
@@ -568,7 +590,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.7.5" << std::endl;
+        std::cout << "crate 0.7.6" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -579,7 +601,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.7.5" << std::endl;
+          std::cout << "crate 0.7.6" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -1227,6 +1249,22 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.warmTarget = argv[a];
         } else {
           err("too many arguments for 'template' command");
+        }
+        break;
+      case CmdRetune:
+        if (auto argShort = isShort(argv[a])) {
+          if (argShort == 'h') { usageRetune(); exit(0); }
+          err("unsupported short option '%s'", argv[a]);
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) { usageRetune(); exit(0); }
+          else if (strEq(argLong, "rctl"))   args.retunePairs.push_back(getArgParam(++a, argc, argv));
+          else if (strEq(argLong, "clear"))  args.retuneClear.push_back(getArgParam(++a, argc, argv));
+          else if (strEq(argLong, "show"))   args.retuneShow = true;
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.retuneTarget.empty()) {
+          args.retuneTarget = argv[a];
+        } else {
+          err("too many arguments for 'retune' command");
         }
         break;
       }

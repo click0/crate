@@ -6,6 +6,88 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.6] — 2026-05-04
+
+`crate retune <jail> --rctl KEY=VALUE [--clear KEY]... [--show]`
+— live RCTL adjustment for a running jail. **No restart required;
+the jail's in-memory state survives.** Operator throttles a
+runaway container (torrent client suddenly sucking the disk)
+without losing its work.
+
+Inspired by Firecracker's per-VM rate limiter, but built on top
+of FreeBSD's existing `rctl(8)` — same hard-cap mechanism crate
+already uses at create time, just exposed as a runtime knob.
+
+### Usage
+
+```sh
+# Throttle a torrent client so it stops fighting your IDE for disk:
+crate retune torrent --rctl writebps=2M --rctl readbps=2M
+
+# Cap CPU + show before/after rctl usage:
+crate retune torrent --rctl pcpu=20 --show
+
+# Drop a previously-set rule:
+crate retune ide --clear pcpu --clear writebps
+
+# Combine — clears run before sets, so you can re-tune in one call:
+crate retune torrent --clear writebps --rctl writebps=512K
+```
+
+### What's NOT in this release
+
+True **token bucket** (sustained rate + burst) for network
+throughput requires `dummynet(4)` integration — that's the topic
+of 0.7.7. RCTL is a hard cap, not a token bucket.
+
+### Validators (typos caught at parse time)
+
+- **`--rctl KEY=VALUE`**: KEY whitelisted against the supported
+  set (pcpu, memoryuse, vmemoryuse, readbps, writebps, readiops,
+  writeiops, maxproc, openfiles, nthr, ...). Typos like `witebps`
+  produce an error that **lists the supported keys** instead of
+  shrugging — operators look at this, not the source.
+- **VALUE** rejected per key class: `pcpu` is 0..100 with no
+  suffix; `*bps`/`memoryuse` accept K/M/G/T (1024-based,
+  matches `rctl(8)`); `*iops` and counts must be plain ints.
+- **`--clear KEY`** validates the key against the same whitelist.
+
+### Implementation
+
+- **`lib/retune_pure.{h,cpp}`** — pure helpers:
+  `validateRctlKey` (whitelist with helpful error),
+  `validateRctlValue` (per-key kind: percentage / byte rate /
+  plain int), `parseHumanSize` (1024-based; supports decimals
+  like `1.5M`), argv builders for `rctl -a` (set), `rctl -r`
+  (clear), `rctl -u` (show).
+- **`lib/retune.cpp`** — runtime: jail-name → JID via
+  `JailQuery`, optional pre-show `rctl -u`, apply `--clear`s
+  first (soft-fail; rule may not exist), apply `--rctl`s, optional
+  post-show. Raw operator value passes through to `rctl(8)` —
+  no double-conversion of the suffix.
+- **`cli/args.cpp` + `main.cpp`** — `CmdRetune` enumerator,
+  repeatable `--rctl`/`--clear`, `--show` toggle.
+- **`lib/audit*.cpp`** — recorded as state-changing.
+
+### Tests
+
+`tests/unit/retune_pure_test.cpp` — 16 ATF cases:
+- 2 `validateRctlKey` (whole whitelist accepted; typos rejected
+  with the supported-set list embedded in the error)
+- 3 `validateRctlValue` per key class (pcpu range, byte rate
+  with K/M/G/T, IOPS/counts no suffix)
+- 3 `validatePairs` (typical, empty rejected, **error message
+  contains the offending pair index** for multi-flag debugging)
+- 4 `parseHumanSize` (plain int, K/M/G/T 1024-based, decimal
+  `1.5M`, invalid → `-1`)
+- 3 argv builders (set, clear, show — including the property
+  that `set` passes the **raw suffix** through to rctl(8)
+  unchanged so we don't double-convert)
+
+**Verified locally: 16/16** in `retune_pure_test`.
+
+---
+
 ## [0.7.5] — 2026-05-04
 
 ZFS warm-template caching (part 1) — `crate template warm <jail>

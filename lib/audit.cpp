@@ -75,6 +75,7 @@ static AuditPure::Event makeEvent(int argc, char **argv, const Args &args,
   case CmdRestore:  ev.cmd = "restore";   break;
   case CmdReplicate: ev.cmd = "replicate"; break;
   case CmdTemplate: ev.cmd = "template";  break;
+  case CmdRetune:   ev.cmd = "retune";    break;
   default:          ev.cmd = "?";
   }
 

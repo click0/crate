@@ -52,3 +52,4 @@ atf_test_program{name="replicate_pure_test"}
 atf_test_program{name="ha_pure_test"}
 atf_test_program{name="pool_pure_test"}
 atf_test_program{name="warm_pure_test"}
+atf_test_program{name="retune_pure_test"}
