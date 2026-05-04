@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdReplicate, CmdTemplate, CmdRetune};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdReplicate, CmdTemplate, CmdRetune, CmdThrottle};
 
 class Args {
 public:
@@ -144,6 +144,16 @@ public:
   std::vector<std::string> retunePairs; // repeatable --rctl KEY=VALUE
   std::vector<std::string> retuneClear; // repeatable --clear KEY (drops the rule)
   bool        retuneShow = false;       // --show: dump usage before+after
+
+  // throttle parameters (dummynet token-bucket network shaping)
+  std::string throttleTarget;        // jail name or JID
+  std::string throttleIngressRate;   // --ingress RATE
+  std::string throttleIngressBurst;  // --ingress-burst BYTES
+  std::string throttleEgressRate;    // --egress RATE
+  std::string throttleEgressBurst;   // --egress-burst BYTES
+  std::string throttleQueue;         // --queue (slot count or "100KB")
+  bool        throttleClear = false; // --clear: drop pipes + binds
+  bool        throttleShow = false;  // --show: dump pipe state
 
   void validate();
 };

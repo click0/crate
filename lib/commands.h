@@ -32,3 +32,4 @@ bool restoreCrate(const Args &args);
 bool replicateCrate(const Args &args);
 bool templateWarmCommand(const Args &args);
 bool retuneCommand(const Args &args);
+bool throttleCommand(const Args &args);

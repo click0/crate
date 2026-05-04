@@ -62,6 +62,7 @@ Command isCommand(const char *arg) {
   if (strEq(arg, "replicate")) return CmdReplicate;
   if (strEq(arg, "template"))  return CmdTemplate;
   if (strEq(arg, "retune"))    return CmdRetune;
+  if (strEq(arg, "throttle"))  return CmdThrottle;
   return CmdNone;
 }
 
@@ -230,6 +231,13 @@ void Args::validate() {
       ERR("the 'retune' command requires a jail name (positional arg)")
     if (retunePairs.empty() && retuneClear.empty() && !retuneShow)
       ERR("the 'retune' command needs at least one of --rctl, --clear, or --show")
+    break;
+  case CmdThrottle:
+    if (throttleTarget.empty())
+      ERR("the 'throttle' command requires a jail name (positional arg)")
+    if (throttleIngressRate.empty() && throttleEgressRate.empty()
+        && !throttleClear && !throttleShow)
+      ERR("the 'throttle' command needs at least one of --ingress, --egress, --clear, or --show")
     break;
   default:
     ERR("no command was given")

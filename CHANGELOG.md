@@ -6,6 +6,109 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.7] — 2026-05-04
+
+`crate throttle <jail>` — **true token-bucket network rate
+limiting** via FreeBSD's `dummynet(4)` accessed through
+`ipfw(8)`. Sister to `crate retune` (0.7.6) which targets RCTL
+hard caps for CPU/disk/memory. This release fills the
+"Firecracker-style sustained-rate-with-burst" gap for network
+traffic — torrent client gets 1Mbit/s sustained but can burst to
+1MB so initial DHT chatter doesn't lag.
+
+### Usage
+
+```sh
+# Cap a torrent client to 10Mbit/s ingress, 5Mbit/s egress, 1MB burst:
+crate throttle torrent --ingress 10Mbit/s --egress 5Mbit/s \
+                       --ingress-burst 1MB --egress-burst 1MB
+
+# Egress-only (downloads fine, uploads fighting your IDE):
+crate throttle torrent --egress 1Mbit/s --queue 100
+
+# Inspect current pipe state:
+crate throttle torrent --show
+
+# Drop all throttling for the jail:
+crate throttle torrent --clear
+```
+
+### Mechanism
+
+```
+ipfw pipe <pipeId> config bw <rate> burst <burst> queue <queue>
+ipfw add <ruleId> pipe <pipeId> ip from <jailIp> to any out  (egress)
+ipfw add <ruleId> pipe <pipeId> ip from any to <jailIp> in   (ingress)
+```
+
+`bw` is sustained rate (Firecracker's "refill rate"), `burst` is
+bucket capacity (Firecracker's "size"). Together a textbook
+token bucket.
+
+### Pipe ID allocation
+
+Per-jail deterministic IDs: `pipeId = 10000 + jid*2 + (egress?1:0)`,
+`ruleId = 20000 + jid*2 + (egress?1:0)`. Two pipes per jail
+(ingress/egress). The deterministic mapping means:
+
+- Re-running `crate throttle torrent --ingress 5Mbit/s` after
+  earlier `--ingress 10Mbit/s` **replaces** the old config; no
+  orphan pipes.
+- A teardown after a daemon restart can find the right pipe to
+  delete.
+- `kPipeBase = 10000` and `kRuleBase = 20000` leave the low IDs
+  for operator-defined ipfw rules.
+
+### Defense in depth
+
+- **Rate** rejects the bare `"10M"` form on purpose. ipfw accepts
+  it but the bit/s vs byte/s ambiguity bites operators. We force
+  `Mbit/s` or `MB/s` to be spelled out.
+- **Burst** rejects `/s` suffix — burst is bytes, not bytes/s.
+  Catches the common typo where someone writes `--burst 1MB/s`.
+- **Queue slot count** capped at 1..1000. Without that, an
+  operator could turn it into an unbounded memory sink for
+  dummynet's per-packet allocations.
+- **Burst without rate** is flagged as a config error — burst
+  alone has no effect, surfacing the typo instead of silently
+  accepting it.
+- **Jail IP** validated as IPv4 (octet bounds checked) before
+  reaching ipfw — otherwise the wrong octet would silently
+  rule-bind to nothing.
+
+### Implementation
+
+- **`lib/throttle_pure.{h,cpp}`** — pure helpers:
+  `validateRate`/`validateBurst`/`validateQueue`/`validateIp`,
+  `pipeIdForJail`/`ruleIdForJail` (deterministic),
+  `ThrottleSpec` + `validateSpec`, argv builders for `pipe
+  config`/`add bind`/`delete rule`/`pipe delete`/`pipe show`.
+- **`lib/throttle.cpp`** — runtime: jail-name → JID + IPv4 via
+  `JailQuery`, soft-delete prior config (so repeats replace
+  cleanly), apply per-direction. `--clear` strips both
+  directions; `--show` runs `ipfw pipe show` for each.
+- **`cli/args.cpp` + `main.cpp`** — `CmdThrottle` enumerator,
+  full flag set wired.
+- **`lib/audit*.cpp`** — recorded as state-changing.
+
+### Tests
+
+`tests/unit/throttle_pure_test.cpp` — 20 ATF cases:
+
+| Group | Notable cases |
+|---|---|
+| `validateRate` | typical bit/s + byte/s; **bare `10M` REJECTED** (ambiguity guard); lowercase `mbit/s` rejected (ipfw is finicky); `Mbps` rejected |
+| `validateBurst` | empty allowed; `/s` suffix rejected (burst is bytes, not bytes/s) |
+| `validateQueue` | slot count 1..1000; byte size `KB`/`MB`; out-of-range rejected |
+| `validateIp` | typical, octet > 255 rejected, missing/extra octet rejected |
+| `pipeIdForJail` | deterministic per JID+direction, distinct ranges from `ruleIdForJail` |
+| `validateSpec` | full spec, single direction, **burst-without-rate flagged** |
+| argv builders | full pipe config; **optional burst+queue omitted when empty**; egress vs ingress `from`/`to` ordering; `pipe delete` word order (delete LAST for pipes) |
+
+**Verified locally: 20/20** in `throttle_pure_test`.
+
+---
+
 ## [0.7.6] — 2026-05-04
 
 `crate retune <jail> --rctl KEY=VALUE [--clear KEY]... [--show]`

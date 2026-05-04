@@ -251,3 +251,16 @@ Items completed and removed from this file:
   rule (0.7.6 — lib/retune_pure.cpp + lib/retune.cpp).
   Token-bucket-style network throttling (per-iface bandwidth
   with burst) is the topic of 0.7.7 (dummynet integration).
+- crate throttle — TRUE token-bucket network rate limiting via
+  dummynet(4) accessed through ipfw(8). Sister to retune which
+  targets RCTL hard caps. `--ingress RATE --egress RATE
+  [--ingress-burst N --egress-burst N --queue N]`. Sustained
+  rate (ipfw `bw`) plus burst capacity (ipfw `burst`) — the
+  textbook token bucket Firecracker exposes. Pipe IDs derived
+  deterministically from JID (10000 + jid*2; +1 for egress) so
+  re-running the command replaces the prior config without
+  orphaning rules. `--clear` removes all pipes + binds for the
+  jail. Pure validators reject the bare "10M" rate form (forces
+  bit/s vs byte/s disambiguation), enforce queue-slot bounds
+  1..1000, validate IPv4 octets. 20 ATF tests
+  (0.7.7 — lib/throttle_pure.cpp + lib/throttle.cpp).
