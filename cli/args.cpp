@@ -61,6 +61,7 @@ static void usage() {
   std::cout << "  backup TARGET --output-dir DIR  take a ZFS-send stream of the jail (incremental supported)" << std::endl;
   std::cout << "  restore STREAM --to DATASET     replay a backup stream into a fresh dataset" << std::endl;
   std::cout << "  replicate TARGET --to HOST --dest-dataset DS  stream a ZFS snapshot to a remote host" << std::endl;
+  std::cout << "  template warm TARGET --output DS  capture jail's on-disk state as a ZFS warm template" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -370,6 +371,29 @@ static void usageBackup() {
   std::cout << "" << std::endl;
 }
 
+static void usageTemplate() {
+  std::cout << "usage: crate template warm <jail> --output <dataset> [--promote]" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Capture the on-disk state of a running jail as a ZFS clone the" << std::endl;
+  std::cout << "operator can later pass to `crate run --warm-base <dataset>`." << std::endl;
+  std::cout << "Skips cold-create work like pkg install or profile init." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "What's captured:  pkg/var caches, fontconfig, db migrations," << std::endl;
+  std::cout << "                  npm install output, anything written to disk." << std::endl;
+  std::cout << "What's NOT:       process memory, open fds, browser tabs," << std::endl;
+  std::cout << "                  X11 sessions. (See lib/warm_pure.h for why" << std::endl;
+  std::cout << "                  Firecracker-style memory snapshot is" << std::endl;
+  std::cout << "                  out-of-scope for jail-based architectures.)" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Options:" << std::endl;
+  std::cout << "  --output DATASET   destination ZFS dataset (e.g. tank/templates/firefox-warm)" << std::endl;
+  std::cout << "  --promote          run `zfs promote` on the clone so it's no" << std::endl;
+  std::cout << "                     longer dependent on the source snapshot — useful" << std::endl;
+  std::cout << "                     when the operator wants to delete old warm" << std::endl;
+  std::cout << "                     snapshots without breaking the template." << std::endl;
+  std::cout << "" << std::endl;
+}
+
 static void usageReplicate() {
   std::cout << "usage: crate replicate <jail> --to <[user@]host>" << std::endl;
   std::cout << "                       --dest-dataset <pool/jails/name>" << std::endl;
@@ -544,7 +568,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.7.4" << std::endl;
+        std::cout << "crate 0.7.5" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -555,7 +579,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.7.4" << std::endl;
+          std::cout << "crate 0.7.5" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -1186,6 +1210,23 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.replicateTarget = argv[a];
         } else {
           err("too many arguments for 'replicate' command");
+        }
+        break;
+      case CmdTemplate:
+        if (auto argShort = isShort(argv[a])) {
+          if (argShort == 'h') { usageTemplate(); exit(0); }
+          err("unsupported short option '%s'", argv[a]);
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) { usageTemplate(); exit(0); }
+          else if (strEq(argLong, "output"))   args.warmOutputDataset = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "promote"))  args.warmPromote = true;
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.templateSubcmd.empty()) {
+          args.templateSubcmd = argv[a];
+        } else if (args.warmTarget.empty()) {
+          args.warmTarget = argv[a];
+        } else {
+          err("too many arguments for 'template' command");
         }
         break;
       }

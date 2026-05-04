@@ -30,3 +30,4 @@ bool migrateCommand(const Args &args);
 bool backupCrate(const Args &args);
 bool restoreCrate(const Args &args);
 bool replicateCrate(const Args &args);
+bool templateWarmCommand(const Args &args);

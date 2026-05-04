@@ -60,6 +60,7 @@ Command isCommand(const char *arg) {
   if (strEq(arg, "backup"))   return CmdBackup;
   if (strEq(arg, "restore"))  return CmdRestore;
   if (strEq(arg, "replicate")) return CmdReplicate;
+  if (strEq(arg, "template"))  return CmdTemplate;
   return CmdNone;
 }
 
@@ -212,6 +213,16 @@ void Args::validate() {
       ERR("the 'replicate' command requires --to <[user@]host>")
     if (replicateDestDataset.empty())
       ERR("the 'replicate' command requires --dest-dataset <pool/jails/name>")
+    break;
+  case CmdTemplate:
+    if (templateSubcmd.empty())
+      ERR("the 'template' command requires a subcommand: 'warm'")
+    if (templateSubcmd != "warm")
+      ERR("'template " << templateSubcmd << "' is not supported (only 'warm')")
+    if (warmTarget.empty())
+      ERR("the 'template warm' command requires a jail name")
+    if (warmOutputDataset.empty())
+      ERR("the 'template warm' command requires --output <dataset>")
     break;
   default:
     ERR("no command was given")

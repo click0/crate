@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdReplicate};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdReplicate, CmdTemplate};
 
 class Args {
 public:
@@ -132,6 +132,12 @@ public:
   std::string replicateSshKey;         // --ssh-key /path/to/identity
   std::string replicateSshConfig;      // --ssh-config /path/to/ssh_config
   std::vector<std::string> replicateSshOpts; // repeatable --ssh-opt KEY=VAL
+
+  // template parameters (subcommand: "warm")
+  std::string templateSubcmd;       // currently only "warm"
+  std::string warmTarget;           // jail name
+  std::string warmOutputDataset;    // ZFS dataset to clone into
+  bool        warmPromote = false;  // --promote: zfs promote after clone
 
   void validate();
 };

@@ -223,3 +223,18 @@ Items completed and removed from this file:
   (no silent leakage). WebSocket console enforces same ACL
   (0.7.4 — lib/pool_pure.cpp + daemon/auth.cpp +
   daemon/routes.cpp + daemon/ws_console.cpp).
+- ZFS warm-template caching (part 1) — `crate template warm
+  <jail> --output <dataset> [--promote]` snapshots a running
+  jail's dataset and clones it into a "warm template" the
+  operator can later use as a base to skip cold-create work
+  (pkg install, profile init, asset cache priming). Captures
+  on-disk state only — process memory / open tabs / X11
+  sessions need CRIU/bhyve and are documented as out-of-scope
+  for jail-based architectures. Pure validation against shell
+  metas + dataset alphabet; UTC-ISO-8601 lex-sortable snapshot
+  suffix matches the backup module convention. Optional
+  `--promote` detaches the clone from its parent snapshot so
+  retention pruning of warm snapshots can run independently
+  (0.7.5 — lib/warm_pure.cpp + lib/warm.cpp). Part 2
+  (`crate run --warm-base <dataset>` integration to actually
+  consume the template at run time) tracked separately.
