@@ -280,6 +280,10 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdReplicate: {
     succ = replicateCrate(args);
     break;
+  } case CmdTemplate: {
+    // currently the only subcommand is "warm"
+    succ = templateWarmCommand(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}

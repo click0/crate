@@ -6,6 +6,109 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.5] — 2026-05-04
+
+ZFS warm-template caching (part 1) — `crate template warm <jail>
+--output <dataset>` captures a running jail's on-disk state as a
+ZFS clone the operator can later pass to `crate run --warm-base
+<dataset>` (planned for 0.7.6) to skip cold-create work like
+`pkg install`, profile initialisation, or asset-cache priming.
+
+### Inspired by but **not** Firecracker snapshot
+
+Firecracker (and bhyve via `bhyvectl --suspend/--resume`) saves
+**memory** state — open browser tabs, X11 sessions, in-flight
+HTTP connections all come back. That requires either KVM/bhyve
+hypervisor instrumentation or CRIU-style process checkpoint, and
+**neither is available for FreeBSD jails today** (no CRIU port
+that's production-ready; bhyve VMs are a separate product
+class). Documented in `lib/warm_pure.h` and the usage screen.
+
+What `crate template warm` actually captures vs. doesn't:
+
+| Captured (on-disk)                    | NOT captured (memory) |
+| ------------------------------------- | --------------------- |
+| `pkg install` output, `/var/db/pkg`   | process memory        |
+| fontconfig caches                     | open file descriptors |
+| db migrations applied                 | unflushed page cache  |
+| `npm install` output                  | browser tabs          |
+| profile dirs, `/root/.config/...`     | X11 sessions          |
+
+Practical effect: jail launch goes from 30+ seconds (cold create)
+to 1-2 seconds (clone+launch). Firefox window appears, but tabs
+must be re-opened.
+
+### Usage
+
+```sh
+# Prime a jail with everything you want pre-installed:
+crate run -f firefox.crate
+# ... install, configure, log into accounts, browse a few sites ...
+
+# Capture the on-disk state as a warm template:
+crate template warm firefox --output tank/templates/firefox-warm
+
+# Optional: promote the clone so deleting old warm snapshots
+# doesn't break the template
+crate template warm firefox --output tank/templates/firefox-warm --promote
+```
+
+### Design notes
+
+- **Snapshot suffix** is `warm-YYYY-MM-DDTHH:MM:SSZ` (UTC, lex-
+  sortable), matching the backup module convention so retention
+  pruning is a one-liner: `ls -1 ...@warm-* | sort | head -n -N`.
+- **Without `--promote`** the template dataset is a ZFS clone of
+  the warm snapshot — near-zero space until written, but
+  prevents deletion of the source snapshot. With `--promote`
+  the clone graph is flipped (operator can delete old warms).
+- **Validation gates** apply to the destination dataset: alnum
+  + `._-/`, no `//`, no `.`/`..` segments, no leading/trailing
+  slash, no `:` (reserved for snapshot/bookmark separators).
+- **Audit log** records `template:warm:<jail>-><dataset>`.
+
+### Implementation
+
+- **`lib/warm_pure.{h,cpp}`** — pure helpers:
+  `warmSnapshotSuffix(unixEpoch)` (UTC ISO 8601),
+  `validateTemplateDataset` (same alphabet rules as
+  `ReplicatePure::validateDestDataset`), `validateSnapshotSuffix`
+  (rejects `@`/`/`/shell metas), and three argv builders for
+  `zfs snapshot/clone/promote`.
+- **`lib/warm.cpp`** — runtime: jail → ZFS dataset via
+  `JailQuery`+`Util::Fs::getZfsDataset`, run snapshot, run
+  clone, optional promote.
+- **`cli/args.cpp` + `main.cpp`** — `CmdTemplate` enumerator;
+  parser-side subcommand dispatch on `templateSubcmd` so we
+  can grow `template list/destroy/...` later without breaking
+  this contract.
+- **`lib/audit*.cpp`** — recorded as
+  `template:warm:<jail>-><dataset>`.
+
+### Tests
+
+`tests/unit/warm_pure_test.cpp` — 10 ATF cases:
+- 2 `validateTemplateDataset` (typical, invalid: leading/trailing
+  slash, double slash, `.`/`..`, `:`, shell metas)
+- 2 `validateSnapshotSuffix` (typical, invalid: empty, 65 chars,
+  `@`, `/`, shell metas)
+- 2 `warmSnapshotSuffix` (canonical UNIX epochs, **lex-sort =
+  chrono-sort invariant**)
+- `fullSnapshotName` shape
+- 3 argv-shape tests (snapshot, clone, promote)
+
+**Verified locally: 10/10** in `warm_pure_test`.
+
+### What's NOT in this release
+
+`crate run --warm-base <dataset>` — the consumer side that
+actually picks up the template at run time. That requires
+modifying `lib/run.cpp`'s create-jail-directory path to clone
+from the operator's warm dataset instead of extracting
+`base.txz`. Tracked as 0.7.6.
+
+---
+
 ## [0.7.4] — 2026-05-04
 
 Resource pools + per-token ACL — operators carve their container
