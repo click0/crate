@@ -6,6 +6,155 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.8] — 2026-05-04
+
+`crate backup-prune <dir> --keep <spec>` — Proxmox-style retention
+pruning of `crate backup` stream files. Operators write daily backups
+to a directory (NFS share, USB disk, S3-mounted FS); this command
+deletes the old ones under a bucketed retention policy without the
+operator having to script `find -mtime` rules.
+
+The Firecracker / Proxmox-VE comparison series picked off another
+operator pain point: backup files accumulate forever on the backup
+volume, and existing tooling (Proxmox vzdump-prune) bucketing
+semantics aren't trivial to script with shell. This release ships
+the same semantics in a one-shot command.
+
+### Usage
+
+```sh
+# Daily=7, weekly=4, monthly=6 — same syntax as Proxmox vzdump
+crate backup-prune /backups --keep daily=7,weekly=4,monthly=6
+
+# Filter to one jail (useful when one dir holds several jails)
+crate backup-prune /backups --keep daily=14 --jail postgres
+
+# Preview without deleting
+crate backup-prune /backups --keep daily=7 --dry-run
+
+# Also remove orphaned incrementals (default: keep + warn)
+crate backup-prune /backups --keep daily=7 --delete-orphans
+```
+
+### Bucketing semantics
+
+For each retention bucket type with `N>0` (`hourly | daily | weekly
+| monthly`), walk the **full** stream files newest → oldest. The
+newest stream that lands in a fresh bucket key is kept; subsequent
+streams in the same bucket are dropped. Stop after `N` distinct
+buckets are seen.
+
+The kept set is the **union** across bucket types. A file pinned by
+multiple types still counts as one keeper.
+
+Bucket key derivations (all UTC):
+
+| bucket  | key                          |
+|---------|------------------------------|
+| hourly  | `epoch / 3600`               |
+| daily   | `epoch / 86400`              |
+| weekly  | `epoch / (86400 * 7)`        |
+| monthly | `gmtime → year*12 + month`   |
+
+`monthly` is calendar-aligned — months don't have uniform length so
+plain integer division would drift over the years.
+
+### Incremental chains
+
+`crate backup --auto-incremental` produces files like
+`<jail>-backup-<curr>.inc-from-backup-<prev>.zstream` that depend on
+their base full. Two safety rules:
+
+1. **Incrementals follow their base.** If the base full is kept,
+   the incremental is kept too — chains stay restorable. If the
+   base is dropped, the incremental is flagged as an *orphan*.
+2. **Orphans default to keep + warn.** Operators can pass
+   `--delete-orphans` to remove them as well. We don't auto-delete
+   because partial chains are sometimes intentional (e.g. an
+   operator wants the last full + some recent incrementals before
+   a destructive change).
+
+### Defence in depth
+
+- **Filename schema enforced.** The pure parser only matches
+  `<jail>-backup-YYYY-MM-DDTHH:MM:SSZ.zstream` (and the optional
+  `.inc-from-...` tail). Files in the directory that don't match —
+  README.md, .DS_Store, an external tool's output — are silently
+  skipped, never touched.
+- **Right-most `-backup-` boundary.** Jail names containing `-`
+  (e.g. `dev-postgres`) parse correctly; we use `rfind` so the
+  rightmost `-backup-` separator wins.
+- **Epoch parsing rejects out-of-range values.** Bad month/day/hour
+  values produce a parse failure (file goes to "skipped", not
+  "removed"). The 1970-01-01T00:00:00Z epoch is treated as a
+  parse-failure sentinel — nobody names a backup that.
+- **Unparseable timestamps are orphans, never auto-removed.** Even
+  with `--delete-orphans`, files with an unrecognisable suffix stay
+  put — we don't know what they are.
+- **`unlink` failures don't abort.** If one file can't be removed
+  (permissions, vanished mid-run), the rest still process; the
+  failure is reported in red without aborting.
+
+### Implementation
+
+- `lib/backup_prune_pure.{h,cpp}` — pure module:
+  - `validateDir`, `validateJailFilter` — input sanitisation
+  - `parseSuffixEpoch` — UTC ISO-8601 → `time_t` via Howard
+    Hinnant's days_from_civil algorithm (no `timegm` dependency,
+    no `TZ` race)
+  - `parseStreamFilename` — splits the schema into
+    `(jail, suffix, incFromSuffix, epoch)`
+  - `hourBucket`, `dayBucket`, `weekBucket`, `monthBucket` —
+    bucket-key derivations
+  - `decidePrune` — the policy core; returns
+    `{keep, remove, orphans}` triple
+  - `explainKeeps` — keep-set with per-file reason ("daily:1",
+    "monthly:3" etc.) for verbose / debug use
+- `lib/backup_prune.cpp` — runtime: `std::filesystem` directory
+  scan, calls into pure module, `Util::Fs::unlink` per decision,
+  size summary in MB
+- CLI: `cli/args.cpp` adds `usageBackupPrune()` + parser case;
+  `cli/args_pure.cpp` adds `isCommand("backup-prune")` and
+  validation; `lib/args.h` adds `Cmd BackupPrune` + 5 fields
+- `lib/audit.cpp`, `lib/audit_pure.cpp` — recorded as
+  state-changing (writes the `backup-prune` line into audit.log
+  with target = `<dir> keep=<spec>`)
+
+### Tests
+
+22 ATF cases in `tests/unit/backup_prune_pure_test.cpp`:
+
+- Directory + jail-filter validators
+- Epoch parsing — known dates, round-trip through
+  `BackupPure::snapshotSuffix`, malformed-input rejection
+- Filename parser — full / incremental / dashed-jail-name (rfind
+  correctness), garbage-file rejection
+- Bucket distinctness across hour/day/week/month
+- Calendar-aligned month bucketing across Feb→Mar boundary
+- Daily-only, mixed daily+monthly union
+- Empty policy keeps nothing
+- Incremental kept with surviving base; orphaned with dropped base
+- `--delete-orphans` flag promotes orphans to removals
+- Lists are disjoint (no file appears in more than one bucket)
+- Empty input + "more buckets requested than files exist" both
+  produce sensible decisions
+
+### Caveats
+
+- Operates on **stream files** in the backup directory, never on
+  source-side ZFS snapshots. Operators who want snapshot pruning
+  on the source pool should keep using `zfs destroy` — that's a
+  separate concern with different blast radius.
+- Only files matching the `crate backup` schema are touched. Other
+  files in the directory are visible (in the "skipped" count) but
+  never deleted — even with `--delete-orphans`.
+- No interactive confirmation prompt. Operators are expected to
+  run `--dry-run` first or wrap the command in their own
+  confirmation. Adding a `--yes` requirement would force operators
+  to plumb `--yes` through cron, which we deemed worse.
+
+---
+
 ## [0.7.7] — 2026-05-04
 
 `crate throttle <jail>` — **true token-bucket network rate

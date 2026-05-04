@@ -57,6 +57,7 @@ tests/unit/pool_pure_test
 tests/unit/warm_pure_test
 tests/unit/retune_pure_test
 tests/unit/throttle_pure_test
+tests/unit/backup_prune_pure_test
 *.gcda
 *.gcno
 coverage.info

@@ -59,6 +59,7 @@ static void usage() {
   std::cout << "  inspect TARGET             print full JSON snapshot of a running container's state" << std::endl;
   std::cout << "  migrate TARGET --from EP --to EP  move a container between hosts via the F2 API" << std::endl;
   std::cout << "  backup TARGET --output-dir DIR  take a ZFS-send stream of the jail (incremental supported)" << std::endl;
+  std::cout << "  backup-prune DIR --keep SPEC   delete old .zstream files by retention bucket (Proxmox-style)" << std::endl;
   std::cout << "  restore STREAM --to DATASET     replay a backup stream into a fresh dataset" << std::endl;
   std::cout << "  replicate TARGET --to HOST --dest-dataset DS  stream a ZFS snapshot to a remote host" << std::endl;
   std::cout << "  template warm TARGET --output DS  capture jail's on-disk state as a ZFS warm template" << std::endl;
@@ -373,6 +374,29 @@ static void usageBackup() {
   std::cout << "" << std::endl;
 }
 
+static void usageBackupPrune() {
+  std::cout << "usage: crate backup-prune <dir> --keep <spec>" << std::endl;
+  std::cout << "                          [--jail NAME] [--dry-run] [--delete-orphans]" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Apply a Proxmox-style retention policy to .zstream files left by" << std::endl;
+  std::cout << "`crate backup`. Newest stream per bucket survives; the rest are" << std::endl;
+  std::cout << "deleted. Bucket types: hourly | daily | weekly | monthly." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Retention spec (same syntax as parseRetention):" << std::endl;
+  std::cout << "  hourly=N,daily=N,weekly=N,monthly=N    any subset; combine freely" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Examples:" << std::endl;
+  std::cout << "  crate backup-prune /backups --keep daily=7,weekly=4,monthly=6" << std::endl;
+  std::cout << "  crate backup-prune /backups --keep daily=14 --jail postgres" << std::endl;
+  std::cout << "  crate backup-prune /backups --keep daily=7 --dry-run" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Incrementals (.inc-from-*.zstream) inherit their base full's fate:" << std::endl;
+  std::cout << "  base kept     -> incremental kept (chain stays restorable)" << std::endl;
+  std::cout << "  base removed  -> incremental flagged 'orphan' (kept by default)" << std::endl;
+  std::cout << "                   --delete-orphans removes them too." << std::endl;
+  std::cout << "" << std::endl;
+}
+
 static void usageThrottle() {
   std::cout << "usage: crate throttle <jail> [--ingress RATE] [--egress RATE]" << std::endl;
   std::cout << "                       [--ingress-burst BYTES] [--egress-burst BYTES]" << std::endl;
@@ -619,7 +643,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.7.7" << std::endl;
+        std::cout << "crate 0.7.8" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -630,7 +654,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.7.7" << std::endl;
+          std::cout << "crate 0.7.8" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -1226,6 +1250,23 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.backupTarget = argv[a];
         } else {
           err("too many arguments for 'backup' command");
+        }
+        break;
+      case CmdBackupPrune:
+        if (auto argShort = isShort(argv[a])) {
+          if (argShort == 'h') { usageBackupPrune(); exit(0); }
+          err("unsupported short option '%s'", argv[a]);
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help"))             { usageBackupPrune(); exit(0); }
+          else if (strEq(argLong, "keep"))         args.backupPruneKeep = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "jail"))         args.backupPruneJailFilter = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "dry-run"))      args.backupPruneDryRun = true;
+          else if (strEq(argLong, "delete-orphans")) args.backupPruneDeleteOrphans = true;
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.backupPruneDir.empty()) {
+          args.backupPruneDir = argv[a];
+        } else {
+          err("too many arguments for 'backup-prune' command");
         }
         break;
       case CmdRestore:

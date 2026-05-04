@@ -58,6 +58,7 @@ Command isCommand(const char *arg) {
   if (strEq(arg, "inspect"))  return CmdInspect;
   if (strEq(arg, "migrate"))  return CmdMigrate;
   if (strEq(arg, "backup"))   return CmdBackup;
+  if (strEq(arg, "backup-prune")) return CmdBackupPrune;
   if (strEq(arg, "restore"))  return CmdRestore;
   if (strEq(arg, "replicate")) return CmdReplicate;
   if (strEq(arg, "template"))  return CmdTemplate;
@@ -207,6 +208,12 @@ void Args::validate() {
       ERR("the 'restore' command requires a stream file (positional arg)")
     if (restoreDataset.empty())
       ERR("the 'restore' command requires --to <pool/jails/name>")
+    break;
+  case CmdBackupPrune:
+    if (backupPruneDir.empty())
+      ERR("the 'backup-prune' command requires a directory (positional arg)")
+    if (backupPruneKeep.empty())
+      ERR("the 'backup-prune' command requires --keep <retention-spec> (e.g. daily=7,weekly=4)")
     break;
   case CmdReplicate:
     if (replicateTarget.empty())

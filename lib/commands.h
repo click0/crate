@@ -29,6 +29,7 @@ bool inspectCrate(const Args &args);
 bool migrateCommand(const Args &args);
 bool backupCrate(const Args &args);
 bool restoreCrate(const Args &args);
+bool backupPruneCrate(const Args &args);
 bool replicateCrate(const Args &args);
 bool templateWarmCommand(const Args &args);
 bool retuneCommand(const Args &args);

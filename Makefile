@@ -25,6 +25,7 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/create.cpp lib/run.cpp \
            lib/wireguard_runtime_pure.cpp \
            lib/migrate_pure.cpp lib/migrate.cpp \
            lib/backup_pure.cpp lib/backup.cpp \
+           lib/backup_prune_pure.cpp lib/backup_prune.cpp \
            lib/replicate_pure.cpp lib/replicate.cpp \
            lib/inspect_pure.cpp lib/inspect.cpp \
            lib/stack.cpp lib/stack_pure.cpp \
@@ -186,7 +187,8 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              wireguard_runtime_pure_test migrate_pure_test \
              datacenter_pure_test backup_pure_test replicate_pure_test \
              ha_pure_test pool_pure_test warm_pure_test \
-             retune_pure_test throttle_pure_test
+             retune_pure_test throttle_pure_test \
+             backup_prune_pure_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)
@@ -220,7 +222,8 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  lib/inter_dns_pure.cpp lib/wireguard_pure.cpp \
                  lib/ipsec_pure.cpp lib/inspect_pure.cpp \
                  lib/wireguard_runtime_pure.cpp lib/migrate_pure.cpp \
-                 lib/backup_pure.cpp lib/replicate_pure.cpp \
+                 lib/backup_pure.cpp lib/backup_prune_pure.cpp \
+                 lib/replicate_pure.cpp \
                  cli/args_pure.cpp daemon/metrics_pure.cpp \
                  daemon/routes_pure.cpp daemon/ws_pure.cpp \
                  daemon/transfer_pure.cpp hub/aggregator_pure.cpp \
