@@ -284,6 +284,9 @@ static int mainGuarded(int argc, char** argv) {
     // currently the only subcommand is "warm"
     succ = templateWarmCommand(args);
     break;
+  } case CmdRetune: {
+    succ = retuneCommand(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}

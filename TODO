@@ -238,3 +238,16 @@ Items completed and removed from this file:
   (0.7.5 — lib/warm_pure.cpp + lib/warm.cpp). Part 2
   (`crate run --warm-base <dataset>` integration to actually
   consume the template at run time) tracked separately.
+- crate retune — live RCTL adjustment for a running jail. No
+  restart required; the jail's in-memory state survives. Operator
+  throttles a runaway container (torrent client suddenly sucking
+  the disk) without losing it. `--rctl KEY=VALUE` (repeatable),
+  `--clear KEY` (drops the rule), `--show` (rctl -u dump
+  before+after). Whitelisted RCTL keys (typos give a helpful
+  diagnostic); human-friendly K/M/G/T suffixes (1024-based) for
+  byte rates, plain integers for IOPS/counts, 0..100 for pcpu.
+  Pure validators reject shell metas / out-of-range / suffix-on-
+  IOPS at parse time so the rctl(8) child never sees a malformed
+  rule (0.7.6 — lib/retune_pure.cpp + lib/retune.cpp).
+  Token-bucket-style network throttling (per-iface bandwidth
+  with burst) is the topic of 0.7.7 (dummynet integration).

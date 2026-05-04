@@ -61,6 +61,7 @@ Command isCommand(const char *arg) {
   if (strEq(arg, "restore"))  return CmdRestore;
   if (strEq(arg, "replicate")) return CmdReplicate;
   if (strEq(arg, "template"))  return CmdTemplate;
+  if (strEq(arg, "retune"))    return CmdRetune;
   return CmdNone;
 }
 
@@ -223,6 +224,12 @@ void Args::validate() {
       ERR("the 'template warm' command requires a jail name")
     if (warmOutputDataset.empty())
       ERR("the 'template warm' command requires --output <dataset>")
+    break;
+  case CmdRetune:
+    if (retuneTarget.empty())
+      ERR("the 'retune' command requires a jail name (positional arg)")
+    if (retunePairs.empty() && retuneClear.empty() && !retuneShow)
+      ERR("the 'retune' command needs at least one of --rctl, --clear, or --show")
     break;
   default:
     ERR("no command was given")

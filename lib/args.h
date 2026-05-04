@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdReplicate, CmdTemplate};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdReplicate, CmdTemplate, CmdRetune};
 
 class Args {
 public:
@@ -138,6 +138,12 @@ public:
   std::string warmTarget;           // jail name
   std::string warmOutputDataset;    // ZFS dataset to clone into
   bool        warmPromote = false;  // --promote: zfs promote after clone
+
+  // retune parameters
+  std::string retuneTarget;             // jail name or JID
+  std::vector<std::string> retunePairs; // repeatable --rctl KEY=VALUE
+  std::vector<std::string> retuneClear; // repeatable --clear KEY (drops the rule)
+  bool        retuneShow = false;       // --show: dump usage before+after
 
   void validate();
 };
