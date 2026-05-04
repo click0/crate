@@ -2,6 +2,7 @@
 
 #include "auth.h"
 #include "auth_pure.h"
+#include "pool_pure.h"
 
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include <httplib.h>
@@ -57,6 +58,32 @@ bool isAuthorized(const httplib::Request &req, const Config &config,
     req.path,
     (long)::time(nullptr),
     sha256hex);
+}
+
+bool isAuthorizedForContainer(const httplib::Request &req,
+                              const Config &config,
+                              const std::string &requiredRole,
+                              const std::string &containerName) {
+  // Run the standard auth gate first (role + expiry + scope).
+  if (!isAuthorized(req, config, requiredRole))
+    return false;
+  // Unix socket peers don't have an associated token entry, so
+  // they bypass the pool ACL too. (Treating socket peers as
+  // unrestricted matches the wider "socket file mode is the gate"
+  // model documented in CAVEATS in crated.8.)
+  if (isUnixSocketPeer(req))
+    return true;
+  // Find the matching token entry and consult its `pools:` list.
+  auto rawToken = AuthPure::parseBearerToken(req.get_header_value("Authorization"));
+  if (rawToken.empty())
+    return false;   // shouldn't happen — isAuthorized already returned true
+  auto hash = sha256hex(rawToken);
+  for (auto &t : config.tokens) {
+    if (t.tokenHash != hash) continue;
+    auto containerPool = PoolPure::inferPool(containerName, config.poolSeparator);
+    return PoolPure::tokenAllowsContainer(t.pools, containerPool);
+  }
+  return false;
 }
 
 }

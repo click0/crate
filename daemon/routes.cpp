@@ -151,12 +151,12 @@ static void handleMetrics(const httplib::Request &, httplib::Response &res) {
 
 static void handleContainerStats(const httplib::Request &req, httplib::Response &res,
                                   const Config &config) {
-  if (!isAuthorized(req, config, "viewer")) {
+  auto name = req.path_params.at("name");
+  if (!isAuthorizedForContainer(req, config, "viewer", name)) {
     jsonError(res, 403, "unauthorized");
     return;
   }
 
-  auto name = req.path_params.at("name");
   auto jail = JailQuery::getJailByName(name);
   if (!jail) {
     try {
@@ -200,12 +200,12 @@ static void handleContainerStats(const httplib::Request &req, httplib::Response 
 
 static void handleContainerStop(const httplib::Request &req, httplib::Response &res,
                                  const Config &config) {
-  if (!isAuthorized(req, config, "admin")) {
+  auto name = req.path_params.at("name");
+  if (!isAuthorizedForContainer(req, config, "admin", name)) {
     jsonError(res, 403, "unauthorized");
     return;
   }
 
-  auto name = req.path_params.at("name");
   auto jail = JailQuery::getJailByName(name);
   if (!jail) {
     try {
@@ -254,12 +254,12 @@ static void handleContainerStop(const httplib::Request &req, httplib::Response &
 
 static void handleContainerStart(const httplib::Request &req, httplib::Response &res,
                                   const Config &config) {
-  if (!isAuthorized(req, config, "admin")) {
+  auto name = req.path_params.at("name");
+  if (!isAuthorizedForContainer(req, config, "admin", name)) {
     jsonError(res, 403, "unauthorized");
     return;
   }
 
-  auto name = req.path_params.at("name");
 
   // Check if already running
   auto jail = JailQuery::getJailByName(name);
@@ -294,12 +294,12 @@ static void handleContainerStart(const httplib::Request &req, httplib::Response 
 
 static void handleContainerDestroy(const httplib::Request &req, httplib::Response &res,
                                     const Config &config) {
-  if (!isAuthorized(req, config, "admin")) {
+  auto name = req.path_params.at("name");
+  if (!isAuthorizedForContainer(req, config, "admin", name)) {
     jsonError(res, 403, "unauthorized");
     return;
   }
 
-  auto name = req.path_params.at("name");
 
   // Stop if running
   auto jail = JailQuery::getJailByName(name);
@@ -324,12 +324,12 @@ static void handleContainerDestroy(const httplib::Request &req, httplib::Respons
 
 static void handleContainerLogs(const httplib::Request &req, httplib::Response &res,
                                  const Config &config) {
-  if (!isAuthorized(req, config, "viewer")) {
+  auto name = req.path_params.at("name");
+  if (!isAuthorizedForContainer(req, config, "viewer", name)) {
     jsonError(res, 403, "unauthorized");
     return;
   }
 
-  auto name = req.path_params.at("name");
   auto jail = JailQuery::getJailByName(name);
   if (!jail) {
     try {
@@ -452,12 +452,12 @@ static void handleContainerLogs(const httplib::Request &req, httplib::Response &
 
 static void handleContainerRestart(const httplib::Request &req, httplib::Response &res,
                                     const Config &config) {
-  if (!isAuthorized(req, config, "admin")) {
+  auto name = req.path_params.at("name");
+  if (!isAuthorizedForContainer(req, config, "admin", name)) {
     jsonError(res, 403, "unauthorized");
     return;
   }
 
-  auto name = req.path_params.at("name");
   auto jail = JailQuery::getJailByName(name);
 
   // Stop phase: send SIGTERM, wait up to 10s, fall back to SIGKILL.
@@ -526,11 +526,11 @@ static std::string datasetForJail(const std::string &name) {
 
 static void handleListSnapshots(const httplib::Request &req, httplib::Response &res,
                                  const Config &config) {
-  if (!isAuthorized(req, config, "viewer")) {
+  auto name = req.path_params.at("name");
+  if (!isAuthorizedForContainer(req, config, "viewer", name)) {
     jsonError(res, 403, "unauthorized");
     return;
   }
-  auto name = req.path_params.at("name");
   auto ds = datasetForJail(name);
   if (ds.empty()) {
     jsonError(res, 404, "container or dataset not found");
@@ -565,11 +565,11 @@ static void handleListSnapshots(const httplib::Request &req, httplib::Response &
 
 static void handleCreateSnapshot(const httplib::Request &req, httplib::Response &res,
                                   const Config &config) {
-  if (!isAuthorized(req, config, "admin")) {
+  auto name = req.path_params.at("name");
+  if (!isAuthorizedForContainer(req, config, "admin", name)) {
     jsonError(res, 403, "unauthorized");
     return;
   }
-  auto name = req.path_params.at("name");
   auto ds = datasetForJail(name);
   if (ds.empty()) {
     jsonError(res, 404, "container or dataset not found");
@@ -603,11 +603,11 @@ static void handleCreateSnapshot(const httplib::Request &req, httplib::Response 
 
 static void handleDeleteSnapshot(const httplib::Request &req, httplib::Response &res,
                                   const Config &config) {
-  if (!isAuthorized(req, config, "admin")) {
+  auto name = req.path_params.at("name");
+  if (!isAuthorizedForContainer(req, config, "admin", name)) {
     jsonError(res, 403, "unauthorized");
     return;
   }
-  auto name = req.path_params.at("name");
   auto snap = req.path_params.at("snap");
 
   auto reason = RoutesPure::validateSnapshotName(snap);
@@ -636,11 +636,11 @@ static void handleDeleteSnapshot(const httplib::Request &req, httplib::Response 
 
 static void handleStatsStream(const httplib::Request &req, httplib::Response &res,
                                const Config &config) {
-  if (!isAuthorized(req, config, "viewer")) {
+  auto name = req.path_params.at("name");
+  if (!isAuthorizedForContainer(req, config, "viewer", name)) {
     jsonError(res, 403, "unauthorized");
     return;
   }
-  auto name = req.path_params.at("name");
   auto jail = JailQuery::getJailByName(name);
   if (!jail) {
     try { jail = JailQuery::getJailByJid(std::stoi(name)); } catch (...) {}
@@ -735,11 +735,11 @@ static const std::string ARTIFACT_DIR = "/var/run/crate";
 
 static void handleContainerExport(const httplib::Request &req, httplib::Response &res,
                                    const Config &config) {
-  if (!isAuthorized(req, config, "admin")) {
+  auto name = req.path_params.at("name");
+  if (!isAuthorizedForContainer(req, config, "admin", name)) {
     jsonError(res, 403, "unauthorized");
     return;
   }
-  auto name = req.path_params.at("name");
   auto jail = JailQuery::getJailByName(name);
   if (!jail) {
     try { jail = JailQuery::getJailByJid(std::stoi(name)); } catch (...) {}
@@ -830,11 +830,11 @@ static void handleExportDownload(const httplib::Request &req, httplib::Response 
 
 static void handleContainerImport(const httplib::Request &req, httplib::Response &res,
                                    const Config &config) {
-  if (!isAuthorized(req, config, "admin")) {
+  auto name = req.path_params.at("name");
+  if (!isAuthorizedForContainer(req, config, "admin", name)) {
     jsonError(res, 403, "unauthorized");
     return;
   }
-  auto name = req.path_params.at("name");
   auto reason = TransferPure::validateArtifactName(name + ".crate");
   if (!reason.empty()) {
     jsonError(res, 400, reason);

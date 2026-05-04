@@ -50,3 +50,4 @@ atf_test_program{name="datacenter_pure_test"}
 atf_test_program{name="backup_pure_test"}
 atf_test_program{name="replicate_pure_test"}
 atf_test_program{name="ha_pure_test"}
+atf_test_program{name="pool_pure_test"}

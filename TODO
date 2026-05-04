@@ -213,3 +213,13 @@ Items completed and removed from this file:
   partner in declared order wins; no order when all partners
   down (no half-failovers). (0.7.3 — hub/ha_pure.cpp +
   hub/api.cpp + hub/poller.cpp).
+- Resource pools + ACL — tokens in crated.conf gain optional
+  `pools:` whitelist; the pool of a container is inferred from
+  its jail name via `auth.pool_separator` (default "-", so
+  "dev-postgres" -> pool "dev"). F2 endpoints with `:name`
+  enforce pool match before role/scope checks. Empty `pools:` =
+  unrestricted (pre-0.7.4 behaviour); "*" = explicit all-pools.
+  Pool-less jails reachable only by unrestricted/wildcard tokens
+  (no silent leakage). WebSocket console enforces same ACL
+  (0.7.4 — lib/pool_pure.cpp + daemon/auth.cpp +
+  daemon/routes.cpp + daemon/ws_console.cpp).

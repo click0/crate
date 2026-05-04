@@ -19,4 +19,16 @@ namespace Crated {
 bool isAuthorized(const httplib::Request &req, const Config &config,
                   const std::string &requiredRole);
 
+// As above, but also enforces the per-token pool ACL (added in
+// 0.7.4) against the container the request is targeting. The pool
+// is inferred from `containerName` via PoolPure::inferPool with
+// `config.poolSeparator`. F2 endpoints with a `:name` URL
+// parameter should use this variant; routes that don't address a
+// specific container (e.g. /api/v1/host) keep using
+// isAuthorized().
+bool isAuthorizedForContainer(const httplib::Request &req,
+                              const Config &config,
+                              const std::string &requiredRole,
+                              const std::string &containerName);
+
 }

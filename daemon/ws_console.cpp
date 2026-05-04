@@ -3,6 +3,7 @@
 #include "ws_console.h"
 #include "ws_pure.h"
 #include "auth_pure.h"
+#include "pool_pure.h"
 
 #include "jail_query.h"
 #include "pathnames.h"
@@ -239,6 +240,28 @@ void handleClient(int fd, Config config) {
     ::close(fd);
     return;
   }
+
+  // Pool ACL (0.7.4): consult the matching token's `pools:` whitelist.
+  // The bearer-token check above already established the token is
+  // valid; here we just look it up again to read the per-token pool
+  // list. Cheap (token list is in-process and small).
+  {
+    auto rawTok = AuthPure::parseBearerToken(authHeader);
+    auto hash = sha256hex(rawTok);
+    bool poolOk = false;
+    for (auto &t : config.tokens) {
+      if (t.tokenHash != hash) continue;
+      auto containerPool = PoolPure::inferPool(jailName, config.poolSeparator);
+      poolOk = PoolPure::tokenAllowsContainer(t.pools, containerPool);
+      break;
+    }
+    if (!poolOk) {
+      writeAll(fd, WsPure::buildHandshakeRejection("token not allowed for this container's pool"));
+      ::close(fd);
+      return;
+    }
+  }
+
   auto jail = JailQuery::getJailByName(jailName);
   if (!jail) {
     writeAll(fd, WsPure::buildHandshakeRejection("container not found"));
