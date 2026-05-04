@@ -63,6 +63,7 @@ static void usage() {
   std::cout << "  replicate TARGET --to HOST --dest-dataset DS  stream a ZFS snapshot to a remote host" << std::endl;
   std::cout << "  template warm TARGET --output DS  capture jail's on-disk state as a ZFS warm template" << std::endl;
   std::cout << "  retune TARGET --rctl K=V...   live-tune jail RCTL limits without restart (--show, --clear)" << std::endl;
+  std::cout << "  throttle TARGET --ingress R --egress R    dummynet token-bucket network shaping" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -372,6 +373,34 @@ static void usageBackup() {
   std::cout << "" << std::endl;
 }
 
+static void usageThrottle() {
+  std::cout << "usage: crate throttle <jail> [--ingress RATE] [--egress RATE]" << std::endl;
+  std::cout << "                       [--ingress-burst BYTES] [--egress-burst BYTES]" << std::endl;
+  std::cout << "                       [--queue N] [--clear] [--show]" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "True token-bucket network rate limiting via dummynet(4) — sustained" << std::endl;
+  std::cout << "rate (bw) plus burst capacity. Sister to `crate retune` (which targets" << std::endl;
+  std::cout << "RCTL hard caps for CPU/disk/memory)." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Rate format (bit/s OR byte/s — bare 'NM' is REJECTED to avoid ambiguity):" << std::endl;
+  std::cout << "  10Mbit/s  100Kbit/s  1Gbit/s     bit/s units" << std::endl;
+  std::cout << "  10MB/s    100KB/s    1GB/s       byte/s (uppercase B mandatory)" << std::endl;
+  std::cout << "  10000                            plain integer = bytes/s" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Burst (bytes only — no /s):  1MB | 100KB | 100000" << std::endl;
+  std::cout << "Queue: slot count 1..1000  OR  byte size 100KB | 1MB" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Examples:" << std::endl;
+  std::cout << "  crate throttle torrent --ingress 10Mbit/s --egress 5Mbit/s --burst 1MB" << std::endl;
+  std::cout << "  crate throttle torrent --egress 1Mbit/s --queue 100" << std::endl;
+  std::cout << "  crate throttle torrent --show" << std::endl;
+  std::cout << "  crate throttle torrent --clear" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Pipe IDs are deterministic per JID (10000 + jid*2; +1 for egress)." << std::endl;
+  std::cout << "Repeating the command replaces the previous config — no orphaned pipes." << std::endl;
+  std::cout << "" << std::endl;
+}
+
 static void usageRetune() {
   std::cout << "usage: crate retune <jail> [--rctl KEY=VALUE]... [--clear KEY]... [--show]" << std::endl;
   std::cout << "" << std::endl;
@@ -590,7 +619,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.7.6" << std::endl;
+        std::cout << "crate 0.7.7" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -601,7 +630,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.7.6" << std::endl;
+          std::cout << "crate 0.7.7" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -1265,6 +1294,26 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.retuneTarget = argv[a];
         } else {
           err("too many arguments for 'retune' command");
+        }
+        break;
+      case CmdThrottle:
+        if (auto argShort = isShort(argv[a])) {
+          if (argShort == 'h') { usageThrottle(); exit(0); }
+          err("unsupported short option '%s'", argv[a]);
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) { usageThrottle(); exit(0); }
+          else if (strEq(argLong, "ingress"))        args.throttleIngressRate = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "ingress-burst"))  args.throttleIngressBurst = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "egress"))         args.throttleEgressRate = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "egress-burst"))   args.throttleEgressBurst = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "queue"))          args.throttleQueue = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "clear"))          args.throttleClear = true;
+          else if (strEq(argLong, "show"))           args.throttleShow = true;
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.throttleTarget.empty()) {
+          args.throttleTarget = argv[a];
+        } else {
+          err("too many arguments for 'throttle' command");
         }
         break;
       }

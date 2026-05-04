@@ -78,6 +78,7 @@ std::string pickTarget(const Args &args) {
   case CmdReplicate: return args.replicateTarget + "->" + args.replicateTo + ":" + args.replicateDestDataset;
   case CmdTemplate: return args.templateSubcmd + ":" + args.warmTarget + "->" + args.warmOutputDataset;
   case CmdRetune:   return args.retuneTarget;
+  case CmdThrottle: return args.throttleTarget;
   case CmdList:
   case CmdClean:
   case CmdTop:

@@ -287,6 +287,9 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdRetune: {
     succ = retuneCommand(args);
     break;
+  } case CmdThrottle: {
+    succ = throttleCommand(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}
