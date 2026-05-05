@@ -28,14 +28,20 @@ concurrency:
 jobs:
   lite:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     name: FreeBSD 14.2 lite (compile + unit tests)
     steps:
       - uses: actions/checkout@v4
 
       - name: Compile + unit tests on FreeBSD
         uses: cross-platform-actions/action@v0.32.0
-        timeout-minutes: 20
+        # Bumped from 20m to 30m: the per-test Makefile rule recompiles
+        # every TEST_LINK_SRCS for each test binary (~30 files × ~40
+        # tests = ~1200 compiles), so each new pure-test adds ~1m to
+        # the FreeBSD VM build. Run 159 (0.7.9) was the first to
+        # timeout. A proper Makefile refactor (compile TEST_LINK_SRCS
+        # to .o once, link tests against them) is tracked separately.
+        timeout-minutes: 30
         with:
           operating_system: freebsd
           version: '14.2'

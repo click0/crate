@@ -15,6 +15,18 @@ operational quality.)
 
 === Medium priority — operational quality ===
 
+* (build) Makefile test-link refactor — current rule
+    tests/unit/%: tests/unit/%.cpp $(TEST_LINK_SRCS) ...
+        $(CXX) -o $@ $< $(TEST_LINK_SRCS) ...
+  recompiles every TEST_LINK_SRCS file (~30 files) for every test
+  binary (~40 tests) → ~1200 compilations on a clean build. Each
+  new pure-test pushes FreeBSD-lite CI another ~1 minute closer
+  to the workflow timeout. Fix: compile TEST_LINK_SRCS to objects
+  in tests/unit/.objs/<basename>.o once, link tests against them.
+  Should give ~5-10× speedup on the test-build phase. Tracked as
+  followup after we hit the 20m timeout on run 159 (0.7.9 release);
+  bumped CI timeout to 30m as a stop-gap.
+
 === Out of scope (separate repository) ===
 
 * Admin/dashboard UI for the datacenter view. The hub already
