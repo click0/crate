@@ -375,4 +375,168 @@ bool poolVisibleOnSocket(const std::string &pool,
   return false;
 }
 
+// --- HTTP wire parsing ---
+
+namespace {
+
+// Status reason phrases for the responses we actually emit.
+const char *reasonForStatus(int status) {
+  switch (status) {
+  case 200: return "OK";
+  case 400: return "Bad Request";
+  case 403: return "Forbidden";
+  case 404: return "Not Found";
+  case 405: return "Method Not Allowed";
+  case 411: return "Length Required";
+  case 413: return "Payload Too Large";
+  case 500: return "Internal Server Error";
+  default:  return "Unknown";
+  }
+}
+
+// Lowercase a copy.
+std::string toLower(std::string s) {
+  for (auto &c : s) {
+    if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
+  }
+  return s;
+}
+
+bool methodLooksValid(const std::string &m) {
+  if (m.empty() || m.size() > 16) return false;
+  for (char c : m) {
+    if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')))
+      return false;
+  }
+  return true;
+}
+
+bool pathLooksValid(const std::string &p) {
+  if (p.empty() || p.size() > 1024) return false;
+  if (p.front() != '/') return false;
+  for (char c : p) {
+    // ASCII printable, no control chars, no whitespace mid-path.
+    if (c < 0x21 || c > 0x7e) return false;
+  }
+  return true;
+}
+
+} // anon
+
+ParsedHttp parseHttpHead(const std::string &head) {
+  ParsedHttp out;
+  // Locate the first CRLF (end of request line).
+  auto eol = head.find("\r\n");
+  if (eol == std::string::npos) {
+    out.bad = true; out.error = "no CRLF after request line";
+    return out;
+  }
+  std::string requestLine = head.substr(0, eol);
+  if (requestLine.size() > 1024 + 32) {  // cap path + method + version + slack
+    out.bad = true; out.error = "request line too long";
+    return out;
+  }
+
+  // Split request line on single spaces. We require exactly two spaces:
+  // METHOD SP PATH SP VERSION
+  auto sp1 = requestLine.find(' ');
+  if (sp1 == std::string::npos) {
+    out.bad = true; out.error = "request line missing SP after method";
+    return out;
+  }
+  auto sp2 = requestLine.find(' ', sp1 + 1);
+  if (sp2 == std::string::npos) {
+    out.bad = true; out.error = "request line missing SP after path";
+    return out;
+  }
+  std::string method  = requestLine.substr(0, sp1);
+  std::string path    = requestLine.substr(sp1 + 1, sp2 - sp1 - 1);
+  std::string version = requestLine.substr(sp2 + 1);
+
+  if (!methodLooksValid(method)) {
+    out.bad = true; out.error = "invalid HTTP method";
+    return out;
+  }
+  if (!pathLooksValid(path)) {
+    out.bad = true; out.error = "invalid HTTP path";
+    return out;
+  }
+  if (version != "HTTP/1.0" && version != "HTTP/1.1") {
+    out.bad = true; out.error = "unsupported HTTP version (need 1.0 or 1.1)";
+    return out;
+  }
+
+  out.method = method;
+  out.path   = path;
+
+  // Parse headers: each line `NAME: VALUE\r\n`, ending at empty CRLF.
+  std::size_t i = eol + 2;
+  while (i < head.size()) {
+    auto e = head.find("\r\n", i);
+    if (e == std::string::npos) {
+      out.bad = true; out.error = "header block not terminated by CRLF";
+      return out;
+    }
+    if (e == i) {
+      // empty line — end of headers
+      return out;
+    }
+    if (e - i > 4096) {
+      out.bad = true; out.error = "header line too long";
+      return out;
+    }
+    std::string line = head.substr(i, e - i);
+    auto colon = line.find(':');
+    if (colon == std::string::npos) {
+      out.bad = true; out.error = "header missing ':'";
+      return out;
+    }
+    std::string name = toLower(line.substr(0, colon));
+    std::string value;
+    // Skip optional whitespace after colon.
+    std::size_t v = colon + 1;
+    while (v < line.size() && (line[v] == ' ' || line[v] == '\t')) v++;
+    value = line.substr(v);
+
+    if (name == "content-length") {
+      // Strict: digits only, fits in size_t, cap 64KB (control-socket bodies
+      // are tiny JSON patches; anything bigger is hostile).
+      if (value.empty()) {
+        out.bad = true; out.error = "Content-Length empty";
+        return out;
+      }
+      std::size_t n = 0;
+      for (char c : value) {
+        if (c < '0' || c > '9') {
+          out.bad = true; out.error = "Content-Length not numeric";
+          return out;
+        }
+        n = n * 10 + (std::size_t)(c - '0');
+        if (n > 65536) {
+          out.bad = true; out.error = "Content-Length over 64KB cap";
+          return out;
+        }
+      }
+      out.contentLength = n;
+    }
+    // All other headers ignored.
+    i = e + 2;
+  }
+  // Reached end of input without seeing the empty terminator line.
+  out.bad = true; out.error = "header block truncated";
+  return out;
+}
+
+std::string buildHttpResponse(int status, const std::string &body,
+                              const std::string &contentType) {
+  std::ostringstream o;
+  o << "HTTP/1.1 " << status << " " << reasonForStatus(status) << "\r\n"
+    << "Content-Type: " << contentType << "\r\n"
+    << "Content-Length: " << body.size() << "\r\n"
+    << "Connection: close\r\n"
+    << "\r\n"
+    << body;
+  return o.str();
+}
+
 } // namespace ControlSocketPure

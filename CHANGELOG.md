@@ -6,6 +6,96 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.11] — 2026-05-05
+
+Closes the defence-in-depth gap left in 0.7.10: control sockets now
+verify peer credentials via `getpeereid(2)` on each connection,
+matching what the design document promised.
+
+The 0.7.10 prototype used cpp-httplib for control sockets, which
+gave routing for free but did not expose the per-connection fd to
+handlers — making `getpeereid(2)` impossible to call. We had to
+synthesise `peerGid = expectedGid` and rely solely on filesystem
+permissions. 0.7.11 replaces the httplib code path for control
+sockets with a hand-rolled accept loop that captures peer creds
+the moment `accept(2)` returns:
+
+```
+accept(listenFd) -> connFd
+getpeereid(connFd, &uid, &gid)  ← layer 2 active here
+read header until \r\n\r\n
+parseHttpHead(...)
+read body up to Content-Length
+parseRoute(method, path)
+authorize(...)                  ← real peerGid passed in
+dispatch + writeResponse
+close
+```
+
+Defence in depth (now complete, 4 layers):
+
+1. **Filesystem permissions** (kernel) — outer gate.
+2. **`getpeereid(2)` re-check** (THIS RELEASE) — even if perms get
+   loosened by misconfiguration, peer.gid must match the socket's
+   configured group.
+3. **Pool ACL** — request paths scoped to `socket.pools`.
+4. **Role gate** — `viewer` socket rejects PATCH.
+
+### Implementation
+
+- `daemon/control_socket_pure.{h,cpp}` — extended with strict
+  HTTP/1.0–1.1 wire parser (`parseHttpHead`) and response builder
+  (`buildHttpResponse`):
+  - Method whitelist (alpha only, ≤16 chars)
+  - Path validation (printable ASCII only, ≤1024 chars)
+  - Strict Content-Length (digits only, capped at 64KB)
+  - Header line cap 4KB; total head cap 8KB
+  - Case-insensitive header names
+  - No chunked encoding, no continuation lines, no keep-alive
+- `daemon/control_socket.cpp` — fully rewritten:
+  - `bindSocketOrThrow` — `socket(AF_UNIX) → bind → chmod → chown
+    → listen(16)`. Per-spec fail-soft: errors during bind log and
+    skip just that socket; other sockets keep going.
+  - `acceptLoop` — `SO_RCVTIMEO`-driven so a stop-flag check fires
+    every second for graceful shutdown.
+  - `handleConnection` — `getpeereid` first, parse, authorize,
+    dispatch, write, close. Per-connection thread, detached.
+- The `extern "C" int getpeereid(int, uid_t *, gid_t *);` declaration
+  is portable across FreeBSD (where it's in `<unistd.h>`) and Linux
+  glibc (where it requires `_DEFAULT_SOURCE`); a duplicate
+  declaration matches the BSD signature stable since 4.4BSD.
+
+### Tests
+
+`tests/unit/control_socket_pure_test.cpp` extended with **8 new
+ATF cases** for the wire parser:
+
+- `http_parse_typical_get` — happy path
+- `http_parse_patch_with_content_length` — extracts CL header
+- `http_parse_content_length_case_insensitive` — `CONTENT-LENGTH`,
+  `content-length` both work (RFC 9110 case-insensitivity)
+- `http_parse_http_1_0_accepted` — both 1.0 and 1.1 supported
+- `http_parse_rejects_malformed` — empty input, no CRLF, missing SP,
+  unsupported version, space in path, non-numeric CL, oversized CL,
+  header without colon, truncated head
+- `http_parse_rejects_bad_method_chars` — non-letter / over-cap
+  method names
+- `http_response_shape` — status/CT/CL/connection-close all present;
+  body verbatim after empty CRLF
+- `http_response_status_codes` — 400/403/404/500 reason phrases
+
+**889/889 unit tests pass locally** (881 from prior + 8 new).
+
+### NOT in this release (still future)
+
+- **Lifecycle endpoints** (start/stop/destroy) on control sockets.
+  Those keep the bearer-token requirement on the main API.
+- **Per-jail (not per-group) sockets.** The current per-group model
+  covers the multi-team use case; per-jail isolation can come if
+  operators ask for it.
+
+---
+
 ## [0.7.10] — 2026-05-05
 
 `crated` control sockets — bearer-token-less Unix-socket REST API for

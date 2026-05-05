@@ -1,43 +1,36 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 //
-// Runtime for the crated control-socket plane (0.7.10).
+// Runtime for the crated control-socket plane.
 //
-// For each ControlSocketSpec:
-//   1. Resolve the unix group via getgrnam(3); WARN-and-skip if absent.
-//   2. WARN if the configured mode has world-bits set (operator
-//      override is allowed by design — see TODO note below).
-//   3. mkdir -p /var/run/crate/control/ (mode 0755).
-//   4. unlink old socket from a prior run.
-//   5. bind, then chmod, then chown root:<gid>.
-//   6. Spawn a httplib::Server thread that registers control-only
-//      routes. Each request invokes peer_extract → control_route_dispatch.
+// 0.7.10 prototype used cpp-httplib for control sockets, which gave
+// us routing and HTTP parsing for free but did NOT expose the
+// per-connection fd to handlers — defeating the whole point of
+// peer-cred verification. 0.7.11 replaces that with a hand-rolled
+// accept loop:
 //
-// Peer extraction TODO (0.7.11):
+//   thread per socket:
+//     1. socket(AF_UNIX, SOCK_STREAM)
+//     2. bind(spec.path), listen(...)
+//     3. chmod + chown to spec.mode and spec.group
+//     4. accept-loop:
+//        a. accept(fd) — returns connection fd
+//        b. getpeereid(connFd, &uid, &gid)  ← THIS is what 0.7.10 missed
+//        c. read header bytes until \r\n\r\n (8KB cap)
+//        d. ControlSocketPure::parseHttpHead -> {method, path, content-length}
+//        e. read body up to content-length (64KB cap)
+//        f. ControlSocketPure::parseRoute -> ParsedRoute
+//        g. ControlSocketPure::authorize with REAL peer creds
+//        h. dispatch + write response, close fd
 //
-// Defence-in-depth design: filesystem perms (kernel-enforced) are
-// the OUTER gate — operator B physically cannot connect(2) to
-// operator A's socket because the kernel rejects the open with
-// EACCES before crated sees a byte. INSIDE crated we'd like to
-// re-check via getpeereid(2) against the connection fd, so even
-// a misconfigured 0666 socket fails closed.
+// All policy lives in ControlSocketPure. This file is socket I/O only.
 //
-// cpp-httplib (the HTTP framework crated already uses) does NOT
-// expose the per-connection fd through its public API. Adding the
-// inner getpeereid check therefore requires either:
-//   (a) forking cpp-httplib to expose the fd, or
-//   (b) writing a custom HTTP-on-unix-socket accept loop (~400 LOC).
-//
-// For 0.7.10 we ship with filesystem perms as the sole gate. We
-// pass `peerGid = expectedGid` synthetically so the pure-module
-// ACL chain still runs (pool/role checks remain effective). The
-// gid-mismatch branch in ControlSocketPure::authorize is therefore
-// unreachable at runtime — but the unit tests still cover it, so
-// when we wire (b) in 0.7.11 the policy is already validated.
-//
-// No control-socket request EVER touches state of jails outside its
-// pool ACL, even with this limitation: pool/role checks are pure
-// and re-run for every request.
+// Defence in depth (now complete):
+//   1. Filesystem perms (kernel)        — outer gate, most attackers stop here
+//   2. getpeereid(2) re-check (THIS)    — even if perms get loosened, peer.gid
+//                                          must match the configured group
+//   3. Pool ACL (pure)                  — request paths scoped to socket.pools
+//   4. Role gate (pure)                 — viewer rejects PATCH
 //
 
 #include "control_socket.h"
@@ -47,8 +40,6 @@
 #include "../lib/util.h"
 #include "../lib/pathnames.h"
 
-#include <httplib.h>
-
 #include <grp.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -56,8 +47,17 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+// getpeereid(2) — declared in <unistd.h> on FreeBSD, but glibc on
+// Linux only exposes it under _DEFAULT_SOURCE / _BSD_SOURCE. The
+// extern declaration below is a no-op when the platform header
+// already declared it (BSD signature is stable since 4.4BSD), and
+// it lets the same source compile on a Linux dev box for syntax
+// checks without pulling in feature-test macros.
+extern "C" int getpeereid(int s, uid_t *euid, gid_t *egid);
+
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -67,13 +67,11 @@
 
 namespace Crated {
 
-// Peer credentials would be set per-connection here in a future
-// release that wires getpeereid(2). For 0.7.10 we synthesise them
-// from the socket's expected gid (see file header comment).
-static thread_local long g_peerUid = -1;
-static thread_local long g_peerGid = -1;
-
 namespace {
+
+constexpr std::size_t kMaxHeader = 8 * 1024;
+constexpr std::size_t kMaxBody   = 64 * 1024;
+constexpr int         kAcceptTimeoutSec = 1;  // for graceful shutdown
 
 // Resolve a unix group name to gid. Returns -1 if not found.
 long resolveGroup(const std::string &name) {
@@ -83,8 +81,6 @@ long resolveGroup(const std::string &name) {
   return static_cast<long>(gr->gr_gid);
 }
 
-// mkdir -p style, mode 0755. Tolerates EEXIST. Throws on other
-// failures.
 void mkdirP(const std::string &dir) {
   std::string cur;
   for (char c : dir) {
@@ -98,55 +94,55 @@ void mkdirP(const std::string &dir) {
     throw std::runtime_error("mkdir " + dir + ": " + std::strerror(errno));
 }
 
-// Pre-route check + response. Used by every control-socket handler
-// before doing any work.
-bool authorizeOrReject(const httplib::Request &req,
-                       httplib::Response &res,
-                       const ControlSocketPure::ControlSocketSpec &spec,
-                       long expectedGid,
-                       char poolSeparator,
-                       ControlSocketPure::ParsedRoute &route) {
-  ControlSocketPure::AuthorizeInput in;
-  // 0.7.10: peer creds synthesised from the socket's expected gid.
-  // Filesystem perms (kernel) are the actual gate; this branch
-  // becomes meaningful once getpeereid(2) is wired (0.7.11).
-  in.peerUid           = g_peerUid;  // unused at runtime
-  (void)g_peerUid;
-  in.peerGid           = expectedGid;
-  in.socketExpectedGid = expectedGid;
-  in.socketRole        = spec.role;
-  in.socketPools       = spec.pools;
-  in.action            = route.action;
-  in.container         = route.container;
-  in.poolSeparator     = poolSeparator;
-
-  auto d = ControlSocketPure::authorize(in);
-  if (d == ControlSocketPure::Decision::Allow) return true;
-
-  std::string msg;
-  switch (d) {
-  case ControlSocketPure::Decision::DenyGidMismatch:
-    msg = "peer credentials do not match the socket's expected group";
-    break;
-  case ControlSocketPure::Decision::DenyPoolMismatch:
-    msg = "container is outside the pools served by this socket";
-    break;
-  case ControlSocketPure::Decision::DenyRoleMismatch:
-    msg = "this socket has the 'viewer' role; PATCH requires 'admin'";
-    break;
-  case ControlSocketPure::Decision::DenyUnknownAction:
-    msg = "unknown route";
-    break;
-  default:
-    msg = "denied";
+// Read until needle is found, or capacity exceeded, or EOF. Returns the
+// buffer including the needle. Sets `bad` if cap exceeded or peer closed
+// before needle.
+std::string readUntilNeedle(int fd, const std::string &needle,
+                            std::size_t cap, bool &bad) {
+  std::string buf;
+  bad = false;
+  buf.reserve(1024);
+  char tmp[1024];
+  while (true) {
+    if (auto pos = buf.find(needle); pos != std::string::npos)
+      return buf;
+    if (buf.size() >= cap) { bad = true; return buf; }
+    ssize_t n = ::read(fd, tmp, sizeof(tmp));
+    if (n <= 0) { bad = true; return buf; }
+    buf.append(tmp, (std::size_t)n);
   }
-  res.status = ControlSocketPure::httpStatusFor(d);
-  res.set_content(ControlSocketPure::renderErrorJson(msg), "application/json");
-  return false;
 }
 
-// GET /v1/control/containers
-void handleList(httplib::Response &res,
+// Read exactly `want` bytes (or until EOF). Sets `bad` on EOF before
+// reaching `want` or on read error.
+std::string readExact(int fd, std::size_t want, bool &bad) {
+  std::string buf;
+  bad = false;
+  buf.reserve(want);
+  char tmp[1024];
+  while (buf.size() < want) {
+    auto remaining = want - buf.size();
+    auto chunk = remaining > sizeof(tmp) ? sizeof(tmp) : remaining;
+    ssize_t n = ::read(fd, tmp, chunk);
+    if (n <= 0) { bad = true; return buf; }
+    buf.append(tmp, (std::size_t)n);
+  }
+  return buf;
+}
+
+void writeAll(int fd, const std::string &data) {
+  std::size_t off = 0;
+  while (off < data.size()) {
+    ssize_t n = ::write(fd, data.data() + off, data.size() - off);
+    if (n <= 0) return;  // peer gone — best effort
+    off += (std::size_t)n;
+  }
+}
+
+// Per-jail handlers. These are the same as 0.7.10 but the pre-route
+// authorize() check now runs with REAL peer creds.
+
+void handleList(std::string &resBody, int &status,
                 const ControlSocketPure::ControlSocketSpec &spec,
                 char poolSeparator) {
   auto jails = JailQuery::getAllJails(/*crateOnly=*/true);
@@ -162,36 +158,33 @@ void handleList(httplib::Response &res,
     cs.jid   = j.jid;
     out.push_back(cs);
   }
-  res.set_content(ControlSocketPure::renderContainersJson(out),
-                  "application/json");
+  status  = 200;
+  resBody = ControlSocketPure::renderContainersJson(out);
 }
 
-// GET /v1/control/containers/:name
-void handleGet(httplib::Response &res, const std::string &name) {
+void handleGet(std::string &resBody, int &status, const std::string &name) {
   auto j = JailQuery::getJailByName(name);
   if (!j) {
-    res.status = 404;
-    res.set_content(ControlSocketPure::renderErrorJson("container not found"),
-                    "application/json");
+    status  = 404;
+    resBody = ControlSocketPure::renderErrorJson("container not found");
     return;
   }
   std::ostringstream o;
-  o << "{\"name\":\"" << j->name << "\","
-    << "\"jid\":" << j->jid << ","
-    << "\"path\":\"" << j->path << "\","
+  o << "{\"name\":\""    << j->name     << "\","
+    << "\"jid\":"        << j->jid      << ","
+    << "\"path\":\""     << j->path     << "\","
     << "\"hostname\":\"" << j->hostname << "\","
-    << "\"ip4\":\"" << j->ip4 << "\","
-    << "\"dying\":" << (j->dying ? "true" : "false") << "}";
-  res.set_content(o.str(), "application/json");
+    << "\"ip4\":\""      << j->ip4      << "\","
+    << "\"dying\":"      << (j->dying ? "true" : "false") << "}";
+  status  = 200;
+  resBody = o.str();
 }
 
-// GET /v1/control/containers/:name/stats
-void handleStats(httplib::Response &res, const std::string &name) {
+void handleStats(std::string &resBody, int &status, const std::string &name) {
   auto j = JailQuery::getJailByName(name);
   if (!j) {
-    res.status = 404;
-    res.set_content(ControlSocketPure::renderErrorJson("container not found"),
-                    "application/json");
+    status  = 404;
+    resBody = ControlSocketPure::renderErrorJson("container not found");
     return;
   }
   std::map<std::string, std::string> usage;
@@ -206,10 +199,7 @@ void handleStats(httplib::Response &res, const std::string &name) {
       if (eq != std::string::npos)
         usage[line.substr(0, eq)] = line.substr(eq + 1);
     }
-  } catch (...) {
-    // Empty usage is fine — operator should still see the jail
-    // exists, just with no RCTL data attached.
-  }
+  } catch (...) {}
   std::ostringstream o;
   o << "{\"jid\":" << j->jid << ",\"usage\":{";
   bool first = true;
@@ -219,29 +209,24 @@ void handleStats(httplib::Response &res, const std::string &name) {
     first = false;
   }
   o << "}}";
-  res.set_content(o.str(), "application/json");
+  status  = 200;
+  resBody = o.str();
 }
 
-// PATCH /v1/control/containers/:name/resources
-void handlePatch(const httplib::Request &req, httplib::Response &res,
-                 const std::string &name) {
+void handlePatch(std::string &resBody, int &status,
+                 const std::string &name, const std::string &body) {
   auto j = JailQuery::getJailByName(name);
   if (!j) {
-    res.status = 404;
-    res.set_content(ControlSocketPure::renderErrorJson("container not found"),
-                    "application/json");
+    status  = 404;
+    resBody = ControlSocketPure::renderErrorJson("container not found");
     return;
   }
   ControlSocketPure::ResourcesPatch patch;
-  if (auto e = ControlSocketPure::parseResourcesPatch(req.body, patch);
-      !e.empty()) {
-    res.status = 400;
-    res.set_content(ControlSocketPure::renderErrorJson(e),
-                    "application/json");
+  if (auto e = ControlSocketPure::parseResourcesPatch(body, patch); !e.empty()) {
+    status  = 400;
+    resBody = ControlSocketPure::renderErrorJson(e);
     return;
   }
-  // Apply each present field via rctl(8). Whitelist is enforced by
-  // parseResourcesPatch itself (only pcpu/memoryuse/readbps/writebps).
   auto applyOne = [&](const char *key, const std::string &value) {
     if (value.empty()) return;
     auto rule = "jail:" + j->name + ":" + key + ":deny=" + value;
@@ -253,64 +238,212 @@ void handlePatch(const httplib::Request &req, httplib::Response &res,
     applyOne("readbps",   patch.readbps);
     applyOne("writebps",  patch.writebps);
   } catch (const std::exception &e) {
-    res.status = 500;
-    res.set_content(ControlSocketPure::renderErrorJson(
-      std::string("rctl(8) failed: ") + e.what()), "application/json");
+    status  = 500;
+    resBody = ControlSocketPure::renderErrorJson(
+      std::string("rctl(8) failed: ") + e.what());
     return;
   }
-  res.set_content(ControlSocketPure::renderPatchOkJson(patch),
-                  "application/json");
+  status  = 200;
+  resBody = ControlSocketPure::renderPatchOkJson(patch);
 }
 
-void registerControlRoutes(httplib::Server &srv,
-                           const ControlSocketPure::ControlSocketSpec &spec,
-                           long expectedGid,
-                           char poolSeparator) {
-  // We register a single catch-all that re-parses the route via the
-  // pure module so the ACL decision and route parsing live in one
-  // place. httplib's own routing would force us to duplicate paths.
-  auto handler = [spec, expectedGid, poolSeparator](
-      const httplib::Request &req, httplib::Response &res) {
-    ControlSocketPure::ParsedRoute route =
-      ControlSocketPure::parseRoute(req.method, req.path);
+void handleConnection(int connFd,
+                      const ControlSocketPure::ControlSocketSpec &spec,
+                      long expectedGid,
+                      char poolSeparator) {
+  // Layer 2: getpeereid on the connection fd. This is the whole reason
+  // we abandoned cpp-httplib for control sockets.
+  long peerUid = -1, peerGid = -1;
+  {
+    uid_t uid = (uid_t)-1;
+    gid_t gid = (gid_t)-1;
+    if (::getpeereid(connFd, &uid, &gid) == 0) {
+      peerUid = (long)uid;
+      peerGid = (long)gid;
+    }
+  }
 
-    if (!authorizeOrReject(req, res, spec, expectedGid, poolSeparator, route))
-      return;
+  bool bad = false;
+  auto headBlob = readUntilNeedle(connFd, "\r\n\r\n", kMaxHeader, bad);
+  if (bad) {
+    auto r = ControlSocketPure::buildHttpResponse(
+      400, ControlSocketPure::renderErrorJson("malformed or oversized request head"));
+    writeAll(connFd, r);
+    ::close(connFd);
+    return;
+  }
 
-    switch (route.action) {
-    case ControlSocketPure::Action::ListContainers:
-      handleList(res, spec, poolSeparator);
-      return;
-    case ControlSocketPure::Action::GetContainer:
-      handleGet(res, route.container);
-      return;
-    case ControlSocketPure::Action::GetContainerStats:
-      handleStats(res, route.container);
-      return;
-    case ControlSocketPure::Action::PatchResources:
-      handlePatch(req, res, route.container);
-      return;
-    case ControlSocketPure::Action::Unknown:
-      // already handled by authorizeOrReject; can't reach here
+  // Trim everything after the first \r\n\r\n so parseHttpHead sees just
+  // the head; the body (if any) is in the remaining bytes already read,
+  // plus whatever's still on the wire.
+  auto endOfHead = headBlob.find("\r\n\r\n") + 4;
+  std::string head = headBlob.substr(0, endOfHead);
+  std::string carriedBody = headBlob.substr(endOfHead);
+
+  auto parsed = ControlSocketPure::parseHttpHead(head);
+  if (parsed.bad) {
+    auto r = ControlSocketPure::buildHttpResponse(
+      400, ControlSocketPure::renderErrorJson("HTTP parse: " + parsed.error));
+    writeAll(connFd, r);
+    ::close(connFd);
+    return;
+  }
+
+  // Read body.
+  std::string body = carriedBody;
+  if (parsed.contentLength > body.size()) {
+    auto more = readExact(connFd,
+                          parsed.contentLength - body.size(), bad);
+    if (bad) {
+      auto r = ControlSocketPure::buildHttpResponse(
+        400, ControlSocketPure::renderErrorJson("body shorter than Content-Length"));
+      writeAll(connFd, r);
+      ::close(connFd);
       return;
     }
-  };
+    body += more;
+  } else if (body.size() > parsed.contentLength) {
+    body.resize(parsed.contentLength);
+  }
 
-  // Register for all methods we might see; httplib calls the matching
-  // method-specific handler if registered, otherwise 404.
-  srv.Get   ("/v1/control/.*",  handler);
-  srv.Patch ("/v1/control/.*",  handler);
-  // Anything else returns 404 (we don't register POST/PUT/DELETE).
+  auto route = ControlSocketPure::parseRoute(parsed.method, parsed.path);
+
+  ControlSocketPure::AuthorizeInput in;
+  in.peerUid           = peerUid;
+  in.peerGid           = peerGid;
+  in.socketExpectedGid = expectedGid;
+  in.socketRole        = spec.role;
+  in.socketPools       = spec.pools;
+  in.action            = route.action;
+  in.container         = route.container;
+  in.poolSeparator     = poolSeparator;
+
+  auto d = ControlSocketPure::authorize(in);
+  if (d != ControlSocketPure::Decision::Allow) {
+    std::string msg;
+    switch (d) {
+    case ControlSocketPure::Decision::DenyGidMismatch:
+      msg = "peer credentials do not match the socket's expected group";
+      break;
+    case ControlSocketPure::Decision::DenyPoolMismatch:
+      msg = "container is outside the pools served by this socket";
+      break;
+    case ControlSocketPure::Decision::DenyRoleMismatch:
+      msg = "this socket has the 'viewer' role; PATCH requires 'admin'";
+      break;
+    case ControlSocketPure::Decision::DenyUnknownAction:
+      msg = "unknown route";
+      break;
+    default:
+      msg = "denied";
+    }
+    auto r = ControlSocketPure::buildHttpResponse(
+      ControlSocketPure::httpStatusFor(d),
+      ControlSocketPure::renderErrorJson(msg));
+    writeAll(connFd, r);
+    ::close(connFd);
+    return;
+  }
+
+  // Dispatch.
+  std::string resBody;
+  int         status = 500;
+  switch (route.action) {
+  case ControlSocketPure::Action::ListContainers:
+    handleList(resBody, status, spec, poolSeparator);
+    break;
+  case ControlSocketPure::Action::GetContainer:
+    handleGet(resBody, status, route.container);
+    break;
+  case ControlSocketPure::Action::GetContainerStats:
+    handleStats(resBody, status, route.container);
+    break;
+  case ControlSocketPure::Action::PatchResources:
+    handlePatch(resBody, status, route.container, body);
+    break;
+  case ControlSocketPure::Action::Unknown:
+    // unreachable: filtered by authorize() above
+    break;
+  }
+  writeAll(connFd,
+           ControlSocketPure::buildHttpResponse(status, resBody));
+  ::close(connFd);
 }
 
-// One Server instance per socket. Run on a detached thread.
 struct SocketRuntime {
   ControlSocketPure::ControlSocketSpec spec;
   long expectedGid = -1;
   char poolSeparator = '-';
-  std::unique_ptr<httplib::Server> srv;
+  int  listenFd = -1;
+  std::atomic<bool> stopFlag{false};
   std::thread thread;
 };
+
+// Bind + listen on the unix socket, set mode + group, return fd.
+// Throws on hard failures; warning-class issues (mode > 0660) are
+// printed but the bind continues.
+int bindSocketOrThrow(const ControlSocketPure::ControlSocketSpec &spec,
+                      long expectedGid) {
+  int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd < 0)
+    throw std::runtime_error(std::string("socket(AF_UNIX): ") + std::strerror(errno));
+
+  ::unlink(spec.path.c_str());
+
+  struct sockaddr_un addr{};
+  addr.sun_family = AF_UNIX;
+  if (spec.path.size() >= sizeof(addr.sun_path)) {
+    ::close(fd);
+    throw std::runtime_error("socket path too long for sockaddr_un");
+  }
+  std::strncpy(addr.sun_path, spec.path.c_str(), sizeof(addr.sun_path) - 1);
+
+  if (::bind(fd, (struct sockaddr *)&addr,
+             (socklen_t)(sizeof(addr.sun_family) + spec.path.size())) < 0) {
+    int e = errno;
+    ::close(fd);
+    throw std::runtime_error("bind " + spec.path + ": " + std::strerror(e));
+  }
+  if (::chmod(spec.path.c_str(), spec.mode) != 0) {
+    std::cerr << "control_sockets[" << spec.path
+              << "]: chmod failed: " << std::strerror(errno) << std::endl;
+  }
+  if (::chown(spec.path.c_str(), 0, (gid_t)expectedGid) != 0) {
+    std::cerr << "control_sockets[" << spec.path
+              << "]: chown root:" << spec.group
+              << " failed: " << std::strerror(errno) << std::endl;
+  }
+  if (::listen(fd, 16) < 0) {
+    int e = errno;
+    ::close(fd);
+    throw std::runtime_error("listen " + spec.path + ": " + std::strerror(e));
+  }
+  return fd;
+}
+
+void acceptLoop(SocketRuntime *rt) {
+  // Set a recv timeout on the listen fd so accept() returns periodically
+  // and we can check the stopFlag for graceful shutdown.
+  struct timeval tv{};
+  tv.tv_sec  = kAcceptTimeoutSec;
+  tv.tv_usec = 0;
+  ::setsockopt(rt->listenFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+  while (!rt->stopFlag.load()) {
+    int connFd = ::accept(rt->listenFd, nullptr, nullptr);
+    if (connFd < 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+        continue;
+      // Real error — break out so we don't spin.
+      std::cerr << "control_sockets[" << rt->spec.path
+                << "]: accept failed: " << std::strerror(errno) << std::endl;
+      break;
+    }
+    // Per-connection thread; detached so we don't track lifecycle.
+    std::thread(handleConnection, connFd, rt->spec,
+                rt->expectedGid, rt->poolSeparator).detach();
+  }
+}
 
 } // anon
 
@@ -326,7 +459,6 @@ ControlSocketsManager::~ControlSocketsManager() { stop(); }
 int ControlSocketsManager::start() {
   if (config_.controlSockets.empty()) return 0;
 
-  // Ensure /var/run/crate/control exists with reasonable mode.
   try {
     mkdirP("/var/run/crate/control");
   } catch (const std::exception &e) {
@@ -349,59 +481,21 @@ int ControlSocketsManager::start() {
       std::cerr << "control_sockets[" << spec.path
                 << "]: mode 0" << std::oct << spec.mode << std::dec
                 << " has world-readable bits set — proceeding as configured,"
-                   " but consider 0660 (group-only)"
-                << std::endl;
+                   " but consider 0660 (group-only)" << std::endl;
     }
-
     auto rt = std::make_unique<SocketRuntime>();
-    rt->spec           = spec;
-    rt->expectedGid    = gid;
-    rt->poolSeparator  = config_.poolSeparator;
-    rt->srv            = std::make_unique<httplib::Server>();
-    registerControlRoutes(*rt->srv, spec, gid, config_.poolSeparator);
+    rt->spec          = spec;
+    rt->expectedGid   = gid;
+    rt->poolSeparator = config_.poolSeparator;
 
-    // Stale socket from previous run.
-    ::unlink(spec.path.c_str());
-
-    rt->thread = std::thread([rt = rt.get()]() {
-      // httplib's listen() does the bind+listen+accept loop and
-      // sets the socket to AF_UNIX when set_address_family is set.
-      rt->srv->set_address_family(AF_UNIX);
-      rt->srv->listen(rt->spec.path, 0);
-    });
-
-    // chmod + chown the socket once httplib has bound it. There's
-    // no direct hook, so spin-wait briefly for the socket file to
-    // appear (typical: a few ms).
-    bool ready = false;
-    for (int i = 0; i < 200 && !ready; i++) {
-      struct stat st{};
-      if (::stat(spec.path.c_str(), &st) == 0) {
-        ready = true;
-        break;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-    if (!ready) {
-      std::cerr << "control_sockets[" << spec.path
-                << "]: socket file did not appear within 1s — skipping"
-                << std::endl;
-      // Best effort: we can't easily kill the listen() thread because
-      // httplib doesn't expose a stop hook before it's bound. The
-      // thread will linger; we orphan it. This is a config-error
-      // path, not a runtime concern.
+    try {
+      rt->listenFd = bindSocketOrThrow(spec, gid);
+    } catch (const std::exception &e) {
+      std::cerr << "control_sockets[" << spec.path << "]: " << e.what()
+                << " — skipping this socket" << std::endl;
       continue;
     }
-    if (::chmod(spec.path.c_str(), spec.mode) != 0) {
-      std::cerr << "control_sockets[" << spec.path
-                << "]: chmod failed: " << std::strerror(errno) << std::endl;
-    }
-    if (::chown(spec.path.c_str(), 0, static_cast<gid_t>(gid)) != 0) {
-      std::cerr << "control_sockets[" << spec.path
-                << "]: chown root:" << spec.group
-                << " failed: " << std::strerror(errno) << std::endl;
-    }
-
+    rt->thread = std::thread(acceptLoop, rt.get());
     impl_->runtimes.push_back(std::move(rt));
     started++;
   }
@@ -411,7 +505,8 @@ int ControlSocketsManager::start() {
 void ControlSocketsManager::stop() {
   if (!impl_) return;
   for (auto &rt : impl_->runtimes) {
-    if (rt->srv) rt->srv->stop();
+    rt->stopFlag.store(true);
+    if (rt->listenFd >= 0) ::close(rt->listenFd);
     if (rt->thread.joinable()) rt->thread.join();
     ::unlink(rt->spec.path.c_str());
   }

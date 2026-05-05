@@ -190,4 +190,52 @@ int httpStatusFor(Decision d);
 bool poolVisibleOnSocket(const std::string &pool,
                          const std::vector<std::string> &socketPools);
 
+// --- Minimal HTTP/1.1 wire parsing (0.7.11) ---
+//
+// 0.7.11 ditches cpp-httplib for control sockets and runs a
+// hand-rolled accept loop so getpeereid(2) can be called on the
+// connection fd at accept time. The wire-level parsing is small
+// because the API surface is small (4 routes, JSON bodies).
+//
+// Strict subset of HTTP we accept:
+//   - HTTP/1.0 or HTTP/1.1 (we always reply with Connection: close)
+//   - Request line: METHOD SP PATH SP VERSION CRLF
+//   - Headers: case-insensitive NAME ":" VALUE CRLF; we only honour
+//     Content-Length, all others are ignored.
+//   - Headers terminated by empty CRLF.
+//   - No chunked encoding, no continuation lines, no folding.
+//
+// Anything outside this subset is rejected; the runtime returns
+// HTTP 400 and closes the connection.
+
+struct ParsedHttp {
+  std::string method;             // "GET" / "PATCH"
+  std::string path;               // "/v1/control/containers"
+  std::size_t contentLength = 0;  // from Content-Length header (0 if absent)
+  bool        bad = false;
+  std::string error;              // populated when bad == true
+};
+
+// Parse the header block of an HTTP request — bytes from connection
+// start up to and including the first empty CRLF line. The body
+// (if any) is read separately by the caller using ContentLength.
+//
+// Caps:
+//   - method:  16 chars  (we don't need the larger spec-allowed set)
+//   - path:    1024 chars
+//   - any single header line: 4096 chars
+//
+// On any cap exceeded or syntax violation, returns ParsedHttp with
+// bad == true and error filled.
+ParsedHttp parseHttpHead(const std::string &head);
+
+// Build a minimal HTTP/1.1 response. Always includes:
+//   - Status line
+//   - Content-Type
+//   - Content-Length
+//   - Connection: close
+// No chunked encoding, no Transfer-Encoding, no Server header.
+std::string buildHttpResponse(int status, const std::string &body,
+                              const std::string &contentType = "application/json");
+
 } // namespace ControlSocketPure

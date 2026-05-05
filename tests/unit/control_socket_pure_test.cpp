@@ -12,11 +12,14 @@ using ControlSocketPure::AuthorizeInput;
 using ControlSocketPure::ContainerSummary;
 using ControlSocketPure::ControlSocketSpec;
 using ControlSocketPure::Decision;
+using ControlSocketPure::ParsedHttp;
 using ControlSocketPure::ParsedRoute;
 using ControlSocketPure::ResourcesPatch;
 using ControlSocketPure::authorize;
+using ControlSocketPure::buildHttpResponse;
 using ControlSocketPure::httpStatusFor;
 using ControlSocketPure::isModeSafe;
+using ControlSocketPure::parseHttpHead;
 using ControlSocketPure::parseResourcesPatch;
 using ControlSocketPure::parseRoute;
 using ControlSocketPure::poolVisibleOnSocket;
@@ -446,6 +449,122 @@ ATF_TEST_CASE_BODY(pool_visibility) {
 }
 
 // ----------------------------------------------------------------------
+// HTTP parsing (0.7.11)
+// ----------------------------------------------------------------------
+
+ATF_TEST_CASE_WITHOUT_HEAD(http_parse_typical_get);
+ATF_TEST_CASE_BODY(http_parse_typical_get) {
+  std::string head =
+    "GET /v1/control/containers HTTP/1.1\r\n"
+    "Host: localhost\r\n"
+    "User-Agent: test\r\n"
+    "\r\n";
+  auto p = parseHttpHead(head);
+  ATF_REQUIRE(!p.bad);
+  ATF_REQUIRE_EQ(p.method, std::string("GET"));
+  ATF_REQUIRE_EQ(p.path,   std::string("/v1/control/containers"));
+  ATF_REQUIRE_EQ(p.contentLength, (std::size_t)0);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(http_parse_patch_with_content_length);
+ATF_TEST_CASE_BODY(http_parse_patch_with_content_length) {
+  std::string head =
+    "PATCH /v1/control/containers/dev-pg/resources HTTP/1.1\r\n"
+    "Content-Type: application/json\r\n"
+    "Content-Length: 23\r\n"
+    "\r\n";
+  auto p = parseHttpHead(head);
+  ATF_REQUIRE(!p.bad);
+  ATF_REQUIRE_EQ(p.method, std::string("PATCH"));
+  ATF_REQUIRE_EQ(p.path,   std::string("/v1/control/containers/dev-pg/resources"));
+  ATF_REQUIRE_EQ(p.contentLength, (std::size_t)23);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(http_parse_content_length_case_insensitive);
+ATF_TEST_CASE_BODY(http_parse_content_length_case_insensitive) {
+  // RFC 9110: header field names are case-insensitive.
+  std::string head =
+    "PATCH /v1/control/containers/x/resources HTTP/1.1\r\n"
+    "CONTENT-LENGTH: 5\r\n"
+    "\r\n";
+  auto p = parseHttpHead(head);
+  ATF_REQUIRE(!p.bad);
+  ATF_REQUIRE_EQ(p.contentLength, (std::size_t)5);
+
+  head = "PATCH /v1/control/containers/x/resources HTTP/1.1\r\n"
+         "content-length: 7\r\n"
+         "\r\n";
+  p = parseHttpHead(head);
+  ATF_REQUIRE(!p.bad);
+  ATF_REQUIRE_EQ(p.contentLength, (std::size_t)7);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(http_parse_http_1_0_accepted);
+ATF_TEST_CASE_BODY(http_parse_http_1_0_accepted) {
+  // Some clients (curl --http1.0, simple wrappers) negotiate HTTP/1.0.
+  std::string head =
+    "GET /v1/control/containers HTTP/1.0\r\n"
+    "\r\n";
+  auto p = parseHttpHead(head);
+  ATF_REQUIRE(!p.bad);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(http_parse_rejects_malformed);
+ATF_TEST_CASE_BODY(http_parse_rejects_malformed) {
+  ATF_REQUIRE(parseHttpHead("").bad);                            // empty
+  ATF_REQUIRE(parseHttpHead("not http").bad);                    // no CRLF
+  ATF_REQUIRE(parseHttpHead("GET\r\n\r\n").bad);                 // missing path/version
+  ATF_REQUIRE(parseHttpHead("GET / HTTP/2.0\r\n\r\n").bad);      // unsupported version
+  ATF_REQUIRE(parseHttpHead("GET space path HTTP/1.1\r\n\r\n").bad); // path has space
+  // Non-numeric Content-Length
+  ATF_REQUIRE(parseHttpHead(
+    "PATCH /v1/control/containers/x/resources HTTP/1.1\r\n"
+    "Content-Length: abc\r\n\r\n").bad);
+  // Over 64KB cap
+  ATF_REQUIRE(parseHttpHead(
+    "PATCH /v1/control/containers/x/resources HTTP/1.1\r\n"
+    "Content-Length: 999999999\r\n\r\n").bad);
+  // Header without colon
+  ATF_REQUIRE(parseHttpHead(
+    "GET /x HTTP/1.1\r\n"
+    "BadHeader\r\n\r\n").bad);
+  // Truncated (no final empty CRLF)
+  ATF_REQUIRE(parseHttpHead(
+    "GET /x HTTP/1.1\r\n"
+    "Host: localhost\r\n").bad);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(http_parse_rejects_bad_method_chars);
+ATF_TEST_CASE_BODY(http_parse_rejects_bad_method_chars) {
+  // Method with non-letter — reject.
+  ATF_REQUIRE(parseHttpHead("GET! /x HTTP/1.1\r\n\r\n").bad);
+  ATF_REQUIRE(parseHttpHead("G3T /x HTTP/1.1\r\n\r\n").bad);
+  // Method too long (over 16-char cap) — reject.
+  ATF_REQUIRE(parseHttpHead(std::string(20, 'A') + " /x HTTP/1.1\r\n\r\n").bad);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(http_response_shape);
+ATF_TEST_CASE_BODY(http_response_shape) {
+  auto r = buildHttpResponse(200, R"({"ok":true})");
+  ATF_REQUIRE(r.find("HTTP/1.1 200 OK\r\n")             != std::string::npos);
+  ATF_REQUIRE(r.find("Content-Type: application/json")  != std::string::npos);
+  ATF_REQUIRE(r.find("Content-Length: 11")              != std::string::npos);
+  ATF_REQUIRE(r.find("Connection: close")               != std::string::npos);
+  // Body is included verbatim after the empty CRLF.
+  auto pos = r.find("\r\n\r\n");
+  ATF_REQUIRE(pos != std::string::npos);
+  ATF_REQUIRE_EQ(r.substr(pos + 4), std::string(R"({"ok":true})"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(http_response_status_codes);
+ATF_TEST_CASE_BODY(http_response_status_codes) {
+  ATF_REQUIRE(buildHttpResponse(400, "{}").find(" 400 Bad Request")  != std::string::npos);
+  ATF_REQUIRE(buildHttpResponse(403, "{}").find(" 403 Forbidden")    != std::string::npos);
+  ATF_REQUIRE(buildHttpResponse(404, "{}").find(" 404 Not Found")    != std::string::npos);
+  ATF_REQUIRE(buildHttpResponse(500, "{}").find(" 500 Internal Server Error") != std::string::npos);
+}
+
+// ----------------------------------------------------------------------
 // Test entrypoint
 // ----------------------------------------------------------------------
 
@@ -479,4 +598,12 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, render_patch_ok_omits_empty_keys);
   ATF_ADD_TEST_CASE(tcs, http_status_mapping);
   ATF_ADD_TEST_CASE(tcs, pool_visibility);
+  ATF_ADD_TEST_CASE(tcs, http_parse_typical_get);
+  ATF_ADD_TEST_CASE(tcs, http_parse_patch_with_content_length);
+  ATF_ADD_TEST_CASE(tcs, http_parse_content_length_case_insensitive);
+  ATF_ADD_TEST_CASE(tcs, http_parse_http_1_0_accepted);
+  ATF_ADD_TEST_CASE(tcs, http_parse_rejects_malformed);
+  ATF_ADD_TEST_CASE(tcs, http_parse_rejects_bad_method_chars);
+  ATF_ADD_TEST_CASE(tcs, http_response_shape);
+  ATF_ADD_TEST_CASE(tcs, http_response_status_codes);
 }
