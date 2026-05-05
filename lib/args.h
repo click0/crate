@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdReplicate, CmdTemplate, CmdRetune, CmdThrottle};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdBackupPrune, CmdReplicate, CmdTemplate, CmdRetune, CmdThrottle};
 
 class Args {
 public:
@@ -30,6 +30,8 @@ public:
 
   // run parameters
   std::string runCrateFile;
+  std::string runWarmBase;             // --warm-base <dataset>: clone instead of tar-extract
+  std::string runName;                 // --name <name>: jail name when --warm-base used (no -f)
 
   // validate parameters
   std::string validateSpec;
@@ -121,6 +123,13 @@ public:
   // restore parameters
   std::string restoreFile;             // path to .zstream
   std::string restoreDataset;          // ZFS dest dataset (pool/jails/name)
+
+  // backup-prune parameters
+  std::string backupPruneDir;             // directory holding .zstream files (positional)
+  std::string backupPruneKeep;            // --keep <retention-spec>; same syntax as parseRetention
+  std::string backupPruneJailFilter;      // --jail NAME (optional)
+  bool        backupPruneDryRun = false;  // --dry-run
+  bool        backupPruneDeleteOrphans = false; // --delete-orphans
 
   // replicate parameters
   std::string replicateTarget;         // jail name (positional)

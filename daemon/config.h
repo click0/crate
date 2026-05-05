@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "control_socket_pure.h"
+
 #include <string>
 #include <vector>
 
@@ -57,6 +59,11 @@ struct Config {
   // authenticated via `Authorization: Bearer <admin-token>`.
   unsigned consoleWsPort = 0;
   std::string consoleWsBind = "127.0.0.1";
+
+  // Control sockets (opt-in, 0.7.10): per-group Unix sockets for
+  // bearer-token-less GUI/tray access. Each socket has its own
+  // file mode + group + pool ACL + role. See ControlSocketPure.
+  std::vector<ControlSocketPure::ControlSocketSpec> controlSockets;
 
   // Load from YAML file
   static Config load(const std::string &path);

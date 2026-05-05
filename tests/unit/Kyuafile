@@ -54,3 +54,5 @@ atf_test_program{name="pool_pure_test"}
 atf_test_program{name="warm_pure_test"}
 atf_test_program{name="retune_pure_test"}
 atf_test_program{name="throttle_pure_test"}
+atf_test_program{name="backup_prune_pure_test"}
+atf_test_program{name="control_socket_pure_test"}

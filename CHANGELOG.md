@@ -6,6 +6,635 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.12] — 2026-05-05
+
+Build infrastructure: Makefile test-link refactor. The per-test
+`tests/unit/%: $(TEST_LINK_SRCS) ...` rule was inline-compiling
+every pure source for every test binary (~30 sources × ~40 tests =
+~1200 compilations on a clean build). Each new pure-test added
+about a minute to the FreeBSD-lite CI job, which hit the 20-minute
+inner timeout on the 0.7.9 release commit (workaround: bumped to 30m
+in 0.7.9 followup).
+
+This release moves the pure sources into per-source object files
+under `tests/unit/.test-objs/` that are compiled **once** and then
+linked into every test binary:
+
+```
+tests/unit/.test-objs/lib/util_pure.o
+tests/unit/.test-objs/lib/spec_pure.o
+... (one .o per TEST_LINK_SRCS source) ...
+tests/unit/.test-objs/tests/unit/_test_config_stub.o
+```
+
+A `.SECONDARY:` directive marks them as non-intermediate so make
+keeps them across runs (incremental rebuilds become near-instant —
+no-op finishes in milliseconds).
+
+### Measured speedup
+
+On a 32-vCPU dev box (`make -j32 build-unit-tests` from clean):
+
+| variant                              | wall clock |
+|--------------------------------------|------------|
+| 0.7.11 (per-test inline compile)     | **4m 07s** |
+| 0.7.12 (compile-once + link-many)    | **0m 14s** |
+
+That's ~17× on this box. On the 4-vCPU FreeBSD CI VM the absolute
+numbers will be larger but the ratio holds.
+
+Incremental no-op:
+
+```
+$ make build-unit-tests
+make: Nothing to be done for 'build-unit-tests'.
+real    0m0.008s
+```
+
+### Implementation
+
+- `Makefile`:
+  - New `TEST_OBJ_DIR = tests/unit/.test-objs`
+  - New `TEST_LINK_OBJS` derived via
+    `$(patsubst %.cpp,$(TEST_OBJ_DIR)/%.o,$(TEST_LINK_SRCS))` —
+    keeps source dir layout under TEST_OBJ_DIR so the same
+    `$(TEST_OBJ_DIR)/%.o: %.cpp` pattern rule covers all five
+    top-level dirs (lib/ daemon/ cli/ hub/ snmpd/) without
+    duplicate rules.
+  - Pattern rule auto-creates the per-dir parent via
+    `@mkdir -p $(@D)`.
+  - `.SECONDARY: $(TEST_LINK_OBJS) $(TEST_STUB_OBJ)` keeps the
+    objects across builds (without it, make treats them as
+    intermediate and `rm`s them after each test links — defeating
+    the whole point of caching).
+  - `clean-tests` now also `rm -rf $(TEST_OBJ_DIR)`.
+- `.gitignore` ignores `tests/unit/.test-objs/`.
+- `TODO` entry for "Makefile test-link refactor (medium priority)"
+  removed — done in this release.
+
+### Why we didn't lower the freebsd-build-lite CI timeout
+
+Stays at 30m (raised in the 0.7.9 followup). The clean build will
+now fit comfortably under 5m on the CI VM, but a slow runner day
+or future test additions will still benefit from the headroom.
+Lowering the timeout is a one-line followup we can defer.
+
+### Coverage target unaffected
+
+The `coverage` target still uses `COVERAGE_CXXFLAGS` / `COVERAGE_LDFLAGS`
+which the new pattern rule honours during the per-source compile.
+gcov instrumentation lands in `.test-objs/` alongside the .o files,
+which `find tests/unit -name '*.gcda' -delete` continues to clean
+correctly (the find walks the .test-objs subtree too).
+
+---
+
+## [0.7.11] — 2026-05-05
+
+Closes the defence-in-depth gap left in 0.7.10: control sockets now
+verify peer credentials via `getpeereid(2)` on each connection,
+matching what the design document promised.
+
+The 0.7.10 prototype used cpp-httplib for control sockets, which
+gave routing for free but did not expose the per-connection fd to
+handlers — making `getpeereid(2)` impossible to call. We had to
+synthesise `peerGid = expectedGid` and rely solely on filesystem
+permissions. 0.7.11 replaces the httplib code path for control
+sockets with a hand-rolled accept loop that captures peer creds
+the moment `accept(2)` returns:
+
+```
+accept(listenFd) -> connFd
+getpeereid(connFd, &uid, &gid)  ← layer 2 active here
+read header until \r\n\r\n
+parseHttpHead(...)
+read body up to Content-Length
+parseRoute(method, path)
+authorize(...)                  ← real peerGid passed in
+dispatch + writeResponse
+close
+```
+
+Defence in depth (now complete, 4 layers):
+
+1. **Filesystem permissions** (kernel) — outer gate.
+2. **`getpeereid(2)` re-check** (THIS RELEASE) — even if perms get
+   loosened by misconfiguration, peer.gid must match the socket's
+   configured group.
+3. **Pool ACL** — request paths scoped to `socket.pools`.
+4. **Role gate** — `viewer` socket rejects PATCH.
+
+### Implementation
+
+- `daemon/control_socket_pure.{h,cpp}` — extended with strict
+  HTTP/1.0–1.1 wire parser (`parseHttpHead`) and response builder
+  (`buildHttpResponse`):
+  - Method whitelist (alpha only, ≤16 chars)
+  - Path validation (printable ASCII only, ≤1024 chars)
+  - Strict Content-Length (digits only, capped at 64KB)
+  - Header line cap 4KB; total head cap 8KB
+  - Case-insensitive header names
+  - No chunked encoding, no continuation lines, no keep-alive
+- `daemon/control_socket.cpp` — fully rewritten:
+  - `bindSocketOrThrow` — `socket(AF_UNIX) → bind → chmod → chown
+    → listen(16)`. Per-spec fail-soft: errors during bind log and
+    skip just that socket; other sockets keep going.
+  - `acceptLoop` — `SO_RCVTIMEO`-driven so a stop-flag check fires
+    every second for graceful shutdown.
+  - `handleConnection` — `getpeereid` first, parse, authorize,
+    dispatch, write, close. Per-connection thread, detached.
+- The `extern "C" int getpeereid(int, uid_t *, gid_t *);` declaration
+  is portable across FreeBSD (where it's in `<unistd.h>`) and Linux
+  glibc (where it requires `_DEFAULT_SOURCE`); a duplicate
+  declaration matches the BSD signature stable since 4.4BSD.
+
+### Tests
+
+`tests/unit/control_socket_pure_test.cpp` extended with **8 new
+ATF cases** for the wire parser:
+
+- `http_parse_typical_get` — happy path
+- `http_parse_patch_with_content_length` — extracts CL header
+- `http_parse_content_length_case_insensitive` — `CONTENT-LENGTH`,
+  `content-length` both work (RFC 9110 case-insensitivity)
+- `http_parse_http_1_0_accepted` — both 1.0 and 1.1 supported
+- `http_parse_rejects_malformed` — empty input, no CRLF, missing SP,
+  unsupported version, space in path, non-numeric CL, oversized CL,
+  header without colon, truncated head
+- `http_parse_rejects_bad_method_chars` — non-letter / over-cap
+  method names
+- `http_response_shape` — status/CT/CL/connection-close all present;
+  body verbatim after empty CRLF
+- `http_response_status_codes` — 400/403/404/500 reason phrases
+
+**889/889 unit tests pass locally** (881 from prior + 8 new).
+
+### NOT in this release (still future)
+
+- **Lifecycle endpoints** (start/stop/destroy) on control sockets.
+  Those keep the bearer-token requirement on the main API.
+- **Per-jail (not per-group) sockets.** The current per-group model
+  covers the multi-team use case; per-jail isolation can come if
+  operators ask for it.
+
+---
+
+## [0.7.10] — 2026-05-05
+
+`crated` control sockets — bearer-token-less Unix-socket REST API for
+GUI/tray applications, with **per-group isolation via filesystem
+permissions**. Operator A in unix group `dev-team` connects to
+`/var/run/crate/control/dev.sock`; operator B in group `ops`
+connects to `/var/run/crate/control/prod.sock`. The kernel rejects
+operator B's `connect(2)` on operator A's socket with `EACCES`
+before crated sees a byte — true sibling isolation.
+
+This release picks up the Firecracker control-plane idea (item 4 of
+the Firecracker comparison series), adapted to multi-tenant single-host
+operators: where Firecracker spawns one mini-daemon per VM, we get
+the same isolation properties via N Unix sockets in one daemon, with
+no per-jail process overhead.
+
+### Configuration
+
+```yaml
+control_sockets:
+    - path: /var/run/crate/control/dev.sock
+      group: dev-team           # resolved at startup via getgrnam(3)
+      mode:  "0660"             # default; 0660 root:dev-team
+      pools: [dev, stage]       # which pools this socket can manage
+      role:  admin              # admin = full; viewer = read-only
+
+    - path: /var/run/crate/control/prod.sock
+      group: ops
+      mode:  "0660"
+      pools: [prod]
+      role:  admin
+
+    - path: /var/run/crate/control/monitoring.sock
+      group: developers
+      mode:  "0660"
+      pools: ["*"]              # everything, but read-only
+      role:  viewer
+```
+
+### API surface (per socket)
+
+| Method | Path                                            | Required role |
+|--------|-------------------------------------------------|---------------|
+| `GET`   | `/v1/control/containers`                        | viewer        |
+| `GET`   | `/v1/control/containers/<name>`                 | viewer        |
+| `GET`   | `/v1/control/containers/<name>/stats`           | viewer        |
+| `PATCH` | `/v1/control/containers/<name>/resources`       | admin         |
+
+`PATCH /resources` body is a flat JSON object with a strict whitelist:
+`pcpu` (0..100), `memoryuse`, `readbps`, `writebps` (K/M/G/T suffix).
+Unknown keys are **rejected**, not silently ignored — a typo by a
+tray-app developer fails loudly instead of being a no-op. The
+backing implementation is `rctl(8)` — same mechanism as `crate retune`
+(0.7.6), but reachable from non-root users via filesystem-permission
+ACL instead of admin token.
+
+Lifecycle-changing operations (start/stop/restart/destroy) are
+**deliberately not exposed** on control sockets. Those remain on
+the bearer-token main API. The control plane is for **status polling
+and live tuning** by trusted user-level processes.
+
+### Defence in depth
+
+1. **Filesystem permissions (kernel-enforced).** A 0660 root:ops
+   socket cannot be opened by operators outside the `ops` group.
+   `connect(2)` returns `EACCES` before crated runs a single line of
+   code. This is the primary isolation boundary.
+2. **Pool ACL.** Even if a peer reaches a socket, `/v1/control/
+   containers/<name>` is rejected with HTTP 403 if `<name>`'s
+   inferred pool isn't in the socket's `pools:` list. "*" is the
+   explicit all-pools grant.
+3. **Role gate.** A `viewer` socket rejects `PATCH /resources` with
+   HTTP 403 even if everything else allows. Read-only by construction.
+
+### Operator-friendly defaults
+
+- **Missing group** in the system database → log a warning and
+  **skip that one socket entry**; crated continues with the rest.
+  Avoids "the prod box won't start because dev-team isn't in
+  /etc/group on the prod host".
+- **Mode > 0660** (world-readable bits set) → log a warning and
+  **proceed as configured**. Operators may have legitimate reasons
+  to relax (e.g. a multi-team monitoring pipeline); we surface the
+  risk without forcing a specific policy.
+- **Sockets live under** `/var/run/crate/control/`. The path is
+  validated against this prefix at config-load time — operators
+  cannot accidentally drop sockets in `/tmp` or `/etc`.
+
+### Implementation
+
+- `daemon/control_socket_pure.{h,cpp}` — pure module:
+  - `ControlSocketSpec` config struct + `validateSocketSpec()`
+  - `parseRoute(method, path)` — `/v1/control/containers/...`
+    parser; rejects unknown methods and bad container names
+  - `authorize(...)` — five-way decision matrix (Allow + 4 Deny
+    reasons) with HTTP status mapping
+  - `parseResourcesPatch(json)` — strict whitelist + minimal flat
+    JSON parser; rejects malformed body, unknown keys, empty `{}`
+  - `renderContainersJson()`, `renderErrorJson()`,
+    `renderPatchOkJson()` — stable, sorted JSON output
+- `daemon/control_socket.{h,cpp}` — runtime: bind N Unix sockets
+  with proper mode/ownership; one `httplib::Server` per socket on
+  a detached thread; route handlers delegate every decision to the
+  pure module
+- `daemon/config.{h,cpp}` — `control_sockets:` YAML section parser
+  + validation hook into `ControlSocketPure::validateSocketSpec`
+- `daemon/main.cpp` — `ControlSocketsManager` lifecycle alongside
+  the existing `Server` and `WsConsole`
+- `daemon/crated.conf.sample` — three example sockets covering
+  the typical multi-team deployment shape
+
+### Tests
+
+`tests/unit/control_socket_pure_test.cpp` — **29 ATF cases**:
+
+- `validateSocketSpec` — typical/invalid path (must live under
+  `/var/run/crate/control/`), group alphabet, mode range, role
+  enum, pools list including "*"
+- `isModeSafe` — 0660 ok, 0666/0664/0661/0777 flagged
+- `parseRoute` — list/get/stats/patch + method-mismatch + unknown
+  prefix + malformed container name
+- `authorize` — full ACL decision matrix:
+  - typical allow on all four actions
+  - gid mismatch → `DenyGidMismatch`
+  - pool filter (matches "*", pool-less containers, alt separator)
+  - viewer + PATCH → `DenyRoleMismatch`
+  - viewer GET on all paths still allowed
+  - unknown action → `DenyUnknownAction`
+- `parseResourcesPatch` — typical, all-keys, unknown-key reject,
+  empty-body reject, malformed-JSON reject (5 forms)
+- `renderContainersJson` — stable sort, empty-list shape
+- `renderErrorJson` — escapes `"` and `\n`
+- `renderPatchOkJson` — omits empty fields
+- `httpStatusFor` — 200/403/404 mapping
+- `poolVisibleOnSocket` — "*" matches anything (incl. pool-less)
+
+**881/881 unit tests pass locally** (852 from prior + 29 new).
+
+### Defence-in-depth caveat (0.7.11 follow-up)
+
+`ControlSocketPure::authorize()` includes a `peerGid != socketExpectedGid`
+check intended as a layer-2 re-verification using `getpeereid(2)`
+on the connection fd. cpp-httplib (the framework crated uses for
+HTTP) does not currently expose the per-connection fd through its
+public API, so the runtime synthesises `peerGid = expectedGid` —
+i.e. trusts the kernel's filesystem-permission gate to have already
+filtered out wrong-group peers. The pure-module check exists, is
+unit-tested, and will activate the moment the runtime grows access
+to the connection fd (planned: 0.7.11, via either a custom
+HTTP-on-unix accept loop or a small cpp-httplib patch).
+
+For 0.7.10 this is acceptable: filesystem permissions alone are
+already a substantial improvement over bearer tokens for the GUI
+use case, and the layer-2 re-check is defence-in-depth — not the
+primary boundary.
+
+### NOT in this release (future)
+
+- **Per-connection `getpeereid(2)`** — see caveat above. (0.7.11)
+- **Lifecycle endpoints** (start/stop/destroy) on control sockets.
+  Those keep the bearer-token requirement on the main API.
+- **WebSocket console / screenshots** through the control socket.
+  The console uses a separate listener (0.6.4) and screenshots
+  need X11 + XAUTHORITY context that's hostile to a generic daemon
+  handler.
+- **Per-jail (not per-group) sockets.** If operators want true
+  N-sockets-per-N-jails isolation, that's a future Variant 3 from
+  the design analysis. For multi-team setups the per-group model
+  in this release is sufficient and N-jails-times-cheaper.
+
+---
+
+## [0.7.9] — 2026-05-05
+
+`crate run --warm-base <dataset> --name <name>` — Part 2 of the
+warm-template story (Part 1 was 0.7.5's `crate template warm`).
+A new jail boots from a fresh ZFS clone of the warm template,
+bypassing tar-extract + cold-create work entirely. Where the cold
+path takes 30+ seconds (xz decompress, base.txz extract, pkg
+install replay, profile init), warm-base typically lands at
+1-2 seconds — the whole speed-up story for ZFS-backed workflows.
+
+### Usage
+
+```sh
+# 1. Once: bake an image (run jail, install pkgs, configure, then
+# capture). 0.7.5 territory.
+crate run -f firefox.crate
+crate template warm firefox --output tank/templates/firefox-warm
+
+# 2. From now on, fresh jails come up near-instantly:
+crate run --warm-base tank/templates/firefox-warm --name fox-1
+crate run --warm-base tank/templates/firefox-warm --name fox-2
+crate run --warm-base tank/templates/firefox-warm --name dev-fox
+```
+
+`-f / --file` and `--warm-base` are mutually exclusive. With
+`--warm-base` the rootfs comes from the ZFS clone; the spec is
+parsed from `+CRATE.SPEC` inside the cloned dataset (the source
+jail's directory had it from when it was extracted from the
+original .crate).
+
+`--name` is required and only valid with `--warm-base` — without
+the .crate file there is no name to derive.
+
+### Mechanism
+
+```
+zfs snapshot <warmDataset>@warmrun-<utc>
+zfs clone    <warmDataset>@warmrun-<utc> <jailsParent>/jail-<name>-<hex>
+# ZFS auto-mounts the clone at <jailsParent.mountpoint>/jail-<name>-<hex>
+# which is precisely where lib/run.cpp expected jailPath.
+... (normal jail startup, no tar extraction) ...
+# At teardown:
+zfs destroy <jailsParent>/jail-<name>-<hex>     # auto-unmounts
+zfs destroy <warmDataset>@warmrun-<utc>         # marker snapshot
+```
+
+Two distinct snapshot-suffix prefixes, so operators can prune them
+with different retention rules:
+
+| Prefix       | Owner                      | When pruned                              |
+|--------------|----------------------------|-------------------------------------------|
+| `warm-...`   | `crate template warm`      | When operator retires the template       |
+| `warmrun-...`| `crate run --warm-base`    | At jail teardown (best-effort cleanup)   |
+
+### Defence in depth
+
+- **Warm-base + `-f` is rejected at validate time.** The two paths
+  are mutually exclusive; the validator surfaces the typo before
+  any ZFS call.
+- **Warm dataset name validated** with the same rules as
+  `crate template warm` (alnum + `._-/`, no `..`, no `//`, no
+  leading/trailing `/`). Rejection happens before any `zfs(8)`
+  invocation.
+- **Jail name validated** as alnum + `._-`, length 1..64. No
+  shell metas, no path separators.
+- **Jails dir must be on ZFS.** Surfaces a clear error if
+  `Locations::jailDirectoryPath` isn't a ZFS mountpoint —
+  warm-base is a ZFS-only feature by construction.
+- **Missing `+CRATE.SPEC` in clone** raises a structured error
+  pointing at the expected path, instead of letting the YAML parser
+  fail with a cryptic "file not found".
+- **Teardown is best-effort.** A failure in `zfs destroy <clone>`
+  during cleanup logs but does NOT mask the actual run-time error.
+  This matches the existing `RunAtEnd` semantics for the cold path.
+
+### Implementation
+
+- `lib/warm_pure.{h,cpp}` — extended with three consumer-side
+  helpers:
+  - `validateJailName(name)` — same alphabet as
+    `BackupPure::validateJailName`
+  - `warmRunSnapshotSuffix(epoch)` — distinct `warmrun-` prefix
+  - `warmRunCloneName(parent, name, hex)` — same naming as
+    `Locations::jailDirectoryPath/jail-<name>-<hex>` so
+    mountpoint inheritance lands the rootfs at the expected path
+- `lib/run.cpp` — new branch gated by `args.runWarmBase`:
+  - Skip `mkdir(jailPath)` (ZFS creates it via auto-mount)
+  - `ZfsOps::snapshot(warmSnap)` + `ZfsOps::clone(warmSnap, clone)`
+  - `RunAtEnd destroyWarmClone` replaces the cold path's
+    `RunAtEnd destroyJailDir` (rmdirHier on a mounted clone
+    would either fail or wipe through the mount)
+  - Skip the tar validate + extract block; sanity-check
+    `+CRATE.SPEC` exists in the clone
+- `cli/args.cpp` — `--warm-base` and `--name` flags; updated
+  `usageRun()` documents the two modes
+- `cli/args_pure.cpp` — `Args::validate` for `CmdRun` enforces
+  the mutual exclusion + `--name` requirement
+- `cli/main.cpp` — outer-loop restart-policy extraction skipped
+  when no `-f` is given (warm-base operators wrap their jail in
+  rc.d if they want outer restart)
+- `lib/args.h` — `runWarmBase`, `runName` fields
+
+### Tests
+
+`tests/unit/warm_pure_test.cpp` extended with 6 new ATF cases:
+
+- `warm_base_jail_name_typical` / `_invalid` — alphabet, length cap,
+  reserved-name rejection, shell-meta rejection
+- `warm_run_suffix_distinct_from_template_suffix` — invariant that
+  `warmrun-` and `warm-` prefixes never alias each other
+- `warm_run_suffix_canonical_epochs` — known epoch -> known string
+- `warm_run_suffix_lex_sort_matches_chrono` — cron-pruning property
+  inherited from the backup module convention
+- `warm_run_clone_name_shape` — same naming as
+  `jail-<name>-<hex>` for two parent datasets
+
+**852/852 pass locally.** Total warm_pure_test cases: 16.
+
+### NOT in this release
+
+- **Spec override.** `crate run --warm-base <ds> -f <other.crate>`
+  to take rootfs from the clone but a different spec from the
+  archive. Flagged as a future enhancement; current 0.7.9
+  rejects this combo as an error.
+- **Multi-host pull.** Cloning warm templates across hosts goes
+  through `crate replicate` (0.7.2) explicitly — not auto-pulled
+  by `--warm-base`.
+- **Outer-loop restart policy.** With no `-f`, the
+  `cli/main.cpp` top-level restart loop has no spec to read. The
+  spec inside the clone IS still honoured for in-jail restart;
+  operators wanting outer-loop restart should run the jail under
+  rc.d.
+
+---
+
+## [0.7.8] — 2026-05-04
+
+`crate backup-prune <dir> --keep <spec>` — Proxmox-style retention
+pruning of `crate backup` stream files. Operators write daily backups
+to a directory (NFS share, USB disk, S3-mounted FS); this command
+deletes the old ones under a bucketed retention policy without the
+operator having to script `find -mtime` rules.
+
+The Firecracker / Proxmox-VE comparison series picked off another
+operator pain point: backup files accumulate forever on the backup
+volume, and existing tooling (Proxmox vzdump-prune) bucketing
+semantics aren't trivial to script with shell. This release ships
+the same semantics in a one-shot command.
+
+### Usage
+
+```sh
+# Daily=7, weekly=4, monthly=6 — same syntax as Proxmox vzdump
+crate backup-prune /backups --keep daily=7,weekly=4,monthly=6
+
+# Filter to one jail (useful when one dir holds several jails)
+crate backup-prune /backups --keep daily=14 --jail postgres
+
+# Preview without deleting
+crate backup-prune /backups --keep daily=7 --dry-run
+
+# Also remove orphaned incrementals (default: keep + warn)
+crate backup-prune /backups --keep daily=7 --delete-orphans
+```
+
+### Bucketing semantics
+
+For each retention bucket type with `N>0` (`hourly | daily | weekly
+| monthly`), walk the **full** stream files newest → oldest. The
+newest stream that lands in a fresh bucket key is kept; subsequent
+streams in the same bucket are dropped. Stop after `N` distinct
+buckets are seen.
+
+The kept set is the **union** across bucket types. A file pinned by
+multiple types still counts as one keeper.
+
+Bucket key derivations (all UTC):
+
+| bucket  | key                          |
+|---------|------------------------------|
+| hourly  | `epoch / 3600`               |
+| daily   | `epoch / 86400`              |
+| weekly  | `epoch / (86400 * 7)`        |
+| monthly | `gmtime → year*12 + month`   |
+
+`monthly` is calendar-aligned — months don't have uniform length so
+plain integer division would drift over the years.
+
+### Incremental chains
+
+`crate backup --auto-incremental` produces files like
+`<jail>-backup-<curr>.inc-from-backup-<prev>.zstream` that depend on
+their base full. Two safety rules:
+
+1. **Incrementals follow their base.** If the base full is kept,
+   the incremental is kept too — chains stay restorable. If the
+   base is dropped, the incremental is flagged as an *orphan*.
+2. **Orphans default to keep + warn.** Operators can pass
+   `--delete-orphans` to remove them as well. We don't auto-delete
+   because partial chains are sometimes intentional (e.g. an
+   operator wants the last full + some recent incrementals before
+   a destructive change).
+
+### Defence in depth
+
+- **Filename schema enforced.** The pure parser only matches
+  `<jail>-backup-YYYY-MM-DDTHH:MM:SSZ.zstream` (and the optional
+  `.inc-from-...` tail). Files in the directory that don't match —
+  README.md, .DS_Store, an external tool's output — are silently
+  skipped, never touched.
+- **Right-most `-backup-` boundary.** Jail names containing `-`
+  (e.g. `dev-postgres`) parse correctly; we use `rfind` so the
+  rightmost `-backup-` separator wins.
+- **Epoch parsing rejects out-of-range values.** Bad month/day/hour
+  values produce a parse failure (file goes to "skipped", not
+  "removed"). The 1970-01-01T00:00:00Z epoch is treated as a
+  parse-failure sentinel — nobody names a backup that.
+- **Unparseable timestamps are orphans, never auto-removed.** Even
+  with `--delete-orphans`, files with an unrecognisable suffix stay
+  put — we don't know what they are.
+- **`unlink` failures don't abort.** If one file can't be removed
+  (permissions, vanished mid-run), the rest still process; the
+  failure is reported in red without aborting.
+
+### Implementation
+
+- `lib/backup_prune_pure.{h,cpp}` — pure module:
+  - `validateDir`, `validateJailFilter` — input sanitisation
+  - `parseSuffixEpoch` — UTC ISO-8601 → `time_t` via Howard
+    Hinnant's days_from_civil algorithm (no `timegm` dependency,
+    no `TZ` race)
+  - `parseStreamFilename` — splits the schema into
+    `(jail, suffix, incFromSuffix, epoch)`
+  - `hourBucket`, `dayBucket`, `weekBucket`, `monthBucket` —
+    bucket-key derivations
+  - `decidePrune` — the policy core; returns
+    `{keep, remove, orphans}` triple
+  - `explainKeeps` — keep-set with per-file reason ("daily:1",
+    "monthly:3" etc.) for verbose / debug use
+- `lib/backup_prune.cpp` — runtime: `std::filesystem` directory
+  scan, calls into pure module, `Util::Fs::unlink` per decision,
+  size summary in MB
+- CLI: `cli/args.cpp` adds `usageBackupPrune()` + parser case;
+  `cli/args_pure.cpp` adds `isCommand("backup-prune")` and
+  validation; `lib/args.h` adds `Cmd BackupPrune` + 5 fields
+- `lib/audit.cpp`, `lib/audit_pure.cpp` — recorded as
+  state-changing (writes the `backup-prune` line into audit.log
+  with target = `<dir> keep=<spec>`)
+
+### Tests
+
+22 ATF cases in `tests/unit/backup_prune_pure_test.cpp`:
+
+- Directory + jail-filter validators
+- Epoch parsing — known dates, round-trip through
+  `BackupPure::snapshotSuffix`, malformed-input rejection
+- Filename parser — full / incremental / dashed-jail-name (rfind
+  correctness), garbage-file rejection
+- Bucket distinctness across hour/day/week/month
+- Calendar-aligned month bucketing across Feb→Mar boundary
+- Daily-only, mixed daily+monthly union
+- Empty policy keeps nothing
+- Incremental kept with surviving base; orphaned with dropped base
+- `--delete-orphans` flag promotes orphans to removals
+- Lists are disjoint (no file appears in more than one bucket)
+- Empty input + "more buckets requested than files exist" both
+  produce sensible decisions
+
+### Caveats
+
+- Operates on **stream files** in the backup directory, never on
+  source-side ZFS snapshots. Operators who want snapshot pruning
+  on the source pool should keep using `zfs destroy` — that's a
+  separate concern with different blast radius.
+- Only files matching the `crate backup` schema are touched. Other
+  files in the directory are visible (in the "skipped" count) but
+  never deleted — even with `--delete-orphans`.
+- No interactive confirmation prompt. Operators are expected to
+  run `--dry-run` first or wrap the command in their own
+  confirmation. Adding a `--yes` requirement would force operators
+  to plumb `--yes` through cron, which we deemed worse.
+
+---
+
 ## [0.7.7] — 2026-05-04
 
 `crate throttle <jail>` — **true token-bucket network rate

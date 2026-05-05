@@ -91,4 +91,39 @@ std::vector<std::string> buildPromoteArgv(const std::string &templateDataset) {
   return {"/sbin/zfs", "promote", templateDataset};
 }
 
+// --- Warm-base consumer side ---
+
+std::string validateJailName(const std::string &name) {
+  if (name.empty()) return "jail name is empty";
+  if (name.size() > 64) return "jail name longer than 64 chars";
+  if (name == "." || name == "..") return "jail name is reserved";
+  for (char c : name) {
+    bool ok = isAlnum(c) || c == '.' || c == '_' || c == '-';
+    if (!ok) {
+      std::ostringstream os;
+      os << "invalid character '" << c << "' in jail name";
+      return os.str();
+    }
+  }
+  return "";
+}
+
+std::string warmRunSnapshotSuffix(long unixEpoch) {
+  time_t t = (time_t)unixEpoch;
+  std::tm tm{};
+  ::gmtime_r(&t, &tm);
+  char buf[40];
+  std::strftime(buf, sizeof(buf), "warmrun-%Y-%m-%dT%H:%M:%SZ", &tm);
+  return std::string(buf);
+}
+
+std::string warmRunCloneName(const std::string &parentDataset,
+                             const std::string &jailName,
+                             const std::string &hex) {
+  // Same naming convention as Locations::jailDirectoryPath::jail-<name>-<hex>.
+  // Caller is responsible for having validated parentDataset (via
+  // ZfsOps queries it sees on the host) and jailName (validateJailName).
+  return parentDataset + "/jail-" + jailName + "-" + hex;
+}
+
 } // namespace WarmPure

@@ -25,6 +25,7 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/create.cpp lib/run.cpp \
            lib/wireguard_runtime_pure.cpp \
            lib/migrate_pure.cpp lib/migrate.cpp \
            lib/backup_pure.cpp lib/backup.cpp \
+           lib/backup_prune_pure.cpp lib/backup_prune.cpp \
            lib/replicate_pure.cpp lib/replicate.cpp \
            lib/inspect_pure.cpp lib/inspect.cpp \
            lib/stack.cpp lib/stack_pure.cpp \
@@ -39,7 +40,8 @@ DAEMON_SRCS = daemon/main.cpp daemon/config.cpp daemon/server.cpp \
               daemon/routes.cpp daemon/routes_pure.cpp daemon/auth.cpp \
               daemon/metrics.cpp daemon/metrics_pure.cpp \
               daemon/ws_pure.cpp daemon/ws_console.cpp \
-              daemon/transfer_pure.cpp
+              daemon/transfer_pure.cpp \
+              daemon/control_socket_pure.cpp daemon/control_socket.cpp
 
 SNMPD_SRCS = snmpd/main.cpp snmpd/collector.cpp \
              snmpd/mib.cpp snmpd/mib_pure.cpp
@@ -186,7 +188,8 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              wireguard_runtime_pure_test migrate_pure_test \
              datacenter_pure_test backup_pure_test replicate_pure_test \
              ha_pure_test pool_pure_test warm_pure_test \
-             retune_pure_test throttle_pure_test
+             retune_pure_test throttle_pure_test \
+             backup_prune_pure_test control_socket_pure_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)
@@ -204,8 +207,13 @@ test-unit: $(UNIT_TEST_BINS)
 build-unit-tests: $(UNIT_TEST_BINS)
 
 # Pure platform-independent sources tests can safely link against.
-# Compiled inline (no separate .o) to avoid colliding with the
-# main lib/*.o build that uses different CXXFLAGS.
+# Compiled into per-source object files under TEST_OBJ_DIR ONCE per
+# clean build, then linked into every UNIT_TEST_BINS target. Before
+# 0.7.12 these were inline-compiled per test (~30 srcs * ~40 tests
+# = ~1200 compiles); now it's ~30 + 40 = 70. The .o files live in
+# their own dir so they don't collide with the main lib/*.o build
+# (which uses different CXXFLAGS for the production crate binary).
+TEST_OBJ_DIR = tests/unit/.test-objs
 TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  lib/spec_pure.cpp lib/stack_pure.cpp \
                  lib/lifecycle_pure.cpp lib/import_pure.cpp \
@@ -220,18 +228,42 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  lib/inter_dns_pure.cpp lib/wireguard_pure.cpp \
                  lib/ipsec_pure.cpp lib/inspect_pure.cpp \
                  lib/wireguard_runtime_pure.cpp lib/migrate_pure.cpp \
-                 lib/backup_pure.cpp lib/replicate_pure.cpp \
+                 lib/backup_pure.cpp lib/backup_prune_pure.cpp \
+                 lib/replicate_pure.cpp \
                  cli/args_pure.cpp daemon/metrics_pure.cpp \
                  daemon/routes_pure.cpp daemon/ws_pure.cpp \
-                 daemon/transfer_pure.cpp hub/aggregator_pure.cpp \
+                 daemon/transfer_pure.cpp daemon/control_socket_pure.cpp \
+                 hub/aggregator_pure.cpp \
                  hub/datacenter_pure.cpp hub/ha_pure.cpp \
                  snmpd/mib_pure.cpp
+
+# Map every src to a .o under TEST_OBJ_DIR keeping the source's
+# directory layout (lib/foo.cpp -> tests/unit/.test-objs/lib/foo.o).
+TEST_LINK_OBJS = $(patsubst %.cpp,$(TEST_OBJ_DIR)/%.o,$(TEST_LINK_SRCS))
+TEST_STUB_OBJ  = $(TEST_OBJ_DIR)/tests/unit/_test_config_stub.o
 
 # -Icli/-Idaemon/-Isnmpd let tests #include the *_pure.h files directly.
 TEST_INCLUDES = -Ilib -Icli -Idaemon -Isnmpd -Ihub
 
-tests/unit/%: tests/unit/%.cpp $(TEST_LINK_SRCS) lib/lst-all-script-sections.h tests/unit/_test_config_stub.cpp
-	$(CXX) -std=c++17 $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -o $@ $< $(TEST_LINK_SRCS) tests/unit/_test_config_stub.cpp $(COVERAGE_LDFLAGS) -L/usr/local/lib -latf-c++ -latf-c
+# Per-source compile rule for everything reachable via TEST_LINK_SRCS
+# and the test-config stub. The mkdir -p $(@D) handles all the
+# nested subdirs (lib/, daemon/, cli/, hub/, snmpd/, tests/unit/)
+# without us needing N rules.
+#
+# .SECONDARY tells make these objects are NOT intermediate, so they
+# survive the build instead of being deleted after the test binary
+# links — critical for incremental rebuilds (`make build-unit-tests`
+# twice in a row should be a no-op, not 30 recompiles).
+.SECONDARY: $(TEST_LINK_OBJS) $(TEST_STUB_OBJ)
+
+$(TEST_OBJ_DIR)/%.o: %.cpp lib/lst-all-script-sections.h
+	@mkdir -p $(@D)
+	$(CXX) -std=c++17 $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -c $< -o $@
+
+# Test binary: compile its own .cpp inline (one source -> one
+# binary), link against the cached TEST_LINK_OBJS + stub.
+tests/unit/%: tests/unit/%.cpp $(TEST_LINK_OBJS) $(TEST_STUB_OBJ) lib/lst-all-script-sections.h
+	$(CXX) -std=c++17 $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -o $@ $< $(TEST_LINK_OBJS) $(TEST_STUB_OBJ) $(COVERAGE_LDFLAGS) -L/usr/local/lib -latf-c++ -latf-c
 
 # coverage: build unit tests with gcov instrumentation, run them, and
 # render an HTML report under coverage-html/. Requires lcov + genhtml.
@@ -274,6 +306,7 @@ coverage-clean:
 
 clean-tests:
 	rm -f $(UNIT_TEST_BINS)
+	rm -rf $(TEST_OBJ_DIR)
 
 clean: clean-tests coverage-clean
 	rm -f $(LIB_OBJS) $(CLI_OBJS) $(DAEMON_OBJS) $(SNMPD_OBJS) libcrate.a crate crated crate-snmpd lib/lst-all-script-sections.h

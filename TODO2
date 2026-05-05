@@ -1,0 +1,98 @@
+This file tracks the bhyve / micro-VM track separately from the main
+TODO. crate's primary architecture is jail-based; bhyve work is a
+distinct effort and is intentionally segregated so the jail roadmap
+stays uncluttered.
+
+=== Bhyve track ===
+
+A. (feature, large) Full bhyve backend for crate.
+
+   Add bhyve as a first-class container backend alongside jails.
+   Operators write a spec like:
+
+     name: alpine-vm
+     backend: bhyve
+     image: alpine-edge.qcow2
+     cpus: 2
+     memory: 1G
+     network:
+       - bridge: bridge0
+
+   and `crate run alpine-vm` boots a microVM the same way `crate run`
+   today boots a jail.
+
+   Required surface:
+   - `lib/bhyve_pure.{h,cpp}` — argv builders for bhyve(8), bhyvectl(8),
+     bhyveload(8); spec validation; nmdm/console allocation; tap
+     allocation
+   - `lib/bhyve.cpp` — runtime: image staging into ZFS dataset,
+     vmm.ko presence check, tap creation + bridge attach, console
+     wiring, lifecycle (start/stop/destroy via bhyvectl)
+   - Spec extension: `backend:` field in the YAML schema. Jail is the
+     default for backwards compat. Spec validation refuses fields that
+     don't apply to the chosen backend.
+   - CLI: `crate run`, `crate stop`, `crate destroy`, `crate console`
+     all dispatch on backend
+   - RCTL is jail-only — bhyve resource limits go through the
+     scheduler / vmm cpuset instead. New `lib/vmm_limits_pure.cpp`
+     equivalent for bhyve.
+   - Stats / metrics surface needs a bhyve probe (no jls/rctl —
+     parse bhyvectl --get-stats output).
+   - Must fail gracefully on hosts without vmm.ko / without VT-x|EPT
+     or AMD-V|NPT.
+
+   Estimated scope: 2–3 weeks of focused work; spans roughly 4–6
+   point releases.
+
+B. (feature, small) `crate vm-wrap` — jail wrapper around an
+   existing bhyve VM (Firecracker "jailer" pattern, FreeBSD-flavoured).
+
+   Operator already manages bhyve their own way (vm-bhyve, custom
+   scripts, hand-rolled bhyveload). `crate vm-wrap <vmname>
+   --jail <name>` does NOT manage the VM. It builds the *enclosure*:
+
+   - Creates a vnet jail named <name> with `allow.vmm`
+   - devfs ruleset that exposes only `/dev/vmm/<vmname>`,
+     `/dev/vmmctl`, the VM's `/dev/nmdm*` console pair, and the
+     specific `/dev/tap*` it uses
+   - Optional: `zfs jail <jid> <vm-disk-dataset>` so the VM's disk
+     dataset is visible inside
+   - Prints the `jexec <jid> bhyve …` invocation the operator should
+     use to launch from inside
+
+   Then any future escape from bhyve user-space (CVE-2021-29626
+   class) lands the attacker in a vnet jail with no other privileges
+   instead of in the host. Defence in depth without reinventing
+   bhyve management.
+
+   Surface is small:
+   - `lib/vmwrap_pure.{h,cpp}` — devfs ruleset builder, jail.conf
+     fragment builder, validators (vmname, jail name, dataset)
+   - `lib/vmwrap.cpp` — runtime: write devfs ruleset, jail-create,
+     `zfs jail`
+   - CLI: `crate vm-wrap <vmname> --jail <name> [--dataset DS]
+     [--tap N] [--nmdm N]`
+
+   Estimated scope: one release (about the size of `crate retune`).
+
+   Prerequisites: none — works against the existing bhyve installs
+   on the host without crate owning the VM lifecycle.
+
+=== Notes / open questions ===
+
+* Whether bhyve-on-FreeBSD makes sense long-term for crate's
+  audience (single-host operators running web/dev workloads in
+  jails). Most bhyve users are already on vm-bhyve or libvirt.
+  Justification needs to come from a real operator request.
+
+* `allow.vmm` requires FreeBSD 13+. The base `crate` jail track
+  supports older kernels — bhyve track will be conditional on a
+  runtime detection of jailparam(3) support.
+
+* Live migration of bhyve VMs (Proxmox-style) is not on this list.
+  bhyve doesn't have a stable migrate API yet (work in progress
+  upstream as of 2026). Track separately if/when it lands.
+
+* See docs/bhyve-jailer.md for the immediate-value documentation
+  shipped in 0.7.x — it describes the jailer pattern manually so
+  operators can use it before B is implemented.

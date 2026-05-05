@@ -67,3 +67,54 @@ listen:
 log:
     file: /var/log/crated.log
     level: info
+
+## Control sockets (0.7.10) — bearer-token-less GUI/tray API.
+##
+## Each entry binds a Unix socket under /var/run/crate/control/ owned
+## by root and chgrp'd to a unix group. Filesystem permissions are the
+## kernel-enforced gate: operator B's tray app cannot connect(2) to
+## operator A's socket because the kernel rejects the open with EACCES
+## before crated sees a byte.
+##
+## API surface on each socket (read-only for "viewer", read+write for "admin"):
+##   GET   /v1/control/containers
+##   GET   /v1/control/containers/<name>
+##   GET   /v1/control/containers/<name>/stats
+##   PATCH /v1/control/containers/<name>/resources    (admin only)
+##                                                    body: {"pcpu":"20","writebps":"5M",...}
+##                                                    whitelist: pcpu, memoryuse, readbps, writebps
+##
+## Defence in depth:
+##   - 'pools:' list scopes which jails this socket can reach (uses the
+##     same pool inference as 0.7.4 token ACLs). "*" = all.
+##   - 'role:' is admin (read+write) or viewer (read-only).
+##   - 'mode:' default 0660; world-readable settings emit a startup
+##     warning but are honoured. We recommend keeping 0660.
+##   - Missing 'group' in the system database is logged and that single
+##     socket entry is skipped — crated continues with the others.
+##
+## Lifecycle/limitations:
+##   - per-connection getpeereid(2) verification is a 0.7.11 follow-up.
+##     For 0.7.10, isolation comes solely from filesystem perms, which
+##     is already a substantial improvement over bearer tokens.
+##   - Lifecycle-changing actions (start/stop/destroy) are NOT exposed
+##     here — those remain in the bearer-token API on the main socket.
+##
+# control_sockets:
+#     - path: /var/run/crate/control/dev.sock
+#       group: dev-team
+#       mode: "0660"            # quoted to keep yaml-cpp from re-interpreting
+#       pools: [dev, stage]
+#       role: admin
+#
+#     - path: /var/run/crate/control/prod.sock
+#       group: ops
+#       mode: "0660"
+#       pools: [prod]
+#       role: admin
+#
+#     - path: /var/run/crate/control/monitoring.sock
+#       group: developers       # broad read-only access
+#       mode: "0660"
+#       pools: ["*"]
+#       role: viewer
