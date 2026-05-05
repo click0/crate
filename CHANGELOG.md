@@ -6,6 +6,178 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.10] — 2026-05-05
+
+`crated` control sockets — bearer-token-less Unix-socket REST API for
+GUI/tray applications, with **per-group isolation via filesystem
+permissions**. Operator A in unix group `dev-team` connects to
+`/var/run/crate/control/dev.sock`; operator B in group `ops`
+connects to `/var/run/crate/control/prod.sock`. The kernel rejects
+operator B's `connect(2)` on operator A's socket with `EACCES`
+before crated sees a byte — true sibling isolation.
+
+This release picks up the Firecracker control-plane idea (item 4 of
+the Firecracker comparison series), adapted to multi-tenant single-host
+operators: where Firecracker spawns one mini-daemon per VM, we get
+the same isolation properties via N Unix sockets in one daemon, with
+no per-jail process overhead.
+
+### Configuration
+
+```yaml
+control_sockets:
+    - path: /var/run/crate/control/dev.sock
+      group: dev-team           # resolved at startup via getgrnam(3)
+      mode:  "0660"             # default; 0660 root:dev-team
+      pools: [dev, stage]       # which pools this socket can manage
+      role:  admin              # admin = full; viewer = read-only
+
+    - path: /var/run/crate/control/prod.sock
+      group: ops
+      mode:  "0660"
+      pools: [prod]
+      role:  admin
+
+    - path: /var/run/crate/control/monitoring.sock
+      group: developers
+      mode:  "0660"
+      pools: ["*"]              # everything, but read-only
+      role:  viewer
+```
+
+### API surface (per socket)
+
+| Method | Path                                            | Required role |
+|--------|-------------------------------------------------|---------------|
+| `GET`   | `/v1/control/containers`                        | viewer        |
+| `GET`   | `/v1/control/containers/<name>`                 | viewer        |
+| `GET`   | `/v1/control/containers/<name>/stats`           | viewer        |
+| `PATCH` | `/v1/control/containers/<name>/resources`       | admin         |
+
+`PATCH /resources` body is a flat JSON object with a strict whitelist:
+`pcpu` (0..100), `memoryuse`, `readbps`, `writebps` (K/M/G/T suffix).
+Unknown keys are **rejected**, not silently ignored — a typo by a
+tray-app developer fails loudly instead of being a no-op. The
+backing implementation is `rctl(8)` — same mechanism as `crate retune`
+(0.7.6), but reachable from non-root users via filesystem-permission
+ACL instead of admin token.
+
+Lifecycle-changing operations (start/stop/restart/destroy) are
+**deliberately not exposed** on control sockets. Those remain on
+the bearer-token main API. The control plane is for **status polling
+and live tuning** by trusted user-level processes.
+
+### Defence in depth
+
+1. **Filesystem permissions (kernel-enforced).** A 0660 root:ops
+   socket cannot be opened by operators outside the `ops` group.
+   `connect(2)` returns `EACCES` before crated runs a single line of
+   code. This is the primary isolation boundary.
+2. **Pool ACL.** Even if a peer reaches a socket, `/v1/control/
+   containers/<name>` is rejected with HTTP 403 if `<name>`'s
+   inferred pool isn't in the socket's `pools:` list. "*" is the
+   explicit all-pools grant.
+3. **Role gate.** A `viewer` socket rejects `PATCH /resources` with
+   HTTP 403 even if everything else allows. Read-only by construction.
+
+### Operator-friendly defaults
+
+- **Missing group** in the system database → log a warning and
+  **skip that one socket entry**; crated continues with the rest.
+  Avoids "the prod box won't start because dev-team isn't in
+  /etc/group on the prod host".
+- **Mode > 0660** (world-readable bits set) → log a warning and
+  **proceed as configured**. Operators may have legitimate reasons
+  to relax (e.g. a multi-team monitoring pipeline); we surface the
+  risk without forcing a specific policy.
+- **Sockets live under** `/var/run/crate/control/`. The path is
+  validated against this prefix at config-load time — operators
+  cannot accidentally drop sockets in `/tmp` or `/etc`.
+
+### Implementation
+
+- `daemon/control_socket_pure.{h,cpp}` — pure module:
+  - `ControlSocketSpec` config struct + `validateSocketSpec()`
+  - `parseRoute(method, path)` — `/v1/control/containers/...`
+    parser; rejects unknown methods and bad container names
+  - `authorize(...)` — five-way decision matrix (Allow + 4 Deny
+    reasons) with HTTP status mapping
+  - `parseResourcesPatch(json)` — strict whitelist + minimal flat
+    JSON parser; rejects malformed body, unknown keys, empty `{}`
+  - `renderContainersJson()`, `renderErrorJson()`,
+    `renderPatchOkJson()` — stable, sorted JSON output
+- `daemon/control_socket.{h,cpp}` — runtime: bind N Unix sockets
+  with proper mode/ownership; one `httplib::Server` per socket on
+  a detached thread; route handlers delegate every decision to the
+  pure module
+- `daemon/config.{h,cpp}` — `control_sockets:` YAML section parser
+  + validation hook into `ControlSocketPure::validateSocketSpec`
+- `daemon/main.cpp` — `ControlSocketsManager` lifecycle alongside
+  the existing `Server` and `WsConsole`
+- `daemon/crated.conf.sample` — three example sockets covering
+  the typical multi-team deployment shape
+
+### Tests
+
+`tests/unit/control_socket_pure_test.cpp` — **29 ATF cases**:
+
+- `validateSocketSpec` — typical/invalid path (must live under
+  `/var/run/crate/control/`), group alphabet, mode range, role
+  enum, pools list including "*"
+- `isModeSafe` — 0660 ok, 0666/0664/0661/0777 flagged
+- `parseRoute` — list/get/stats/patch + method-mismatch + unknown
+  prefix + malformed container name
+- `authorize` — full ACL decision matrix:
+  - typical allow on all four actions
+  - gid mismatch → `DenyGidMismatch`
+  - pool filter (matches "*", pool-less containers, alt separator)
+  - viewer + PATCH → `DenyRoleMismatch`
+  - viewer GET on all paths still allowed
+  - unknown action → `DenyUnknownAction`
+- `parseResourcesPatch` — typical, all-keys, unknown-key reject,
+  empty-body reject, malformed-JSON reject (5 forms)
+- `renderContainersJson` — stable sort, empty-list shape
+- `renderErrorJson` — escapes `"` and `\n`
+- `renderPatchOkJson` — omits empty fields
+- `httpStatusFor` — 200/403/404 mapping
+- `poolVisibleOnSocket` — "*" matches anything (incl. pool-less)
+
+**881/881 unit tests pass locally** (852 from prior + 29 new).
+
+### Defence-in-depth caveat (0.7.11 follow-up)
+
+`ControlSocketPure::authorize()` includes a `peerGid != socketExpectedGid`
+check intended as a layer-2 re-verification using `getpeereid(2)`
+on the connection fd. cpp-httplib (the framework crated uses for
+HTTP) does not currently expose the per-connection fd through its
+public API, so the runtime synthesises `peerGid = expectedGid` —
+i.e. trusts the kernel's filesystem-permission gate to have already
+filtered out wrong-group peers. The pure-module check exists, is
+unit-tested, and will activate the moment the runtime grows access
+to the connection fd (planned: 0.7.11, via either a custom
+HTTP-on-unix accept loop or a small cpp-httplib patch).
+
+For 0.7.10 this is acceptable: filesystem permissions alone are
+already a substantial improvement over bearer tokens for the GUI
+use case, and the layer-2 re-check is defence-in-depth — not the
+primary boundary.
+
+### NOT in this release (future)
+
+- **Per-connection `getpeereid(2)`** — see caveat above. (0.7.11)
+- **Lifecycle endpoints** (start/stop/destroy) on control sockets.
+  Those keep the bearer-token requirement on the main API.
+- **WebSocket console / screenshots** through the control socket.
+  The console uses a separate listener (0.6.4) and screenshots
+  need X11 + XAUTHORITY context that's hostile to a generic daemon
+  handler.
+- **Per-jail (not per-group) sockets.** If operators want true
+  N-sockets-per-N-jails isolation, that's a future Variant 3 from
+  the design analysis. For multi-team setups the per-group model
+  in this release is sufficient and N-jails-times-cheaper.
+
+---
+
 ## [0.7.9] — 2026-05-05
 
 `crate run --warm-base <dataset> --name <name>` — Part 2 of the

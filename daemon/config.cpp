@@ -88,6 +88,38 @@ Config Config::load(const std::string &path) {
       cfg.consoleWsBind = cons["bind"].as<std::string>();
   }
 
+  if (auto socks = root["control_sockets"]) {
+    if (!socks.IsSequence())
+      throw std::runtime_error("control_sockets must be a YAML sequence");
+    for (auto s : socks) {
+      ControlSocketPure::ControlSocketSpec spec;
+      if (s["path"])  spec.path  = s["path"].as<std::string>();
+      if (s["group"]) spec.group = s["group"].as<std::string>();
+      if (s["mode"]) {
+        // Parse mode either as 0xxx octal string ("0660") or as a
+        // YAML int (660 / 0o660). YAML's octal-int handling is
+        // version-dependent; accepting a string keeps the config
+        // file portable across yaml-cpp versions.
+        try {
+          auto raw = s["mode"].as<std::string>();
+          spec.mode = std::stoul(raw, nullptr, 8);
+        } catch (...) {
+          spec.mode = s["mode"].as<unsigned>();
+        }
+      }
+      if (s["role"]) spec.role = s["role"].as<std::string>();
+      if (auto pl = s["pools"]) {
+        if (pl.IsSequence())
+          for (auto p : pl) spec.pools.push_back(p.as<std::string>());
+        else if (pl.IsScalar())
+          spec.pools.push_back(pl.as<std::string>());
+      }
+      if (auto e = ControlSocketPure::validateSocketSpec(spec); !e.empty())
+        throw std::runtime_error("control_sockets[" + spec.path + "]: " + e);
+      cfg.controlSockets.push_back(spec);
+    }
+  }
+
   return cfg;
 }
 

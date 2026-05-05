@@ -40,7 +40,8 @@ DAEMON_SRCS = daemon/main.cpp daemon/config.cpp daemon/server.cpp \
               daemon/routes.cpp daemon/routes_pure.cpp daemon/auth.cpp \
               daemon/metrics.cpp daemon/metrics_pure.cpp \
               daemon/ws_pure.cpp daemon/ws_console.cpp \
-              daemon/transfer_pure.cpp
+              daemon/transfer_pure.cpp \
+              daemon/control_socket_pure.cpp daemon/control_socket.cpp
 
 SNMPD_SRCS = snmpd/main.cpp snmpd/collector.cpp \
              snmpd/mib.cpp snmpd/mib_pure.cpp
@@ -188,7 +189,7 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              datacenter_pure_test backup_pure_test replicate_pure_test \
              ha_pure_test pool_pure_test warm_pure_test \
              retune_pure_test throttle_pure_test \
-             backup_prune_pure_test
+             backup_prune_pure_test control_socket_pure_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)
@@ -226,7 +227,8 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  lib/replicate_pure.cpp \
                  cli/args_pure.cpp daemon/metrics_pure.cpp \
                  daemon/routes_pure.cpp daemon/ws_pure.cpp \
-                 daemon/transfer_pure.cpp hub/aggregator_pure.cpp \
+                 daemon/transfer_pure.cpp daemon/control_socket_pure.cpp \
+                 hub/aggregator_pure.cpp \
                  hub/datacenter_pure.cpp hub/ha_pure.cpp \
                  snmpd/mib_pure.cpp
 
