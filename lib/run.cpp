@@ -285,7 +285,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     // Teardown: zfs destroy the clone (auto-unmounts) and then the
     // marker snapshot. Best-effort — we never want a teardown failure
     // to mask the real error from the run.
-    destroyWarmClone.reset([warmCloneName, warmSnapName]() {
+    destroyWarmClone.reset([warmCloneName, warmSnapName, &args]() {
       LOG("warm-base: destroy clone " << warmCloneName)
       try { ZfsOps::destroy(warmCloneName); } catch (...) {}
       LOG("warm-base: destroy snapshot " << warmSnapName)
@@ -314,7 +314,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // mounted clone would either fail or wipe through the mount.
   RunAtEnd destroyJailDir;
   if (!warmBase) {
-    destroyJailDir.reset([&jailPath]() {
+    destroyJailDir.reset([&jailPath, &args]() {
       LOG("removing the jail directory " << jailPath << " ...")
       Util::Fs::rmdirHier(jailPath);
       LOG("removing the jail directory " << jailPath << " done")
