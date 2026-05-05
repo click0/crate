@@ -6,6 +6,141 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.9] — 2026-05-05
+
+`crate run --warm-base <dataset> --name <name>` — Part 2 of the
+warm-template story (Part 1 was 0.7.5's `crate template warm`).
+A new jail boots from a fresh ZFS clone of the warm template,
+bypassing tar-extract + cold-create work entirely. Where the cold
+path takes 30+ seconds (xz decompress, base.txz extract, pkg
+install replay, profile init), warm-base typically lands at
+1-2 seconds — the whole speed-up story for ZFS-backed workflows.
+
+### Usage
+
+```sh
+# 1. Once: bake an image (run jail, install pkgs, configure, then
+# capture). 0.7.5 territory.
+crate run -f firefox.crate
+crate template warm firefox --output tank/templates/firefox-warm
+
+# 2. From now on, fresh jails come up near-instantly:
+crate run --warm-base tank/templates/firefox-warm --name fox-1
+crate run --warm-base tank/templates/firefox-warm --name fox-2
+crate run --warm-base tank/templates/firefox-warm --name dev-fox
+```
+
+`-f / --file` and `--warm-base` are mutually exclusive. With
+`--warm-base` the rootfs comes from the ZFS clone; the spec is
+parsed from `+CRATE.SPEC` inside the cloned dataset (the source
+jail's directory had it from when it was extracted from the
+original .crate).
+
+`--name` is required and only valid with `--warm-base` — without
+the .crate file there is no name to derive.
+
+### Mechanism
+
+```
+zfs snapshot <warmDataset>@warmrun-<utc>
+zfs clone    <warmDataset>@warmrun-<utc> <jailsParent>/jail-<name>-<hex>
+# ZFS auto-mounts the clone at <jailsParent.mountpoint>/jail-<name>-<hex>
+# which is precisely where lib/run.cpp expected jailPath.
+... (normal jail startup, no tar extraction) ...
+# At teardown:
+zfs destroy <jailsParent>/jail-<name>-<hex>     # auto-unmounts
+zfs destroy <warmDataset>@warmrun-<utc>         # marker snapshot
+```
+
+Two distinct snapshot-suffix prefixes, so operators can prune them
+with different retention rules:
+
+| Prefix       | Owner                      | When pruned                              |
+|--------------|----------------------------|-------------------------------------------|
+| `warm-...`   | `crate template warm`      | When operator retires the template       |
+| `warmrun-...`| `crate run --warm-base`    | At jail teardown (best-effort cleanup)   |
+
+### Defence in depth
+
+- **Warm-base + `-f` is rejected at validate time.** The two paths
+  are mutually exclusive; the validator surfaces the typo before
+  any ZFS call.
+- **Warm dataset name validated** with the same rules as
+  `crate template warm` (alnum + `._-/`, no `..`, no `//`, no
+  leading/trailing `/`). Rejection happens before any `zfs(8)`
+  invocation.
+- **Jail name validated** as alnum + `._-`, length 1..64. No
+  shell metas, no path separators.
+- **Jails dir must be on ZFS.** Surfaces a clear error if
+  `Locations::jailDirectoryPath` isn't a ZFS mountpoint —
+  warm-base is a ZFS-only feature by construction.
+- **Missing `+CRATE.SPEC` in clone** raises a structured error
+  pointing at the expected path, instead of letting the YAML parser
+  fail with a cryptic "file not found".
+- **Teardown is best-effort.** A failure in `zfs destroy <clone>`
+  during cleanup logs but does NOT mask the actual run-time error.
+  This matches the existing `RunAtEnd` semantics for the cold path.
+
+### Implementation
+
+- `lib/warm_pure.{h,cpp}` — extended with three consumer-side
+  helpers:
+  - `validateJailName(name)` — same alphabet as
+    `BackupPure::validateJailName`
+  - `warmRunSnapshotSuffix(epoch)` — distinct `warmrun-` prefix
+  - `warmRunCloneName(parent, name, hex)` — same naming as
+    `Locations::jailDirectoryPath/jail-<name>-<hex>` so
+    mountpoint inheritance lands the rootfs at the expected path
+- `lib/run.cpp` — new branch gated by `args.runWarmBase`:
+  - Skip `mkdir(jailPath)` (ZFS creates it via auto-mount)
+  - `ZfsOps::snapshot(warmSnap)` + `ZfsOps::clone(warmSnap, clone)`
+  - `RunAtEnd destroyWarmClone` replaces the cold path's
+    `RunAtEnd destroyJailDir` (rmdirHier on a mounted clone
+    would either fail or wipe through the mount)
+  - Skip the tar validate + extract block; sanity-check
+    `+CRATE.SPEC` exists in the clone
+- `cli/args.cpp` — `--warm-base` and `--name` flags; updated
+  `usageRun()` documents the two modes
+- `cli/args_pure.cpp` — `Args::validate` for `CmdRun` enforces
+  the mutual exclusion + `--name` requirement
+- `cli/main.cpp` — outer-loop restart-policy extraction skipped
+  when no `-f` is given (warm-base operators wrap their jail in
+  rc.d if they want outer restart)
+- `lib/args.h` — `runWarmBase`, `runName` fields
+
+### Tests
+
+`tests/unit/warm_pure_test.cpp` extended with 6 new ATF cases:
+
+- `warm_base_jail_name_typical` / `_invalid` — alphabet, length cap,
+  reserved-name rejection, shell-meta rejection
+- `warm_run_suffix_distinct_from_template_suffix` — invariant that
+  `warmrun-` and `warm-` prefixes never alias each other
+- `warm_run_suffix_canonical_epochs` — known epoch -> known string
+- `warm_run_suffix_lex_sort_matches_chrono` — cron-pruning property
+  inherited from the backup module convention
+- `warm_run_clone_name_shape` — same naming as
+  `jail-<name>-<hex>` for two parent datasets
+
+**852/852 pass locally.** Total warm_pure_test cases: 16.
+
+### NOT in this release
+
+- **Spec override.** `crate run --warm-base <ds> -f <other.crate>`
+  to take rootfs from the clone but a different spec from the
+  archive. Flagged as a future enhancement; current 0.7.9
+  rejects this combo as an error.
+- **Multi-host pull.** Cloning warm templates across hosts goes
+  through `crate replicate` (0.7.2) explicitly — not auto-pulled
+  by `--warm-base`.
+- **Outer-loop restart policy.** With no `-f`, the
+  `cli/main.cpp` top-level restart loop has no spec to read. The
+  spec inside the clone IS still honoured for in-jail restart;
+  operators wanting outer-loop restart should run the jail under
+  rc.d.
+
+---
+
 ## [0.7.8] — 2026-05-04
 
 `crate backup-prune <dir> --keep <spec>` — Proxmox-style retention

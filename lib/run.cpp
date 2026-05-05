@@ -11,6 +11,7 @@
 #include "share_pure.h"
 #include "bridge_pure.h"
 #include "wireguard_runtime_pure.h"
+#include "warm_pure.h"
 #include "ifconfig_ops.h"
 #include "scripts.h"
 #include "ctx.h"
@@ -231,9 +232,66 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   auto &user = userInfo.name;
   auto &homeDir = userInfo.homeDir;
 
-  // create the jail directory
-  auto jailPath = STR(Locations::jailDirectoryPath << "/jail-" << Util::filePathToBareName(args.runCrateFile) << "-" << Util::randomHex(4));
-  Util::Fs::mkdir(jailPath, S_IRUSR|S_IWUSR|S_IXUSR);
+  // ------------------------------------------------------------------
+  // Warm-base mode (0.7.9): operator gives `--warm-base <dataset>
+  // --name <name>` instead of `-f <file.crate>`. We snapshot+clone the
+  // warm dataset (on-disk state captured by `crate template warm`) and
+  // let ZFS auto-mount it as the jail directory, skipping the
+  // tar-extract entirely. The cloned dataset still has +CRATE.SPEC
+  // because the source jail had it from when it was first extracted.
+  // ------------------------------------------------------------------
+  const bool warmBase = !args.runWarmBase.empty();
+  const std::string runHex = Util::randomHex(4);
+  const std::string nameComponent = warmBase
+    ? args.runName
+    : Util::filePathToBareName(args.runCrateFile);
+
+  auto jailPath = STR(Locations::jailDirectoryPath << "/jail-" << nameComponent << "-" << runHex);
+
+  // For warm-base we let ZFS create + mount the directory by setting
+  // mountpoint inheritance on the clone. For the cold path we mkdir
+  // up front so tar can extract into it.
+  if (!warmBase) {
+    Util::Fs::mkdir(jailPath, S_IRUSR|S_IWUSR|S_IXUSR);
+  }
+
+  // Warm-base prep: validate inputs, snapshot the warm template, clone
+  // it under the jails parent dataset so the clone's mountpoint
+  // inherits to <Locations::jailDirectoryPath>/jail-<name>-<hex> = jailPath.
+  std::string warmCloneName, warmSnapName;
+  RunAtEnd destroyWarmClone;
+  if (warmBase) {
+    if (auto e = WarmPure::validateTemplateDataset(args.runWarmBase); !e.empty())
+      ERR("--warm-base: " << e)
+    if (auto e = WarmPure::validateJailName(args.runName); !e.empty())
+      ERR("--name: " << e)
+
+    if (!Util::Fs::isOnZfs(Locations::jailDirectoryPath))
+      ERR("--warm-base requires the jails directory to live on ZFS; "
+          << Locations::jailDirectoryPath << " is not")
+    auto parentDataset = Util::Fs::getZfsDataset(Locations::jailDirectoryPath);
+    if (parentDataset.empty())
+      ERR("--warm-base: cannot determine ZFS dataset of " << Locations::jailDirectoryPath)
+
+    warmSnapName = WarmPure::fullSnapshotName(
+      args.runWarmBase, WarmPure::warmRunSnapshotSuffix(::time(nullptr)));
+    warmCloneName = WarmPure::warmRunCloneName(parentDataset, args.runName, runHex);
+
+    LOG("warm-base: snapshot " << warmSnapName)
+    ZfsOps::snapshot(warmSnapName);
+    LOG("warm-base: clone -> " << warmCloneName << " (auto-mounts at " << jailPath << ")")
+    ZfsOps::clone(warmSnapName, warmCloneName);
+
+    // Teardown: zfs destroy the clone (auto-unmounts) and then the
+    // marker snapshot. Best-effort — we never want a teardown failure
+    // to mask the real error from the run.
+    destroyWarmClone.reset([warmCloneName, warmSnapName]() {
+      LOG("warm-base: destroy clone " << warmCloneName)
+      try { ZfsOps::destroy(warmCloneName); } catch (...) {}
+      LOG("warm-base: destroy snapshot " << warmSnapName)
+      try { ZfsOps::destroy(warmSnapName); } catch (...) {}
+    });
+  }
 
   // check if jail directory is on encrypted ZFS (opportunistic, pre-spec)
   if (Util::Fs::isOnZfs(jailPath)) {
@@ -250,11 +308,18 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     return STR(jailPath << subdir);
   };
 
-  RunAtEnd destroyJailDir([&jailPath,&args]() {
-    LOG("removing the jail directory " << jailPath << " ...")
-    Util::Fs::rmdirHier(jailPath);
-    LOG("removing the jail directory " << jailPath << " done")
-  });
+  // The cold path uses Util::Fs::rmdirHier to clean up the extracted
+  // tree on teardown. The warm path uses `zfs destroy <clone>` instead
+  // (registered above as destroyWarmClone) — recursive rmdir on a
+  // mounted clone would either fail or wipe through the mount.
+  RunAtEnd destroyJailDir;
+  if (!warmBase) {
+    destroyJailDir.reset([&jailPath]() {
+      LOG("removing the jail directory " << jailPath << " ...")
+      Util::Fs::rmdirHier(jailPath);
+      LOG("removing the jail directory " << jailPath << " done")
+    });
+  }
 
   // mounts
   std::list<std::unique_ptr<Mount>> mounts;
@@ -263,25 +328,38 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     m->mount();
   };
 
-  // validate the crate archive: reject archives with '..' path components (directory traversal)
-  LOG("validating the crate file " << args.runCrateFile)
-  {
-    auto listing = Util::execPipelineGetOutput(
-      {{CRATE_PATH_XZ, Cmd::xzThreadsArg, "--decompress"}, {CRATE_PATH_TAR, "tf", "-"}},
-      "list crate archive contents", args.runCrateFile);
-    std::istringstream is(listing);
-    std::string entry;
-    while (std::getline(is, entry)) {
-      if (entry.find("..") != std::string::npos)
-        ERR("crate archive contains path with '..' component: " << entry << " — refusing to extract (directory traversal)")
+  // For the cold path, validate + extract the .crate archive. For
+  // warm-base, the rootfs is already in place from the ZFS clone.
+  if (!warmBase) {
+    // validate the crate archive: reject archives with '..' path components (directory traversal)
+    LOG("validating the crate file " << args.runCrateFile)
+    {
+      auto listing = Util::execPipelineGetOutput(
+        {{CRATE_PATH_XZ, Cmd::xzThreadsArg, "--decompress"}, {CRATE_PATH_TAR, "tf", "-"}},
+        "list crate archive contents", args.runCrateFile);
+      std::istringstream is(listing);
+      std::string entry;
+      while (std::getline(is, entry)) {
+        if (entry.find("..") != std::string::npos)
+          ERR("crate archive contains path with '..' component: " << entry << " — refusing to extract (directory traversal)")
+      }
     }
-  }
 
-  // extract the crate archive into the jail directory
-  LOG("extracting the crate file " << args.runCrateFile << " into " << jailPath)
-  Util::execPipeline(
-    {{CRATE_PATH_XZ, Cmd::xzThreadsArg, "--decompress"}, {CRATE_PATH_TAR, "xf", "-", "-C", jailPath}},
-    "extract the crate file into the jail directory", args.runCrateFile);
+    // extract the crate archive into the jail directory
+    LOG("extracting the crate file " << args.runCrateFile << " into " << jailPath)
+    Util::execPipeline(
+      {{CRATE_PATH_XZ, Cmd::xzThreadsArg, "--decompress"}, {CRATE_PATH_TAR, "xf", "-", "-C", jailPath}},
+      "extract the crate file into the jail directory", args.runCrateFile);
+  } else {
+    LOG("warm-base: rootfs comes from ZFS clone — skipping tar extraction")
+    // Sanity check: the warm dataset must contain +CRATE.SPEC. Warm
+    // templates produced by `crate template warm` always do (the source
+    // jail was extracted from a .crate that put it there) but a
+    // hand-rolled template might not.
+    if (!Util::Fs::fileExists(J("/+CRATE.SPEC")))
+      ERR("--warm-base: cloned dataset is missing +CRATE.SPEC at " << J("/+CRATE.SPEC")
+          << " — was it produced by `crate template warm` of a `crate run` jail?")
+  }
 
   // parse +CRATE.SPEC
   auto spec = parseSpec(J("/+CRATE.SPEC")).preprocess();
@@ -514,7 +592,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     }
   }
 
-  auto jailXname = STR(Util::filePathToBareName(args.runCrateFile) << "_pid" << ::getpid());
+  auto jailXname = STR(nameComponent << "_pid" << ::getpid());
 
   // environment in jail
   std::string jailEnv;

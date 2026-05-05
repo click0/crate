@@ -97,10 +97,22 @@ void Args::validate() {
     }
     break;
   case CmdRun:
-    if (runCrateFile.empty())
-      ERR("the 'run' command requires the crate file as an argument (-f, --file)")
-    if (!std::ifstream(runCrateFile).good())
-      ERR("the file passed to the 'run' command can't be opened: " << runCrateFile)
+    if (!runWarmBase.empty()) {
+      // --warm-base <dataset> --name <name>: cold-create-skipping path.
+      // Spec is parsed from +CRATE.SPEC inside the cloned warm dataset.
+      // -f is incompatible: the OS comes from the clone, not the archive.
+      if (!runCrateFile.empty())
+        ERR("--warm-base and -f/--file are mutually exclusive (warm-base supplies the rootfs from a ZFS clone)")
+      if (runName.empty())
+        ERR("--warm-base requires --name <name> (no .crate file to derive the jail name from)")
+    } else {
+      if (runCrateFile.empty())
+        ERR("the 'run' command requires the crate file as an argument (-f, --file)")
+      if (!std::ifstream(runCrateFile).good())
+        ERR("the file passed to the 'run' command can't be opened: " << runCrateFile)
+      if (!runName.empty())
+        ERR("--name is only valid with --warm-base; without it, the jail name is derived from the .crate file")
+    }
     break;
   case CmdValidate:
     if (validateSpec.empty())

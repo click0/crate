@@ -30,6 +30,8 @@ public:
 
   // run parameters
   std::string runCrateFile;
+  std::string runWarmBase;             // --warm-base <dataset>: clone instead of tar-extract
+  std::string runName;                 // --name <name>: jail name when --warm-base used (no -f)
 
   // validate parameters
   std::string validateSpec;

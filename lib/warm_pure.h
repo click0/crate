@@ -82,4 +82,43 @@ std::vector<std::string> buildCloneArgv(const std::string &sourceDataset,
 // prefer the clone graph as-is.
 std::vector<std::string> buildPromoteArgv(const std::string &templateDataset);
 
+// --- Warm-base consumer side (0.7.9) ---
+//
+// `crate run --warm-base <dataset> --name <name>` boots a fresh jail
+// from a warm template's ZFS clone instead of extracting a .crate
+// archive. The runtime side:
+//   1. zfs snapshot <warmDataset>@warmrun-<utc>      (fresh marker)
+//   2. zfs clone <warmDataset>@warmrun-<utc> <parent>/jail-<name>-<hex>
+//   3. ZFS auto-mounts the clone at jailPath via mountpoint inheritance
+//   4. RunAtEnd: zfs destroy <clone> + zfs destroy <snap>
+//
+// This module owns the naming + validators; the snapshot/clone/destroy
+// argv builders above (and ZfsOps) handle the actual ZFS calls.
+
+// Validate a jail name supplied via `crate run --name <name>`. Same
+// rules as ReplicatePure::validateContainerName / BackupPure::
+// validateJailName (alnum + ._- 1..64 chars). Used only with
+// --warm-base where there's no .crate file to derive the name from.
+std::string validateJailName(const std::string &name);
+
+// Suffix for the run-time snapshot we take of the warm template
+// before cloning it. Distinct prefix ("warmrun-") from the warm
+// template's own snapshot ("warm-") so `zfs list` operators can
+// tell them apart and prune them with different retention rules.
+//   warmrun-2026-05-04T12:00:00Z
+std::string warmRunSnapshotSuffix(long unixEpoch);
+
+// Build the destination clone's full dataset name. The clone lives
+// alongside other jails so its mountpoint inherits to jailPath
+// without an explicit `zfs set mountpoint=...`.
+//   parent="tank/jails", name="firefox", hex="abcd"
+//   -> "tank/jails/jail-firefox-abcd"
+//
+// `parentDataset` is the ZFS dataset that owns the jail directory
+// (e.g. Util::Fs::getZfsDataset(Locations::jailDirectoryPath)).
+// `hex` is whatever the runtime feeds in (typically Util::randomHex(4)).
+std::string warmRunCloneName(const std::string &parentDataset,
+                             const std::string &jailName,
+                             const std::string &hex);
+
 } // namespace WarmPure

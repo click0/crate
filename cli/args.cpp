@@ -87,11 +87,24 @@ static void usageCreate() {
 }
 
 static void usageRun() {
-  std::cout << "usage: crate run [-h|--help] [--var KEY=VALUE ...] <create-file>" << std::endl;
+  std::cout << "usage: crate run [-h|--help] [--var KEY=VALUE ...] -f <create-file>" << std::endl;
+  std::cout << "       crate run [--var KEY=VALUE ...] --warm-base <dataset> --name <name>" << std::endl;
   std::cout << "" << std::endl;
-  std::cout << "Options:" << std::endl;
+  std::cout << "Two modes:" << std::endl;
+  std::cout << "  -f / --file <archive>             cold-create from .crate (extract base.txz, run pkg, ...)" << std::endl;
+  std::cout << "  --warm-base <dataset>             skip cold-create: clone the warm-template ZFS dataset" << std::endl;
+  std::cout << "                                    produced by `crate template warm` and boot from it." << std::endl;
+  std::cout << "                                    Spec comes from +CRATE.SPEC inside the cloned dataset." << std::endl;
+  std::cout << "  --name <name>                     jail name; required and only valid with --warm-base" << std::endl;
+  std::cout << "                                    (without --warm-base the name is derived from the .crate)" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Common options:" << std::endl;
   std::cout << "      --var KEY=VALUE                substitute ${KEY} with VALUE in embedded spec (repeatable)" << std::endl;
   std::cout << "  -h, --help                         show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Examples:" << std::endl;
+  std::cout << "  crate run -f firefox.crate" << std::endl;
+  std::cout << "  crate run --warm-base tank/templates/firefox-warm --name firefox" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -643,7 +656,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.7.8" << std::endl;
+        std::cout << "crate 0.7.9" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -654,7 +667,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.7.8" << std::endl;
+          std::cout << "crate 0.7.9" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -760,6 +773,10 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
             exit(0);
           } else if (strEq(argLong, "file")) {
             args.runCrateFile = getArgParam(++a, argc, argv);
+          } else if (strEq(argLong, "warm-base")) {
+            args.runWarmBase = getArgParam(++a, argc, argv);
+          } else if (strEq(argLong, "name")) {
+            args.runName = getArgParam(++a, argc, argv);
           } else {
             err("unsupported long option '%s'", argv[a]);
           }

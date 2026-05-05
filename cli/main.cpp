@@ -152,8 +152,13 @@ static int mainGuarded(int argc, char** argv) {
     // Extract restart policy from the crate spec (if any) before running.
     // The spec is inside the .crate archive at +CRATE.SPEC — extract it
     // via a lightweight tar pipe without unpacking the whole archive.
+    // For --warm-base runs there is no .crate file; the restart policy
+    // (if any) lives in the cloned dataset's +CRATE.SPEC and is honoured
+    // by lib/run.cpp once the clone is mounted, but not by this outer
+    // restart loop. Operators wanting outer-loop restart should run the
+    // jail under a daemon (rc.d) wrapper instead.
     std::unique_ptr<Spec::RestartPolicy> restartPolicy;
-    try {
+    if (!args.runCrateFile.empty()) try {
       auto specYaml = Util::execCommandGetOutput(
         {"/usr/bin/tar", "xf", args.runCrateFile, "-O", "+CRATE.SPEC"},
         "extract spec for restart policy");

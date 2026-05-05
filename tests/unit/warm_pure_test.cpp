@@ -10,8 +10,11 @@ using WarmPure::buildCloneArgv;
 using WarmPure::buildPromoteArgv;
 using WarmPure::buildSnapshotArgv;
 using WarmPure::fullSnapshotName;
+using WarmPure::validateJailName;
 using WarmPure::validateSnapshotSuffix;
 using WarmPure::validateTemplateDataset;
+using WarmPure::warmRunCloneName;
+using WarmPure::warmRunSnapshotSuffix;
 using WarmPure::warmSnapshotSuffix;
 
 // --- validateTemplateDataset ---
@@ -117,6 +120,73 @@ ATF_TEST_CASE_BODY(promote_argv_shape) {
   ATF_REQUIRE_EQ(v[2], std::string("tank/templates/firefox-warm"));
 }
 
+// --- Warm-base consumer-side helpers (0.7.9) ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(warm_base_jail_name_typical);
+ATF_TEST_CASE_BODY(warm_base_jail_name_typical) {
+  ATF_REQUIRE_EQ(validateJailName("firefox"),         std::string());
+  ATF_REQUIRE_EQ(validateJailName("dev-postgres"),    std::string());
+  ATF_REQUIRE_EQ(validateJailName("worker.1"),        std::string());
+  ATF_REQUIRE_EQ(validateJailName("a"),               std::string());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(warm_base_jail_name_invalid);
+ATF_TEST_CASE_BODY(warm_base_jail_name_invalid) {
+  ATF_REQUIRE(!validateJailName("").empty());
+  ATF_REQUIRE(!validateJailName(".").empty());        // reserved
+  ATF_REQUIRE(!validateJailName("..").empty());       // reserved
+  ATF_REQUIRE(!validateJailName("foo/bar").empty());  // path separator
+  ATF_REQUIRE(!validateJailName("foo bar").empty());  // space
+  ATF_REQUIRE(!validateJailName("foo;rm").empty());   // shell meta
+  ATF_REQUIRE(!validateJailName("foo`pwd`").empty()); // backtick
+  ATF_REQUIRE(!validateJailName(std::string(65, 'a')).empty());  // > 64 chars
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(warm_run_suffix_distinct_from_template_suffix);
+ATF_TEST_CASE_BODY(warm_run_suffix_distinct_from_template_suffix) {
+  // Property: warmrun-* vs warm-* — different prefixes so operators
+  // can prune one without affecting the other.
+  auto runSuf  = warmRunSnapshotSuffix(1767225600L);   // 2026-01-01
+  auto tmplSuf = warmSnapshotSuffix(1767225600L);
+  ATF_REQUIRE(runSuf.find("warmrun-") == 0);
+  ATF_REQUIRE(tmplSuf.find("warm-")   == 0);
+  ATF_REQUIRE(tmplSuf.find("warmrun-") == std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(warm_run_suffix_canonical_epochs);
+ATF_TEST_CASE_BODY(warm_run_suffix_canonical_epochs) {
+  // 2026-05-04T12:00:00Z = 1777896000
+  ATF_REQUIRE_EQ(warmRunSnapshotSuffix(1777896000L),
+                 std::string("warmrun-2026-05-04T12:00:00Z"));
+  // 1970-01-01T00:00:00Z = 0
+  ATF_REQUIRE_EQ(warmRunSnapshotSuffix(0L),
+                 std::string("warmrun-1970-01-01T00:00:00Z"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(warm_run_suffix_lex_sort_matches_chrono);
+ATF_TEST_CASE_BODY(warm_run_suffix_lex_sort_matches_chrono) {
+  // Cron-friendly retention property: lexicographic order = chronological.
+  auto a = warmRunSnapshotSuffix(1767225600L);   // 2026-01-01
+  auto b = warmRunSnapshotSuffix(1798761600L);   // 2027-01-01
+  auto c = warmRunSnapshotSuffix(4102444800L);   // 2100-01-01
+  ATF_REQUIRE(a < b);
+  ATF_REQUIRE(b < c);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(warm_run_clone_name_shape);
+ATF_TEST_CASE_BODY(warm_run_clone_name_shape) {
+  // Same naming convention as Locations::jailDirectoryPath/jail-<name>-<hex>:
+  // the parent dataset's mountpoint covers the whole path, so the
+  // clone's mountpoint inheritance lands the rootfs at the expected
+  // jail directory automatically.
+  ATF_REQUIRE_EQ(warmRunCloneName("tank/jails", "firefox", "abcd"),
+                 std::string("tank/jails/jail-firefox-abcd"));
+  ATF_REQUIRE_EQ(warmRunCloneName("zroot/crate", "dev-postgres", "1234"),
+                 std::string("zroot/crate/jail-dev-postgres-1234"));
+  // Empty parent is a runtime input we don't sanitize here — caller's
+  // responsibility (it comes from getZfsDataset, not user input).
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, template_dataset_typical);
   ATF_ADD_TEST_CASE(tcs, template_dataset_invalid);
@@ -128,4 +198,10 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, snapshot_argv_shape);
   ATF_ADD_TEST_CASE(tcs, clone_argv_shape);
   ATF_ADD_TEST_CASE(tcs, promote_argv_shape);
+  ATF_ADD_TEST_CASE(tcs, warm_base_jail_name_typical);
+  ATF_ADD_TEST_CASE(tcs, warm_base_jail_name_invalid);
+  ATF_ADD_TEST_CASE(tcs, warm_run_suffix_distinct_from_template_suffix);
+  ATF_ADD_TEST_CASE(tcs, warm_run_suffix_canonical_epochs);
+  ATF_ADD_TEST_CASE(tcs, warm_run_suffix_lex_sort_matches_chrono);
+  ATF_ADD_TEST_CASE(tcs, warm_run_clone_name_shape);
 }
