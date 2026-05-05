@@ -6,6 +6,89 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.12] — 2026-05-05
+
+Build infrastructure: Makefile test-link refactor. The per-test
+`tests/unit/%: $(TEST_LINK_SRCS) ...` rule was inline-compiling
+every pure source for every test binary (~30 sources × ~40 tests =
+~1200 compilations on a clean build). Each new pure-test added
+about a minute to the FreeBSD-lite CI job, which hit the 20-minute
+inner timeout on the 0.7.9 release commit (workaround: bumped to 30m
+in 0.7.9 followup).
+
+This release moves the pure sources into per-source object files
+under `tests/unit/.test-objs/` that are compiled **once** and then
+linked into every test binary:
+
+```
+tests/unit/.test-objs/lib/util_pure.o
+tests/unit/.test-objs/lib/spec_pure.o
+... (one .o per TEST_LINK_SRCS source) ...
+tests/unit/.test-objs/tests/unit/_test_config_stub.o
+```
+
+A `.SECONDARY:` directive marks them as non-intermediate so make
+keeps them across runs (incremental rebuilds become near-instant —
+no-op finishes in milliseconds).
+
+### Measured speedup
+
+On a 32-vCPU dev box (`make -j32 build-unit-tests` from clean):
+
+| variant                              | wall clock |
+|--------------------------------------|------------|
+| 0.7.11 (per-test inline compile)     | **4m 07s** |
+| 0.7.12 (compile-once + link-many)    | **0m 14s** |
+
+That's ~17× on this box. On the 4-vCPU FreeBSD CI VM the absolute
+numbers will be larger but the ratio holds.
+
+Incremental no-op:
+
+```
+$ make build-unit-tests
+make: Nothing to be done for 'build-unit-tests'.
+real    0m0.008s
+```
+
+### Implementation
+
+- `Makefile`:
+  - New `TEST_OBJ_DIR = tests/unit/.test-objs`
+  - New `TEST_LINK_OBJS` derived via
+    `$(patsubst %.cpp,$(TEST_OBJ_DIR)/%.o,$(TEST_LINK_SRCS))` —
+    keeps source dir layout under TEST_OBJ_DIR so the same
+    `$(TEST_OBJ_DIR)/%.o: %.cpp` pattern rule covers all five
+    top-level dirs (lib/ daemon/ cli/ hub/ snmpd/) without
+    duplicate rules.
+  - Pattern rule auto-creates the per-dir parent via
+    `@mkdir -p $(@D)`.
+  - `.SECONDARY: $(TEST_LINK_OBJS) $(TEST_STUB_OBJ)` keeps the
+    objects across builds (without it, make treats them as
+    intermediate and `rm`s them after each test links — defeating
+    the whole point of caching).
+  - `clean-tests` now also `rm -rf $(TEST_OBJ_DIR)`.
+- `.gitignore` ignores `tests/unit/.test-objs/`.
+- `TODO` entry for "Makefile test-link refactor (medium priority)"
+  removed — done in this release.
+
+### Why we didn't lower the freebsd-build-lite CI timeout
+
+Stays at 30m (raised in the 0.7.9 followup). The clean build will
+now fit comfortably under 5m on the CI VM, but a slow runner day
+or future test additions will still benefit from the headroom.
+Lowering the timeout is a one-line followup we can defer.
+
+### Coverage target unaffected
+
+The `coverage` target still uses `COVERAGE_CXXFLAGS` / `COVERAGE_LDFLAGS`
+which the new pattern rule honours during the per-source compile.
+gcov instrumentation lands in `.test-objs/` alongside the .o files,
+which `find tests/unit -name '*.gcda' -delete` continues to clean
+correctly (the find walks the .test-objs subtree too).
+
+---
+
 ## [0.7.11] — 2026-05-05
 
 Closes the defence-in-depth gap left in 0.7.10: control sockets now
