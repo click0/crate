@@ -42,9 +42,11 @@
 #include "../lib/commands.h"
 #include "../lib/jail_query.h"
 #include "../lib/pool_pure.h"
+#include "../lib/spec_registry.h"
 #include "../lib/util.h"
 #include "../lib/pathnames.h"
 
+#include <fcntl.h>
 #include <grp.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -218,10 +220,84 @@ void handleStats(std::string &resBody, int &status, const std::string &name) {
   resBody = o.str();
 }
 
-// 0.8.13: lifecycle handlers — POST stop / restart. PostStart not
-// implementable from this plane (no .crate file path tracked once
-// the jail is stopped — would need a separate "registry" of
-// known specs that's out of scope here; documented in CHANGELOG).
+// 0.8.13: lifecycle handlers — POST stop / restart.
+// 0.8.21: PostStart now consults the spec registry (introduced
+// in this release) and forks `crate run -f <abs-path>` detached.
+void handleStart(std::string &resBody, int &status, const std::string &name) {
+  // If the jail is already running, reply 409 Conflict so the
+  // operator gets a clear "no-op" rather than a 200 that creates
+  // false confidence.
+  if (auto j = JailQuery::getJailByName(name); j) {
+    status  = 409;
+    resBody = ControlSocketPure::renderErrorJson("container is already running");
+    return;
+  }
+
+  std::string cratePath;
+  try {
+    cratePath = SpecRegistry::lookup(name);
+  } catch (const std::exception &e) {
+    status  = 500;
+    resBody = ControlSocketPure::renderErrorJson(
+      std::string("spec-registry read failed: ") + e.what());
+    return;
+  }
+  if (cratePath.empty()) {
+    status  = 404;
+    resBody = ControlSocketPure::renderErrorJson(
+      "no spec registered for '" + name +
+      "' — start it once via `crate run -f <file>` so the registry "
+      "can record the path");
+    return;
+  }
+
+  // Verify the registered path still exists. A stale registry
+  // entry for a removed .crate file would otherwise produce a
+  // confusing 200 followed by a silent fork failure.
+  struct stat st{};
+  if (::stat(cratePath.c_str(), &st) != 0) {
+    status  = 410;   // Gone
+    resBody = ControlSocketPure::renderErrorJson(
+      "registered .crate path no longer exists: " + cratePath);
+    return;
+  }
+
+  // Fork + setsid + exec so the child outlives this request and
+  // runs as a session leader (no controlling tty). The exec target
+  // is /usr/local/bin/crate which is setuid root — works whether
+  // crated is started by an operator at the console or from
+  // /etc/rc.d/crated.
+  pid_t pid = ::fork();
+  if (pid < 0) {
+    status  = 500;
+    resBody = ControlSocketPure::renderErrorJson(
+      std::string("fork failed: ") + std::strerror(errno));
+    return;
+  }
+  if (pid == 0) {
+    // Child: detach from controlling terminal so the spawned
+    // crate process survives crated's own teardown / SIGHUP.
+    ::setsid();
+    // Close stdio. Errors from the spawned crate go to its own
+    // log file (lib/audit.cpp) — there's no way to surface them
+    // back to the control-socket caller, who already got 202.
+    ::close(0); ::close(1); ::close(2);
+    ::open("/dev/null", O_RDONLY);
+    ::open("/dev/null", O_WRONLY);
+    ::open("/dev/null", O_WRONLY);
+    ::execl(CRATE_PATH_CRATE, "crate", "run", "-f", cratePath.c_str(),
+            nullptr);
+    ::_exit(127);
+  }
+  // Parent: don't wait — the child runs the jail's foreground
+  // supervisor for as long as the jail is up, which can be hours.
+  // We reply 202 immediately and let the operator poll
+  // GET /v1/control/containers/<name> for status.
+  status  = 202;
+  resBody = R"({"status":"starting","container":")" + name +
+            R"(","crate_path":")" + cratePath + R"("})";
+}
+
 void handleStop(std::string &resBody, int &status, const std::string &name) {
   auto j = JailQuery::getJailByName(name);
   if (!j) {
@@ -457,13 +533,8 @@ void handleConnection(int connFd,
     handleRestart(resBody, status, route.container);
     break;
   case ControlSocketPure::Action::PostStart:
-    // 0.8.13: not implemented in this release — starting a stopped
-    // jail requires the .crate file path which crated doesn't track.
-    // A future "spec registry" hook would close this; for now reply 501.
-    status  = 501;
-    resBody = ControlSocketPure::renderErrorJson(
-      "POST /start not implemented on control sockets — "
-      "use bearer-token main API or `crate run -f <file.crate>`");
+    // 0.8.21: spec-registry-backed start (replaces the 0.8.13 501 stub).
+    handleStart(resBody, status, route.container);
     break;
   case ControlSocketPure::Action::Unknown:
     // unreachable: filtered by authorize() above

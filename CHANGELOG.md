@@ -6,6 +6,119 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.21] — 2026-05-06
+
+Spec registry + control-plane PostStart. Closes the 0.8.13
+deferred item — control sockets returned `501 Not Implemented`
+for `POST /v1/control/containers/<name>/start` because crated
+didn't track which `.crate` file produced a given jail name.
+0.8.21 adds a tiny file-backed registry that `crate run -f`
+populates automatically, and wires PostStart to consult it.
+
+### What this release adds
+
+```sh
+% sudo crate run -f /home/op/firefox.crate    # registers automatically
+% cat /var/run/crate/spec-registry.txt
+# crate spec registry — managed by `crate run -f`
+# format: <jail-name> <abs-crate-path>
+firefox /home/op/firefox.crate
+
+% crate stop firefox       # registry entry stays — by design
+% curl --unix-socket /var/run/crate/control/op.sock \
+       -X POST http://x/v1/control/containers/firefox/start
+{"status":"starting","container":"firefox","crate_path":"/home/op/firefox.crate"}
+```
+
+`crate run -f` writes the {name -> abs-path} pair after the
+jail successfully comes up (best-effort: a registry write
+failure logs but doesn't abort the jail). Entries are
+intentionally NOT auto-removed when the jail stops — that's
+what lets a control-plane PostStart find the path again.
+
+### Lifecycle
+
+- **Register**: `crate run -f <file>` after `RunJail::createJail`
+  succeeds (warm-base runs skip the registry; no .crate file).
+- **Re-register**: same name + different `.crate` path replaces
+  the entry. Idempotent if the path is unchanged.
+- **Persist**: stop/restart leave the entry in place.
+- **Manual remove**: future `crate clean --orphans` will sweep
+  entries whose `.crate` file no longer exists. For now, the
+  operator can edit `/var/run/crate/spec-registry.txt` by hand.
+
+### Control-plane PostStart contract
+
+| Condition | Response |
+|---|---|
+| Jail already running | `409 Conflict` |
+| No registry entry for the name | `404 Not Found` |
+| Registered path no longer exists | `410 Gone` |
+| `fork()` failure | `500 Internal Server Error` |
+| Otherwise | `202 Accepted` + `{"status":"starting","container":"<n>","crate_path":"<p>"}` |
+
+The 202 is intentional — `crate run` is the foreground supervisor
+of the jail, so the spawned process lives for as long as the
+jail is up (hours, days). Operators poll
+`GET /v1/control/containers/<name>` for the actual running state.
+
+### Implementation
+
+Pure module `lib/spec_registry_pure.{h,cpp}`:
+
+- `Entry` (name + cratePath), validators reused from the existing
+  jail-name conventions, `parseLine`/`formatLine`,
+  `findIndex` for the read-after-write idempotency check
+- Path validator rejects relative paths, `..` segments, control
+  characters, and a tight set of shell metas (`$ ` `` ` `` `;`,
+  `|`, `&`, `*`, `?`, `<`, `>`, `\`, `"`, `'`, `\n`, `\r`).
+  Internal spaces are allowed because validatePath already
+  permits them — useful when staging crates under user homes
+  with unusual paths.
+
+Runtime `lib/spec_registry.{h,cpp}` mirrors `NetworkLease` —
+flock-protected atomic-rename writes, `readAll` / `upsert` /
+`remove` / `lookup` API.
+
+`lib/run.cpp` wiring (one new call after `createJail` returns):
+
+```cpp
+auto absPath = std::filesystem::absolute(args.runCrateFile).string();
+SpecRegistry::upsert(nameComponent, absPath);
+```
+
+`daemon/control_socket.cpp::handleStart`:
+
+- looks up the registered path via `SpecRegistry::lookup`
+- pre-flight checks (running? path exists?) before forking
+- `fork() + setsid()` then `execl(CRATE_PATH_CRATE, "crate",
+  "run", "-f", path)`. Stdio is redirected to `/dev/null` so
+  the child outlives crated SIGHUP / restart cycles.
+
+10 ATF unit cases cover the pure helpers (name validation, path
+validation including shell-meta rejection + control-char
+rejection, line round-trip, single-space separator semantics,
+findIndex behaviour).
+
+### What this release does NOT do
+
+- **`crate registry list/add/rm` CLI** — operators manage the
+  file via `crate run -f` (auto-write) or by editing
+  `/var/run/crate/spec-registry.txt` directly. A CLI surface
+  could ship later; it's pure operator UX.
+- **Auto-prune of orphans** — `crate clean --orphans` will sweep
+  entries pointing at deleted .crate files. Tracked separately;
+  the registry is small enough that operators won't notice
+  staleness for a while.
+- **Wiring on the bearer-token main API** — the F2 main API has
+  always supported `POST /containers` with the .crate body
+  inline; PostStart-by-name is a control-plane-specific feature
+  for tray-app workflows.
+
+1061/1061 unit tests pass locally.
+
+---
+
 ## [0.8.20] — 2026-05-06
 
 IPv6 NPTv6 — **Phase 2: runtime allocator + jail interface

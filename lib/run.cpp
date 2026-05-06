@@ -18,6 +18,7 @@
 #include "network_lease.h"
 #include "ip6_alloc_pure.h"
 #include "network_lease6.h"
+#include "spec_registry.h"
 #include "auto_fw_pure.h"
 #include "net_detect.h"
 #include "ifconfig_ops.h"
@@ -741,6 +742,22 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   auto jailInfo = RunJail::createJail(spec, jailPath, args.logProgress);
   int jid = jailInfo.jid;
+
+  // 0.8.21: register the {jail-name -> .crate path} pair so the
+  // daemon's control-plane PostStart can find the spec on a later
+  // `start <name>` request. Skipped for warm-base runs (no .crate
+  // file path to register). Best-effort: a registry write failure
+  // logs but doesn't abort the jail start.
+  if (!warmBase && !args.runCrateFile.empty()) {
+    try {
+      auto absPath = std::filesystem::absolute(args.runCrateFile).string();
+      SpecRegistry::upsert(nameComponent, absPath);
+    } catch (const std::exception &ex) {
+      WARN("spec-registry: failed to register " << nameComponent
+           << " -> " << args.runCrateFile << ": " << ex.what())
+    }
+  }
+
   // securelevel: -1 means inherit host default, 0-3 are explicit values
   // bastille defaults to securelevel=2 for all jails
   auto securelevelStr = spec.securelevel >= 0 ? std::to_string(spec.securelevel) : std::string();
