@@ -657,6 +657,54 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     }
   }
 
+  // 0.8.11: when GUI mode wants GPU access, auto-unhide /dev/dri/*
+  // entries from the jail's devfs view. Saves the operator from
+  // writing a custom devfs ruleset for the common case "I want
+  // hardware-accelerated firefox in this jail."
+  //
+  // Triggered when:
+  //   - spec.guiOptions->mode == "gpu" (explicit), OR
+  //   - spec.guiOptions->mode == "auto" AND host has /dev/dri/card0
+  //     (gpu mode would resolve to "gpu" at GUI start anyway)
+  // Skipped when guiOptions absent OR mode == "headless"/"nested"
+  // (no GPU needed) OR /dev/dri/card0 doesn't exist on host
+  // (nothing to expose).
+  if (spec.guiOptions
+      && (spec.guiOptions->mode == "gpu" || spec.guiOptions->mode == "auto")) {
+    struct stat st{};
+    if (::stat("/dev/dri/card0", &st) == 0) {
+      // Use devfs(8) per-jail rules: add `path 'dri/*' unhide` then
+      // applyset. Operates on the jail's devfs mount, leaves host
+      // devfs untouched.
+      try {
+        Util::execCommand(
+          {CRATE_PATH_DEVFS, "-m", J("/dev"), "rule", "add",
+           "path", "dri", "unhide"},
+          "auto-gui: unhide /dev/dri");
+        Util::execCommand(
+          {CRATE_PATH_DEVFS, "-m", J("/dev"), "rule", "add",
+           "path", "dri/*", "unhide"},
+          "auto-gui: unhide /dev/dri/*");
+        Util::execCommand(
+          {CRATE_PATH_DEVFS, "-m", J("/dev"), "rule", "applyset"},
+          "auto-gui: applyset for dri unhide");
+        LOG("auto-gui: /dev/dri/* unhidden in jail's devfs view "
+            "(GPU mode '" << spec.guiOptions->mode << "')")
+      } catch (const std::exception &ex) {
+        std::cerr << rang::fg::yellow
+                  << "auto-gui: devfs unhide /dev/dri failed: "
+                  << ex.what()
+                  << " — GPU rendering inside the jail will not work; "
+                     "add a custom devfs_ruleset manually if needed"
+                  << rang::style::reset << std::endl;
+      }
+    } else {
+      LOG("auto-gui: GPU mode requested but /dev/dri/card0 absent "
+          "on host — skipping devfs unhide (jail will fall back to "
+          "software rendering)")
+    }
+  }
+
   auto jailXname = STR(nameComponent << "_pid" << ::getpid());
 
   // environment in jail

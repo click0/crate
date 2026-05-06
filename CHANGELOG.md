@@ -6,6 +6,89 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.11] — 2026-05-06
+
+`gui: auto` and `gui: { mode: gpu }` now auto-unhide `/dev/dri/*`
+in the jail's devfs view. Saves the operator from writing a custom
+devfs ruleset for the common case "I want hardware-accelerated
+firefox in this jail."
+
+### What's automated
+
+| Already automatic (pre-0.8.11) | New in 0.8.11 |
+|---|---|
+| `/tmp/.X11-unix` bind-mount (since X11 support landed) | `/dev/dri/card*` + `/dev/dri/renderD*` unhidden in jail's devfs view |
+
+So with `gui: auto` (0.7.19 scalar shortcut) the only operator
+config now is the spec line itself:
+
+```yaml
+gui: auto
+start: firefox
+```
+
+That's the whole spec for "run firefox with GPU acceleration in
+a jail" — no `terminal.devfs_ruleset:`, no manual
+`mounts: { host: /dev/dri/card0, jail: ... }` needed.
+
+### Trigger conditions
+
+- `guiOptions->mode == "gpu"` (explicit GPU mode), OR
+- `guiOptions->mode == "auto"` AND `/dev/dri/card0` exists on host
+
+Skipped when:
+- No `guiOptions` at all (no GUI wanted)
+- `mode == "headless"` or `"nested"` (software/Xephyr — no GPU
+  needed)
+- `/dev/dri/card0` doesn't exist on host (nothing to expose)
+
+### Mechanism
+
+```sh
+devfs -m <jail-path>/dev rule add path dri unhide
+devfs -m <jail-path>/dev rule add path 'dri/*' unhide
+devfs -m <jail-path>/dev rule applyset
+```
+
+Operates on the jail's devfs mount only. Host devfs untouched.
+
+### Defence in depth
+
+- Only the `dri` subdirectory and its children are unhidden — no
+  blanket `path '*' unhide` that would expose unrelated devices.
+- Soft-fail with operator-visible warning if `devfs(8)` fails:
+  jail still starts, just without GPU access. Operator can add
+  a manual ruleset to recover.
+- Operator's explicit `terminal.devfs_ruleset:` setting wins —
+  this auto-unhide only adds rules; if the operator's custom
+  ruleset is more restrictive, it gets the last word via the
+  existing `applyset` after this block.
+
+### Implementation
+
+`lib/run.cpp` — after the existing `terminal.devfs_ruleset` apply,
+add the auto-unhide block conditional on `spec.guiOptions->mode`.
+~30 LOC of run.cpp; no new files.
+
+### Tests
+
+No new unit tests — the change is shell-out + filesystem state,
+not pure logic. Existing GUI tests cover the mode-resolution
+side. **994/994 unit tests pass locally**.
+
+### NOT in this release
+
+- **Auto-detect GUI need from `start:` command** (firefox,
+  gimp, blender) → enable `gui: auto` implicitly. Risky (false
+  positives like `firefox-stats-collector`); deferred until
+  requested.
+- **NVIDIA / AMDGPU specific device exposure** — currently we
+  only handle the standard `/dev/dri/*` paths. NVIDIA adds
+  `/dev/nvidia*`; AMDGPU adds `/dev/kfd`. Future work to detect
+  + expose those automatically.
+
+---
+
 ## [0.8.10] — 2026-05-06
 
 `options.ipsec.conf:` — auto-install strongSwan conn snippet
