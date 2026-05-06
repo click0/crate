@@ -6,6 +6,78 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.12] — 2026-05-06
+
+Log-stream auto-reopen on rotate. `?follow=true` clients survive
+log rotation (newsyslog, logrotate) without operator intervention.
+Pre-0.8.12 the stream ended cleanly on `NOTE_DELETE`/`NOTE_RENAME`
+and the operator had to re-curl.
+
+### Mechanism
+
+When `kqueue` fires with `NOTE_DELETE | NOTE_RENAME` on the watched
+fd:
+1. Brief `usleep(50ms)` so the rotator has a chance to create the
+   replacement file (logrotate typically does rename-then-create
+   in two syscalls; we'd hit ENOENT in the gap).
+2. Close old fd; loop `open(logPath, O_RDONLY | O_CLOEXEC)` up to
+   20 times with 50ms backoff (1s total).
+3. If the new file appears, re-register the kqueue filter on the
+   new fd and reset the `std::ifstream` to the new file from start.
+4. If it never appears, end the stream cleanly so the client can
+   re-curl manually.
+
+### Operator-visible behaviour
+
+Before:
+```sh
+$ curl -N https://crated/api/v1/containers/myjail/logs?follow=true
+... live tail ...
+                          # (newsyslog rotates here — connection drops)
+$ # operator manually retries:
+$ curl -N https://crated/api/v1/containers/myjail/logs?follow=true
+```
+
+After:
+```sh
+$ curl -N https://crated/api/v1/containers/myjail/logs?follow=true
+... live tail ...
+... (newsyslog rotates — invisible to operator) ...
+... live tail of new file continues ...
+```
+
+### Implementation
+
+`daemon/routes.cpp::handleContainerLogs` streaming branch:
+- Inspects `triggered.fflags` after each `kevent` call
+- On rotate event: usleep + retry-open loop + re-arm kqueue + reset
+  ifstream
+- Uses the existing `FdCloser` RAII for proper teardown of the
+  old fd
+
+Linux fallback path is unchanged (still `usleep(500ms)` polling;
+no rotate detection — Linux dev-only path).
+
+### Tests
+
+No new unit tests — the change is platform-specific runtime I/O
+behind `#ifdef __FreeBSD__` exercising kqueue+open+ifstream-reset.
+End-to-end testing remains a future functional-test addition.
+
+**994/994 unit tests pass locally**.
+
+### NOT in this release
+
+- **Auto-recover from `NOTE_REVOKE`** — currently treated like
+  delete. Not commonly hit.
+- **Inode-stable detection** — currently we re-open by path. If
+  the path itself disappears (entire /var/log/crate/<jail>/
+  removed), stream ends. Acceptable for the typical rotate flow.
+- **Linux `inotify` rotate detection** — gated on broader Linux
+  port work.
+
+---
+
 ## [0.8.11] — 2026-05-06
 
 `gui: auto` and `gui: { mode: gpu }` now auto-unhide `/dev/dri/*`

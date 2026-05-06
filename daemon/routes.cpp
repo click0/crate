@@ -501,12 +501,40 @@ static void handleContainerLogs(const httplib::Request &req, httplib::Response &
           struct timespec timeout{1, 0};  // 1s — also forces a
                                           // periodic disconnect check.
           struct kevent triggered;
-          // Ignore errors / spurious wakeups; fall through to
-          // re-read regardless. NOTE_DELETE / NOTE_RENAME just
-          // wake us; the std::getline loop above will then EOF
-          // and the operator can re-curl when their log rotator
-          // creates the new file.
-          (void)::kevent(kqFd, nullptr, 0, &triggered, 1, &timeout);
+          int n = ::kevent(kqFd, nullptr, 0, &triggered, 1, &timeout);
+          // 0.8.12: handle log rotation (NOTE_DELETE | NOTE_RENAME).
+          // Old fd now points at the renamed/deleted inode; the new
+          // file (logrotate created /var/log/crate/<jail>/console.log
+          // again) lives at the same path. Close + re-open + re-watch.
+          //
+          // Brief sleep before re-open: logrotate typically does
+          // rename-old, then-create-new in two syscalls; if we re-
+          // open in the gap we'd hit ENOENT. 50ms is a generous
+          // safety margin without being operator-visible.
+          if (n > 0
+              && (triggered.fflags & (NOTE_DELETE | NOTE_RENAME))) {
+            ::usleep(50000);
+            ::close(watchFd); watchFd = -1;
+            for (int i = 0; i < 20 && watchFd < 0; i++) {
+              watchFd = ::open(logPath.c_str(), O_RDONLY | O_CLOEXEC);
+              if (watchFd < 0) ::usleep(50000);  // up to 1s total
+            }
+            if (watchFd < 0) {
+              // Rotator never created the new file. End the stream
+              // cleanly so client can re-curl manually.
+              return false;
+            }
+            // Re-register kqueue filter on the new fd.
+            struct kevent ev;
+            EV_SET(&ev, watchFd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
+                   NOTE_WRITE | NOTE_EXTEND | NOTE_DELETE | NOTE_RENAME,
+                   0, nullptr);
+            (void)::kevent(kqFd, &ev, 1, nullptr, 0, nullptr);
+            // Reset the ifstream to the new file from start.
+            ifs.close();
+            ifs.open(logPath, std::ios::in);
+            if (!ifs.is_open()) return false;
+          }
         } else {
           ::usleep(500000);
         }
