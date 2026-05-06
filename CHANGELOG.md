@@ -6,6 +6,72 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.8] — 2026-05-06
+
+`daemon/routes.cpp` rate-limit refactor onto the shared
+`RateLimit::check` module. Mechanical no-op: same key shape,
+same per-second counter, same cap values — both API planes
+(main API + control sockets) now share state and any future
+tuning lands in one place.
+
+### Before
+
+```cpp
+// daemon/routes.cpp:
+static std::mutex g_rateMutex;
+static std::map<std::string, std::pair<int, time_t>> g_rateBuckets;
+static bool checkRateLimit(...) {
+  std::lock_guard<...> lock(g_rateMutex);
+  // ... 10 lines of bucket-management duplicated from
+  //     daemon/rate_limit_pure.cpp ...
+}
+static constexpr int RATE_LIMIT_MUTATING = 10;
+static constexpr int RATE_LIMIT_READ     = 100;
+```
+
+### After
+
+```cpp
+static bool checkRateLimit(const std::string &clientId,
+                           const std::string &endpoint,
+                           int maxPerSecond) {
+  return RateLimit::check(clientId + "|" + endpoint, maxPerSecond);
+}
+// All RATE_LIMIT_MUTATING / RATE_LIMIT_READ refs replaced with
+// RateLimit::kMutating / RateLimit::kRead (same values).
+```
+
+### What this unlocks
+
+- Future config-driven cap tuning in `crated.conf` (`rate_limit.read:`,
+  `rate_limit.mutating:`) lands in one place + applies to both
+  planes consistently.
+- Single bucket store: a sustained burst from one client gets
+  consistently rate-limited regardless of which plane it's hitting.
+- ~25 LOC removed from `daemon/routes.cpp`.
+
+### Behaviour change
+
+None observable to operators. Same key (`<clientId>|<endpoint>`),
+same caps, same algorithm. The shared store is process-wide so
+buckets carry over across hot reload (which is the same as before
+since both files used static state).
+
+### Tests
+
+`tests/unit/rate_limit_pure_test.cpp` (10 cases from 0.7.15)
+already covers the algorithm. **994/994 unit tests pass locally**
+(no new tests; pure refactor).
+
+### NOT in this release
+
+- **Config-driven caps** — `crated.conf` overrides for
+  `RateLimit::kRead` / `kMutating`. The 100/10 defaults are
+  conservative; tighter caps for paranoid operators or looser
+  caps for trusted-network deployments are a future configurable.
+
+---
+
 ## [0.8.7] — 2026-05-06
 
 `firewall_backend:` config override for hybrid pf+ipfw hosts and

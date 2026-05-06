@@ -5,6 +5,7 @@
 #include "routes.h"
 #include "auth.h"
 #include "metrics.h"
+#include "rate_limit.h"
 #include "routes_pure.h"
 #include "transfer_pure.h"
 
@@ -40,12 +41,18 @@
 
 namespace Crated {
 
-// --- Simple per-endpoint rate limiter ---
-// Tracks request counts per second for each (clientId, endpoint) pair.
-// Mutating endpoints: 10 req/s. Read endpoints: 100 req/s.
-
-static std::mutex g_rateMutex;
-static std::map<std::string, std::pair<int, time_t>> g_rateBuckets;
+// --- Per-endpoint rate limiter ---
+//
+// 0.8.8: thin wrapper over the shared `RateLimit::check` module
+// (introduced in 0.7.15 for control sockets). Behaviour is
+// identical to the prior local impl — same {clientId, endpoint}
+// key, same per-second counter, same cap constants — but both
+// API planes now share state and any future tuning lands in one
+// place.
+//
+// Constants moved to daemon/rate_limit.h:
+//   RateLimit::kMutating  (10 req/s)  — formerly RATE_LIMIT_MUTATING
+//   RateLimit::kRead      (100 req/s) — formerly RATE_LIMIT_READ
 
 // 0.8.4: cap the number of concurrent log-streaming clients so a
 // burst of polling agents (Prometheus exporters, log shippers,
@@ -58,17 +65,9 @@ static constexpr int     kMaxStreamingClients = 32;
 
 static bool checkRateLimit(const std::string &clientId, const std::string &endpoint,
                            int maxPerSecond) {
-  std::lock_guard<std::mutex> lock(g_rateMutex);
-  auto key = clientId + "|" + endpoint;
-  auto now = ::time(nullptr);
-  auto &bucket = g_rateBuckets[key];
-  if (bucket.second != now) {
-    bucket.first = 1;
-    bucket.second = now;
-    return true;
-  }
-  bucket.first++;
-  return bucket.first <= maxPerSecond;
+  // Same key shape ("<clientId>|<endpoint>") as the prior local
+  // impl so existing buckets carry over cleanly across hot-reload.
+  return RateLimit::check(clientId + "|" + endpoint, maxPerSecond);
 }
 
 static std::string getClientId(const httplib::Request &req) {
@@ -76,8 +75,9 @@ static std::string getClientId(const httplib::Request &req) {
   return addr.empty() ? "unix" : addr;
 }
 
-static constexpr int RATE_LIMIT_MUTATING = 10;
-static constexpr int RATE_LIMIT_READ = 100;
+// Cap constants live in daemon/rate_limit.h since 0.7.15.
+// (Pre-0.8.8 this file had local constexpr aliases; removed in
+// the routes.cpp rate-limit refactor.)
 
 // --- JSON helpers ---
 
@@ -964,7 +964,7 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
   // API v1 — read-only (F1) with rate limiting
   srv.Get("/api/v1/containers",
     [](const httplib::Request &req, httplib::Response &res) {
-      if (!checkRateLimit(getClientId(req), "/api/v1/containers", RATE_LIMIT_READ)) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers", RateLimit::kRead)) {
         jsonError(res, 429, "rate limit exceeded");
         return;
       }
@@ -972,7 +972,7 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
     });
   srv.Get("/api/v1/containers/:name/gui",
     [](const httplib::Request &req, httplib::Response &res) {
-      if (!checkRateLimit(getClientId(req), "/api/v1/containers/gui", RATE_LIMIT_READ)) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/gui", RateLimit::kRead)) {
         jsonError(res, 429, "rate limit exceeded");
         return;
       }
@@ -980,7 +980,7 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
     });
   srv.Get("/api/v1/host",
     [](const httplib::Request &req, httplib::Response &res) {
-      if (!checkRateLimit(getClientId(req), "/api/v1/host", RATE_LIMIT_READ)) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/host", RateLimit::kRead)) {
         jsonError(res, 429, "rate limit exceeded");
         return;
       }
@@ -990,7 +990,7 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
   // Prometheus metrics (no auth, with read rate limit)
   srv.Get("/metrics",
     [](const httplib::Request &req, httplib::Response &res) {
-      if (!checkRateLimit(getClientId(req), "/metrics", RATE_LIMIT_READ)) {
+      if (!checkRateLimit(getClientId(req), "/metrics", RateLimit::kRead)) {
         jsonError(res, 429, "rate limit exceeded");
         return;
       }
@@ -1000,7 +1000,7 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
   // API v1 — management (F2) with auth + rate limiting
   srv.Get("/api/v1/containers/:name/stats",
     [&config](const httplib::Request &req, httplib::Response &res) {
-      if (!checkRateLimit(getClientId(req), "/api/v1/containers/stats", RATE_LIMIT_READ)) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/stats", RateLimit::kRead)) {
         jsonError(res, 429, "rate limit exceeded");
         return;
       }
@@ -1008,7 +1008,7 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
     });
   srv.Get("/api/v1/containers/:name/logs",
     [&config](const httplib::Request &req, httplib::Response &res) {
-      if (!checkRateLimit(getClientId(req), "/api/v1/containers/logs", RATE_LIMIT_READ)) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/logs", RateLimit::kRead)) {
         jsonError(res, 429, "rate limit exceeded");
         return;
       }
@@ -1016,7 +1016,7 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
     });
   srv.Post("/api/v1/containers/:name/stop",
     [&config](const httplib::Request &req, httplib::Response &res) {
-      if (!checkRateLimit(getClientId(req), "/api/v1/containers/stop", RATE_LIMIT_MUTATING)) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/stop", RateLimit::kMutating)) {
         jsonError(res, 429, "rate limit exceeded");
         return;
       }
@@ -1024,7 +1024,7 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
     });
   srv.Post("/api/v1/containers/:name/start",
     [&config](const httplib::Request &req, httplib::Response &res) {
-      if (!checkRateLimit(getClientId(req), "/api/v1/containers/start", RATE_LIMIT_MUTATING)) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/start", RateLimit::kMutating)) {
         jsonError(res, 429, "rate limit exceeded");
         return;
       }
@@ -1032,7 +1032,7 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
     });
   srv.Delete("/api/v1/containers/:name",
     [&config](const httplib::Request &req, httplib::Response &res) {
-      if (!checkRateLimit(getClientId(req), "/api/v1/containers/destroy", RATE_LIMIT_MUTATING)) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/destroy", RateLimit::kMutating)) {
         jsonError(res, 429, "rate limit exceeded");
         return;
       }
@@ -1040,7 +1040,7 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
     });
   srv.Post("/api/v1/containers/:name/restart",
     [&config](const httplib::Request &req, httplib::Response &res) {
-      if (!checkRateLimit(getClientId(req), "/api/v1/containers/restart", RATE_LIMIT_MUTATING)) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/restart", RateLimit::kMutating)) {
         jsonError(res, 429, "rate limit exceeded");
         return;
       }
@@ -1048,7 +1048,7 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
     });
   srv.Get("/api/v1/containers/:name/snapshots",
     [&config](const httplib::Request &req, httplib::Response &res) {
-      if (!checkRateLimit(getClientId(req), "/api/v1/containers/snapshots-list", RATE_LIMIT_READ)) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/snapshots-list", RateLimit::kRead)) {
         jsonError(res, 429, "rate limit exceeded");
         return;
       }
@@ -1056,7 +1056,7 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
     });
   srv.Post("/api/v1/containers/:name/snapshots",
     [&config](const httplib::Request &req, httplib::Response &res) {
-      if (!checkRateLimit(getClientId(req), "/api/v1/containers/snapshots-create", RATE_LIMIT_MUTATING)) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/snapshots-create", RateLimit::kMutating)) {
         jsonError(res, 429, "rate limit exceeded");
         return;
       }
@@ -1064,7 +1064,7 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
     });
   srv.Delete(R"(/api/v1/containers/:name/snapshots/:snap)",
     [&config](const httplib::Request &req, httplib::Response &res) {
-      if (!checkRateLimit(getClientId(req), "/api/v1/containers/snapshots-delete", RATE_LIMIT_MUTATING)) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/snapshots-delete", RateLimit::kMutating)) {
         jsonError(res, 429, "rate limit exceeded");
         return;
       }
@@ -1072,7 +1072,7 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
     });
   srv.Get("/api/v1/containers/:name/stats/stream",
     [&config](const httplib::Request &req, httplib::Response &res) {
-      if (!checkRateLimit(getClientId(req), "/api/v1/containers/stats-stream", RATE_LIMIT_READ)) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/stats-stream", RateLimit::kRead)) {
         jsonError(res, 429, "rate limit exceeded");
         return;
       }
@@ -1080,7 +1080,7 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
     });
   srv.Post("/api/v1/containers/:name/export",
     [&config](const httplib::Request &req, httplib::Response &res) {
-      if (!checkRateLimit(getClientId(req), "/api/v1/containers/export", RATE_LIMIT_MUTATING)) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/containers/export", RateLimit::kMutating)) {
         jsonError(res, 429, "rate limit exceeded");
         return;
       }
@@ -1088,7 +1088,7 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
     });
   srv.Get(R"(/api/v1/exports/:filename)",
     [&config](const httplib::Request &req, httplib::Response &res) {
-      if (!checkRateLimit(getClientId(req), "/api/v1/exports/download", RATE_LIMIT_READ)) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/exports/download", RateLimit::kRead)) {
         jsonError(res, 429, "rate limit exceeded");
         return;
       }
@@ -1096,7 +1096,7 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
     });
   srv.Post(R"(/api/v1/imports/:name)",
     [&config](const httplib::Request &req, httplib::Response &res) {
-      if (!checkRateLimit(getClientId(req), "/api/v1/imports", RATE_LIMIT_MUTATING)) {
+      if (!checkRateLimit(getClientId(req), "/api/v1/imports", RateLimit::kMutating)) {
         jsonError(res, 429, "rate limit exceeded");
         return;
       }
