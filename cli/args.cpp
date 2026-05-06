@@ -160,12 +160,19 @@ static void usageImport() {
 }
 
 static void usageValidate() {
-  std::cout << "usage: crate validate [-h|--help] <spec-file>" << std::endl;
+  std::cout << "usage: crate validate [--strict] <spec-file>" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Validates a +CRATE.SPEC YAML file for syntax, schema and logical consistency." << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Options:" << std::endl;
-  std::cout << "  -h, --help                         show this help screen" << std::endl;
+  std::cout << "      --strict      promote warnings AND extra structural checks to errors:" << std::endl;
+  std::cout << "                       - duplicate inbound TCP/UDP host ports" << std::endl;
+  std::cout << "                       - duplicate share destinations" << std::endl;
+  std::cout << "                       - empty mount source/destination" << std::endl;
+  std::cout << "                       - x11/mode=shared (no display isolation)" << std::endl;
+  std::cout << "                       - missing memoryuse/maxproc RCTL caps" << std::endl;
+  std::cout << "                     Exits non-zero on first error class found." << std::endl;
+  std::cout << "  -h, --help        show this help screen" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -675,7 +682,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.7.15" << std::endl;
+        std::cout << "crate 0.7.16" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -686,7 +693,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.7.15" << std::endl;
+          std::cout << "crate 0.7.16" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -816,6 +823,8 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           if (strEq(argLong, "help")) {
             usageValidate();
             exit(0);
+          } else if (strEq(argLong, "strict")) {
+            args.validateStrict = true;
           } else {
             err("unsupported long option '%s'", argv[a]);
           }

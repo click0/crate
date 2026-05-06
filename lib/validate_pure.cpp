@@ -4,7 +4,10 @@
 #include "spec.h"
 
 #include <cctype>
+#include <set>
+#include <sstream>
 #include <string>
+#include <unordered_map>
 
 namespace ValidatePure {
 
@@ -125,6 +128,123 @@ std::vector<std::string> gatherWarnings(const Spec &spec) {
   }
 
   return w;
+}
+
+namespace {
+
+// Format a port-range as "8080" or "8080-8090" for error messages.
+std::string fmtRange(unsigned a, unsigned b) {
+  if (a == b) return std::to_string(a);
+  std::ostringstream o;
+  o << a << "-" << b;
+  return o.str();
+}
+
+// Detect overlap between two ports/ranges. Inclusive bounds.
+bool rangesOverlap(unsigned a1, unsigned a2, unsigned b1, unsigned b2) {
+  return !(a2 < b1 || b2 < a1);
+}
+
+// Append a "duplicate inbound port" error for one protocol's list.
+// Quadratic in #rules; spec author has typically <20 rules total
+// so it's fine. Ranges are checked for overlap, not just exact dup.
+void checkInboundPortConflicts(
+    const char *proto,
+    const std::vector<std::pair<Spec::NetOptDetails::PortRange,
+                                Spec::NetOptDetails::PortRange>> &rules,
+    std::vector<std::string> &out) {
+  for (size_t i = 0; i < rules.size(); i++) {
+    const auto &host_i = rules[i].first;
+    for (size_t j = i + 1; j < rules.size(); j++) {
+      const auto &host_j = rules[j].first;
+      if (rangesOverlap(host_i.first, host_i.second,
+                        host_j.first, host_j.second)) {
+        std::ostringstream o;
+        o << "net/inbound/" << proto
+          << ": host port " << fmtRange(host_i.first, host_i.second)
+          << " conflicts with " << fmtRange(host_j.first, host_j.second)
+          << " (rules " << (i + 1) << " and " << (j + 1) << ")";
+        out.push_back(o.str());
+      }
+    }
+  }
+}
+
+} // anon
+
+std::vector<std::string> gatherStrictErrors(const Spec &spec) {
+  std::vector<std::string> e;
+
+  // --- Inbound port conflicts ---
+  if (spec.optionExists("net")) {
+    auto optNet = spec.optionNet();
+    if (optNet) {
+      checkInboundPortConflicts("tcp", optNet->inboundPortsTcp, e);
+      checkInboundPortConflicts("udp", optNet->inboundPortsUdp, e);
+    }
+  }
+
+  // --- Duplicate share destinations ---
+  // Two different host paths mapping to the same jail-side path is
+  // ambiguous: which one wins? Almost always a copy-paste error.
+  // Same destination across dirsShare and filesShare is also flagged
+  // since they collide in the jail filesystem.
+  {
+    std::unordered_map<std::string, std::string> dst2src;
+    auto check = [&](const char *kind,
+                     const std::vector<std::pair<std::string, std::string>> &v) {
+      for (const auto &[host, jail] : v) {
+        auto it = dst2src.find(jail);
+        if (it != dst2src.end() && it->second != host) {
+          std::ostringstream o;
+          o << kind << " destination '" << jail
+            << "' is mapped from two different host sources: '"
+            << it->second << "' and '" << host << "'";
+          e.push_back(o.str());
+        } else {
+          dst2src[jail] = host;
+        }
+      }
+    };
+    check("share/dir",  spec.dirsShare);
+    check("share/file", spec.filesShare);
+  }
+
+  // --- Empty mount source/destination ---
+  // Caught at run time today as a confusing error; --strict wants
+  // it surfaced at validate time.
+  for (const auto &[host, jail] : spec.dirsShare) {
+    if (host.empty() || jail.empty())
+      e.push_back("share/dir: empty source or destination ("
+                  "host='" + host + "', jail='" + jail + "')");
+  }
+  for (const auto &[host, jail] : spec.filesShare) {
+    if (host.empty() || jail.empty())
+      e.push_back("share/file: empty source or destination ("
+                  "host='" + host + "', jail='" + jail + "')");
+  }
+
+  // --- x11/mode=shared promoted to error in strict mode ---
+  if (spec.x11Options && spec.x11Options->mode == "shared") {
+    e.push_back("x11/mode=shared is rejected in --strict mode "
+                "(no display isolation; switch to mode=nested or mode=headless, "
+                "or drop --strict if intentional)");
+  } else if (!spec.x11Options && spec.optionExists("x11")) {
+    e.push_back("x11 option without explicit x11/mode is rejected in --strict mode "
+                "(implicit default is 'shared', which has no display isolation)");
+  }
+
+  // --- Unbounded RCTL ---
+  // Strict mode wants at least one of memoryuse/maxproc set so a
+  // runaway process inside the jail can't OOM-kill the host.
+  if (spec.limits.empty()
+      || (spec.limits.find("memoryuse") == spec.limits.end()
+          && spec.limits.find("maxproc") == spec.limits.end())) {
+    e.push_back("limits: --strict requires at least 'memoryuse' or 'maxproc' "
+                "to bound the jail; runaway processes can otherwise OOM-kill the host");
+  }
+
+  return e;
 }
 
 }

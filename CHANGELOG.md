@@ -6,6 +6,107 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.16] — 2026-05-06
+
+`crate validate --strict` + completions refresh + Makefile header-dep
+regression fix from 0.7.12.
+
+### `crate validate --strict`
+
+Promotes warnings to errors AND adds new structural checks that
+the regular `crate validate` doesn't catch. Designed for CI gates
+where "warning" is too soft — the spec is rejected on first error.
+
+```sh
+crate validate spec.yml             # standard: schema + warnings
+crate validate --strict spec.yml    # rejects on any warn or structural error
+```
+
+Strict-mode catalogue (v1):
+
+| Check | Rationale |
+|---|---|
+| Duplicate inbound TCP/UDP host ports | Two rules binding the same host port silently override; almost always a copy-paste error |
+| Duplicate share destinations | Two host paths mapped to the same jail-side path is ambiguous and likely a typo |
+| Empty share source/destination | Surfaces at validate-time instead of cryptic runtime mount errors |
+| `x11/mode=shared` (was a warning) | Promoted to error: no display isolation, jail processes can sniff host keystrokes |
+| Unbounded RCTL | `limits:` absent OR no `memoryuse`/`maxproc` — runaway processes can OOM-kill the host |
+
+All warnings from the regular validate are also promoted to errors
+in `--strict` mode. Operators who deliberately want a warning-laden
+spec can drop `--strict`; CI pipelines should add it.
+
+### Completions refresh
+
+`completions/crate.sh` was last updated when crate had ~12 commands.
+Modern crate has **28** commands. This release brings the file up
+to date for both bash and zsh:
+
+- All commands now in the bash `commands` variable
+- Per-command flag completions added: `backup`, `restore`,
+  `backup-prune`, `replicate`, `template`, `retune`, `throttle`,
+  `doctor`, `migrate`, `inspect`, `top`, `inter-dns`, `vpn`,
+  `stats`, `logs`, `stop`, `restart`
+- File-completion hints for new flags: `--from-token-file`,
+  `--ssh-key`, `--output-dir`, etc.
+- zsh `_arguments` blocks for all new commands with `:` descriptors
+  for tab-help
+
+Auto-generation from CLI usage is tracked as a future enhancement;
+the file is hand-maintained against `cli/args.cpp` for now.
+
+### Makefile -MMD -MP (regression fix)
+
+The 0.7.12 test-build refactor moved `TEST_LINK_SRCS` compilation
+into per-source `.o` files cached under `tests/unit/.test-objs/`,
+which gave us the 17× speedup. But the pattern rule:
+
+```
+$(TEST_OBJ_DIR)/%.o: %.cpp lib/lst-all-script-sections.h
+	$(CXX) ... -c $< -o $@
+```
+
+did NOT track header dependencies. Changing `lib/args.h` (or any
+other shared header) would NOT trigger a rebuild of the objects
+that `#include` it — make would see the `.cpp` unchanged and
+re-link the cached stale `.o` into the test binary.
+
+This bit me hard during 0.7.16 development: 21 unit tests started
+failing with `validate() did not throw Exception as expected`
+because `args_pure.o` was built against a pre-`validateStrict`
+`args.h`. A `make clean-tests && make` resolved it locally, but
+the regression would have hit FreeBSD CI cache too.
+
+Fix: add `-MMD -MP` to the compile rule and `-include` the
+generated `.d` files. Now any header change triggers the right
+rebuilds without manual cleanup.
+
+### Tests
+
+- **12 new ATF cases** in `validate_pure_test` covering the
+  strict-mode checks: minimal-spec-unbounded, bounded-spec-no-error,
+  bounded-via-maxproc, TCP port conflict (single + range overlap),
+  UDP port conflict, no-conflict baseline, duplicate share dest,
+  same-share-twice-not-conflict, empty share paths, x11/mode=shared
+  promoted, x11/mode=nested no-error.
+- **933/933 unit tests pass locally** (921 prior + 12 new).
+
+### NOT in this release (future)
+
+- **Completion auto-gen** — a make target that runs `crate -h`
+  and `crate <cmd> -h` for every command, parses the usage output,
+  and emits completions. Tracked separately; current hand-
+  maintained file is a stop-gap.
+- **--strict checks for namespaces / network policies** — once
+  the network-policy section grows beyond inbound port ranges,
+  add cross-rule conflict detection (same proto+port forwarded to
+  two destinations, etc.).
+- **`--strict` integration into `crate run`** — currently
+  `--strict` is `crate validate` only. A future enhancement could
+  reject specs at run time too; for now operators enforce via CI.
+
+---
+
 ## [0.7.15] — 2026-05-06
 
 Rate limiting on control sockets. The 0.7.10/0.7.11 control-socket

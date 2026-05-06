@@ -259,16 +259,34 @@ TEST_INCLUDES = -Ilib -Icli -Idaemon -Isnmpd -Ihub
 # survive the build instead of being deleted after the test binary
 # links — critical for incremental rebuilds (`make build-unit-tests`
 # twice in a row should be a no-op, not 30 recompiles).
+#
+# -MMD -MP emits per-object dependency files (.d) tracking every
+# header the .cpp pulls in. We include them at the bottom so a
+# header change (e.g. lib/args.h) triggers a recompile of every
+# object that #include's it. Without this, 0.7.16 would silently
+# build against a stale args.h and tests would fail with
+# "validate() did not throw" because the object knows about an
+# older Args layout.
 .SECONDARY: $(TEST_LINK_OBJS) $(TEST_STUB_OBJ)
 
 $(TEST_OBJ_DIR)/%.o: %.cpp lib/lst-all-script-sections.h
 	@mkdir -p $(@D)
-	$(CXX) -std=c++17 $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -c $< -o $@
+	$(CXX) -std=c++17 $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -MMD -MP -c $< -o $@
 
 # Test binary: compile its own .cpp inline (one source -> one
-# binary), link against the cached TEST_LINK_OBJS + stub.
+# binary), link against the cached TEST_LINK_OBJS + stub. The .cpp
+# is compiled at link time here (single -o $@ $< ...). Header
+# dependencies for that compile are NOT tracked by .d (no separate
+# .o), but tests/unit/*.cpp is small per file and fast to recompile.
 tests/unit/%: tests/unit/%.cpp $(TEST_LINK_OBJS) $(TEST_STUB_OBJ) lib/lst-all-script-sections.h
 	$(CXX) -std=c++17 $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -o $@ $< $(TEST_LINK_OBJS) $(TEST_STUB_OBJ) $(COVERAGE_LDFLAGS) -L/usr/local/lib -latf-c++ -latf-c
+
+# Auto-generated header dependency files. The leading `-` makes make
+# tolerate them not yet existing (first build); after the first
+# compile of each .cpp, its .d is created and subsequent runs see
+# the proper header chain.
+-include $(TEST_LINK_OBJS:.o=.d)
+-include $(TEST_STUB_OBJ:.o=.d)
 
 # coverage: build unit tests with gcov instrumentation, run them, and
 # render an HTML report under coverage-html/. Requires lcov + genhtml.

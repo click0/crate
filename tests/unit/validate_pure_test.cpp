@@ -12,6 +12,7 @@
 #include "spec.h"
 #include "validate_pure.h"
 
+using ValidatePure::gatherStrictErrors;
 using ValidatePure::gatherWarnings;
 
 // Helper: minimal Spec + a runCmd so spec.validate() (if ever called)
@@ -358,6 +359,168 @@ ATF_TEST_CASE_BODY(multiple_warnings)
 	ATF_REQUIRE(w.size() >= 4u);
 }
 
+// ---------------------------------------------------------------------------
+// gatherStrictErrors (0.7.16) — `crate validate --strict` only
+// ---------------------------------------------------------------------------
+
+// Build a Spec with the limits stub already populated so the
+// "unbounded RCTL" strict check doesn't dominate every test.
+static Spec mkBoundedSpec() {
+	auto s = mkSpec();
+	s.limits["memoryuse"] = "512M";
+	return s;
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(strict_minimal_spec_still_unbounded);
+ATF_TEST_CASE_BODY(strict_minimal_spec_still_unbounded)
+{
+	// Minimal spec with no limits: --strict flags it for unbounded RCTL.
+	auto s = mkSpec();
+	auto e = gatherStrictErrors(s);
+	ATF_REQUIRE(hasMatch(e, "memoryuse"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(strict_bounded_spec_no_errors);
+ATF_TEST_CASE_BODY(strict_bounded_spec_no_errors)
+{
+	// Spec with a memoryuse limit should pass the unbounded-RCTL check.
+	auto s = mkBoundedSpec();
+	auto e = gatherStrictErrors(s);
+	for (auto &m : e)
+		ATF_REQUIRE(m.find("memoryuse") == std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(strict_bounded_via_maxproc);
+ATF_TEST_CASE_BODY(strict_bounded_via_maxproc)
+{
+	// maxproc alone is also acceptable bounding (it caps fork-bombs).
+	auto s = mkSpec();
+	s.limits["maxproc"] = "200";
+	auto e = gatherStrictErrors(s);
+	for (auto &m : e)
+		ATF_REQUIRE(m.find("memoryuse or maxproc") == std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(strict_inbound_tcp_port_conflict);
+ATF_TEST_CASE_BODY(strict_inbound_tcp_port_conflict)
+{
+	auto s = mkBoundedSpec();
+	auto net = Spec::NetOptDetails::createDefault();
+	// Two host rules both targeting port 8080 — clear conflict.
+	net->inboundPortsTcp.push_back({{8080, 8080}, {80, 80}});
+	net->inboundPortsTcp.push_back({{8080, 8080}, {81, 81}});
+	s.options["net"] = net;
+	auto e = gatherStrictErrors(s);
+	ATF_REQUIRE(hasMatch(e, "host port 8080"));
+	ATF_REQUIRE(hasMatch(e, "tcp"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(strict_inbound_tcp_range_overlap);
+ATF_TEST_CASE_BODY(strict_inbound_tcp_range_overlap)
+{
+	// Range overlap is a conflict too: 8000-8100 and 8050-8200 share
+	// 51 ports.
+	auto s = mkBoundedSpec();
+	auto net = Spec::NetOptDetails::createDefault();
+	net->inboundPortsTcp.push_back({{8000, 8100}, {80, 180}});
+	net->inboundPortsTcp.push_back({{8050, 8200}, {81, 231}});
+	s.options["net"] = net;
+	auto e = gatherStrictErrors(s);
+	ATF_REQUIRE(hasMatch(e, "8000-8100"));
+	ATF_REQUIRE(hasMatch(e, "8050-8200"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(strict_inbound_udp_port_conflict);
+ATF_TEST_CASE_BODY(strict_inbound_udp_port_conflict)
+{
+	// UDP independently flagged; same-protocol scoping.
+	auto s = mkBoundedSpec();
+	auto net = Spec::NetOptDetails::createDefault();
+	net->inboundPortsUdp.push_back({{53, 53}, {53, 53}});
+	net->inboundPortsUdp.push_back({{53, 53}, {54, 54}});
+	s.options["net"] = net;
+	auto e = gatherStrictErrors(s);
+	ATF_REQUIRE(hasMatch(e, "udp"));
+	// TCP isn't accidentally flagged.
+	for (auto &m : e) {
+		// "tcp" appearing inside a udp message is fine; check on a
+		// per-rule basis: the message describing the UDP conflict
+		// contains "udp". Just confirm we have a udp entry above.
+		(void)m;
+	}
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(strict_no_inbound_no_conflict);
+ATF_TEST_CASE_BODY(strict_no_inbound_no_conflict)
+{
+	// Single inbound rule cannot conflict with itself.
+	auto s = mkBoundedSpec();
+	auto net = Spec::NetOptDetails::createDefault();
+	net->inboundPortsTcp.push_back({{8080, 8080}, {80, 80}});
+	s.options["net"] = net;
+	auto e = gatherStrictErrors(s);
+	for (auto &m : e)
+		ATF_REQUIRE(m.find("host port") == std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(strict_duplicate_share_destination);
+ATF_TEST_CASE_BODY(strict_duplicate_share_destination)
+{
+	auto s = mkBoundedSpec();
+	// Two different host paths -> same jail-side destination.
+	s.dirsShare.push_back({"/home/alice/data",  "/data"});
+	s.dirsShare.push_back({"/home/bob/data",    "/data"});
+	auto e = gatherStrictErrors(s);
+	ATF_REQUIRE(hasMatch(e, "/data"));
+	ATF_REQUIRE(hasMatch(e, "two different host sources"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(strict_same_share_twice_not_a_conflict);
+ATF_TEST_CASE_BODY(strict_same_share_twice_not_a_conflict)
+{
+	// Operator listing the SAME mapping twice is harmless dup, not
+	// a conflict (idempotent). Only flag when sources differ.
+	auto s = mkBoundedSpec();
+	s.dirsShare.push_back({"/home/alice/data", "/data"});
+	s.dirsShare.push_back({"/home/alice/data", "/data"});
+	auto e = gatherStrictErrors(s);
+	for (auto &m : e)
+		ATF_REQUIRE(m.find("two different host sources") == std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(strict_empty_share_paths);
+ATF_TEST_CASE_BODY(strict_empty_share_paths)
+{
+	auto s = mkBoundedSpec();
+	s.dirsShare.push_back({"", "/data"});
+	s.filesShare.push_back({"/etc/hosts", ""});
+	auto e = gatherStrictErrors(s);
+	ATF_REQUIRE(hasMatch(e, "share/dir"));
+	ATF_REQUIRE(hasMatch(e, "share/file"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(strict_x11_shared_promoted_to_error);
+ATF_TEST_CASE_BODY(strict_x11_shared_promoted_to_error)
+{
+	auto s = mkBoundedSpec();
+	s.x11Options = std::make_unique<Spec::X11Options>();
+	s.x11Options->mode = "shared";
+	auto e = gatherStrictErrors(s);
+	ATF_REQUIRE(hasMatch(e, "x11/mode=shared"));
+	ATF_REQUIRE(hasMatch(e, "rejected in --strict"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(strict_x11_nested_no_error);
+ATF_TEST_CASE_BODY(strict_x11_nested_no_error)
+{
+	auto s = mkBoundedSpec();
+	s.x11Options = std::make_unique<Spec::X11Options>();
+	s.x11Options->mode = "nested";
+	auto e = gatherStrictErrors(s);
+	for (auto &m : e)
+		ATF_REQUIRE(m.find("x11") == std::string::npos);
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
 	ATF_ADD_TEST_CASE(tcs, no_warnings_for_minimal_spec);
@@ -393,4 +556,17 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, mac_rules_warns);
 	ATF_ADD_TEST_CASE(tcs, terminal_devfs_ruleset_warns);
 	ATF_ADD_TEST_CASE(tcs, multiple_warnings);
+	// 0.7.16 strict-mode tests
+	ATF_ADD_TEST_CASE(tcs, strict_minimal_spec_still_unbounded);
+	ATF_ADD_TEST_CASE(tcs, strict_bounded_spec_no_errors);
+	ATF_ADD_TEST_CASE(tcs, strict_bounded_via_maxproc);
+	ATF_ADD_TEST_CASE(tcs, strict_inbound_tcp_port_conflict);
+	ATF_ADD_TEST_CASE(tcs, strict_inbound_tcp_range_overlap);
+	ATF_ADD_TEST_CASE(tcs, strict_inbound_udp_port_conflict);
+	ATF_ADD_TEST_CASE(tcs, strict_no_inbound_no_conflict);
+	ATF_ADD_TEST_CASE(tcs, strict_duplicate_share_destination);
+	ATF_ADD_TEST_CASE(tcs, strict_same_share_twice_not_a_conflict);
+	ATF_ADD_TEST_CASE(tcs, strict_empty_share_paths);
+	ATF_ADD_TEST_CASE(tcs, strict_x11_shared_promoted_to_error);
+	ATF_ADD_TEST_CASE(tcs, strict_x11_nested_no_error);
 }

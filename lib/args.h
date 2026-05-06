@@ -35,6 +35,7 @@ public:
 
   // validate parameters
   std::string validateSpec;
+  bool        validateStrict = false;  // --strict: promote warnings + extra structural checks to errors
 
   // snapshot parameters
   std::string snapshotSubcmd;   // "create", "list", "restore", "delete", "diff"
