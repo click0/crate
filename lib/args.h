@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdBackupPrune, CmdReplicate, CmdTemplate, CmdRetune, CmdThrottle};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdBackupPrune, CmdReplicate, CmdTemplate, CmdRetune, CmdThrottle, CmdDoctor};
 
 class Args {
 public:
@@ -153,6 +153,9 @@ public:
   std::vector<std::string> retunePairs; // repeatable --rctl KEY=VALUE
   std::vector<std::string> retuneClear; // repeatable --clear KEY (drops the rule)
   bool        retuneShow = false;       // --show: dump usage before+after
+
+  // doctor parameters
+  bool doctorJson = false;             // -j/--json: machine-readable output
 
   // throttle parameters (dummynet token-bucket network shaping)
   std::string throttleTarget;        // jail name or JID

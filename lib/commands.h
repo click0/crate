@@ -34,3 +34,4 @@ bool replicateCrate(const Args &args);
 bool templateWarmCommand(const Args &args);
 bool retuneCommand(const Args &args);
 bool throttleCommand(const Args &args);
+bool doctorCommand(const Args &args);

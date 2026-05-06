@@ -80,6 +80,7 @@ std::string pickTarget(const Args &args) {
   case CmdTemplate: return args.templateSubcmd + ":" + args.warmTarget + "->" + args.warmOutputDataset;
   case CmdRetune:   return args.retuneTarget;
   case CmdThrottle: return args.throttleTarget;
+  case CmdDoctor:   return "";
   case CmdList:
   case CmdClean:
   case CmdTop:

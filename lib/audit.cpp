@@ -78,6 +78,7 @@ static AuditPure::Event makeEvent(int argc, char **argv, const Args &args,
   case CmdTemplate: ev.cmd = "template";  break;
   case CmdRetune:   ev.cmd = "retune";    break;
   case CmdThrottle: ev.cmd = "throttle";  break;
+  case CmdDoctor:   ev.cmd = "doctor";    break;
   default:          ev.cmd = "?";
   }
 
@@ -99,6 +100,7 @@ static bool isReadOnly(Command c) {
   case CmdLogs:
   case CmdTop:
   case CmdInspect:
+  case CmdDoctor:
     return true;
   default:
     return false;

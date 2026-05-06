@@ -298,6 +298,9 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdThrottle: {
     succ = throttleCommand(args);
     break;
+  } case CmdDoctor: {
+    succ = doctorCommand(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}

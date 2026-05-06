@@ -6,6 +6,115 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.13] — 2026-05-06
+
+`crate doctor` — one-shot health check command. First command an
+operator runs when something looks off; surfaces ~half the common
+support-ticket conditions in a single go.
+
+### Usage
+
+```sh
+crate doctor          # text report, exits 0/1/2
+crate doctor --json   # machine-readable, same exit codes
+```
+
+Exit code:
+
+| | meaning |
+|---|---|
+| `0` | all checks PASS |
+| `1` | at least one WARN, no FAIL — degraded but functional |
+| `2` | at least one FAIL — operator action needed |
+
+Cron-friendly: `crate doctor --json | jq '.summary'` makes alerts trivial.
+
+### Sample output
+
+```
+kernel:
+  [PASS] if_bridge       loaded — vnet jails (bridge interfaces)
+  [PASS] if_epair        loaded — vnet jails (paired veth-style links)
+  [WARN] dummynet        not loaded — crate throttle (kldload dummynet if you need it)
+
+command:
+  [PASS] /sbin/zfs       found — ZFS dataset / snapshot operations
+  [PASS] /sbin/jail      found — jail(8) lifecycle
+  ...
+
+filesystem:
+  [PASS] /var/run/crate  crated runtime state — 5234 MB free
+  [WARN] /var/log/crate  audit log + per-jail create logs — 32 MB free (below recommended 50 MB)
+
+zfs:
+  [PASS] zpool           all pools healthy
+
+jails:
+  [PASS] postgres        jid=12, ip4=10.0.1.5
+  [WARN] redis           marked dying — `crate clean` may help
+
+audit:
+  [PASS] /var/log/crate/audit.log  size = 14 MB
+
+Summary: 9 PASS, 3 WARN, 0 FAIL
+```
+
+### Check catalog (v1)
+
+| Category | What |
+|---|---|
+| `kernel`     | `kldstat -n` for `if_bridge`, `if_epair` (required); `racct`, `dummynet`, `ipfw`, `vmm`, `nmdm` (recommended) |
+| `command`    | `access(X_OK)` on `/sbin/zfs`, `/sbin/jail`, `/usr/sbin/jexec`, `/usr/bin/jls`, `/sbin/ifconfig`, `/usr/bin/{grep,tar,xz}`, `/sbin/{rctl,ipfw,pfctl,kldstat}` |
+| `filesystem` | `/var/run/crate` and `/var/log/crate` exist + writable + free-space warning thresholds (100 MB / 50 MB) |
+| `zfs`        | `zpool status -x` parsed for "all pools are healthy" / "no pools available" / anything else |
+| `config`     | `/usr/local/etc/crated.conf` parseability sniff (read first 4 KB, reject NUL bytes) |
+| `jails`      | `JailQuery::getAllJails(crateOnly=true)` — flag dying jails as WARN |
+| `audit`      | `/var/log/crate/audit.log` size — WARN at ≥100 MB suggesting rotation |
+
+Categories sort in canonical order in text output (kernel → command →
+filesystem → zfs → config → jails → audit) so day-to-day diffs are
+clean. Within a category, checks sort alphabetically by name.
+
+### Implementation
+
+- `lib/doctor_pure.{h,cpp}` — `Check`/`Severity`/`Report` data model,
+  `passCheck`/`warnCheck`/`failCheck` constructors, text + JSON
+  rendering, exit-code aggregation. No system surface — testable on
+  any platform.
+- `lib/doctor.cpp` — runtime: kldstat per-module, `access(X_OK)` on
+  command paths, `statvfs(2)` for free-space, `zpool status -x` parse,
+  `crated.conf` text-sniff, JailQuery walk, `stat(2)` on audit log.
+  Read-only by construction.
+- `cli/args.cpp` + `cli/args_pure.cpp` — `CmdDoctor`, `-j/--json`
+  flag, no positional args.
+- `lib/audit.cpp` — added to the `isReadOnly` whitelist (alongside
+  list/info/stats/logs/top/inspect) so `crate doctor` runs don't
+  fill the audit log on a polled monitor.
+
+### Tests
+
+`tests/unit/doctor_pure_test.cpp` — **13 ATF cases**:
+
+- Constructor severity, label strings, tally counters, exit-code priorities (FAIL > WARN > PASS)
+- Text rendering: groups by category, severity labels present, summary
+  line, ANSI-colour gating (`--no-color`), detail field surfaced,
+  canonical category order
+- JSON rendering: top-level shape, empty-report shape, escapes for
+  quotes/newlines
+
+**902/902 unit tests pass locally** (889 from prior + 13 new).
+
+### NOT in this release (future)
+
+- **Network policy check** — would inspect ipfw rules vs operator-
+  defined rules for conflicts. Tricky to do without false positives.
+- **Per-jail RCTL drift** — verify the actual rctl rules match what
+  the spec said. Needs spec-loading machinery; deferred.
+- **WireGuard / IPsec config sanity** — render to /tmp and diff
+  against installed config. Defer until operators ask.
+
+---
+
 ## [0.7.12] — 2026-05-05
 
 Build infrastructure: Makefile test-link refactor. The per-test

@@ -64,6 +64,7 @@ Command isCommand(const char *arg) {
   if (strEq(arg, "template"))  return CmdTemplate;
   if (strEq(arg, "retune"))    return CmdRetune;
   if (strEq(arg, "throttle"))  return CmdThrottle;
+  if (strEq(arg, "doctor"))    return CmdDoctor;
   return CmdNone;
 }
 
@@ -257,6 +258,9 @@ void Args::validate() {
     if (throttleIngressRate.empty() && throttleEgressRate.empty()
         && !throttleClear && !throttleShow)
       ERR("the 'throttle' command needs at least one of --ingress, --egress, --clear, or --show")
+    break;
+  case CmdDoctor:
+    // No required arguments — run all checks unconditionally.
     break;
   default:
     ERR("no command was given")
