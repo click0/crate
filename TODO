@@ -26,6 +26,18 @@ operational quality.)
   on the auto-create-bridge mechanism from 0.6.3. Estimated 600
   LOC, one release.
 
+* (feature) `gui: auto` — zero-config GUI mode for desktop-app
+  jails. Single spec line `gui: auto` (or auto-detect from
+  `start:` cmd: firefox/gimp/blender/...) triggers: copy
+  $XAUTHORITY -> jail-local cookie, bind-mount /tmp/.X11-unix,
+  expose /dev/dri/card0 + renderD128 via devfs ruleset, detect
+  Wayland and bind-mount $XDG_RUNTIME_DIR/wayland-0 if present.
+  Removes the per-jail X11/devfs config every desktop spec
+  currently has. Inspired by libkrun's virtio-gpu+venus path
+  (VM-only solution; jails get the same DX via direct DRM access
+  which is faster than virtio-gpu translation). Estimated 500
+  LOC, one release.
+
 === Out of scope (separate repository) ===
 
 * Admin/dashboard UI for the datacenter view. The hub already
