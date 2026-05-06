@@ -25,6 +25,11 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef __FreeBSD__
+#include <sys/event.h>   // 0.8.5: kqueue/kevent for log-stream tail
+#include <sys/types.h>
+#include <sys/time.h>
+#endif
 
 #include <atomic>
 #include <ctime>
@@ -446,7 +451,43 @@ static void handleContainerLogs(const httplib::Request &req, httplib::Response &
           return false;
       }
 
-      // Now tail: poll for new data every 500ms
+      // 0.8.5: tail loop — block on kqueue(2) for new bytes instead
+      // of busy-waiting with usleep(500ms). Each streaming client
+      // gets its own kqueue fd watching its own log file. Wakeup is
+      // immediate when the log is appended; 1s timeout ensures we
+      // periodically check whether the client disconnected (sink
+      // write returns false) even on quiet logs.
+      //
+      // Linux fallback (dev environment only — crated runs on
+      // FreeBSD): no kqueue, keep the 500ms poll.
+#ifdef __FreeBSD__
+      int kqFd = ::kqueue();
+      int watchFd = -1;
+      if (kqFd >= 0) {
+        watchFd = ::open(logPath.c_str(), O_RDONLY | O_CLOEXEC);
+        if (watchFd < 0) {
+          ::close(kqFd);
+          kqFd = -1;
+        } else {
+          struct kevent ev;
+          EV_SET(&ev, watchFd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
+                 NOTE_WRITE | NOTE_EXTEND | NOTE_DELETE | NOTE_RENAME,
+                 0, nullptr);
+          if (::kevent(kqFd, &ev, 1, nullptr, 0, nullptr) < 0) {
+            ::close(watchFd); watchFd = -1;
+            ::close(kqFd);    kqFd    = -1;
+          }
+        }
+      }
+      // RAII-style closer so any return path frees both fds.
+      struct FdCloser {
+        int *kq; int *wf;
+        ~FdCloser() {
+          if (*wf >= 0) ::close(*wf);
+          if (*kq >= 0) ::close(*kq);
+        }
+      } closer{&kqFd, &watchFd};
+#endif
       ifs.clear(); // clear EOF flag
       for (;;) {
         while (std::getline(ifs, line)) {
@@ -455,9 +496,25 @@ static void handleContainerLogs(const httplib::Request &req, httplib::Response &
             return false; // client disconnected
         }
         ifs.clear();
-        ::usleep(500000); // 500ms poll interval
+#ifdef __FreeBSD__
+        if (kqFd >= 0) {
+          struct timespec timeout{1, 0};  // 1s — also forces a
+                                          // periodic disconnect check.
+          struct kevent triggered;
+          // Ignore errors / spurious wakeups; fall through to
+          // re-read regardless. NOTE_DELETE / NOTE_RENAME just
+          // wake us; the std::getline loop above will then EOF
+          // and the operator can re-curl when their log rotator
+          // creates the new file.
+          (void)::kevent(kqFd, nullptr, 0, &triggered, 1, &timeout);
+        } else {
+          ::usleep(500000);
+        }
+#else
+        ::usleep(500000);
+#endif
       }
-      // Unreachable; streaming ends when client disconnects
+      // Unreachable; streaming ends when client disconnects.
     },
     [](bool /*success*/) {
       // 0.8.4: release the streaming-clients counter slot whether

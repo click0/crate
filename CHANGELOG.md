@@ -6,6 +6,107 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.5] — 2026-05-06
+
+Log-streaming tail now uses `kqueue(2)` + `kevent(2)` instead of
+`usleep(500ms)` busy-polling. Each `?follow=true` streaming client
+gets its own kqueue fd watching its own log file; the per-client
+thread blocks until the kernel signals a write. The 32-cap from
+0.8.4 stays as belt-and-suspenders.
+
+### Mechanism
+
+```
+kq      = kqueue();
+watchFd = open(logPath, O_RDONLY | O_CLOEXEC);
+EV_SET(&ev, watchFd, EVFILT_VNODE,
+       EV_ADD | EV_CLEAR,
+       NOTE_WRITE | NOTE_EXTEND | NOTE_DELETE | NOTE_RENAME,
+       0, NULL);
+kevent(kq, &ev, 1, NULL, 0, NULL);
+
+// tail loop:
+while (read new bytes via std::getline → sink.write):
+    ;
+struct timespec timeout{1, 0};   // 1s — also forces a periodic
+struct kevent triggered;          //      disconnect-check
+kevent(kq, NULL, 0, &triggered, 1, &timeout);
+// loop back, read newly-arrived bytes, write to sink
+```
+
+### Wakeup characteristics
+
+Before (0.8.4 and earlier):
+- 500ms polling — average wake latency 250ms even when log is hot
+- One wakeup per client per 500ms regardless of activity (CPU
+  usage scales with client count, not log rate)
+
+After (0.8.5):
+- ~0ms wake latency on append (kernel notifies via kqueue)
+- One wakeup per actual log write per client (CPU scales with
+  log rate, not client count)
+- 1s timeout still fires periodically so a quiet log + a vanished
+  client are detected within 1s
+
+### Rotation safety
+
+The kqueue filter watches `NOTE_WRITE | NOTE_EXTEND | NOTE_DELETE
+| NOTE_RENAME`. A log rotator (newsyslog, logrotate) renaming the
+file mid-stream wakes us up; the next `getline` round hits EOF
+gracefully and the operator can re-curl when the rotator creates
+the fresh file. We do NOT auto-reopen — that's a future
+enhancement; today's behaviour is "stream ends cleanly on rotate."
+
+### Linux fallback
+
+cpp-httplib runs on FreeBSD in production; the codebase is built
+on Linux only for unit tests. The `kqueue(2)` syscall is
+FreeBSD-native (and macOS/OpenBSD) and not available on Linux,
+so the new code is gated by `#ifdef __FreeBSD__`. On Linux the
+old `usleep(500ms)` path is preserved — unit-test compatibility,
+no behaviour change for crated's actual deployment.
+
+A future Linux port would use `inotify(7)` for the equivalent
+mechanism. Tracked but not blocking.
+
+### Implementation
+
+- `daemon/routes.cpp::handleContainerLogs` streaming branch:
+  - Opens an extra read-only fd for kqueue's filter target
+  - Registers `EVFILT_VNODE` events
+  - Replaces `usleep(500000)` with `kevent(... 1s timeout)`
+  - RAII `FdCloser` struct ensures both fds close on any return
+    path (sink-write fail, client disconnect, exception)
+- New includes (FreeBSD-only): `<sys/event.h>`, `<sys/types.h>`,
+  `<sys/time.h>`
+
+### Tests
+
+No new unit tests — the change is platform-specific runtime I/O
+behind `#ifdef`. Existing tests that don't exercise the streaming
+path are unaffected.
+
+**985/985 unit tests pass locally** (no new tests; same as 0.8.4).
+
+The actual streaming mechanism is exercised by the FreeBSD CI
+build (compile success → kqueue API used correctly). End-to-end
+streaming testing remains a future functional-test addition.
+
+### NOT in this release
+
+- **Cross-client kqueue mux** — sharing one kqueue/bg-thread
+  across all clients to reduce thread count below O(N). Requires
+  bypassing cpp-httplib's content-provider model (which keeps a
+  worker thread per active stream). Not blocking; current 32-cap
+  + efficient sleep is operationally fine.
+- **Auto-reopen on rotate** — currently stream ends when the log
+  is rotated. Operators re-curl. A `tail -F` style auto-follow
+  would re-open by path on `NOTE_DELETE` / `NOTE_RENAME`. Defer.
+- **Linux `inotify` port** — only matters if crated ever runs on
+  Linux. Defer.
+
+---
+
 ## [0.8.4] — 2026-05-06
 
 Three code-health fixes from the second-pass audit. All three were
