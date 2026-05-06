@@ -6,6 +6,140 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.0] — 2026-05-06
+
+**Major version bump.** First release on the `0.8.0` branch.
+
+`mode: auto` now auto-generates the SNAT rule that was previously
+the operator's responsibility. Combined with 0.7.17's pool
+allocator and 0.7.18's spec shortcut, a single-line spec gets
+true outbound-internet jails on a fresh host:
+
+```yaml
+# crate.yml (operator-written, once)
+network_pool:      10.66.0.0/24
+network_interface: em0       # NEW REQUIREMENT for SNAT auto-rule
+
+# spec.yml (per-jail)
+options:
+  net:
+    mode: auto
+```
+
+`crate run` with the above:
+1. (0.7.18) expands `mode: auto` to bridge + auto-create-bridge
+2. (0.7.17) allocates `10.66.0.2` from the pool, registers a lease
+3. (0.7.17) configures static IP on the jail-side iface
+4. **(0.8.0) emits one nat rule** into the jail's pf anchor:
+   ```
+   nat on em0 inet from 10.66.0.2 to ! 10.66.0.2 -> (em0)
+   ```
+5. Jail starts; outbound traffic from the jail's `10.66.0.2`
+   gets translated to the host's `em0` address; reply packets
+   route back through the established state.
+
+Operator does NOT need to write any pf.conf rule for routine
+desktop-app jails.
+
+### Why a major version bump
+
+`mode: auto` semantics changed. Pre-0.8.0 the shortcut produced
+a jail that needed operator-supplied SNAT to work — many specs
+relied on operator-written pf.conf. Post-0.8.0 the same spec
+auto-loads SNAT into the per-jail pf anchor, which can interact
+with operator's existing rules.
+
+This is a behaviour change visible to operators, hence 0.8.0.
+Specs that don't use `mode: auto` are unaffected.
+
+### Defence in depth
+
+- **External interface validated** before reaching `pfctl`: 1..15
+  chars, alnum + `.` (vlan tags) + `_`, no shell metacharacters.
+- **Jail address validated**: digits + dots + optional `/<prefix>`,
+  ≤18 chars. Catches shell-injection attempts in the network_pool
+  config.
+- **`to ! <jailAddr>`** clause excludes intra-jail traffic — replies
+  between two jails on the same bridge stay on the bridge instead
+  of being NAT'd to the host's address.
+- **`-> (em0)`** with parens means "translate to whatever address
+  is currently on em0" — robust against DHCP lease changes on the
+  host's external interface.
+- **`inet`** qualifier confines the rule to IPv4 — no accidental
+  IPv6 NAT (which pf would warn about anyway, but explicit > implicit).
+
+### Soft-fail behaviour
+
+If `network_interface` is unset in `crate.yml`, the auto-fw step
+warns and continues:
+```
+auto-fw: network_interface unset in crate.yml; skipping SNAT
+auto-rule — outbound traffic from 10.66.0.2 will require
+operator-written pf/ipfw rules
+```
+
+If `pfctl` fails to load the rule (pf.ko not loaded, syntax error
+in the operator's main pf.conf, ...), the auto-fw step warns and
+continues:
+```
+auto-fw: SNAT rule load failed: <error> — outbound traffic may not
+work; configure pf manually
+```
+
+These soft-fails preserve the pre-0.8.0 behaviour of "jail starts
+even if firewall is broken." Operators relying on the auto-fw can
+trip-wire detection via `crate doctor` (0.7.13) which checks
+`zpool` health + `network_pool` config — a future doctor check
+could also verify the auto-fw rule was loaded.
+
+### Implementation
+
+- `lib/auto_fw_pure.{h,cpp}` — pure module:
+  - `validateExternalIface` — IFNAMSIZ + alnum + `.` + `_`
+  - `validateRuleAddress` — IPv4 with optional CIDR suffix
+  - `formatSnatRule(iface, addr)` — produces the canonical pf
+    nat rule string
+  - `formatSnatAnchorLine` — same plus trailing newline so
+    multiple lines concatenate cleanly
+- `lib/run.cpp` — wired into the bridge-mode auto-IP block:
+  validates inputs, builds the rule line, loads via existing
+  `PfctlOps::addRules(anchor, rulesText)`. Cleanup is automatic
+  (existing `destroyPfAnchor` `RunAtEnd` flushes the anchor at
+  teardown).
+
+### Tests
+
+`tests/unit/auto_fw_pure_test.cpp` — **11 ATF cases**:
+
+- iface validator: typical (em0/igb0/vlan0.100/bridge0/vtnet1) +
+  invalid (empty, oversized, space, semicolon, backtick, slash,
+  newline)
+- address validator: typical IPv4 + CIDR + 0.0.0.0/0 catch-all +
+  rejection of shell-injection (`;rm -rf /`, backticks, `$(...)`,
+  multiple slashes, oversized)
+- SNAT rule shape: single IP + CIDR + invariants pinned (`inet`
+  qualifier present, `to ! <jailAddr>` exclusion present, `(<iface>)`
+  parens for dynamic translation)
+- anchor line format: trailing newline + starts with rule
+
+**958/958 unit tests pass locally** (947 prior + 11 new).
+
+### NOT in this release (future Phase 2 / Phase 3)
+
+- **Port-forward auto-rules** (rdr) from `inbound:` declarations.
+  0.8.1.
+- **ipfw alternative** for operators using ipfw instead of pf.
+  0.8.2.
+- **IPv6 SNAT (NPTv6)** for IPv6 pool allocation. Defer until
+  0.8.x adds IPv6 pool support.
+- **`crate doctor` integration** — verify auto-fw rule actually
+  loaded for each running jail. 0.8.x quality-of-life.
+- **`network_interface` auto-detect** — read from `route -4 get
+  default` if unset in config. Defer; explicit config is safer
+  for production hosts with multiple uplinks.
+
+---
+
 ## [0.7.19] — 2026-05-06
 
 `gui: auto` scalar shortcut — companion to 0.7.18's `mode: auto`

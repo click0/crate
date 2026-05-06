@@ -63,6 +63,7 @@ tests/unit/doctor_pure_test
 tests/unit/sandbox_pure_test
 tests/unit/rate_limit_pure_test
 tests/unit/ip_alloc_pure_test
+tests/unit/auto_fw_pure_test
 tests/unit/.test-objs/
 *.gcda
 *.gcno

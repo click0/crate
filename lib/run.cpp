@@ -15,6 +15,7 @@
 #include "config.h"
 #include "ip_alloc_pure.h"
 #include "network_lease.h"
+#include "auto_fw_pure.h"
 #include "ifconfig_ops.h"
 #include "scripts.h"
 #include "ctx.h"
@@ -790,8 +791,8 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         // unique per jail instance and stable for its lifetime.
         auto leaseName = std::filesystem::path(jailPath).filename().string();
         uint32_t addr = NetworkLease::allocateFor(leaseName, pool);
-        auto ip = IpAllocPure::formatIp(addr) + "/"
-                + std::to_string(pool.prefixLen);
+        auto ipBare = IpAllocPure::formatIp(addr);
+        auto ip = ipBare + "/" + std::to_string(pool.prefixLen);
         auto gw = IpAllocPure::formatIp(IpAllocPure::gatewayFor(pool));
         RunNet::configureStaticIp(bridgeInfo.ifaceB, ip, gw, jid, execInJail);
         Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
@@ -804,6 +805,39 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
           LOG("network: releasing lease for " << leaseName)
           try { NetworkLease::releaseFor(leaseName); } catch (...) {}
         });
+
+        // 0.8.0: SNAT auto-rule. Without this, packets from the jail
+        // leave the host with a 10.66.0.x source addr that never
+        // gets translated and replies can't be routed back.
+        // We emit one nat rule per jail (scoped by jail's IP) into
+        // the jail's existing pf anchor crate/<jailXname>; the
+        // anchor is flushed at teardown by the existing destroyPfAnchor
+        // RunAtEnd, so cleanup is automatic.
+        if (!cfg.networkInterface.empty()) {
+          if (auto e = AutoFwPure::validateExternalIface(cfg.networkInterface); !e.empty())
+            ERR("network_interface '" << cfg.networkInterface << "': " << e)
+          if (auto e = AutoFwPure::validateRuleAddress(ipBare); !e.empty())
+            ERR("auto-fw: jail IP failed validation: " << e)
+          auto rule = AutoFwPure::formatSnatAnchorLine(cfg.networkInterface, ipBare);
+          auto anchor = std::string("crate/") + jailXname;
+          try {
+            PfctlOps::addRules(anchor, rule);
+            LOG("auto-fw: SNAT rule added to anchor " << anchor
+                << " (" << ipBare << " -> " << cfg.networkInterface << ")")
+          } catch (const std::exception &ex) {
+            // Don't kill the run if pf isn't loaded; warn loudly.
+            std::cerr << rang::fg::yellow
+                      << "auto-fw: SNAT rule load failed: " << ex.what()
+                      << " — outbound traffic may not work; configure pf manually"
+                      << rang::style::reset << std::endl;
+          }
+        } else {
+          std::cerr << rang::fg::yellow
+                    << "auto-fw: network_interface unset in crate.yml; "
+                       "skipping SNAT auto-rule — outbound traffic from "
+                    << ipBare << " will require operator-written pf/ipfw rules"
+                    << rang::style::reset << std::endl;
+        }
       } else {
         // No pool configured -- fall back to DHCP (pre-0.7.17 default).
         RunNet::configureDhcp(bridgeInfo.ifaceB, jailPath, jid, jidStr, execInJail);
