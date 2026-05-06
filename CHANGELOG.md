@@ -6,6 +6,105 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.15] — 2026-05-06
+
+IPv6 NPTv6 — **Phase 1 hook only.** Adds the `network_pool6:`
+config field with shape validation. Full IPv6 implementation
+(per-jail allocation, NAT66/NPTv6 pf rules, lease store) is a
+larger piece of work tracked separately.
+
+### Why ship a hook without implementation
+
+The "easy + medium" sprint's IPv6 item was the largest in scope —
+generalising `IpAllocPure` to 128-bit addresses, mirroring lease
+management, choosing between NAT66 and true NPTv6 (RFC 6296), and
+designing how it composes with SLAAC + DHCPv6 + operator-managed
+prefixes. Doing it in a single release would either rush the
+design or skip the validation work that made IPv4 (0.7.17 / 0.8.0
+/ 0.8.1) reliable.
+
+This hook lets operators **declare intent today** so the eventual
+runtime work can read existing config without a follow-up
+crate.yml migration:
+
+```yaml
+# crate.yml — accepted today, runtime is a no-op
+network_pool6: fd00:0:0:0::/64
+```
+
+### What this release does
+
+- New `Settings.networkPool6` field
+- YAML parser validates basic shape:
+  - Must contain `::` (IPv6 shorthand)
+  - Must contain `/` (CIDR mark)
+  - Detailed validation (prefix length, address arithmetic) lives
+    in a future `Ip6AllocPure` module
+- Stored in `Settings`; **not yet consulted by `lib/run.cpp`** —
+  jails today get IPv6 via the existing `options.net.ipv6: slaac`
+  / static-IPv6 spec fields, unchanged
+
+### What this release does NOT do (Phase 2+)
+
+- **`lib/ip6_alloc_pure.{h,cpp}`** — 128-bit address arithmetic,
+  CIDR parsing for `/48`–`/64`–`/126`, allocator that skips
+  reserved hosts (anycast, multicast, etc.)
+- **IPv6 lease store** — `/var/run/crate/network-leases6.txt` or
+  shared-format extension to existing `network-leases.txt`
+- **NAT66 vs NPTv6 decision** — NAT66 is simpler (`pf nat on em0
+  inet6 from <pool> -> (em0)`) but stateful; NPTv6 (RFC 6296) is
+  stateless prefix translation, requires `binat` rule shape
+- **`route -6 get default`** auto-detect (mirror of 0.8.6)
+- **`crate doctor` IPv6 checks** — pool exhaustion, prefix
+  conflicts with operator's other allocations
+- **ipfw IPv6 path** — `ipfw nat <id> config ... ipv6` is not
+  supported by `ipfw nat`; would need a different mechanism
+
+### Operator workflow today
+
+For IPv6 in jails today (pre-Phase 2), operators continue to use
+the existing per-spec fields:
+
+```yaml
+options:
+  net:
+    mode: bridge
+    bridge: bridge0
+    ipv6: slaac          # or static address; pre-existing
+```
+
+Setting `network_pool6` in crate.yml is harmless — it parses,
+validates shape, gets stored, and the runtime ignores it. Future
+Phase 2 will read it.
+
+### Tests
+
+No new pure tests — the validator is a 2-line shape check at
+config load. Future `Ip6AllocPure` work will introduce its own
+test module. **994/994 unit tests pass locally**.
+
+### Closes the "easy + medium" sprint
+
+The 10-release sprint asked for in this conversation:
+
+| Release | Item | Status |
+|---|---|---|
+| 0.8.6 | network_interface auto-detect | DONE |
+| 0.8.7 | firewall_backend override | DONE |
+| 0.8.8 | routes.cpp rate-limit refactor | DONE |
+| 0.8.9 | doctor: verify auto-fw loaded | DONE |
+| 0.8.10 | IPsec auto-render-conf | DONE |
+| 0.8.11 | gui:auto X11/DRM auto-binds | DONE |
+| 0.8.12 | log auto-reopen on rotate | DONE |
+| 0.8.13 | lifecycle endpoints on control sockets | DONE (PostStart deferred) |
+| 0.8.14 | doctor: network policy + RCTL drift | DONE |
+| 0.8.15 | IPv6 NPTv6 | **Phase 1 hook only** (this release) |
+
+10 releases shipped end-to-end. Next sprint can start from a
+clean roadmap.
+
+---
+
 ## [0.8.14] — 2026-05-06
 
 `crate doctor` extended with two new operational checks:

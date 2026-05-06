@@ -41,6 +41,13 @@ struct Settings {
   // `network_pool: 10.66.0.0/24` in /usr/local/etc/crate.yml or
   // ~/.config/crate/crate.yml.
   std::string networkPool;
+  // 0.8.15: IPv6 ULA prefix for `network: auto` jails (Phase 1
+  // hook). Currently parsed + validated but not wired into runtime
+  // — full IPv6 NPTv6 / NAT66 + per-jail allocation is a future
+  // release. Operators can set this today to declare intent;
+  // doctor (0.8.x) will flag the gap when full implementation
+  // lands. Format: ULA /64 prefix, e.g. "fd00:0:0:0::/64".
+  std::string networkPool6;
   // 0.8.7: explicit firewall backend choice for auto-fw. Accepted
   // values:
   //   ""     — auto-detect via kldstat (pf preferred, then ipfw)

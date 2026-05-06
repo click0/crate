@@ -54,6 +54,19 @@ static void applyYaml(Settings &s, const YAML::Node &cfg) {
   if (cfg["default_bridge"])    s.defaultBridge = cfg["default_bridge"].as<std::string>();
   if (cfg["static_mac_default"]) s.staticMacDefault = cfg["static_mac_default"].as<bool>();
   if (cfg["network_pool"])      s.networkPool = cfg["network_pool"].as<std::string>();
+  if (cfg["network_pool6"]) {
+    auto v = cfg["network_pool6"].as<std::string>();
+    // 0.8.15: validate basic shape — must contain '::' (IPv6
+    // shorthand) and '/' (CIDR mark). Detailed validation lives
+    // in a future Ip6AllocPure module.
+    if (v.find("::") == std::string::npos)
+      throw std::runtime_error(
+        "network_pool6 must be an IPv6 CIDR with '::' shorthand — got '" + v + "'");
+    if (v.find('/') == std::string::npos)
+      throw std::runtime_error(
+        "network_pool6 must include a CIDR prefix (e.g. fd00::/64) — got '" + v + "'");
+    s.networkPool6 = v;
+  }
   if (cfg["firewall_backend"]) {
     auto v = cfg["firewall_backend"].as<std::string>();
     if (v != "" && v != "pf" && v != "ipfw" && v != "none")
