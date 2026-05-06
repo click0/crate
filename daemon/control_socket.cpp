@@ -38,6 +38,8 @@
 #include "rate_limit.h"
 #include "rate_limit_pure.h"
 #include "sandbox.h"
+#include "../lib/args.h"
+#include "../lib/commands.h"
 #include "../lib/jail_query.h"
 #include "../lib/pool_pure.h"
 #include "../lib/util.h"
@@ -214,6 +216,60 @@ void handleStats(std::string &resBody, int &status, const std::string &name) {
   o << "}}";
   status  = 200;
   resBody = o.str();
+}
+
+// 0.8.13: lifecycle handlers — POST stop / restart. PostStart not
+// implementable from this plane (no .crate file path tracked once
+// the jail is stopped — would need a separate "registry" of
+// known specs that's out of scope here; documented in CHANGELOG).
+void handleStop(std::string &resBody, int &status, const std::string &name) {
+  auto j = JailQuery::getJailByName(name);
+  if (!j) {
+    status  = 404;
+    resBody = ControlSocketPure::renderErrorJson("container not found");
+    return;
+  }
+  Args args;
+  args.cmd = CmdStop;
+  args.stopTarget = name;
+  try {
+    if (stopCrate(args)) {
+      status  = 200;
+      resBody = R"({"status":"stopped","container":")" + name + "\"}";
+    } else {
+      status  = 500;
+      resBody = ControlSocketPure::renderErrorJson("stop returned failure");
+    }
+  } catch (const std::exception &e) {
+    status  = 500;
+    resBody = ControlSocketPure::renderErrorJson(
+      std::string("stop failed: ") + e.what());
+  }
+}
+
+void handleRestart(std::string &resBody, int &status, const std::string &name) {
+  auto j = JailQuery::getJailByName(name);
+  if (!j) {
+    status  = 404;
+    resBody = ControlSocketPure::renderErrorJson("container not found");
+    return;
+  }
+  Args args;
+  args.cmd = CmdRestart;
+  args.restartTarget = name;
+  try {
+    if (restartCrate(args)) {
+      status  = 200;
+      resBody = R"({"status":"restarted","container":")" + name + "\"}";
+    } else {
+      status  = 500;
+      resBody = ControlSocketPure::renderErrorJson("restart returned failure");
+    }
+  } catch (const std::exception &e) {
+    status  = 500;
+    resBody = ControlSocketPure::renderErrorJson(
+      std::string("restart failed: ") + e.what());
+  }
 }
 
 void handlePatch(std::string &resBody, int &status,
@@ -393,6 +449,21 @@ void handleConnection(int connFd,
     break;
   case ControlSocketPure::Action::PatchResources:
     handlePatch(resBody, status, route.container, body);
+    break;
+  case ControlSocketPure::Action::PostStop:
+    handleStop(resBody, status, route.container);
+    break;
+  case ControlSocketPure::Action::PostRestart:
+    handleRestart(resBody, status, route.container);
+    break;
+  case ControlSocketPure::Action::PostStart:
+    // 0.8.13: not implemented in this release — starting a stopped
+    // jail requires the .crate file path which crated doesn't track.
+    // A future "spec registry" hook would close this; for now reply 501.
+    status  = 501;
+    resBody = ControlSocketPure::renderErrorJson(
+      "POST /start not implemented on control sockets — "
+      "use bearer-token main API or `crate run -f <file.crate>`");
     break;
   case ControlSocketPure::Action::Unknown:
     // unreachable: filtered by authorize() above

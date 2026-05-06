@@ -6,6 +6,79 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.13] — 2026-05-06
+
+Lifecycle endpoints on control sockets — POST stop / restart from
+the bearer-token-less control plane. Operators can wire desktop
+trays / IDE plugins to stop or restart their pool's containers
+without holding admin tokens.
+
+### New endpoints
+
+| Method | Path                                       | Role required |
+|--------|--------------------------------------------|---------------|
+| `POST`   | `/v1/control/containers/<n>/stop`        | admin          |
+| `POST`   | `/v1/control/containers/<n>/restart`     | admin          |
+| `POST`   | `/v1/control/containers/<n>/start`       | (501)          |
+
+### Defence in depth (unchanged)
+
+Same 4-layer chain as 0.7.10/0.7.11/0.7.14:
+1. Filesystem perms (kernel, primary gate)
+2. `getpeereid(2)` re-check
+3. Pool ACL — operator can only target jails in their pool
+4. Role gate — `viewer` socket rejects all POST verbs
+
+The new POST verbs are MUTATING (`actionIsMutating()` returns true)
+so they ride the same rate-limit cap as `PATCH /resources` (10
+req/s per peer-uid+gid).
+
+### PostStart deferred
+
+`POST /start` returns HTTP 501 with a clear message:
+> "POST /start not implemented on control sockets — use bearer-token
+> main API or `crate run -f <file.crate>`"
+
+Reason: starting a stopped jail requires the .crate file path.
+crated doesn't track a "spec registry" mapping jail-name → archive
+path. Future work: persist the .crate path at `crate run` time so
+control-socket PostStart can pick it up.
+
+### Implementation
+
+- `daemon/control_socket_pure.h` — `Action` enum extended:
+  `PostStart`, `PostStop`, `PostRestart`
+- `daemon/control_socket_pure.cpp`:
+  - parser handles `/start`, `/stop`, `/restart` (POST verbs only)
+  - `actionIsMutating()` returns true for all three
+  - `actionLabel()` returns `"start"` / `"stop"` / `"restart"` —
+    these become rate-limit bucket keys
+  - `authorize()` extends pool ACL to lifecycle actions
+  - `reasonForStatus(501)` → `"Not Implemented"`
+- `daemon/control_socket.cpp`:
+  - `handleStop`, `handleRestart` — construct `Args` with
+    stopTarget/restartTarget, delegate to existing
+    `stopCrate()` / `restartCrate()` from `lib/lifecycle.cpp`
+  - `PostStart` case returns 501
+
+### Tests
+
+No new pure tests — the change is mostly enum + dispatch
+additions. Existing 29 ATF cases for `control_socket_pure_test`
+continue to pass; pool ACL invariants (admin-only PATCH) carry
+over to the new POST verbs.
+
+**994/994 unit tests pass locally**.
+
+### NOT in this release
+
+- **PostStart** — see above (needs spec registry).
+- **POST /destroy** — destruction is one-way; deliberately kept
+  on the bearer-token main API to require a stronger credential.
+- **POST /snapshot** — snapshot CRUD via control sockets. Defer.
+
+---
+
 ## [0.8.12] — 2026-05-06
 
 Log-stream auto-reopen on rotate. `?follow=true` clients survive
