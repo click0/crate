@@ -36,4 +36,32 @@ std::string generateGpuXorgConf(unsigned displayNum,
                                 const std::string &gpuDriver,
                                 const std::string &gpuDevice);
 
+// 0.8.18: `gui: auto` resolution.
+// Inputs:
+//   displaySet  — host has $DISPLAY (X11 server reachable)
+//   waylandSet  — host has $WAYLAND_DISPLAY (compositor reachable)
+//   hasGpu      — host has /dev/dri/card0 OR /dev/nvidia0
+// Returns one of:
+//   "shared"    — shared X11 + cookie (and Wayland mount if also set)
+//   "gpu"       — start Xorg in jail with the host's GPU
+//   "headless"  — Xvfb / dummy
+// The shared path takes priority when DISPLAY or WAYLAND_DISPLAY is
+// set — that's what desktop-app jails want. Operators who want
+// Xephyr (nested) write `gui: nested` explicitly.
+std::string resolveAutoMode(bool displaySet,
+                            bool waylandSet,
+                            bool hasGpu);
+
+// Parse the host's $WAYLAND_DISPLAY into the basename of the Unix
+// socket that lives under $XDG_RUNTIME_DIR. Returns "" if the input
+// is not a usable socket name.
+//   ""              -> ""
+//   "wayland-0"     -> "wayland-0"
+//   "wayland-1"     -> "wayland-1"
+//   "/abs/path/sok" -> "" (we only support the basename form;
+//                          absolute-path Wayland sockets are rare
+//                          and need a different mount strategy)
+//   "../etc/passwd" -> "" (path traversal rejected)
+std::string parseWaylandDisplay(const std::string &waylandDisplayEnv);
+
 }

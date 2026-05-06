@@ -6,6 +6,122 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.18] — 2026-05-06
+
+`gui: auto` now also auto-handles X11 cookies and Wayland sockets,
+closing the medium-priority TODO `gui: auto` item. Combined with
+0.8.11's auto-`/dev/dri/*` unhide, a single spec line now covers
+the full desktop-app jail flow:
+
+```yaml
+gui: auto
+start: firefox
+```
+
+…and `crate run` does:
+
+| Pre-0.8.18 manual config | 0.8.18 automatic |
+|---|---|
+| `terminal.devfs_ruleset:` for /dev/dri | `gui: auto` (since 0.8.11) |
+| Mount `/tmp/.X11-unix` | `gui: auto` (this release) |
+| Copy `~/.Xauthority` into jail | `gui: auto` (this release) |
+| Bind `$XDG_RUNTIME_DIR/wayland-0` | `gui: auto` (this release) |
+| Set `DISPLAY`, `XAUTHORITY`, `WAYLAND_DISPLAY` env | `gui: auto` (this release) |
+
+### What this release adds
+
+When `gui: auto` resolves to the shared path (i.e. host has
+`$DISPLAY` and/or `$WAYLAND_DISPLAY`), `setupX11` now:
+
+1. **Bind-mounts `/tmp/.X11-unix`** into the jail and sets
+   `DISPLAY` env (when the host has `$DISPLAY`)
+2. **Copies `$XAUTHORITY`** (or the default `~/.Xauthority` if
+   unset) to `<jailpath>/root/.Xauthority`, chmod 0600, and sets
+   the in-jail `XAUTHORITY=/root/.Xauthority`. We copy rather
+   than bind-mount so a jail compromise can't overwrite the
+   operator's host cookie file.
+3. **Bind-mounts the Wayland socket** when `$WAYLAND_DISPLAY` is
+   set: `$XDG_RUNTIME_DIR/<sock>` -> `<jailpath>/tmp/wayland/<sock>`,
+   and sets in-jail `XDG_RUNTIME_DIR=/tmp/wayland` +
+   `WAYLAND_DISPLAY=<sock>`. The Wayland socket basename is
+   validated through `RunGuiPure::parseWaylandDisplay` to reject
+   path-traversal / shell-meta input.
+
+### Behaviour change for `gui: auto`
+
+Pre-0.8.18, `gui: auto` resolved to:
+
+| `$DISPLAY` set | GPU present | Resolved to |
+|---|---|---|
+| no  | yes | gpu      |
+| yes | yes | nested (Xephyr) |
+| yes | no  | nested (Xephyr) |
+| no  | no  | headless |
+
+0.8.18 routes through `RunGuiPure::resolveAutoMode`:
+
+| `$DISPLAY` or `$WAYLAND_DISPLAY` set | GPU present | Resolved to |
+|---|---|---|
+| yes | * | **shared** (was nested) |
+| no  | yes | gpu (unchanged) |
+| no  | no  | headless (unchanged) |
+
+The "shared" path is what desktop-app jails actually want — fast,
+matches the pattern every "firefox in a jail" guide uses. Operators
+who relied on Xephyr from `gui: auto` should write `gui: nested`
+explicitly. The shared mode keeps its security warning (host
+keystroke / window-manipulation exposure), suppressible via
+`CRATE_X11_SHARED_ACK=1` as before.
+
+### Implementation
+
+Pure helpers in `lib/run_gui_pure.{h,cpp}`:
+
+- `resolveAutoMode(displaySet, waylandSet, hasGpu)` — table-driven
+  resolution; testable without env-var setup
+- `parseWaylandDisplay(env)` — validates the host's `WAYLAND_DISPLAY`
+  is a basename (no slashes, no `..`, no shell metas, length
+  <=64); empty string on rejection
+
+Runtime in `lib/run_gui.cpp`:
+
+- `resolveGuiMode` calls the pure helper for `gui: auto`
+- The shared X11 block conditionally skips X11 work when DISPLAY
+  is unset (Wayland-only host) and adds the cookie copy +
+  Wayland mount when `gui: auto` is in effect
+- All file copies / mounts are soft-fail (warn but don't ERR) so
+  a misconfigured host still gets a jail with /dev/dri/* available
+
+6 ATF unit cases on the new pure helpers (2 paths through
+`resolveAutoMode` for each input axis; basenames + traversal
+rejection for `parseWaylandDisplay`).
+
+### What this release does NOT do
+
+- **Per-jail user uid/gid in cookie copy** — the cookie lands at
+  `/root/.Xauthority` because the in-jail user is currently always
+  root. Once non-root in-jail users land (TODO low-priority
+  rootless containers), cookie target needs to follow.
+- **Wayland-only hosts without DISPLAY** — supported (we skip the
+  X11 socket bind cleanly), but most operators still have an X
+  server running side-by-side on FreeBSD. Pure-Wayland
+  walk-throughs in docs/ are deferred.
+- **Detect from `start:` cmd** (firefox/gimp/blender/...) — the
+  TODO mentioned this as a "could also" trigger; spec-level
+  `gui: auto` is enough surface for now.
+
+1025/1025 unit tests pass locally.
+
+### Closes the 3-release follow-on sprint
+
+| Release | Item | Status |
+|---|---|---|
+| 0.8.16 | crate vm-wrap (bhyve jailer, TODO2 B) | DONE |
+| 0.8.17 | network: auto top-level shorthand | DONE |
+| 0.8.18 | gui: auto X11 cookie + Wayland | DONE (this) |
+
+---
+
 ## [0.8.17] — 2026-05-06
 
 `network: auto` — top-level spec shorthand for zero-config vnet

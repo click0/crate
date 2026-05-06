@@ -240,8 +240,76 @@ ATF_TEST_CASE_BODY(xorg_conf_garbage_resolution_falls_back)
 	ATF_REQUIRE(out.find("Virtual    1280 720") != std::string::npos);
 }
 
+// ===================================================================
+// 0.8.18: gui: auto resolution + Wayland socket parser
+// ===================================================================
+
+ATF_TEST_CASE_WITHOUT_HEAD(autoMode_display_set_picks_shared);
+ATF_TEST_CASE_BODY(autoMode_display_set_picks_shared)
+{
+	ATF_REQUIRE_EQ(RunGuiPure::resolveAutoMode(true,  false, false), std::string("shared"));
+	ATF_REQUIRE_EQ(RunGuiPure::resolveAutoMode(true,  true,  true),  std::string("shared"));
+	// GPU presence shouldn't override the shared path when DISPLAY is set.
+	ATF_REQUIRE_EQ(RunGuiPure::resolveAutoMode(true,  false, true),  std::string("shared"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(autoMode_wayland_only_picks_shared);
+ATF_TEST_CASE_BODY(autoMode_wayland_only_picks_shared)
+{
+	// Wayland-only host (no X server) -> shared path. The shared
+	// branch in setupX11 conditionally skips X11 when DISPLAY is
+	// unset and just sets up Wayland.
+	ATF_REQUIRE_EQ(RunGuiPure::resolveAutoMode(false, true, false), std::string("shared"));
+	ATF_REQUIRE_EQ(RunGuiPure::resolveAutoMode(false, true, true),  std::string("shared"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(autoMode_no_display_with_gpu_picks_gpu);
+ATF_TEST_CASE_BODY(autoMode_no_display_with_gpu_picks_gpu)
+{
+	// SSH session into a GPU host: no DISPLAY, no Wayland, has GPU.
+	ATF_REQUIRE_EQ(RunGuiPure::resolveAutoMode(false, false, true), std::string("gpu"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(autoMode_nothing_picks_headless);
+ATF_TEST_CASE_BODY(autoMode_nothing_picks_headless)
+{
+	ATF_REQUIRE_EQ(RunGuiPure::resolveAutoMode(false, false, false), std::string("headless"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(parseWayland_basenames);
+ATF_TEST_CASE_BODY(parseWayland_basenames)
+{
+	ATF_REQUIRE_EQ(RunGuiPure::parseWaylandDisplay("wayland-0"), std::string("wayland-0"));
+	ATF_REQUIRE_EQ(RunGuiPure::parseWaylandDisplay("wayland-1"), std::string("wayland-1"));
+	ATF_REQUIRE_EQ(RunGuiPure::parseWaylandDisplay("custom_socket-name.42"), std::string("custom_socket-name.42"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(parseWayland_rejects_paths_and_garbage);
+ATF_TEST_CASE_BODY(parseWayland_rejects_paths_and_garbage)
+{
+	ATF_REQUIRE_EQ(RunGuiPure::parseWaylandDisplay(""), std::string());
+	ATF_REQUIRE_EQ(RunGuiPure::parseWaylandDisplay("/abs/path"), std::string());
+	ATF_REQUIRE_EQ(RunGuiPure::parseWaylandDisplay("rel/path"), std::string());
+	ATF_REQUIRE_EQ(RunGuiPure::parseWaylandDisplay(".."), std::string());
+	ATF_REQUIRE_EQ(RunGuiPure::parseWaylandDisplay("."), std::string());
+	ATF_REQUIRE_EQ(RunGuiPure::parseWaylandDisplay("$(rm -rf /)"), std::string());
+	ATF_REQUIRE_EQ(RunGuiPure::parseWaylandDisplay("with space"), std::string());
+	ATF_REQUIRE_EQ(RunGuiPure::parseWaylandDisplay("with;semicolon"), std::string());
+	// Length cap at 64.
+	std::string toolong(65, 'a');
+	ATF_REQUIRE_EQ(RunGuiPure::parseWaylandDisplay(toolong), std::string());
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
+	// 0.8.18: gui: auto
+	ATF_ADD_TEST_CASE(tcs, autoMode_display_set_picks_shared);
+	ATF_ADD_TEST_CASE(tcs, autoMode_wayland_only_picks_shared);
+	ATF_ADD_TEST_CASE(tcs, autoMode_no_display_with_gpu_picks_gpu);
+	ATF_ADD_TEST_CASE(tcs, autoMode_nothing_picks_headless);
+	ATF_ADD_TEST_CASE(tcs, parseWayland_basenames);
+	ATF_ADD_TEST_CASE(tcs, parseWayland_rejects_paths_and_garbage);
+
 	ATF_ADD_TEST_CASE(tcs, xorg_conf_default_driver);
 	ATF_ADD_TEST_CASE(tcs, xorg_conf_explicit_driver);
 	ATF_ADD_TEST_CASE(tcs, xorg_conf_nvidia_extras);

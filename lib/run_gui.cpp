@@ -22,6 +22,7 @@
 #include <netinet/in.h>
 #include <errno.h>
 
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -80,17 +81,23 @@ static unsigned findAvailablePort(unsigned preferred) {
 
 // Determine effective GUI mode from spec.
 // Priority: gui.mode > x11.mode > auto-detect.
-// "auto" logic: if GPU detected -> gpu, elif DISPLAY set -> nested, else headless
+//
+// 0.8.18: `gui: auto` resolution lives in RunGuiPure::resolveAutoMode.
+//   DISPLAY or WAYLAND_DISPLAY set -> "shared" (was "nested" pre-0.8.18)
+//   hasGpu                         -> "gpu"
+//   else                           -> "headless"
+// The shared path picks up XAUTHORITY copy + Wayland mount further
+// down (see setupX11). Operators who want Xephyr (the pre-0.8.18
+// 'auto' behaviour) write `gui: nested` explicitly.
 static std::string resolveGuiMode(const Spec &spec) {
   if (spec.guiOptions) {
     if (spec.guiOptions->mode == "auto") {
-      // Check for GPU: try to detect via sysctl or /dev/dri
       struct stat st;
       bool hasGpu = (::stat("/dev/dri/card0", &st) == 0) ||
                     (::stat("/dev/nvidia0", &st) == 0);
-      if (hasGpu && ::getenv("DISPLAY") == nullptr)
-        return "gpu";
-      return ::getenv("DISPLAY") ? "nested" : "headless";
+      bool displaySet  = (::getenv("DISPLAY")         != nullptr);
+      bool waylandSet  = (::getenv("WAYLAND_DISPLAY") != nullptr);
+      return RunGuiPure::resolveAutoMode(displaySet, waylandSet, hasGpu);
     }
     return spec.guiOptions->mode;
   }
@@ -571,14 +578,107 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
          "keystrokes and manipulate windows. Use mode=nested (Xephyr) or mode=headless "
          "for security-sensitive workloads. Set CRATE_X11_SHARED_ACK=1 to suppress this warning.")
   }
-  if (logProgress)
-    std::cerr << rang::fg::gray << "x11 option (mode=shared): mount the X11 socket in jail" << rang::style::reset << std::endl;
-  Util::Fs::mkdir(J("/tmp/.X11-unix"), 01777);
-  mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix", MNT_IGNORE));
+
+  bool isAutoFlow = (spec.guiOptions && spec.guiOptions->mode == "auto");
   auto *display = ::getenv("DISPLAY");
-  if (display == nullptr)
+  auto *waylandDisplay = ::getenv("WAYLAND_DISPLAY");
+  auto *xdgRuntimeDir = ::getenv("XDG_RUNTIME_DIR");
+
+  // X11 socket bind + DISPLAY env. DISPLAY is required for traditional
+  // shared mode but optional for `gui: auto` (Wayland-only host).
+  if (display != nullptr) {
+    if (logProgress)
+      std::cerr << rang::fg::gray << "x11 option (mode=shared): mount the X11 socket in jail" << rang::style::reset << std::endl;
+    Util::Fs::mkdir(J("/tmp/.X11-unix"), 01777);
+    mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix", MNT_IGNORE));
+    setJailEnv("DISPLAY", display);
+  } else if (!isAutoFlow) {
+    // Pre-0.8.18 behaviour: traditional x11.mode=shared without
+    // DISPLAY is an operator error.
     ERR("DISPLAY environment variable is not set")
-  setJailEnv("DISPLAY", display);
+  } else if (waylandDisplay == nullptr) {
+    // gui: auto with neither DISPLAY nor WAYLAND_DISPLAY shouldn't
+    // have reached the shared branch — resolveAutoMode would have
+    // picked headless or gpu. Defensive guard.
+    ERR("gui: auto resolved to shared but neither DISPLAY nor WAYLAND_DISPLAY is set")
+  }
+
+  // 0.8.18: copy $XAUTHORITY into a jail-local cookie for `gui: auto`.
+  // Without this, the in-jail X client gets "No protocol specified"
+  // because the host's MIT-MAGIC-COOKIE-1 file is unreachable from
+  // inside the jail. We copy (don't bind) so a jail compromise can't
+  // overwrite the operator's cookie file on the host.
+  if (isAutoFlow && display != nullptr) {
+    auto *xauth = ::getenv("XAUTHORITY");
+    std::string xauthPath = (xauth != nullptr) ? std::string(xauth) : std::string();
+    if (xauthPath.empty()) {
+      // Default per X(7): $HOME/.Xauthority
+      auto *home = ::getenv("HOME");
+      if (home != nullptr)
+        xauthPath = std::string(home) + "/.Xauthority";
+    }
+    if (!xauthPath.empty() && Util::Fs::fileExists(xauthPath)) {
+      auto jailXauth = J("/root/.Xauthority");
+      try {
+        Util::Fs::copyFile(xauthPath, jailXauth);
+        ::chmod(jailXauth.c_str(), 0600);
+        setJailEnv("XAUTHORITY", "/root/.Xauthority");
+        if (logProgress)
+          std::cerr << rang::fg::gray << "gui: auto: copied $XAUTHORITY -> "
+                    << jailXauth << rang::style::reset << std::endl;
+      } catch (const std::exception &ex) {
+        std::cerr << rang::fg::yellow
+                  << "gui: auto: failed to copy $XAUTHORITY (" << ex.what()
+                  << ") — in-jail X clients may need 'xhost +local:' on the host"
+                  << rang::style::reset << std::endl;
+      }
+    }
+  }
+
+  // 0.8.18: bind-mount the host's Wayland socket into the jail for
+  // `gui: auto`. WAYLAND_DISPLAY's value (e.g. "wayland-0") is the
+  // socket basename under $XDG_RUNTIME_DIR. We map it into the jail
+  // at /tmp/wayland/<name> + set WAYLAND_DISPLAY=<name> +
+  // XDG_RUNTIME_DIR=/tmp/wayland inside the jail. /tmp/wayland is a
+  // safe target because its parent is mode 01777 already.
+  if (isAutoFlow && waylandDisplay != nullptr && xdgRuntimeDir != nullptr) {
+    auto sockBasename = RunGuiPure::parseWaylandDisplay(waylandDisplay);
+    if (sockBasename.empty()) {
+      std::cerr << rang::fg::yellow
+                << "gui: auto: WAYLAND_DISPLAY='" << waylandDisplay
+                << "' not a usable basename (paths/special chars unsupported); "
+                << "skipping Wayland mount"
+                << rang::style::reset << std::endl;
+    } else {
+      std::string hostSock = std::string(xdgRuntimeDir) + "/" + sockBasename;
+      if (Util::Fs::fileExists(hostSock)) {
+        try {
+          Util::Fs::mkdir(J("/tmp/wayland"), 0700);
+          // Pre-create an empty file at the target so nullfs has
+          // something to mount over (FreeBSD nullfs needs a target).
+          auto jailSockTarget = J("/tmp/wayland/") + sockBasename;
+          { std::ofstream touch(jailSockTarget); }
+          mount(new Mount("nullfs", jailSockTarget, hostSock, MNT_IGNORE));
+          setJailEnv("XDG_RUNTIME_DIR", "/tmp/wayland");
+          setJailEnv("WAYLAND_DISPLAY", sockBasename);
+          if (logProgress)
+            std::cerr << rang::fg::gray << "gui: auto: bound Wayland socket "
+                      << hostSock << " -> " << jailSockTarget
+                      << rang::style::reset << std::endl;
+        } catch (const std::exception &ex) {
+          std::cerr << rang::fg::yellow
+                    << "gui: auto: failed to bind Wayland socket "
+                    << hostSock << " (" << ex.what() << ")"
+                    << rang::style::reset << std::endl;
+        }
+      } else if (logProgress) {
+        std::cerr << rang::fg::gray
+                  << "gui: auto: WAYLAND_DISPLAY set but socket "
+                  << hostSock << " not found; skipping Wayland mount"
+                  << rang::style::reset << std::endl;
+      }
+    }
+  }
 
   // Register shared mode in GUI registry (for tracking)
   {

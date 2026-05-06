@@ -25,16 +25,12 @@ operational quality.)
   single-line spec key.
 
 * (feature) `gui: auto` — zero-config GUI mode for desktop-app
-  jails. Single spec line `gui: auto` (or auto-detect from
-  `start:` cmd: firefox/gimp/blender/...) triggers: copy
-  $XAUTHORITY -> jail-local cookie, bind-mount /tmp/.X11-unix,
-  expose /dev/dri/card0 + renderD128 via devfs ruleset, detect
-  Wayland and bind-mount $XDG_RUNTIME_DIR/wayland-0 if present.
-  Removes the per-jail X11/devfs config every desktop spec
-  currently has. Inspired by libkrun's virtio-gpu+venus path
-  (VM-only solution; jails get the same DX via direct DRM access
-  which is faster than virtio-gpu translation). Estimated 500
-  LOC, one release.
+  jails. *Shipped — assembled across 0.7.19 (scalar shorthand),
+  0.8.11 (auto /dev/dri/*), and 0.8.18 (X11 cookie copy +
+  Wayland socket bind + auto-shared resolution). A single spec
+  line `gui: auto` now covers the full firefox-in-a-jail flow.
+  Auto-detection from `start:` cmd (firefox/gimp/blender/...) was
+  not done — spec-level `gui: auto` was sufficient surface.
 
 === Out of scope (separate repository) ===
 
