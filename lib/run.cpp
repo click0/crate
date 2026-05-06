@@ -11,6 +11,7 @@
 #include "share_pure.h"
 #include "bridge_pure.h"
 #include "wireguard_runtime_pure.h"
+#include "ipsec_runtime_pure.h"
 #include "warm_pure.h"
 #include "config.h"
 #include "ip_alloc_pure.h"
@@ -387,6 +388,33 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         } catch (...) {
           // teardown is best-effort — log but don't propagate.
         }
+      });
+    }
+  }
+
+  // 0.8.4: IPsec / strongSwan tunnel. Same lifecycle pattern as
+  // wireguard above, via `ipsec auto --add/--up` before jail start
+  // and `--down/--delete` on teardown. Operator preconfigures the
+  // strongSwan conn (via ipsec.conf or include); we only toggle it
+  // around the jail's lifetime.
+  RunAtEnd ipsecDownAtEnd;
+  if (auto *ip = spec.optionIpsec()) {
+    if (IpsecRuntimePure::isEnabled(ip->connName)) {
+      LOG("ipsec: adding + bringing up conn '" << ip->connName << "'")
+      Util::execCommand(IpsecRuntimePure::buildAddArgv(ip->connName),
+                        "ipsec auto --add");
+      Util::execCommand(IpsecRuntimePure::buildUpArgv(ip->connName),
+                        "ipsec auto --up");
+      auto connName = ip->connName;
+      ipsecDownAtEnd.reset([connName]() {
+        try {
+          Util::execCommand(IpsecRuntimePure::buildDownArgv(connName),
+                            "ipsec auto --down");
+        } catch (...) {}
+        try {
+          Util::execCommand(IpsecRuntimePure::buildDeleteArgv(connName),
+                            "ipsec auto --delete");
+        } catch (...) {}
       });
     }
   }

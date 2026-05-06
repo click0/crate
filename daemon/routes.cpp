@@ -26,6 +26,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <ctime>
 #include <fstream>
 #include <map>
@@ -40,6 +41,15 @@ namespace Crated {
 
 static std::mutex g_rateMutex;
 static std::map<std::string, std::pair<int, time_t>> g_rateBuckets;
+
+// 0.8.4: cap the number of concurrent log-streaming clients so a
+// burst of polling agents (Prometheus exporters, log shippers,
+// curl-in-a-tight-loop scripts) cannot exhaust the daemon's
+// thread pool. The real fix — single bg thread + kqueue
+// multiplex — is tracked as a follow-up; this counter is the
+// operational guard until then.
+static std::atomic<int> g_streamingClients{0};
+static constexpr int     kMaxStreamingClients = 32;
 
 static bool checkRateLimit(const std::string &clientId, const std::string &endpoint,
                            int maxPerSecond) {
@@ -379,19 +389,26 @@ static void handleContainerLogs(const httplib::Request &req, httplib::Response &
     return;
   }
 
-  // Streaming mode: use chunked transfer encoding with tail -f
-  // cpp-httplib supports set_chunked_content_provider for streaming responses.
+  // Streaming mode: chunked transfer encoding with a polling tail-f
+  // loop inside the chunked content provider. One server thread per
+  // active streaming client.
   //
-  // TODO: Full implementation requires a background thread running tail -f
-  // and feeding chunks to the provider callback. The current approach uses
-  // set_chunked_content_provider with a blocking read from tail -f, which
-  // works but ties up a server thread per streaming client.
-  //
-  // Future improvements:
-  //   - Use epoll/kqueue to multiplex log file watching
-  //   - Add a connection limit for streaming clients
-  //   - Support WebSocket upgrade for bidirectional streaming (RFC 6455)
-  //   - Implement server-sent events (SSE) as an alternative transport
+  // 0.8.4: bounded concurrency via g_streamingClients (cap
+  // kMaxStreamingClients=32). Beyond the cap we return HTTP 503
+  // with Retry-After so well-behaved clients back off instead of
+  // queueing on the daemon's thread pool. Underlying kqueue/epoll
+  // multiplex refactor remains tracked as future work.
+
+  if (g_streamingClients.load() >= kMaxStreamingClients) {
+    res.status = 503;
+    res.set_header("Retry-After", "5");
+    jsonError(res, 503,
+      "log-stream concurrency limit reached ("
+      + std::to_string(kMaxStreamingClients)
+      + " clients); retry shortly");
+    return;
+  }
+  g_streamingClients.fetch_add(1);
 
   res.set_header("X-Content-Type-Options", "nosniff");
   res.set_header("Cache-Control", "no-cache");
@@ -443,7 +460,11 @@ static void handleContainerLogs(const httplib::Request &req, httplib::Response &
       // Unreachable; streaming ends when client disconnects
     },
     [](bool /*success*/) {
-      // Cleanup callback — nothing to do
+      // 0.8.4: release the streaming-clients counter slot whether
+      // the stream finished cleanly (client disconnected) or
+      // erroed out. Any path that aborts this provider eventually
+      // gets here.
+      g_streamingClients.fetch_sub(1);
     }
   );
 }

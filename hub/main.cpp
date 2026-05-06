@@ -44,7 +44,8 @@ int main(int argc, char **argv) {
   ::signal(SIGTERM, signalHandler);
 
   // Load node configuration
-  auto nodes = CrateHub::loadNodes(configPath);
+  unsigned pollIntervalSec = 15;
+  auto nodes = CrateHub::loadNodes(configPath, &pollIntervalSec);
   if (nodes.empty()) {
     std::cerr << "crate-hub: no nodes configured in " << configPath << std::endl;
     return 1;
@@ -63,7 +64,7 @@ int main(int argc, char **argv) {
   CrateHub::Store store("/var/db/crate-hub/metrics.db");
 
   // Start poller thread
-  CrateHub::Poller poller(nodes, store);
+  CrateHub::Poller poller(nodes, store, pollIntervalSec);
   std::thread pollerThread([&poller]() { poller.run(); });
 
   // Start HTTP server

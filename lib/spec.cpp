@@ -76,7 +76,7 @@ Spec& Spec::operator=(const Spec &o) {
 // all options — keep the parsing-order list here. The validation set
 // lives in lib/spec_pure.cpp (spec_pure also references the parser
 // list via re-declaration to keep things isolated).
-static std::list<std::string> allOptionsLst = {"x11", "net", "ssl-certs", "tor", "video", "gl", "no-rm-static-libs", "dbg-ktrace", "wireguard"};
+static std::list<std::string> allOptionsLst = {"x11", "net", "ssl-certs", "tor", "video", "gl", "no-rm-static-libs", "dbg-ktrace", "wireguard", "ipsec"};
 
 // helpers
 static std::string AsString(const YAML::Node &node) {
@@ -711,6 +711,20 @@ static Spec parseSpecFromNode(YAML::Node top) {
                     wg->configPath = AsString(wgOpt.second);
                   else
                     ERR("the invalid value options/wireguard/" << wgOpt.first << " supplied")
+                }
+              }
+            } else if (soptName == "ipsec") {
+              // 0.8.4: strongSwan conn name. Operator pre-loads the
+              // conn into ipsec.conf (or an include); runtime brings
+              // it up at jail start and tears it down on teardown.
+              optVal = std::make_shared<Spec::IpsecOptDetails>();
+              if (soptVal.IsMap()) {
+                auto ip = static_cast<Spec::IpsecOptDetails*>(optVal.get());
+                for (auto ipOpt : soptVal) {
+                  if (AsString(ipOpt.first) == "conn")
+                    ip->connName = AsString(ipOpt.second);
+                  else
+                    ERR("the invalid value options/ipsec/" << ipOpt.first << " supplied")
                 }
               }
             } else {

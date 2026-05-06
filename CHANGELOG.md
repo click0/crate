@@ -6,6 +6,136 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.4] — 2026-05-06
+
+Three code-health fixes from the second-pass audit. All three were
+real debt items rather than aesthetic concerns; this release closes
+each with the smallest reasonable patch + doc/comment.
+
+### Fix #1: hub `poll_interval:` config now actually wired
+
+`hub/poller.cpp::loadNodes` read `root["poll_interval"]` but threw
+the value away — operators setting a custom interval saw it
+silently ignored, and the hard-coded 15s default was used instead.
+
+This release:
+- `loadNodes(path, unsigned *outPollIntervalSec = nullptr)` —
+  matches the `loadHaSpecs(path, long *outThresholdSeconds)`
+  out-param pattern from 0.7.3
+- `Poller(nodes, store, unsigned pollIntervalSec = 15)` —
+  constructor takes the value
+- `hub/main.cpp` reads + passes through
+
+Sanity bounds: `[1, 3600]` seconds. Below 1 caps the daemon at
+something useful; above 3600 (1h) caps an operator-typo from
+leaving a node looking "down" for days.
+
+### Fix #2: log-streaming concurrency cap
+
+`daemon/routes.cpp::handleContainerLogs` (the `?follow=true`
+streaming variant) ties up one server thread per active client
+via a polling tail-f loop. The TODO comment at line 385
+acknowledged this could exhaust the daemon's thread pool under a
+burst of log shippers / Prometheus exporters / curl-in-a-loop
+scripts.
+
+The "right" fix is a single bg thread + kqueue/epoll multiplex.
+That's a substantial refactor (queued separately). This release
+ships the **operational guard**:
+
+- `g_streamingClients` atomic counter, capped at
+  `kMaxStreamingClients = 32`
+- Beyond the cap: HTTP `503 Service Unavailable` with
+  `Retry-After: 5` so well-behaved clients back off
+- Decremented in the chunked-content-provider's cleanup callback
+  whether the stream finished cleanly or errored out
+
+Converts "ties up a server thread per client" from
+**unbounded** resource exposure to **bounded** (32) resource
+exposure. The kqueue refactor remains tracked for a future
+release; not blocking 0.8.4.
+
+### Fix #3: IPsec runtime hook (closes 0.6.10's split-half TODO)
+
+0.6.10 shipped `crate vpn ipsec render-conf` (validate + render
+strongSwan ipsec.conf snippets) with a header comment noting that
+"full kernel-level integration with crate jails is a separate
+runtime concern (TODO)." This release fills in the runtime half:
+
+```yaml
+options:
+  ipsec:
+    conn: my-tunnel-1
+```
+
+When a jail's spec has the new `options.ipsec.conn:` field set,
+`crate run`:
+- before jail start: `ipsec auto --add <conn>` then
+  `ipsec auto --up <conn>`
+- on teardown (incl. crash): `ipsec auto --down <conn>` then
+  `ipsec auto --delete <conn>`
+
+Mirrors the WireGuard runtime pattern from 0.6.13. Operator
+prerequisites (operator's responsibility, NOT crate's):
+- strongSwan installed and the daemon running on the host
+- the conn block referenced by `conn:` already in
+  `/usr/local/etc/ipsec.conf` (or an included file). The
+  `crate vpn ipsec render-conf` command can generate this file.
+
+### Implementation
+
+- `lib/ipsec_runtime_pure.{h,cpp}` — new pure module:
+  - `validateConnName(name)` — ASCII alnum + `._-`, length 1..32,
+    `%default` reserved (strongSwan keyword)
+  - `buildAddArgv` / `buildUpArgv` / `buildDownArgv` /
+    `buildDeleteArgv` — `/usr/local/sbin/ipsec auto --<verb> <name>`
+  - `isEnabled(name)` — non-empty predicate
+- `lib/spec.h` — `IpsecOptDetails { connName }` class added
+  alongside existing `WireguardOptDetails`
+- `lib/spec.cpp` — `options.ipsec.conn:` parser (mirrors
+  wireguard's `options.wireguard.config:`)
+- `lib/spec_pure.cpp` — `optionIpsec()` accessor + validate hook +
+  added `"ipsec"` to `allOptionsLst` whitelist
+- `lib/run.cpp` — `RunAtEnd ipsecDownAtEnd` declared and reset
+  alongside the existing `wgDownAtEnd`. Lifecycle parity.
+
+### Tests
+
+`tests/unit/ipsec_runtime_pure_test.cpp` — **6 ATF cases**:
+
+- `conn_typical` — alphabet acceptance
+- `conn_invalid` — empty, oversized, `%default` reserved, shell
+  metas, slashes
+- `add_argv_shape` — `/usr/local/sbin/ipsec auto --add <name>` 4-token
+  shape pinned
+- `up_down_delete_argv_verbs` — verbs at index [2], conn at [3]
+- `absolute_ipsec_path` — all builders use absolute path
+  (matches WireGuard's `/usr/local/bin/wg-quick` policy)
+- `enabled_predicate` — non-empty test
+
+**985/985 unit tests pass locally** (979 prior + 6 new).
+
+`lib/ipsec_pure.h` header comment updated to point at the new
+runtime module instead of the TODO marker.
+
+Also: `lib/lifecycle.h` got a documentation comment in this
+release explaining why it has zero direct includers (re-exported
+via `lib/commands.h`). No code change.
+
+### NOT in this release
+
+- **kqueue/epoll log-stream multiplex** — still tracked as
+  follow-up; the 32-client cap from this release is the
+  operational guard until then.
+- **`firewall_backend:` config override** for hybrid pf+ipfw
+  hosts where operators want auto-fw on ipfw even when pf is
+  loaded. Defer until requested.
+- **IPsec auto-render** — automatically `crate vpn ipsec
+  render-conf` + drop into strongSwan's include dir. Currently
+  operator does that step manually.
+
+---
+
 ## [0.8.3] — 2026-05-06
 
 `ipfw redir_port` for port-forward — closes the pf/ipfw symmetry

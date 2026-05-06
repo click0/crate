@@ -103,6 +103,19 @@ public:
     // RunAtEnd handler for `wg-quick down <path>` on teardown.
     std::string configPath;
   };
+  // 0.8.4: IPsec / strongSwan integration. Sister of
+  // WireguardOptDetails. Operator gives a strongSwan conn name
+  // (already loaded in /usr/local/etc/ipsec.conf via include);
+  // runtime issues `ipsec auto --add/--up` before jail start and
+  // `--down/--delete` on teardown. The `crate vpn ipsec render-conf`
+  // command (0.6.10) generates conn definitions; this option ties
+  // them to a jail's lifecycle.
+  class IpsecOptDetails : public OptDetails {
+  public:
+    IpsecOptDetails();
+    static std::shared_ptr<IpsecOptDetails> createDefault();
+    std::string connName;
+  };
   std::vector<std::string>                           baseKeep;
   std::vector<std::string>                           baseKeepWildcard;
   std::vector<std::string>                           baseRemove;
@@ -311,6 +324,7 @@ public:
   NetOptDetails* optionNetWr() const;
   const TorOptDetails* optionTor() const;
   const WireguardOptDetails* optionWireguard() const;
+  const IpsecOptDetails*     optionIpsec() const;
 private:
   template<class OptDetailsClass>
   const OptDetailsClass* getOptionDetails(const char *opt) const;

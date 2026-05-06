@@ -39,8 +39,10 @@ std::vector<HaPure::HaSpec> loadHaSpecs(const std::string &configPath,
   return specs;
 }
 
-std::vector<NodeConfig> loadNodes(const std::string &configPath) {
+std::vector<NodeConfig> loadNodes(const std::string &configPath,
+                                  unsigned *outPollIntervalSec) {
   std::vector<NodeConfig> nodes;
+  if (outPollIntervalSec) *outPollIntervalSec = 15;  // default
   try {
     YAML::Node root = YAML::LoadFile(configPath);
     if (auto nodeList = root["nodes"]) {
@@ -55,16 +57,24 @@ std::vector<NodeConfig> loadNodes(const std::string &configPath) {
         nodes.push_back(nc);
       }
     }
-    if (root["poll_interval"])
-      ; // TODO: parse into pollIntervalSec_
+    if (outPollIntervalSec && root["poll_interval"]) {
+      auto v = root["poll_interval"].as<long>();
+      // Sanity: poll_interval must be at least 1 second to avoid
+      // CPU-spin loops, and capped at one hour to avoid an
+      // operator-typo from leaving a node looking "down" for days.
+      if (v < 1)     v = 1;
+      if (v > 3600)  v = 3600;
+      *outPollIntervalSec = static_cast<unsigned>(v);
+    }
   } catch (const std::exception &e) {
     std::cerr << "crate-hub: failed to load config: " << e.what() << std::endl;
   }
   return nodes;
 }
 
-Poller::Poller(const std::vector<NodeConfig> &nodes, Store &store)
-  : nodes_(nodes), store_(store)
+Poller::Poller(const std::vector<NodeConfig> &nodes, Store &store,
+               unsigned pollIntervalSec)
+  : nodes_(nodes), store_(store), pollIntervalSec_(pollIntervalSec)
 {
   statuses_.resize(nodes.size());
   for (size_t i = 0; i < nodes.size(); i++) {
