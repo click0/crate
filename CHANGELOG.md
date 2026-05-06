@@ -6,6 +6,104 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.17] — 2026-05-06
+
+Auto-IP allocation for `IpMode::Auto` bridge mode (Phase 1 of
+`network: auto` from the libkrun-inspired roadmap). The
+`IpMode::Auto` enum value has been declared since the early
+networking work but its runtime fell through to DHCP. This release
+activates pool-based allocation: when a global `network_pool` CIDR
+is configured, the auto branch picks a free IP, registers a lease,
+and configures it as a static address.
+
+### Configuration
+
+```yaml
+# /usr/local/etc/crate.yml or ~/.config/crate/crate.yml
+network_pool: 10.66.0.0/24
+```
+
+When set, every bridged jail with `ipMode: auto` (the default if
+no explicit `ip:` is given) gets an allocated IP from the pool.
+When unset, behaviour is unchanged from 0.7.16 — auto mode falls
+back to DHCP. So the change is opt-in and pre-existing specs
+continue to work.
+
+### Allocator semantics
+
+- The pool's `.0` (network), `.1` (gateway, by convention), and
+  the broadcast (`.255` for /24) are reserved.
+- Allocation is "next lowest free IP" — deterministic, cron-friendly.
+- Pool exhausted → `crate run` exits with a clear error before
+  any jail state is created.
+- Idempotent: re-running `crate run` for the same jail-instance
+  picks up the existing lease (no double-allocation).
+
+### Lease store
+
+`/var/run/crate/network-leases.txt` — flat text file:
+
+```
+# crate network leases — managed by crate run / crate clean
+# format: <jail-name> <ip>
+jail-firefox-abcd 10.66.0.2
+jail-postgres-1234 10.66.0.3
+```
+
+- Atomic writes via tmpfile + `rename(2)` — crash mid-write
+  doesn't leave a half-written file.
+- Concurrent `crate run` invocations serialised via `flock(2)` on
+  the lease file — no two jails can ever pick the same IP.
+- Released on jail teardown via a `RunAtEnd` hook (best-effort:
+  failure logs but doesn't mask the real teardown error).
+
+### Implementation
+
+- `lib/ip_alloc_pure.{h,cpp}` — pure helpers:
+  - `parseCidr`, `parseIp`, `formatIp` — IPv4 round-trip
+  - `gatewayFor`, `broadcastFor` — pool arithmetic
+  - `allocateNext(pool, taken)` — next free, skips `.0`, `.1`,
+    broadcast, and any IP in `taken`
+  - `parseLeaseLine`, `formatLeaseLine` — wire format
+- `lib/network_lease.{h,cpp}` — runtime: `flock`-protected
+  read/write/append/release on the lease file. Atomic.
+- `lib/config.{h,cpp}` — `Settings.networkPool` (string CIDR).
+  Empty = disabled.
+- `lib/run.cpp` — bridge-mode `IpMode::Auto` branch consults
+  `Config::get().networkPool`; if set, allocates + configures
+  static IP + registers `RunAtEnd` lease release. If not set,
+  falls through to existing DHCP path.
+
+### Tests
+
+`tests/unit/ip_alloc_pure_test.cpp` — **14 ATF cases**:
+
+- IP round-trip + bad-input rejection (5 forms)
+- CIDR typical / bad (no slash, empty prefix, /0, /31, /33,
+  bad octet, misaligned base)
+- gateway/broadcast for /24 + /30
+- `allocateNext` happy path, skips taken, skips gateway even if
+  in `taken` (defensive), pool-exhausted returns 0, /30 full pool,
+  doesn't assign broadcast
+- Lease line round-trip + rejection (5 forms: empty, name-only,
+  bad ip, slash in name, leading/double space)
+
+**947/947 unit tests pass locally** (933 prior + 14 new).
+
+### NOT in this release (Phase 2 / Phase 3)
+
+- **`mode: auto` shortcut** in spec — single line replaces the
+  full `options.net.{...}` section. Phase 2 (0.7.18).
+- **SNAT auto-rule generation** — pf or ipfw rule for jail's
+  outbound traffic. Phase 2.
+- **Port forwarding auto-rules** — generate pf/ipfw rdr from
+  the spec's `inbound:` declaration. Phase 2.
+- **IPv6 pool allocation** — only IPv4 in this phase. Phase 3.
+- **Pool reservation in passthrough/netgraph modes** — currently
+  bridge-only. Future.
+
+---
+
 ## [0.7.16] — 2026-05-06
 
 `crate validate --strict` + completions refresh + Makefile header-dep
