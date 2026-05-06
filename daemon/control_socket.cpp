@@ -35,6 +35,7 @@
 
 #include "control_socket.h"
 #include "control_socket_pure.h"
+#include "sandbox.h"
 #include "../lib/jail_query.h"
 #include "../lib/pool_pure.h"
 #include "../lib/util.h"
@@ -263,6 +264,12 @@ void handleConnection(int connFd,
     }
   }
 
+  // Capsicum (0.7.14): once we've extracted peer creds, the only ops
+  // this fd needs are recv/send/shutdown. Limit it before any HTTP
+  // parsing runs, so a parser-side bug can't repurpose the fd into
+  // anything else.
+  Sandbox::applyConnectionRights(connFd);
+
   bool bad = false;
   auto headBlob = readUntilNeedle(connFd, "\r\n\r\n", kMaxHeader, bad);
   if (bad) {
@@ -418,6 +425,11 @@ int bindSocketOrThrow(const ControlSocketPure::ControlSocketSpec &spec,
     ::close(fd);
     throw std::runtime_error("listen " + spec.path + ": " + std::strerror(e));
   }
+  // Capsicum (0.7.14): listener fd needs only accept(2). If a
+  // memory-corruption bug snags this fd reference, an attacker can't
+  // turn it into a sender — only an acceptor of new connections.
+  // No-op on platforms without HAVE_CAPSICUM.
+  Sandbox::applyListenerRights(fd);
   return fd;
 }
 

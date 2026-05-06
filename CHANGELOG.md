@@ -6,6 +6,111 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.14] — 2026-05-06
+
+`crated` Capsicum sandbox — per-fd `cap_rights_limit(2)` on control-socket
+listeners and accepted connections. Activates the `lib/capsicum_ops.cpp`
+infrastructure that has been in the tree (since the early Capsicum
+plumbing) but never wired into the daemon's listen/accept paths.
+
+### Threat model
+
+Defence-in-depth against memory-corruption bugs in the daemon. If a
+buffer-overflow (or similar) gives an attacker a stale `int fd`
+reference to a control-socket listener, they cannot turn it into:
+
+- a sender of arbitrary bytes (no `CAP_SEND` on the listener)
+- a connection-establisher to other hosts (no `CAP_CONNECT`)
+- a configuration-modifier (no `CAP_SETSOCKOPT`)
+
+The accept-only listener can only accept new clients — so the worst
+case is "attacker accepts a connection and serves a 403 from a
+half-corrupted handler", which is still bounded by the existing
+3-layer auth (filesystem perms → getpeereid → pool ACL/role).
+
+For accepted connection fds: limited to recv/send/shutdown the
+moment `getpeereid(2)` finishes. A parser-side bug can't repurpose
+the fd into an arbitrary file write or new socket op.
+
+### Why no `cap_enter()`
+
+`cap_enter(2)` would put the entire `crated` process into capability
+mode, which makes `execve(2)` of subprocesses fail with `ENOTCAPABLE`.
+crated routinely spawns `rctl(8)`, `jail(8)`, `jexec(8)`, `ipfw(8)`,
+`pfctl(8)`, `tar(1)` — all path-based. Whole-process sandbox is
+therefore architecturally incompatible with crated's current "spawn
+a tool for every state-changing op" pattern.
+
+A future hardening track (privsep, à la OpenSSH: sandboxed network
+front + privileged worker over a Unix-socket protocol) is out of
+scope for 0.7.x.
+
+### Right mappings
+
+| FdRole       | Rights                                                          | Count |
+|--------------|------------------------------------------------------------------|-------|
+| `Listener`   | `CAP_ACCEPT, CAP_GETSOCKOPT, CAP_FSTAT`                          | 3     |
+| `Connection` | `CAP_RECV, CAP_SEND, CAP_SHUTDOWN, CAP_GETSOCKOPT, CAP_FSTAT`     | 5     |
+| `LogWrite`   | `CAP_WRITE, CAP_FSYNC, CAP_FSTAT`                                 | 3     |
+| `ConfigRead` | `CAP_READ, CAP_FSTAT`                                             | 2     |
+
+`CAP_FSTAT` is included in every category so libc's `fstat`-based
+buffering optimisations (stdio block-size detection, etc.) keep
+working — without it many calls hit `ENOTCAPABLE` paths.
+
+### Implementation
+
+- `daemon/sandbox_pure.{h,cpp}` — pure helpers:
+  - `FdRole` enum (`Listener`/`Connection`/`LogWrite`/`ConfigRead`)
+  - `labelFor()` — stable diagnostic strings (log-scrapers depend
+    on them)
+  - `rightCountFor()` — expected number of `cap_rights_t` entries
+    per role, pinned by unit tests so a runtime drift surfaces
+  - `describe(fd, role)` — one-line log helper
+- `daemon/sandbox.{h,cpp}` — runtime: thin wrappers over
+  `cap_rights_init` + `cap_rights_limit`, behind `#ifdef HAVE_CAPSICUM`.
+  Linux build emits no-op stubs returning `false` so unit tests still
+  compile and link.
+- `daemon/control_socket.cpp` — wired:
+  - `bindSocketOrThrow` → `Sandbox::applyListenerRights(listenFd)`
+    immediately after `listen(2)`
+  - `handleConnection` → `Sandbox::applyConnectionRights(connFd)` the
+    moment `getpeereid(2)` finishes, before HTTP parsing runs
+
+### Tests
+
+`tests/unit/sandbox_pure_test.cpp` — **6 ATF cases**:
+
+- `labels_are_distinct` — role labels are unique
+- `labels_are_stable` — exact strings pinned (log-scraper contract)
+- `right_counts_match_runtime` — pin the (3, 5, 3, 2) tuple; if
+  someone adds a `CAP_*` to `daemon/sandbox.cpp` without bumping
+  this count, the test fails — surfacing the drift
+- `right_counts_strictly_positive` — no role should have zero rights
+  (zero rights = unusable fd = bug)
+- `connection_has_strictly_more_rights_than_listener` — invariant
+  (a connection is bidirectional + closable; a listener only accepts)
+- `describe_format` — output shape for log lines
+
+**908/908 unit tests pass locally** (902 from prior + 6 new).
+
+### NOT in this release (future hardening)
+
+- **Privsep architecture** — sandboxed network-front + privileged
+  worker process. Would enable real `cap_enter(2)` on the front. ~2
+  weeks of work; queued behind C4/D2/D5 in current roadmap.
+- **`cap_rights_limit` on the main daemon's httplib sockets** —
+  cpp-httplib doesn't expose the per-connection fd to handlers;
+  control-socket plane was rebuilt with a custom accept loop in
+  0.7.11 so we have the hooks there. Same custom-loop refactor on
+  the main daemon could activate per-fd sandbox there too.
+- **Whole-process audit-log fd limiting** — audit log is opened
+  per-record (O_APPEND | O_CLOEXEC), so there's no long-lived fd
+  to limit. A future change could keep the fd open and `applyLogWriteRights`
+  it; would speed up high-volume audit slightly.
+
+---
+
 ## [0.7.13] — 2026-05-06
 
 `crate doctor` — one-shot health check command. First command an
