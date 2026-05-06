@@ -130,6 +130,35 @@ std::string validateIpfwNatId(unsigned id);
 std::vector<std::string> buildIpfwNatConfigArgv(unsigned natId,
                                                 const std::string &externalIface);
 
+// 0.8.3: one redir_port clause for the ipfw nat config command.
+// Mirrors the spec's inboundPortsTcp/Udp pair shape.
+struct RedirPort {
+  std::string proto;        // "tcp" or "udp"
+  unsigned    hostPortLo = 0;
+  unsigned    hostPortHi = 0;
+  std::string jailAddr;     // "10.66.0.5"
+  unsigned    jailPortLo = 0;
+  unsigned    jailPortHi = 0;
+};
+
+// Build argv for the full nat config including redirects:
+//
+//   ipfw nat <natId> config if <iface>
+//     redir_port tcp 10.66.0.5:80 8080
+//     redir_port udp 10.66.0.5:5000-5099 5000-5099
+//     ...
+//
+// (All on one ipfw invocation — chains of `redir_port` are part of
+// the same nat config command.) Empty `redirs` is equivalent to
+// the SNAT-only buildIpfwNatConfigArgv form.
+//
+// Range form is emitted only when lo != hi (per side independently),
+// matching the pf rdr behaviour from 0.8.1.
+std::vector<std::string> buildIpfwNatConfigWithRedirsArgv(
+  unsigned natId,
+  const std::string &externalIface,
+  const std::vector<RedirPort> &redirs);
+
 // Build argv for the rule that activates the NAT for the jail's
 // outbound traffic:
 //   ipfw add <ruleId> nat <natId> ip from <jailAddr> to any out via <iface>

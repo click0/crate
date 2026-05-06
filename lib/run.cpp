@@ -876,19 +876,42 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
                         << rang::style::reset << std::endl;
             }
           } else if (ipfwStatus == 0) {
-            // 0.8.2: ipfw alternative. SNAT only in this release;
-            // port-forward via ipfw redir_port deferred to 0.8.3.
+            // 0.8.2 + 0.8.3: ipfw alternative. SNAT (always) plus
+            // redir_port clauses for each inbound: declaration.
             unsigned natId  = AutoFwPure::natIdForJail(jid);
             unsigned ruleId = AutoFwPure::ruleIdForJail(jid);
+            // Build redirs from spec inbound declarations.
+            std::vector<AutoFwPure::RedirPort> redirs;
+            for (const auto &[host, jail] : optionNet->inboundPortsTcp) {
+              if (AutoFwPure::validatePort(host.first).empty()
+                  && AutoFwPure::validatePort(host.second).empty()
+                  && AutoFwPure::validatePort(jail.first).empty()
+                  && AutoFwPure::validatePort(jail.second).empty()) {
+                redirs.push_back({"tcp",
+                  host.first, host.second, ipBare,
+                  jail.first, jail.second});
+              }
+            }
+            for (const auto &[host, jail] : optionNet->inboundPortsUdp) {
+              if (AutoFwPure::validatePort(host.first).empty()
+                  && AutoFwPure::validatePort(host.second).empty()
+                  && AutoFwPure::validatePort(jail.first).empty()
+                  && AutoFwPure::validatePort(jail.second).empty()) {
+                redirs.push_back({"udp",
+                  host.first, host.second, ipBare,
+                  jail.first, jail.second});
+              }
+            }
             try {
               Util::execCommand(
-                AutoFwPure::buildIpfwNatConfigArgv(natId, cfg.networkInterface),
+                AutoFwPure::buildIpfwNatConfigWithRedirsArgv(natId, cfg.networkInterface, redirs),
                 "ipfw nat config");
               Util::execCommand(
                 AutoFwPure::buildIpfwNatRuleArgv(ruleId, natId, ipBare, cfg.networkInterface),
                 "ipfw add nat rule");
               LOG("auto-fw[ipfw]: NAT instance " << natId << " + rule " << ruleId
-                  << " (" << ipBare << " -> " << cfg.networkInterface << ")")
+                  << " (" << ipBare << " -> " << cfg.networkInterface << ", "
+                  << redirs.size() << " redir_port clauses)")
               // Cleanup: delete rule first, then NAT instance.
               ipfwAutoFwCleanup.reset([natId, ruleId, &args]() {
                 LOG("auto-fw[ipfw]: cleanup rule " << ruleId
@@ -902,19 +925,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
                                     "ipfw nat delete");
                 } catch (...) {}
               });
-              if (!optionNet->inboundPortsTcp.empty()
-                  || !optionNet->inboundPortsUdp.empty()) {
-                std::cerr << rang::fg::yellow
-                          << "auto-fw[ipfw]: inbound: declarations ignored "
-                             "in 0.8.2 (port-forward via ipfw redir_port "
-                             "deferred to 0.8.3); switch to pf for full "
-                             "auto-fw or add ipfw fwd rules manually"
-                          << rang::style::reset << std::endl;
-              }
             } catch (const std::exception &ex) {
               std::cerr << rang::fg::yellow
-                        << "auto-fw[ipfw]: SNAT setup failed: " << ex.what()
-                        << " — outbound traffic may not work"
+                        << "auto-fw[ipfw]: SNAT/redir setup failed: " << ex.what()
+                        << " — outbound + port-forward traffic may not work"
                         << rang::style::reset << std::endl;
             }
           } else {

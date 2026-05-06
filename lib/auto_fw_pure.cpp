@@ -143,6 +143,30 @@ std::vector<std::string> buildIpfwNatConfigArgv(unsigned natId,
           "config", "if", externalIface};
 }
 
+std::vector<std::string> buildIpfwNatConfigWithRedirsArgv(
+    unsigned natId,
+    const std::string &externalIface,
+    const std::vector<RedirPort> &redirs) {
+  auto argv = buildIpfwNatConfigArgv(natId, externalIface);
+  for (const auto &r : redirs) {
+    // ipfw redir_port format:
+    //   redir_port <proto> <jailIp>:<jailLo>[-<jailHi>] <hostLo>[-<hostHi>]
+    argv.push_back("redir_port");
+    argv.push_back(r.proto);
+    std::string jailPortToken =
+      (r.jailPortLo == r.jailPortHi)
+        ? std::to_string(r.jailPortLo)
+        : (std::to_string(r.jailPortLo) + "-" + std::to_string(r.jailPortHi));
+    argv.push_back(r.jailAddr + ":" + jailPortToken);
+    std::string hostPortToken =
+      (r.hostPortLo == r.hostPortHi)
+        ? std::to_string(r.hostPortLo)
+        : (std::to_string(r.hostPortLo) + "-" + std::to_string(r.hostPortHi));
+    argv.push_back(hostPortToken);
+  }
+  return argv;
+}
+
 std::vector<std::string> buildIpfwNatRuleArgv(unsigned ruleId,
                                               unsigned natId,
                                               const std::string &jailAddr,

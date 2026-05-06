@@ -6,7 +6,9 @@
 
 #include <string>
 
+using AutoFwPure::RedirPort;
 using AutoFwPure::buildIpfwNatConfigArgv;
+using AutoFwPure::buildIpfwNatConfigWithRedirsArgv;
 using AutoFwPure::buildIpfwNatDeleteArgv;
 using AutoFwPure::buildIpfwNatRuleArgv;
 using AutoFwPure::buildIpfwRuleDeleteArgv;
@@ -319,6 +321,79 @@ ATF_TEST_CASE_BODY(ipfw_delete_argvs) {
   ATF_REQUIRE_EQ(nd[3], std::string("delete"));
 }
 
+// ----------------------------------------------------------------------
+// ipfw redir_port (0.8.3) — closes the pf/ipfw symmetry gap from 0.8.2
+// ----------------------------------------------------------------------
+
+ATF_TEST_CASE_WITHOUT_HEAD(ipfw_nat_with_no_redirs_equivalent_to_basic);
+ATF_TEST_CASE_BODY(ipfw_nat_with_no_redirs_equivalent_to_basic) {
+  // Empty redirs must produce the same argv as the basic SNAT-only
+  // form; otherwise 0.8.3 would silently change 0.8.2 behaviour.
+  // (Element-wise compare because ATF_REQUIRE_EQ on vector tries to
+  // operator<< the vector for the failure message.)
+  auto basic = buildIpfwNatConfigArgv(30005, "em0");
+  auto empty = buildIpfwNatConfigWithRedirsArgv(30005, "em0", {});
+  ATF_REQUIRE_EQ(basic.size(), empty.size());
+  for (std::size_t i = 0; i < basic.size(); i++)
+    ATF_REQUIRE_EQ(basic[i], empty[i]);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(ipfw_nat_redir_single_port);
+ATF_TEST_CASE_BODY(ipfw_nat_redir_single_port) {
+  std::vector<RedirPort> redirs = {
+    {"tcp", 8080, 8080, "10.66.0.5", 80, 80},
+  };
+  auto v = buildIpfwNatConfigWithRedirsArgv(30005, "em0", redirs);
+  // ipfw nat 30005 config if em0 redir_port tcp 10.66.0.5:80 8080
+  ATF_REQUIRE_EQ(v.size(), (size_t)10);
+  ATF_REQUIRE_EQ(v[6], std::string("redir_port"));
+  ATF_REQUIRE_EQ(v[7], std::string("tcp"));
+  ATF_REQUIRE_EQ(v[8], std::string("10.66.0.5:80"));
+  ATF_REQUIRE_EQ(v[9], std::string("8080"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(ipfw_nat_redir_range);
+ATF_TEST_CASE_BODY(ipfw_nat_redir_range) {
+  std::vector<RedirPort> redirs = {
+    {"udp", 5000, 5099, "10.66.0.7", 5000, 5099},
+  };
+  auto v = buildIpfwNatConfigWithRedirsArgv(30005, "em0", redirs);
+  ATF_REQUIRE_EQ(v[7], std::string("udp"));
+  ATF_REQUIRE_EQ(v[8], std::string("10.66.0.7:5000-5099"));
+  ATF_REQUIRE_EQ(v[9], std::string("5000-5099"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(ipfw_nat_redir_asymmetric_range);
+ATF_TEST_CASE_BODY(ipfw_nat_redir_asymmetric_range) {
+  // Host range -> single jail port. Jail side collapses; host side
+  // stays as range. Same shape as the pf rdr asymmetric case.
+  std::vector<RedirPort> redirs = {
+    {"tcp", 8000, 8010, "10.66.0.5", 80, 80},
+  };
+  auto v = buildIpfwNatConfigWithRedirsArgv(30005, "em0", redirs);
+  ATF_REQUIRE_EQ(v[8], std::string("10.66.0.5:80"));     // jail collapsed
+  ATF_REQUIRE_EQ(v[9], std::string("8000-8010"));         // host range
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(ipfw_nat_redir_multiple);
+ATF_TEST_CASE_BODY(ipfw_nat_redir_multiple) {
+  // Multiple redirects on one config command — chains of
+  // redir_port clauses go on the same `ipfw nat ... config` line.
+  std::vector<RedirPort> redirs = {
+    {"tcp", 8080, 8080, "10.66.0.5", 80,    80},
+    {"udp", 53,   53,   "10.66.0.5", 53,    53},
+    {"tcp", 5000, 5099, "10.66.0.5", 5000,  5099},
+  };
+  auto v = buildIpfwNatConfigWithRedirsArgv(30005, "em0", redirs);
+  // Each redir_port adds 4 tokens; check totals + count of clauses.
+  // 6 base tokens + 3 redirs * 4 tokens = 18.
+  ATF_REQUIRE_EQ(v.size(), (size_t)18);
+  unsigned redirPortCount = 0;
+  for (const auto &t : v)
+    if (t == "redir_port") redirPortCount++;
+  ATF_REQUIRE_EQ(redirPortCount, 3u);
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, iface_typical_accepted);
   ATF_ADD_TEST_CASE(tcs, iface_invalid_rejected);
@@ -347,4 +422,9 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, ipfw_nat_config_argv_shape);
   ATF_ADD_TEST_CASE(tcs, ipfw_nat_rule_argv_shape);
   ATF_ADD_TEST_CASE(tcs, ipfw_delete_argvs);
+  ATF_ADD_TEST_CASE(tcs, ipfw_nat_with_no_redirs_equivalent_to_basic);
+  ATF_ADD_TEST_CASE(tcs, ipfw_nat_redir_single_port);
+  ATF_ADD_TEST_CASE(tcs, ipfw_nat_redir_range);
+  ATF_ADD_TEST_CASE(tcs, ipfw_nat_redir_asymmetric_range);
+  ATF_ADD_TEST_CASE(tcs, ipfw_nat_redir_multiple);
 }

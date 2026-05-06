@@ -6,6 +6,86 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.3] — 2026-05-06
+
+`ipfw redir_port` for port-forward — closes the pf/ipfw symmetry
+gap left by 0.8.2. The ipfw auto-fw path now supports the same
+inbound: declarations as the pf path (0.8.1).
+
+### Mechanism
+
+`ipfw nat ... config` accepts multiple `redir_port` clauses on the
+same line. Per jail (jid=5, IP 10.66.0.5, iface em0):
+
+```sh
+ipfw nat 30005 config if em0 \
+  redir_port tcp 10.66.0.5:80 8080 \
+  redir_port udp 10.66.0.5:53 53 \
+  redir_port tcp 10.66.0.5:5000-5099 5000-5099
+ipfw add 40005 nat 30005 ip from 10.66.0.5 to any out via em0
+```
+
+Same spec syntax produces equivalent firewall behaviour regardless
+of which backend is loaded. Range form on either side is supported
+(jail collapses to `host:lo` if `lo == hi`; otherwise `host:lo-hi`).
+
+### Hybrid pf + ipfw on the same host
+
+FreeBSD supports running both pf and ipfw simultaneously, and crate
+takes advantage:
+
+| Subsystem | Backend |
+|---|---|
+| `mode: auto` SNAT + port-forward (this release line) | pf if loaded, else ipfw |
+| `crate throttle` rate limiting (0.7.7)              | always ipfw + dummynet |
+
+Operators using throttle on a pf-primary host don't need to switch:
+ipfw remains loaded for dummynet pipes; pf does the NAT/rdr; the
+two firewalls don't conflict because they operate on different rule
+chains. crate auto-fw picks one for its own rules; the other stays
+free for whatever the operator's running on it.
+
+### Implementation
+
+- `lib/auto_fw_pure.{h,cpp}` extended:
+  - `RedirPort` struct (proto + host range + jail addr + jail range)
+  - `buildIpfwNatConfigWithRedirsArgv(natId, iface, redirs)` —
+    builds the full config command including all redir_port
+    clauses on one ipfw invocation
+  - Empty `redirs` produces an argv equivalent to the basic
+    `buildIpfwNatConfigArgv` form (back-compat with 0.8.2 SNAT-only).
+- `lib/run.cpp` — ipfw branch builds the redirs vector from
+  `optionNet->inboundPortsTcp` and `inboundPortsUdp`, passes to the
+  new builder. The asymmetry-warning that 0.8.2 emitted is removed.
+
+### Tests
+
+`tests/unit/auto_fw_pure_test.cpp` extended with **5 new ATF cases**:
+
+- `ipfw_nat_with_no_redirs_equivalent_to_basic` — back-compat
+  invariant
+- `ipfw_nat_redir_single_port` — single-port form
+  (`10.66.0.5:80 8080`)
+- `ipfw_nat_redir_range` — range form
+  (`10.66.0.5:5000-5099 5000-5099`)
+- `ipfw_nat_redir_asymmetric_range` — host range, jail single
+- `ipfw_nat_redir_multiple` — three redirects on one config line,
+  18 argv tokens total, 3 `redir_port` keywords
+
+**979/979 unit tests pass locally** (974 prior + 5 new).
+
+### NOT in this release
+
+- **icmp passthrough** for either backend — would need separate
+  rule shape; defer until requested.
+- **IPv6 NAT** — both paths IPv4-only. Defer until 0.8.x adds
+  IPv6 pool support to 0.7.17's allocator.
+- **`firewall_backend:` config override** — currently auto-detect
+  (pf preferred). If operators want to force ipfw on a host where
+  both are loaded, that's a future config-surface addition.
+
+---
+
 ## [0.8.2] — 2026-05-06
 
 `mode: auto` ipfw alternative — operators using `ipfw(8)` instead
