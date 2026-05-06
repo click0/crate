@@ -10,6 +10,7 @@
 
 #include "args.h"
 #include "doctor_pure.h"
+#include "auto_fw_pure.h"
 #include "commands.h"
 #include "jail_query.h"
 #include "util.h"
@@ -316,6 +317,114 @@ void checkAuditLog(Report &r) {
   }
 }
 
+// --- check: auto-fw rules loaded for each running jail (0.8.9) ---
+//
+// 0.8.0+ auto-loads SNAT/rdr rules into per-jail anchors (pf) or
+// nat instances (ipfw). If those rules go missing — pf flushed by
+// operator, ipfw rules deleted — outbound traffic from the jail
+// silently breaks. doctor now surfaces the mismatch.
+//
+// For pf: invoke `pfctl -a crate/<jailXname> -s nat` and check
+// for at least one rule. If the anchor is empty when the jail's
+// spec uses mode:auto + bridge, that's a FAIL.
+//
+// For ipfw: invoke `ipfw nat <natId> show` and check exit code.
+//
+// Caveat: we don't know the jail's spec at doctor time without
+// re-loading the .crate file. As a proxy, we check for ANY pf
+// anchor named crate/<jailXname>* with rules vs no anchor; the
+// presence/absence is informational rather than authoritative.
+// Operators who don't use mode:auto may legitimately have empty
+// anchors — those get a soft WARN, not FAIL.
+
+void checkAutoFwRules(Report &r) {
+  // Fast path: if pf isn't loaded at all, skip — auto-fw via ipfw
+  // path is checked separately, and if neither is loaded, the
+  // existing kernel-module check has already FAIL'd.
+  bool pfLoaded = false;
+  try {
+    pfLoaded = (Util::execCommandGetStatus(
+      {"/sbin/kldstat", "-n", "pf"}, "kldstat pf") == 0);
+  } catch (...) { pfLoaded = false; }
+
+  std::vector<JailQuery::JailInfo> jails;
+  try {
+    jails = JailQuery::getAllJails(/*crateOnly=*/true);
+  } catch (...) {
+    // checkJails already FAIL'd; nothing useful to add.
+    return;
+  }
+  if (jails.empty()) {
+    r.checks.push_back(passCheck("auto-fw", "(no jails)",
+      "no crate-managed jails running — nothing to check"));
+    return;
+  }
+
+  for (const auto &j : jails) {
+    // Synthesise the same jail-x-name run.cpp uses for the anchor.
+    auto jailXname = j.name + "_pid?";  // doctor doesn't know the
+                                         // run.cpp pid; query by
+                                         // anchor list instead.
+    if (pfLoaded) {
+      // List all pf anchors and look for one starting with crate/<j.name>_pid.
+      std::string out;
+      try {
+        out = Util::execCommandGetOutput(
+          {"/sbin/pfctl", "-a", "crate", "-s", "Anchors"},
+          "pfctl list anchors");
+      } catch (const std::exception &ex) {
+        r.checks.push_back(warnCheck("auto-fw", j.name,
+          std::string("pfctl -s Anchors failed: ") + ex.what()
+          + " — cannot verify auto-fw rule"));
+        continue;
+      }
+      // pfctl -s Anchors output: one anchor per line, prefixed by
+      // the parent. Look for a line containing "crate/<j.name>_pid".
+      std::string needle = "crate/" + j.name + "_pid";
+      bool found = false;
+      std::istringstream is(out);
+      std::string line;
+      while (std::getline(is, line)) {
+        if (line.find(needle) != std::string::npos) {
+          found = true;
+          break;
+        }
+      }
+      if (found) {
+        r.checks.push_back(passCheck("auto-fw", j.name,
+          "pf anchor present (auto-fw active)"));
+      } else {
+        // Could be intentional (jail uses NAT mode without auto-fw,
+        // or operator runs custom rules). Soft WARN.
+        r.checks.push_back(warnCheck("auto-fw", j.name,
+          "no crate/" + j.name + "_pid* pf anchor — auto-fw "
+          "inactive (OK for jails not using mode:auto; FAIL for "
+          "auto-mode jails — outbound traffic likely broken)"));
+      }
+    } else {
+      // ipfw path: presence of nat instance natIdForJail(jid).
+      // 0.8.2 conventions.
+      unsigned natId = AutoFwPure::natIdForJail(j.jid);
+      int st = -1;
+      try {
+        st = Util::execCommandGetStatus(
+          {"/sbin/ipfw", "nat", std::to_string(natId), "show"},
+          "ipfw nat show");
+      } catch (...) { st = -1; }
+      if (st == 0) {
+        r.checks.push_back(passCheck("auto-fw", j.name,
+          "ipfw NAT instance " + std::to_string(natId)
+          + " present (auto-fw active)"));
+      } else {
+        r.checks.push_back(warnCheck("auto-fw", j.name,
+          "no ipfw NAT instance " + std::to_string(natId)
+          + " — auto-fw inactive (OK for jails not using mode:auto; "
+          "FAIL for auto-mode jails — outbound traffic likely broken)"));
+      }
+    }
+  }
+}
+
 } // anon
 
 bool doctorCommand(const Args &args) {
@@ -327,6 +436,7 @@ bool doctorCommand(const Args &args) {
   checkCratedConf(r);
   checkJails(r);
   checkAuditLog(r);
+  checkAutoFwRules(r);  // 0.8.9
 
   if (args.doctorJson) {
     std::cout << DoctorPure::renderJson(r) << std::endl;

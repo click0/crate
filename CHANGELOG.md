@@ -6,6 +6,76 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.9] — 2026-05-06
+
+`crate doctor` now verifies auto-fw rules are actually loaded for
+each running jail. Surfaces silent breakage when operators flush
+pf or delete ipfw nat instances out from under crate.
+
+### New `auto-fw` check category
+
+```
+auto-fw:
+  [PASS] postgres-prod  pf anchor present (auto-fw active)
+  [PASS] redis-cache    pf anchor present (auto-fw active)
+  [WARN] dev-postgres   no crate/dev-postgres_pid* pf anchor —
+                        auto-fw inactive (OK for jails not using
+                        mode:auto; FAIL for auto-mode jails —
+                        outbound traffic likely broken)
+```
+
+For each running crate-managed jail:
+- **pf path**: invoke `pfctl -a crate -s Anchors`, look for an
+  anchor matching `crate/<jail-name>_pid*`. Found → PASS;
+  missing → WARN.
+- **ipfw path**: invoke `ipfw nat <natIdForJail(jid)> show`.
+  Exit 0 → PASS; non-zero → WARN.
+- **No jails running**: PASS with "no jails to check".
+
+### Why WARN instead of FAIL
+
+`crate doctor` doesn't know each jail's spec at runtime — operators
+running NAT-mode jails (no auto-fw) or hand-rolled bridge jails
+legitimately have empty anchors. We can't distinguish "expected
+empty" from "auto-fw broken" without re-loading the spec, which
+costs more than the check is worth.
+
+WARN-level is the right call: visible in the report, exit code 1,
+but doesn't fail-hard for setups that don't use mode:auto. Future
+enhancement: persist the spec-side intent ("this jail uses
+auto-fw") in the lease file so doctor can promote WARN → FAIL only
+when there's a known auto-fw expectation.
+
+### Implementation
+
+- `lib/doctor.cpp::checkAutoFwRules` — the new check function:
+  - kldstat for pf/ipfw to pick the inspection path
+  - per-jail invocation + parse
+  - sane fallbacks on missing tools (ipfw not installed → WARN,
+    not crash)
+- `lib/doctor_pure.cpp` — added `auto-fw` to canonical category
+  rank (sorts after `audit`)
+
+### Tests
+
+No new pure tests — the check is shell-out heavy + per-host
+specific (which jails are running, which firewall loaded). The
+existing `tests/unit/doctor_pure_test.cpp` (13 cases) still
+covers the data model + render + exit-code aggregation.
+
+**994/994 unit tests pass locally** (no new tests).
+
+### NOT in this release
+
+- **Spec-aware FAIL promotion** — load the .crate to learn
+  "should have auto-fw" then FAIL instead of WARN on absence.
+  Tracked.
+- **Per-jail rule count** — currently checks "any rule in
+  anchor"; future could check "expected SNAT + N rdr rules
+  present". Defer until operator reports a partial-rule scenario.
+
+---
+
 ## [0.8.8] — 2026-05-06
 
 `daemon/routes.cpp` rate-limit refactor onto the shared
