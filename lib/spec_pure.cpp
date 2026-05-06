@@ -9,6 +9,7 @@
 #include "spec.h"
 #include "config.h"
 #include "wireguard_runtime_pure.h"
+#include "ipsec_runtime_pure.h"
 #include "lst-all-script-sections.h"   // generated: defines allScriptSections
 
 #include "util.h"   // Util::toUInt
@@ -114,6 +115,10 @@ const Spec::WireguardOptDetails* Spec::optionWireguard() const {
   return getOptionDetails<Spec::WireguardOptDetails>("wireguard");
 }
 
+const Spec::IpsecOptDetails* Spec::optionIpsec() const {
+  return getOptionDetails<Spec::IpsecOptDetails>("ipsec");
+}
+
 std::shared_ptr<Spec::NetOptDetails> Spec::NetOptDetails::createDefault() {
   // default "net" options allow all outbound and no inbound
   auto d = std::make_shared<NetOptDetails>();
@@ -138,6 +143,12 @@ std::shared_ptr<Spec::WireguardOptDetails> Spec::WireguardOptDetails::createDefa
   return std::make_shared<WireguardOptDetails>();
 }
 
+Spec::IpsecOptDetails::IpsecOptDetails() = default;
+
+std::shared_ptr<Spec::IpsecOptDetails> Spec::IpsecOptDetails::createDefault() {
+  return std::make_shared<IpsecOptDetails>();
+}
+
 // ===================================================================
 // Allowed-options set (also referenced by lib/spec.cpp's parser).
 // Keep in sync with the list in spec.cpp.
@@ -147,7 +158,7 @@ namespace {
 #define ERR(msg...) ERR2("crate spec validate", msg)
 
 static const std::list<std::string> allOptionsLst = {
-  "x11", "net", "ssl-certs", "tor", "video", "gl", "wireguard",
+  "x11", "net", "ssl-certs", "tor", "video", "gl", "wireguard", "ipsec",
   "no-rm-static-libs", "dbg-ktrace"
 };
 static const std::set<std::string> allOptionsSet(
@@ -381,6 +392,15 @@ void Spec::validate() const {
       auto reason = WireguardRuntimePure::validateConfigPath(wg->configPath);
       if (!reason.empty())
         ERR("options/wireguard/config: " << reason)
+    }
+  }
+
+  // ipsec option: a non-empty `conn` name must be valid (0.8.4)
+  if (auto *ip = optionIpsec()) {
+    if (!ip->connName.empty()) {
+      auto reason = IpsecRuntimePure::validateConnName(ip->connName);
+      if (!reason.empty())
+        ERR("options/ipsec/conn: " << reason)
     }
   }
 }

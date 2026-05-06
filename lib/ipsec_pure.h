@@ -12,9 +12,10 @@
 // and pipe the output into /usr/local/etc/ipsec.conf or include it
 // from a `conn` snippet directory.
 //
-// As with WireGuard, full kernel-level integration with crate jails
-// is a separate runtime concern (TODO). This module is the
-// validate-and-render half — purely testable, no I/O.
+// As with WireGuard, this module is the validate-and-render half —
+// purely testable, no I/O. The runtime half (auto-up before jail
+// start, auto-down on teardown) lives in lib/ipsec_runtime_pure.h
+// and was wired into lib/run.cpp in 0.8.4.
 //
 // We target IKEv2 with PSK / pubkey authentication. The renderer
 // emits a strongSwan-style `conn` block per tunnel, keeping the

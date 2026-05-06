@@ -11,10 +11,12 @@
 #include "share_pure.h"
 #include "bridge_pure.h"
 #include "wireguard_runtime_pure.h"
+#include "ipsec_runtime_pure.h"
 #include "warm_pure.h"
 #include "config.h"
 #include "ip_alloc_pure.h"
 #include "network_lease.h"
+#include "auto_fw_pure.h"
 #include "ifconfig_ops.h"
 #include "scripts.h"
 #include "ctx.h"
@@ -390,6 +392,33 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     }
   }
 
+  // 0.8.4: IPsec / strongSwan tunnel. Same lifecycle pattern as
+  // wireguard above, via `ipsec auto --add/--up` before jail start
+  // and `--down/--delete` on teardown. Operator preconfigures the
+  // strongSwan conn (via ipsec.conf or include); we only toggle it
+  // around the jail's lifetime.
+  RunAtEnd ipsecDownAtEnd;
+  if (auto *ip = spec.optionIpsec()) {
+    if (IpsecRuntimePure::isEnabled(ip->connName)) {
+      LOG("ipsec: adding + bringing up conn '" << ip->connName << "'")
+      Util::execCommand(IpsecRuntimePure::buildAddArgv(ip->connName),
+                        "ipsec auto --add");
+      Util::execCommand(IpsecRuntimePure::buildUpArgv(ip->connName),
+                        "ipsec auto --up");
+      auto connName = ip->connName;
+      ipsecDownAtEnd.reset([connName]() {
+        try {
+          Util::execCommand(IpsecRuntimePure::buildDownArgv(connName),
+                            "ipsec auto --down");
+        } catch (...) {}
+        try {
+          Util::execCommand(IpsecRuntimePure::buildDeleteArgv(connName),
+                            "ipsec auto --delete");
+        } catch (...) {}
+      });
+    }
+  }
+
   // Base container cloning (§22): if spec references a running jail, ZFS-clone its filesystem
   RunAtEnd destroyBaseClone;
   if (spec.baseContainer) {
@@ -699,6 +728,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // allocated one. Declared at function scope so it's reachable
   // from inside the bridge-mode IP-config block below.
   RunAtEnd releaseLeaseAtEnd;
+  // 0.8.2: ipfw NAT rule + instance cleanup. Only used on hosts
+  // running ipfw (not pf). Declared next to the other auto-fw
+  // teardown so the destruction ordering matches.
+  RunAtEnd ipfwAutoFwCleanup;
   RunAtEnd reclaimPassthroughAtEnd;
   RunAtEnd destroyNetgraphAtEnd;
   std::vector<RunAtEnd> destroyExtraInterfaces;
@@ -790,8 +823,8 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         // unique per jail instance and stable for its lifetime.
         auto leaseName = std::filesystem::path(jailPath).filename().string();
         uint32_t addr = NetworkLease::allocateFor(leaseName, pool);
-        auto ip = IpAllocPure::formatIp(addr) + "/"
-                + std::to_string(pool.prefixLen);
+        auto ipBare = IpAllocPure::formatIp(addr);
+        auto ip = ipBare + "/" + std::to_string(pool.prefixLen);
         auto gw = IpAllocPure::formatIp(IpAllocPure::gatewayFor(pool));
         RunNet::configureStaticIp(bridgeInfo.ifaceB, ip, gw, jid, execInJail);
         Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
@@ -804,6 +837,142 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
           LOG("network: releasing lease for " << leaseName)
           try { NetworkLease::releaseFor(leaseName); } catch (...) {}
         });
+
+        // 0.8.0: SNAT auto-rule. Without this, packets from the jail
+        // leave the host with a 10.66.0.x source addr that never
+        // gets translated and replies can't be routed back.
+        // We emit one nat rule per jail (scoped by jail's IP) into
+        // the jail's existing pf anchor crate/<jailXname>; the
+        // anchor is flushed at teardown by the existing destroyPfAnchor
+        // RunAtEnd, so cleanup is automatic.
+        if (!cfg.networkInterface.empty()) {
+          if (auto e = AutoFwPure::validateExternalIface(cfg.networkInterface); !e.empty())
+            ERR("network_interface '" << cfg.networkInterface << "': " << e)
+          if (auto e = AutoFwPure::validateRuleAddress(ipBare); !e.empty())
+            ERR("auto-fw: jail IP failed validation: " << e)
+          auto rule = AutoFwPure::formatSnatAnchorLine(cfg.networkInterface, ipBare);
+
+          // 0.8.1: also emit per-port rdr rules from the spec's
+          // inbound: declarations. Same anchor as SNAT — both
+          // flushed together at jail teardown.
+          for (const auto &[host, jail] : optionNet->inboundPortsTcp) {
+            if (AutoFwPure::validatePort(host.first).empty()
+                && AutoFwPure::validatePort(host.second).empty()
+                && AutoFwPure::validatePort(jail.first).empty()
+                && AutoFwPure::validatePort(jail.second).empty()) {
+              rule += AutoFwPure::formatRdrAnchorLine(
+                cfg.networkInterface, "tcp",
+                host.first, host.second,
+                ipBare,
+                jail.first, jail.second);
+            }
+          }
+          for (const auto &[host, jail] : optionNet->inboundPortsUdp) {
+            if (AutoFwPure::validatePort(host.first).empty()
+                && AutoFwPure::validatePort(host.second).empty()
+                && AutoFwPure::validatePort(jail.first).empty()
+                && AutoFwPure::validatePort(jail.second).empty()) {
+              rule += AutoFwPure::formatRdrAnchorLine(
+                cfg.networkInterface, "udp",
+                host.first, host.second,
+                ipBare,
+                jail.first, jail.second);
+            }
+          }
+
+          // 0.8.2: detect firewall backend. pf preferred (matches
+          // 0.8.0/0.8.1 behaviour). If only ipfw loaded, use the
+          // ipfw NAT path. If neither, warn and skip.
+          int pfStatus = 1, ipfwStatus = 1;
+          try {
+            pfStatus   = Util::execCommandGetStatus({"/sbin/kldstat", "-n", "pf"},   "kldstat pf");
+          } catch (...) { pfStatus = 1; }
+          try {
+            ipfwStatus = Util::execCommandGetStatus({"/sbin/kldstat", "-n", "ipfw"}, "kldstat ipfw");
+          } catch (...) { ipfwStatus = 1; }
+
+          if (pfStatus == 0) {
+            auto anchor = std::string("crate/") + jailXname;
+            try {
+              PfctlOps::addRules(anchor, rule);
+              LOG("auto-fw[pf]: rules added to anchor " << anchor
+                  << " (" << ipBare << " -> " << cfg.networkInterface << ")")
+            } catch (const std::exception &ex) {
+              std::cerr << rang::fg::yellow
+                        << "auto-fw[pf]: SNAT/rdr load failed: " << ex.what()
+                        << " — outbound traffic may not work; configure pf manually"
+                        << rang::style::reset << std::endl;
+            }
+          } else if (ipfwStatus == 0) {
+            // 0.8.2 + 0.8.3: ipfw alternative. SNAT (always) plus
+            // redir_port clauses for each inbound: declaration.
+            unsigned natId  = AutoFwPure::natIdForJail(jid);
+            unsigned ruleId = AutoFwPure::ruleIdForJail(jid);
+            // Build redirs from spec inbound declarations.
+            std::vector<AutoFwPure::RedirPort> redirs;
+            for (const auto &[host, jail] : optionNet->inboundPortsTcp) {
+              if (AutoFwPure::validatePort(host.first).empty()
+                  && AutoFwPure::validatePort(host.second).empty()
+                  && AutoFwPure::validatePort(jail.first).empty()
+                  && AutoFwPure::validatePort(jail.second).empty()) {
+                redirs.push_back({"tcp",
+                  host.first, host.second, ipBare,
+                  jail.first, jail.second});
+              }
+            }
+            for (const auto &[host, jail] : optionNet->inboundPortsUdp) {
+              if (AutoFwPure::validatePort(host.first).empty()
+                  && AutoFwPure::validatePort(host.second).empty()
+                  && AutoFwPure::validatePort(jail.first).empty()
+                  && AutoFwPure::validatePort(jail.second).empty()) {
+                redirs.push_back({"udp",
+                  host.first, host.second, ipBare,
+                  jail.first, jail.second});
+              }
+            }
+            try {
+              Util::execCommand(
+                AutoFwPure::buildIpfwNatConfigWithRedirsArgv(natId, cfg.networkInterface, redirs),
+                "ipfw nat config");
+              Util::execCommand(
+                AutoFwPure::buildIpfwNatRuleArgv(ruleId, natId, ipBare, cfg.networkInterface),
+                "ipfw add nat rule");
+              LOG("auto-fw[ipfw]: NAT instance " << natId << " + rule " << ruleId
+                  << " (" << ipBare << " -> " << cfg.networkInterface << ", "
+                  << redirs.size() << " redir_port clauses)")
+              // Cleanup: delete rule first, then NAT instance.
+              ipfwAutoFwCleanup.reset([natId, ruleId, &args]() {
+                LOG("auto-fw[ipfw]: cleanup rule " << ruleId
+                    << " + nat " << natId)
+                try {
+                  Util::execCommand(AutoFwPure::buildIpfwRuleDeleteArgv(ruleId),
+                                    "ipfw delete rule");
+                } catch (...) {}
+                try {
+                  Util::execCommand(AutoFwPure::buildIpfwNatDeleteArgv(natId),
+                                    "ipfw nat delete");
+                } catch (...) {}
+              });
+            } catch (const std::exception &ex) {
+              std::cerr << rang::fg::yellow
+                        << "auto-fw[ipfw]: SNAT/redir setup failed: " << ex.what()
+                        << " — outbound + port-forward traffic may not work"
+                        << rang::style::reset << std::endl;
+            }
+          } else {
+            std::cerr << rang::fg::yellow
+                      << "auto-fw: neither pf nor ipfw loaded; skipping "
+                         "SNAT/rdr auto-rules — outbound traffic from "
+                      << ipBare << " will require manual firewall config"
+                      << rang::style::reset << std::endl;
+          }
+        } else {
+          std::cerr << rang::fg::yellow
+                    << "auto-fw: network_interface unset in crate.yml; "
+                       "skipping SNAT auto-rule — outbound traffic from "
+                    << ipBare << " will require operator-written pf/ipfw rules"
+                    << rang::style::reset << std::endl;
+        }
       } else {
         // No pool configured -- fall back to DHCP (pre-0.7.17 default).
         RunNet::configureDhcp(bridgeInfo.ifaceB, jailPath, jid, jidStr, execInJail);

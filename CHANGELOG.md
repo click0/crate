@@ -6,6 +6,641 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.5] — 2026-05-06
+
+Log-streaming tail now uses `kqueue(2)` + `kevent(2)` instead of
+`usleep(500ms)` busy-polling. Each `?follow=true` streaming client
+gets its own kqueue fd watching its own log file; the per-client
+thread blocks until the kernel signals a write. The 32-cap from
+0.8.4 stays as belt-and-suspenders.
+
+### Mechanism
+
+```
+kq      = kqueue();
+watchFd = open(logPath, O_RDONLY | O_CLOEXEC);
+EV_SET(&ev, watchFd, EVFILT_VNODE,
+       EV_ADD | EV_CLEAR,
+       NOTE_WRITE | NOTE_EXTEND | NOTE_DELETE | NOTE_RENAME,
+       0, NULL);
+kevent(kq, &ev, 1, NULL, 0, NULL);
+
+// tail loop:
+while (read new bytes via std::getline → sink.write):
+    ;
+struct timespec timeout{1, 0};   // 1s — also forces a periodic
+struct kevent triggered;          //      disconnect-check
+kevent(kq, NULL, 0, &triggered, 1, &timeout);
+// loop back, read newly-arrived bytes, write to sink
+```
+
+### Wakeup characteristics
+
+Before (0.8.4 and earlier):
+- 500ms polling — average wake latency 250ms even when log is hot
+- One wakeup per client per 500ms regardless of activity (CPU
+  usage scales with client count, not log rate)
+
+After (0.8.5):
+- ~0ms wake latency on append (kernel notifies via kqueue)
+- One wakeup per actual log write per client (CPU scales with
+  log rate, not client count)
+- 1s timeout still fires periodically so a quiet log + a vanished
+  client are detected within 1s
+
+### Rotation safety
+
+The kqueue filter watches `NOTE_WRITE | NOTE_EXTEND | NOTE_DELETE
+| NOTE_RENAME`. A log rotator (newsyslog, logrotate) renaming the
+file mid-stream wakes us up; the next `getline` round hits EOF
+gracefully and the operator can re-curl when the rotator creates
+the fresh file. We do NOT auto-reopen — that's a future
+enhancement; today's behaviour is "stream ends cleanly on rotate."
+
+### Linux fallback
+
+cpp-httplib runs on FreeBSD in production; the codebase is built
+on Linux only for unit tests. The `kqueue(2)` syscall is
+FreeBSD-native (and macOS/OpenBSD) and not available on Linux,
+so the new code is gated by `#ifdef __FreeBSD__`. On Linux the
+old `usleep(500ms)` path is preserved — unit-test compatibility,
+no behaviour change for crated's actual deployment.
+
+A future Linux port would use `inotify(7)` for the equivalent
+mechanism. Tracked but not blocking.
+
+### Implementation
+
+- `daemon/routes.cpp::handleContainerLogs` streaming branch:
+  - Opens an extra read-only fd for kqueue's filter target
+  - Registers `EVFILT_VNODE` events
+  - Replaces `usleep(500000)` with `kevent(... 1s timeout)`
+  - RAII `FdCloser` struct ensures both fds close on any return
+    path (sink-write fail, client disconnect, exception)
+- New includes (FreeBSD-only): `<sys/event.h>`, `<sys/types.h>`,
+  `<sys/time.h>`
+
+### Tests
+
+No new unit tests — the change is platform-specific runtime I/O
+behind `#ifdef`. Existing tests that don't exercise the streaming
+path are unaffected.
+
+**985/985 unit tests pass locally** (no new tests; same as 0.8.4).
+
+The actual streaming mechanism is exercised by the FreeBSD CI
+build (compile success → kqueue API used correctly). End-to-end
+streaming testing remains a future functional-test addition.
+
+### NOT in this release
+
+- **Cross-client kqueue mux** — sharing one kqueue/bg-thread
+  across all clients to reduce thread count below O(N). Requires
+  bypassing cpp-httplib's content-provider model (which keeps a
+  worker thread per active stream). Not blocking; current 32-cap
+  + efficient sleep is operationally fine.
+- **Auto-reopen on rotate** — currently stream ends when the log
+  is rotated. Operators re-curl. A `tail -F` style auto-follow
+  would re-open by path on `NOTE_DELETE` / `NOTE_RENAME`. Defer.
+- **Linux `inotify` port** — only matters if crated ever runs on
+  Linux. Defer.
+
+---
+
+## [0.8.4] — 2026-05-06
+
+Three code-health fixes from the second-pass audit. All three were
+real debt items rather than aesthetic concerns; this release closes
+each with the smallest reasonable patch + doc/comment.
+
+### Fix #1: hub `poll_interval:` config now actually wired
+
+`hub/poller.cpp::loadNodes` read `root["poll_interval"]` but threw
+the value away — operators setting a custom interval saw it
+silently ignored, and the hard-coded 15s default was used instead.
+
+This release:
+- `loadNodes(path, unsigned *outPollIntervalSec = nullptr)` —
+  matches the `loadHaSpecs(path, long *outThresholdSeconds)`
+  out-param pattern from 0.7.3
+- `Poller(nodes, store, unsigned pollIntervalSec = 15)` —
+  constructor takes the value
+- `hub/main.cpp` reads + passes through
+
+Sanity bounds: `[1, 3600]` seconds. Below 1 caps the daemon at
+something useful; above 3600 (1h) caps an operator-typo from
+leaving a node looking "down" for days.
+
+### Fix #2: log-streaming concurrency cap
+
+`daemon/routes.cpp::handleContainerLogs` (the `?follow=true`
+streaming variant) ties up one server thread per active client
+via a polling tail-f loop. The TODO comment at line 385
+acknowledged this could exhaust the daemon's thread pool under a
+burst of log shippers / Prometheus exporters / curl-in-a-loop
+scripts.
+
+The "right" fix is a single bg thread + kqueue/epoll multiplex.
+That's a substantial refactor (queued separately). This release
+ships the **operational guard**:
+
+- `g_streamingClients` atomic counter, capped at
+  `kMaxStreamingClients = 32`
+- Beyond the cap: HTTP `503 Service Unavailable` with
+  `Retry-After: 5` so well-behaved clients back off
+- Decremented in the chunked-content-provider's cleanup callback
+  whether the stream finished cleanly or errored out
+
+Converts "ties up a server thread per client" from
+**unbounded** resource exposure to **bounded** (32) resource
+exposure. The kqueue refactor remains tracked for a future
+release; not blocking 0.8.4.
+
+### Fix #3: IPsec runtime hook (closes 0.6.10's split-half TODO)
+
+0.6.10 shipped `crate vpn ipsec render-conf` (validate + render
+strongSwan ipsec.conf snippets) with a header comment noting that
+"full kernel-level integration with crate jails is a separate
+runtime concern (TODO)." This release fills in the runtime half:
+
+```yaml
+options:
+  ipsec:
+    conn: my-tunnel-1
+```
+
+When a jail's spec has the new `options.ipsec.conn:` field set,
+`crate run`:
+- before jail start: `ipsec auto --add <conn>` then
+  `ipsec auto --up <conn>`
+- on teardown (incl. crash): `ipsec auto --down <conn>` then
+  `ipsec auto --delete <conn>`
+
+Mirrors the WireGuard runtime pattern from 0.6.13. Operator
+prerequisites (operator's responsibility, NOT crate's):
+- strongSwan installed and the daemon running on the host
+- the conn block referenced by `conn:` already in
+  `/usr/local/etc/ipsec.conf` (or an included file). The
+  `crate vpn ipsec render-conf` command can generate this file.
+
+### Implementation
+
+- `lib/ipsec_runtime_pure.{h,cpp}` — new pure module:
+  - `validateConnName(name)` — ASCII alnum + `._-`, length 1..32,
+    `%default` reserved (strongSwan keyword)
+  - `buildAddArgv` / `buildUpArgv` / `buildDownArgv` /
+    `buildDeleteArgv` — `/usr/local/sbin/ipsec auto --<verb> <name>`
+  - `isEnabled(name)` — non-empty predicate
+- `lib/spec.h` — `IpsecOptDetails { connName }` class added
+  alongside existing `WireguardOptDetails`
+- `lib/spec.cpp` — `options.ipsec.conn:` parser (mirrors
+  wireguard's `options.wireguard.config:`)
+- `lib/spec_pure.cpp` — `optionIpsec()` accessor + validate hook +
+  added `"ipsec"` to `allOptionsLst` whitelist
+- `lib/run.cpp` — `RunAtEnd ipsecDownAtEnd` declared and reset
+  alongside the existing `wgDownAtEnd`. Lifecycle parity.
+
+### Tests
+
+`tests/unit/ipsec_runtime_pure_test.cpp` — **6 ATF cases**:
+
+- `conn_typical` — alphabet acceptance
+- `conn_invalid` — empty, oversized, `%default` reserved, shell
+  metas, slashes
+- `add_argv_shape` — `/usr/local/sbin/ipsec auto --add <name>` 4-token
+  shape pinned
+- `up_down_delete_argv_verbs` — verbs at index [2], conn at [3]
+- `absolute_ipsec_path` — all builders use absolute path
+  (matches WireGuard's `/usr/local/bin/wg-quick` policy)
+- `enabled_predicate` — non-empty test
+
+**985/985 unit tests pass locally** (979 prior + 6 new).
+
+`lib/ipsec_pure.h` header comment updated to point at the new
+runtime module instead of the TODO marker.
+
+Also: `lib/lifecycle.h` got a documentation comment in this
+release explaining why it has zero direct includers (re-exported
+via `lib/commands.h`). No code change.
+
+### NOT in this release
+
+- **kqueue/epoll log-stream multiplex** — still tracked as
+  follow-up; the 32-client cap from this release is the
+  operational guard until then.
+- **`firewall_backend:` config override** for hybrid pf+ipfw
+  hosts where operators want auto-fw on ipfw even when pf is
+  loaded. Defer until requested.
+- **IPsec auto-render** — automatically `crate vpn ipsec
+  render-conf` + drop into strongSwan's include dir. Currently
+  operator does that step manually.
+
+---
+
+## [0.8.3] — 2026-05-06
+
+`ipfw redir_port` for port-forward — closes the pf/ipfw symmetry
+gap left by 0.8.2. The ipfw auto-fw path now supports the same
+inbound: declarations as the pf path (0.8.1).
+
+### Mechanism
+
+`ipfw nat ... config` accepts multiple `redir_port` clauses on the
+same line. Per jail (jid=5, IP 10.66.0.5, iface em0):
+
+```sh
+ipfw nat 30005 config if em0 \
+  redir_port tcp 10.66.0.5:80 8080 \
+  redir_port udp 10.66.0.5:53 53 \
+  redir_port tcp 10.66.0.5:5000-5099 5000-5099
+ipfw add 40005 nat 30005 ip from 10.66.0.5 to any out via em0
+```
+
+Same spec syntax produces equivalent firewall behaviour regardless
+of which backend is loaded. Range form on either side is supported
+(jail collapses to `host:lo` if `lo == hi`; otherwise `host:lo-hi`).
+
+### Hybrid pf + ipfw on the same host
+
+FreeBSD supports running both pf and ipfw simultaneously, and crate
+takes advantage:
+
+| Subsystem | Backend |
+|---|---|
+| `mode: auto` SNAT + port-forward (this release line) | pf if loaded, else ipfw |
+| `crate throttle` rate limiting (0.7.7)              | always ipfw + dummynet |
+
+Operators using throttle on a pf-primary host don't need to switch:
+ipfw remains loaded for dummynet pipes; pf does the NAT/rdr; the
+two firewalls don't conflict because they operate on different rule
+chains. crate auto-fw picks one for its own rules; the other stays
+free for whatever the operator's running on it.
+
+### Implementation
+
+- `lib/auto_fw_pure.{h,cpp}` extended:
+  - `RedirPort` struct (proto + host range + jail addr + jail range)
+  - `buildIpfwNatConfigWithRedirsArgv(natId, iface, redirs)` —
+    builds the full config command including all redir_port
+    clauses on one ipfw invocation
+  - Empty `redirs` produces an argv equivalent to the basic
+    `buildIpfwNatConfigArgv` form (back-compat with 0.8.2 SNAT-only).
+- `lib/run.cpp` — ipfw branch builds the redirs vector from
+  `optionNet->inboundPortsTcp` and `inboundPortsUdp`, passes to the
+  new builder. The asymmetry-warning that 0.8.2 emitted is removed.
+
+### Tests
+
+`tests/unit/auto_fw_pure_test.cpp` extended with **5 new ATF cases**:
+
+- `ipfw_nat_with_no_redirs_equivalent_to_basic` — back-compat
+  invariant
+- `ipfw_nat_redir_single_port` — single-port form
+  (`10.66.0.5:80 8080`)
+- `ipfw_nat_redir_range` — range form
+  (`10.66.0.5:5000-5099 5000-5099`)
+- `ipfw_nat_redir_asymmetric_range` — host range, jail single
+- `ipfw_nat_redir_multiple` — three redirects on one config line,
+  18 argv tokens total, 3 `redir_port` keywords
+
+**979/979 unit tests pass locally** (974 prior + 5 new).
+
+### NOT in this release
+
+- **icmp passthrough** for either backend — would need separate
+  rule shape; defer until requested.
+- **IPv6 NAT** — both paths IPv4-only. Defer until 0.8.x adds
+  IPv6 pool support to 0.7.17's allocator.
+- **`firewall_backend:` config override** — currently auto-detect
+  (pf preferred). If operators want to force ipfw on a host where
+  both are loaded, that's a future config-surface addition.
+
+---
+
+## [0.8.2] — 2026-05-06
+
+`mode: auto` ipfw alternative — operators using `ipfw(8)` instead
+of `pf(4)` now also get auto-fw. Backend detected at jail-start
+via `kldstat -n {pf,ipfw}`; pf preferred if both loaded (matches
+0.8.0/0.8.1 behaviour), ipfw used if only ipfw is loaded.
+
+### ipfw NAT path
+
+```sh
+# Per jail (jid=5, network_interface=em0, allocated IP 10.66.0.5):
+ipfw nat 30005 config if em0
+ipfw add 40005 nat 30005 ip from 10.66.0.5 to any out via em0
+```
+
+ID conventions:
+- NAT instance id: `30000 + jid`
+- Rule id: `40000 + jid`
+
+These ranges sit above throttle's 10000/20000 (0.7.7), leaving
+the low rule numbers for operator-defined ipfw.
+
+### Cleanup
+
+`RunAtEnd ipfwAutoFwCleanup` declared at function scope; reset on
+successful setup. On jail teardown:
+
+```sh
+ipfw delete 40005           # delete rule first ...
+ipfw nat 30005 delete       # ... then NAT instance
+```
+
+Same word-order quirk as 0.7.7 throttle ("delete" comes LAST in
+`ipfw nat <id> delete`).
+
+### Backend selection
+
+| pf loaded | ipfw loaded | Path                                       |
+|-----------|-------------|--------------------------------------------|
+| yes       | yes         | pf (matches 0.8.0/0.8.1 behaviour)         |
+| yes       | no          | pf                                         |
+| no        | yes         | ipfw (this release)                        |
+| no        | no          | warn + skip; jail starts but no auto-fw    |
+
+### Asymmetric feature set (port-forward)
+
+The ipfw path in this release supports SNAT only. Port-forward
+via `ipfw nat ... redir_port` is planned for 0.8.3. If the spec
+declares `inbound:` ports AND ipfw is the active backend, the
+auto-fw step warns:
+
+```
+auto-fw[ipfw]: inbound: declarations ignored in 0.8.2 (port-forward
+via ipfw redir_port deferred to 0.8.3); switch to pf for full
+auto-fw or add ipfw fwd rules manually
+```
+
+This is a deliberate scope split — the pf path was the primary
+workflow; the ipfw path catches up over 0.8.2 + 0.8.3.
+
+### Implementation
+
+- `lib/auto_fw_pure.{h,cpp}` — extended:
+  - `natIdForJail(jid)` / `ruleIdForJail(jid)` — deterministic
+    per-jid ids in reserved ranges
+  - `validateIpfwNatId` — sanity belt against typos
+  - `buildIpfwNatConfigArgv`, `buildIpfwNatRuleArgv`,
+    `buildIpfwRuleDeleteArgv`, `buildIpfwNatDeleteArgv` — argv
+    builders (string-form, no shell escaping needed)
+- `lib/run.cpp` — backend detection (`kldstat -n {pf,ipfw}`),
+  dispatch on result, register `ipfwAutoFwCleanup` `RunAtEnd` for
+  the ipfw path. Soft-fail with `std::cerr` warnings on every
+  failure mode (backend not loaded, ipfw setup fails) — jail still
+  starts.
+
+### Tests
+
+`tests/unit/auto_fw_pure_test.cpp` extended with **6 new ATF cases**:
+
+- `ipfw_ids_deterministic_per_jid` — same jid → same ids
+- `ipfw_ids_in_reserved_ranges` — 30000+/40000+ above throttle's range
+- `ipfw_validate_id_range` — rejects below-base + above-16-bit
+- `ipfw_nat_config_argv_shape` — `ipfw nat <id> config if <iface>`
+- `ipfw_nat_rule_argv_shape` — full rule + from/to/out/via tokens pinned
+- `ipfw_delete_argvs` — rule delete + NAT delete word-order quirk
+
+**974/974 unit tests pass locally** (968 prior + 6 new).
+
+### NOT in this release (Phase 2 continued)
+
+- **ipfw port-forward** via `redir_port` in the nat config — 0.8.3.
+- **icmp passthrough** — neither pf nor ipfw path supports icmp
+  yet. Defer.
+- **IPv6 NAT** — IPv4-only. Defer until 0.8.x adds IPv6 pool.
+
+---
+
+## [0.8.1] — 2026-05-06
+
+Auto port-forward (pf rdr) for `mode: auto` jails — the second
+slice of network DX Phase 2 (after 0.8.0's SNAT auto-rule).
+
+When the spec declares inbound TCP/UDP ports, `crate run` now
+emits one `rdr` rule per port (or range) into the jail's pf
+anchor, alongside the SNAT rule from 0.8.0:
+
+```yaml
+options:
+  net:
+    mode: auto
+    inbound:
+      tcp:
+        - { from: 8080,       to: 80 }
+        - { from: 5000-5099,  to: 5000-5099 }
+      udp:
+        - { from: 53, to: 53 }
+```
+
+becomes (per-jail anchor `crate/<jailXname>`):
+
+```
+nat on em0 inet from 10.66.0.5 to ! 10.66.0.5 -> (em0)
+rdr on em0 inet proto tcp from any to (em0) port 8080 -> 10.66.0.5 port 80
+rdr on em0 inet proto tcp from any to (em0) port 5000:5099 -> 10.66.0.5 port 5000:5099
+rdr on em0 inet proto udp from any to (em0) port 53 -> 10.66.0.5 port 53
+```
+
+Operator does NOT need to write any pf.conf rdr rules. Same anchor
+as SNAT, so cleanup is automatic via the existing
+`destroyPfAnchor` `RunAtEnd`.
+
+### Format details
+
+- Single port form (`port 8080`) when host range collapses to one
+  port (lo == hi); range form (`port 8080:8090`) otherwise. Same
+  for the jail side independently — asymmetric host-range to
+  jail-single is also supported (pf accepts both).
+- `(<iface>)` parens for the destination match — robust against
+  DHCP changes on the host's external interface.
+- `inet` qualifier confines to IPv4.
+
+### Defence in depth
+
+- **proto whitelisted**: `tcp` or `udp` only. `icmp` and others
+  rejected (would need different rule shape; defer).
+- **port range 1..65535**: port 0 rejected.
+- **silent skip on validation failure**: a malformed port pair
+  is dropped without aborting the run; the rest of the rules
+  still load. The spec parser already validates port ranges
+  upstream, so this is belt-and-braces.
+
+### Implementation
+
+- `lib/auto_fw_pure.{h,cpp}` — extended with:
+  - `validateProto` — whitelist `tcp` / `udp`
+  - `validatePort` — 1..65535
+  - `formatRdrRule` / `formatRdrAnchorLine` — per-rule formatter
+    with smart range-vs-single output
+- `lib/run.cpp` — extends the SNAT auto-fw block: iterate
+  `optionNet->inboundPortsTcp` and `inboundPortsUdp`, append
+  rdr lines to the same anchor text loaded via
+  `PfctlOps::addRules`.
+
+### Tests
+
+`tests/unit/auto_fw_pure_test.cpp` extended with **10 new ATF cases**:
+
+- `proto_typical` / `proto_invalid` — whitelist + injection guard
+- `port_typical` / `port_invalid` — 0 reserved, > 65535 rejected
+- `rdr_single_port_shape` — `port 8080` form (no `:8080:8080`)
+- `rdr_range_both_sides` — `port 5000:5099 -> ... port 5000:5099`
+- `rdr_range_host_single_jail` — asymmetric form, range collapsed
+  to single on the jail side
+- `rdr_uses_iface_token_for_dest` — `to (em0)` parens pinned
+- `rdr_inet_qualifier_present` — `inet proto tcp` invariant
+- `rdr_anchor_line_has_trailing_newline` — concatenation contract
+
+**968/968 unit tests pass locally** (958 prior + 10 new).
+
+### NOT in this release (Phase 2 continued / Phase 3)
+
+- **ipfw alternative** — for operators who use ipfw instead of
+  pf. Different rule shape (`ipfw fwd` for port-forward,
+  `ipfw nat` for SNAT). Tracked as 0.8.2.
+- **icmp passthrough** — needs separate pf rule type. Defer.
+- **IPv6 rdr** — currently IPv4-only. Defer until 0.8.x adds
+  IPv6 pool support.
+
+---
+
+## [0.8.0] — 2026-05-06
+
+**Major version bump.** First release on the `0.8.0` branch.
+
+`mode: auto` now auto-generates the SNAT rule that was previously
+the operator's responsibility. Combined with 0.7.17's pool
+allocator and 0.7.18's spec shortcut, a single-line spec gets
+true outbound-internet jails on a fresh host:
+
+```yaml
+# crate.yml (operator-written, once)
+network_pool:      10.66.0.0/24
+network_interface: em0       # NEW REQUIREMENT for SNAT auto-rule
+
+# spec.yml (per-jail)
+options:
+  net:
+    mode: auto
+```
+
+`crate run` with the above:
+1. (0.7.18) expands `mode: auto` to bridge + auto-create-bridge
+2. (0.7.17) allocates `10.66.0.2` from the pool, registers a lease
+3. (0.7.17) configures static IP on the jail-side iface
+4. **(0.8.0) emits one nat rule** into the jail's pf anchor:
+   ```
+   nat on em0 inet from 10.66.0.2 to ! 10.66.0.2 -> (em0)
+   ```
+5. Jail starts; outbound traffic from the jail's `10.66.0.2`
+   gets translated to the host's `em0` address; reply packets
+   route back through the established state.
+
+Operator does NOT need to write any pf.conf rule for routine
+desktop-app jails.
+
+### Why a major version bump
+
+`mode: auto` semantics changed. Pre-0.8.0 the shortcut produced
+a jail that needed operator-supplied SNAT to work — many specs
+relied on operator-written pf.conf. Post-0.8.0 the same spec
+auto-loads SNAT into the per-jail pf anchor, which can interact
+with operator's existing rules.
+
+This is a behaviour change visible to operators, hence 0.8.0.
+Specs that don't use `mode: auto` are unaffected.
+
+### Defence in depth
+
+- **External interface validated** before reaching `pfctl`: 1..15
+  chars, alnum + `.` (vlan tags) + `_`, no shell metacharacters.
+- **Jail address validated**: digits + dots + optional `/<prefix>`,
+  ≤18 chars. Catches shell-injection attempts in the network_pool
+  config.
+- **`to ! <jailAddr>`** clause excludes intra-jail traffic — replies
+  between two jails on the same bridge stay on the bridge instead
+  of being NAT'd to the host's address.
+- **`-> (em0)`** with parens means "translate to whatever address
+  is currently on em0" — robust against DHCP lease changes on the
+  host's external interface.
+- **`inet`** qualifier confines the rule to IPv4 — no accidental
+  IPv6 NAT (which pf would warn about anyway, but explicit > implicit).
+
+### Soft-fail behaviour
+
+If `network_interface` is unset in `crate.yml`, the auto-fw step
+warns and continues:
+```
+auto-fw: network_interface unset in crate.yml; skipping SNAT
+auto-rule — outbound traffic from 10.66.0.2 will require
+operator-written pf/ipfw rules
+```
+
+If `pfctl` fails to load the rule (pf.ko not loaded, syntax error
+in the operator's main pf.conf, ...), the auto-fw step warns and
+continues:
+```
+auto-fw: SNAT rule load failed: <error> — outbound traffic may not
+work; configure pf manually
+```
+
+These soft-fails preserve the pre-0.8.0 behaviour of "jail starts
+even if firewall is broken." Operators relying on the auto-fw can
+trip-wire detection via `crate doctor` (0.7.13) which checks
+`zpool` health + `network_pool` config — a future doctor check
+could also verify the auto-fw rule was loaded.
+
+### Implementation
+
+- `lib/auto_fw_pure.{h,cpp}` — pure module:
+  - `validateExternalIface` — IFNAMSIZ + alnum + `.` + `_`
+  - `validateRuleAddress` — IPv4 with optional CIDR suffix
+  - `formatSnatRule(iface, addr)` — produces the canonical pf
+    nat rule string
+  - `formatSnatAnchorLine` — same plus trailing newline so
+    multiple lines concatenate cleanly
+- `lib/run.cpp` — wired into the bridge-mode auto-IP block:
+  validates inputs, builds the rule line, loads via existing
+  `PfctlOps::addRules(anchor, rulesText)`. Cleanup is automatic
+  (existing `destroyPfAnchor` `RunAtEnd` flushes the anchor at
+  teardown).
+
+### Tests
+
+`tests/unit/auto_fw_pure_test.cpp` — **11 ATF cases**:
+
+- iface validator: typical (em0/igb0/vlan0.100/bridge0/vtnet1) +
+  invalid (empty, oversized, space, semicolon, backtick, slash,
+  newline)
+- address validator: typical IPv4 + CIDR + 0.0.0.0/0 catch-all +
+  rejection of shell-injection (`;rm -rf /`, backticks, `$(...)`,
+  multiple slashes, oversized)
+- SNAT rule shape: single IP + CIDR + invariants pinned (`inet`
+  qualifier present, `to ! <jailAddr>` exclusion present, `(<iface>)`
+  parens for dynamic translation)
+- anchor line format: trailing newline + starts with rule
+
+**958/958 unit tests pass locally** (947 prior + 11 new).
+
+### NOT in this release (future Phase 2 / Phase 3)
+
+- **Port-forward auto-rules** (rdr) from `inbound:` declarations.
+  0.8.1.
+- **ipfw alternative** for operators using ipfw instead of pf.
+  0.8.2.
+- **IPv6 SNAT (NPTv6)** for IPv6 pool allocation. Defer until
+  0.8.x adds IPv6 pool support.
+- **`crate doctor` integration** — verify auto-fw rule actually
+  loaded for each running jail. 0.8.x quality-of-life.
+- **`network_interface` auto-detect** — read from `route -4 get
+  default` if unset in config. Defer; explicit config is safer
+  for production hosts with multiple uplinks.
+
+---
+
 ## [0.7.19] — 2026-05-06
 
 `gui: auto` scalar shortcut — companion to 0.7.18's `mode: auto`

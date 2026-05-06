@@ -25,8 +25,12 @@ struct NodeConfig {
   std::string datacenter;  // logical group name; empty -> "default"
 };
 
-// Load node list from YAML config file
-std::vector<NodeConfig> loadNodes(const std::string &configPath);
+// Load node list from YAML config file. The optional
+// `outPollIntervalSec` out-parameter receives the value of the
+// top-level `poll_interval` key (default 15 if missing). Same
+// out-param shape as loadHaSpecs's `outThresholdSeconds`.
+std::vector<NodeConfig> loadNodes(const std::string &configPath,
+                                  unsigned *outPollIntervalSec = nullptr);
 
 // Load operator HA specs from the same crate-hub.conf:
 //   ha:
@@ -44,7 +48,8 @@ std::vector<HaPure::HaSpec> loadHaSpecs(const std::string &configPath,
 
 class Poller {
 public:
-  Poller(const std::vector<NodeConfig> &nodes, Store &store);
+  Poller(const std::vector<NodeConfig> &nodes, Store &store,
+         unsigned pollIntervalSec = 15);
 
   void run();   // blocking: poll loop
   void stop();

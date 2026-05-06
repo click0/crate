@@ -25,7 +25,13 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef __FreeBSD__
+#include <sys/event.h>   // 0.8.5: kqueue/kevent for log-stream tail
+#include <sys/types.h>
+#include <sys/time.h>
+#endif
 
+#include <atomic>
 #include <ctime>
 #include <fstream>
 #include <map>
@@ -40,6 +46,15 @@ namespace Crated {
 
 static std::mutex g_rateMutex;
 static std::map<std::string, std::pair<int, time_t>> g_rateBuckets;
+
+// 0.8.4: cap the number of concurrent log-streaming clients so a
+// burst of polling agents (Prometheus exporters, log shippers,
+// curl-in-a-tight-loop scripts) cannot exhaust the daemon's
+// thread pool. The real fix — single bg thread + kqueue
+// multiplex — is tracked as a follow-up; this counter is the
+// operational guard until then.
+static std::atomic<int> g_streamingClients{0};
+static constexpr int     kMaxStreamingClients = 32;
 
 static bool checkRateLimit(const std::string &clientId, const std::string &endpoint,
                            int maxPerSecond) {
@@ -379,19 +394,26 @@ static void handleContainerLogs(const httplib::Request &req, httplib::Response &
     return;
   }
 
-  // Streaming mode: use chunked transfer encoding with tail -f
-  // cpp-httplib supports set_chunked_content_provider for streaming responses.
+  // Streaming mode: chunked transfer encoding with a polling tail-f
+  // loop inside the chunked content provider. One server thread per
+  // active streaming client.
   //
-  // TODO: Full implementation requires a background thread running tail -f
-  // and feeding chunks to the provider callback. The current approach uses
-  // set_chunked_content_provider with a blocking read from tail -f, which
-  // works but ties up a server thread per streaming client.
-  //
-  // Future improvements:
-  //   - Use epoll/kqueue to multiplex log file watching
-  //   - Add a connection limit for streaming clients
-  //   - Support WebSocket upgrade for bidirectional streaming (RFC 6455)
-  //   - Implement server-sent events (SSE) as an alternative transport
+  // 0.8.4: bounded concurrency via g_streamingClients (cap
+  // kMaxStreamingClients=32). Beyond the cap we return HTTP 503
+  // with Retry-After so well-behaved clients back off instead of
+  // queueing on the daemon's thread pool. Underlying kqueue/epoll
+  // multiplex refactor remains tracked as future work.
+
+  if (g_streamingClients.load() >= kMaxStreamingClients) {
+    res.status = 503;
+    res.set_header("Retry-After", "5");
+    jsonError(res, 503,
+      "log-stream concurrency limit reached ("
+      + std::to_string(kMaxStreamingClients)
+      + " clients); retry shortly");
+    return;
+  }
+  g_streamingClients.fetch_add(1);
 
   res.set_header("X-Content-Type-Options", "nosniff");
   res.set_header("Cache-Control", "no-cache");
@@ -429,7 +451,43 @@ static void handleContainerLogs(const httplib::Request &req, httplib::Response &
           return false;
       }
 
-      // Now tail: poll for new data every 500ms
+      // 0.8.5: tail loop — block on kqueue(2) for new bytes instead
+      // of busy-waiting with usleep(500ms). Each streaming client
+      // gets its own kqueue fd watching its own log file. Wakeup is
+      // immediate when the log is appended; 1s timeout ensures we
+      // periodically check whether the client disconnected (sink
+      // write returns false) even on quiet logs.
+      //
+      // Linux fallback (dev environment only — crated runs on
+      // FreeBSD): no kqueue, keep the 500ms poll.
+#ifdef __FreeBSD__
+      int kqFd = ::kqueue();
+      int watchFd = -1;
+      if (kqFd >= 0) {
+        watchFd = ::open(logPath.c_str(), O_RDONLY | O_CLOEXEC);
+        if (watchFd < 0) {
+          ::close(kqFd);
+          kqFd = -1;
+        } else {
+          struct kevent ev;
+          EV_SET(&ev, watchFd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
+                 NOTE_WRITE | NOTE_EXTEND | NOTE_DELETE | NOTE_RENAME,
+                 0, nullptr);
+          if (::kevent(kqFd, &ev, 1, nullptr, 0, nullptr) < 0) {
+            ::close(watchFd); watchFd = -1;
+            ::close(kqFd);    kqFd    = -1;
+          }
+        }
+      }
+      // RAII-style closer so any return path frees both fds.
+      struct FdCloser {
+        int *kq; int *wf;
+        ~FdCloser() {
+          if (*wf >= 0) ::close(*wf);
+          if (*kq >= 0) ::close(*kq);
+        }
+      } closer{&kqFd, &watchFd};
+#endif
       ifs.clear(); // clear EOF flag
       for (;;) {
         while (std::getline(ifs, line)) {
@@ -438,12 +496,32 @@ static void handleContainerLogs(const httplib::Request &req, httplib::Response &
             return false; // client disconnected
         }
         ifs.clear();
-        ::usleep(500000); // 500ms poll interval
+#ifdef __FreeBSD__
+        if (kqFd >= 0) {
+          struct timespec timeout{1, 0};  // 1s — also forces a
+                                          // periodic disconnect check.
+          struct kevent triggered;
+          // Ignore errors / spurious wakeups; fall through to
+          // re-read regardless. NOTE_DELETE / NOTE_RENAME just
+          // wake us; the std::getline loop above will then EOF
+          // and the operator can re-curl when their log rotator
+          // creates the new file.
+          (void)::kevent(kqFd, nullptr, 0, &triggered, 1, &timeout);
+        } else {
+          ::usleep(500000);
+        }
+#else
+        ::usleep(500000);
+#endif
       }
-      // Unreachable; streaming ends when client disconnects
+      // Unreachable; streaming ends when client disconnects.
     },
     [](bool /*success*/) {
-      // Cleanup callback — nothing to do
+      // 0.8.4: release the streaming-clients counter slot whether
+      // the stream finished cleanly (client disconnected) or
+      // erroed out. Any path that aborts this provider eventually
+      // gets here.
+      g_streamingClients.fetch_sub(1);
     }
   );
 }

@@ -60,3 +60,5 @@ atf_test_program{name="doctor_pure_test"}
 atf_test_program{name="sandbox_pure_test"}
 atf_test_program{name="rate_limit_pure_test"}
 atf_test_program{name="ip_alloc_pure_test"}
+atf_test_program{name="auto_fw_pure_test"}
+atf_test_program{name="ipsec_runtime_pure_test"}
