@@ -6,6 +6,106 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.16] — 2026-05-06
+
+`crate vm-wrap` — bhyve jailer (FreeBSD-flavoured analogue of
+Firecracker's [jailer](https://github.com/firecracker-microvm/firecracker/blob/main/docs/jailer.md)
+pattern). Closes [TODO2 item B](TODO2). Defence-in-depth wrapper
+for operators who already manage bhyve VMs via `vm-bhyve` /
+hand-rolled bhyveload — crate does NOT take over the VM lifecycle,
+it only renders the *enclosure*: a vnet jail with `allow.vmm`, a
+tight devfs ruleset whitelisting just `/dev/vmm/<vmname>`,
+`/dev/vmmctl`, the VM's `/dev/nmdm*` console pair and the specific
+`/dev/tap*` it uses, plus an optional delegated ZFS dataset.
+
+### Threat model recap
+
+A future bhyve user-space CVE (e.g. CVE-2021-29626 class) lands
+the attacker inside the cage instead of on the host:
+
+| Scenario                  | No jailer       | With vm-wrap          |
+|---------------------------|-----------------|-----------------------|
+| bhyve user-space CVE      | Host root       | Empty vnet jail       |
+| Disk image confused-deputy| Host filesystem | One ZFS dataset       |
+| Network: ARP/DHCP shenans | Host bridge     | Jail's vnet, isolated |
+| `vmm.ko` kernel CVE       | Host kernel     | Host kernel (no help) |
+| Side-channel (Spectre)    | Host memory     | Host memory (no help) |
+
+The wrapper is a second wall, not a kernel boundary. It only helps
+against bugs confined to bhyve's user-space binary or its ancillary
+devices. See `docs/bhyve-jailer.md` for the full threat model and
+manual recipe — `crate vm-wrap` automates the rendering work.
+
+### Surface
+
+```
+crate vm-wrap <vmname> --jail <name>
+              [--dataset DS] [--tap N] [--nmdm N]
+              [--path P] [--ruleset N]
+              [--output-dir DIR]
+```
+
+Default mode prints three labelled blocks to stdout:
+
+1. **devfs.rules block** — paste into `/etc/devfs.rules`
+2. **jail.conf fragment** — use with `jail -c -f <path>`
+3. **`jexec ... bhyve ...` invocation hint** — operator-edited
+   launch line for the VM from inside the cage
+
+With `--output-dir DIR` each block is written to a separately-named
+file (`devfs.snippet`, `<jail>.jail.conf`, `<jail>.bhyve.sh`) so
+the operator integrates them on their own terms. Render-only — no
+side-effects (no `service devfs restart`, no `jail -c`, no
+`zfs jail`); a future `--apply` mode can drive those steps via the
+argv builders shipped in this release.
+
+### Implementation
+
+Pure builders in `lib/vmwrap_pure.{h,cpp}`:
+
+- Validators: `validateVmName`, `validateJailName`, `validateDataset`,
+  `validateTap` (-1 or 0..9999), `validateNmdm`, `validateRulesetNum`
+  (1..65535), `validateSpec` (one-shot)
+- Builders: `buildDevfsRuleset`, `buildJailConfFragment`,
+  `buildBhyveInvocationHint`
+- argv: `buildDevfsReloadArgv`, `buildJailCreateArgv`,
+  `buildZfsJailArgv` (deferred to future --apply mode)
+- `deriveRulesetNum(jailName)` — FNV-1a 32-bit hash folded into
+  `100..199` so the same jail name always gets the same number;
+  collisions can be resolved with explicit `--ruleset N`
+
+22 ATF unit cases cover validators, derivation determinism + range,
+all three builders, and the three argv-builders.
+
+Runtime in `lib/vmwrap.cpp` — print-mode by default, file-mode
+under `--output-dir DIR`. Output dir is created at mode 0700.
+
+### Defaults
+
+- `--path` defaults to `/` (vm-bhyve convention; the devfs ruleset
+  + vnet + `allow.vmm` are the real walls)
+- `--ruleset` defaults to derived per jail name
+- `--tap` and `--nmdm` default to "none" so operators who manage
+  multiple TAPs / consoles per VM can hand-write those lines
+
+### What this release does NOT do
+
+- **`--apply` mode** — vm-wrap is a renderer; the operator runs
+  `service devfs restart`, `jail -c -f`, and `zfs jail` themselves.
+  The argv builders are shipped so a future --apply can drive them
+  without a second design pass.
+- **Auto-allocate tap / nmdm** — operator picks indices.
+  Auto-allocation interacts with whatever VM-management layer the
+  operator already uses (vm-bhyve has its own counter); we
+  deliberately don't compete with that.
+- **TODO2 item A (full bhyve backend)** — vm-wrap is the *small*
+  bhyve track item. Item A (`backend: bhyve` in the spec, full VM
+  lifecycle) is a 2-3 week effort tracked separately.
+
+1016/1016 unit tests pass locally.
+
+---
+
 ## [0.8.15] — 2026-05-06
 
 IPv6 NPTv6 — **Phase 1 hook only.** Adds the `network_pool6:`

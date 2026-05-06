@@ -66,6 +66,7 @@ static void usage() {
   std::cout << "  retune TARGET --rctl K=V...   live-tune jail RCTL limits without restart (--show, --clear)" << std::endl;
   std::cout << "  throttle TARGET --ingress R --egress R    dummynet token-bucket network shaping" << std::endl;
   std::cout << "  doctor [-j]                health check for crate host (kernel modules, commands, ZFS, jails, ...)" << std::endl;
+  std::cout << "  vm-wrap VM --jail NAME     bhyve jailer: render devfs ruleset + jail.conf for a vnet enclosure" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -508,6 +509,41 @@ static void usageTemplate() {
   std::cout << "" << std::endl;
 }
 
+static void usageVmWrap() {
+  std::cout << "usage: crate vm-wrap <vmname> --jail <name>" << std::endl;
+  std::cout << "                     [--dataset DS] [--tap N] [--nmdm N]" << std::endl;
+  std::cout << "                     [--path P] [--ruleset N]" << std::endl;
+  std::cout << "                     [--output-dir DIR]" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Bhyve jailer (FreeBSD-flavoured analogue of Firecracker's pattern)." << std::endl;
+  std::cout << "Wraps an existing bhyve VM in a vnet jail with allow.vmm and a" << std::endl;
+  std::cout << "tight devfs ruleset so a future bhyve user-space CVE lands the" << std::endl;
+  std::cout << "attacker in the cage instead of on the host. crate does NOT manage" << std::endl;
+  std::cout << "the VM lifecycle — you keep using vm-bhyve / hand-rolled bhyveload." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Default mode prints three labelled blocks to stdout:" << std::endl;
+  std::cout << "  1. devfs.rules block (paste into /etc/devfs.rules)" << std::endl;
+  std::cout << "  2. jail.conf fragment (use with `jail -c -f <path>`)" << std::endl;
+  std::cout << "  3. `jexec ... bhyve ...` invocation hint" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "With --output-dir DIR, each block is written to a file in DIR" << std::endl;
+  std::cout << "instead of stdout. vm-wrap never executes side-effects (no" << std::endl;
+  std::cout << "service devfs restart, no jail -c, no zfs jail) — it's a renderer." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Options:" << std::endl;
+  std::cout << "  --jail NAME         enclosure jail name (required)" << std::endl;
+  std::cout << "  --dataset DS        ZFS dataset to delegate via `zfs jail` (optional)" << std::endl;
+  std::cout << "  --tap N             tap index to expose: /dev/tap<N> (default: none)" << std::endl;
+  std::cout << "  --nmdm N            nmdm pair index to expose: /dev/nmdm<N>* (default: none)" << std::endl;
+  std::cout << "  --path P            jail path (default: '/'; vm-bhyve convention)" << std::endl;
+  std::cout << "  --ruleset N         devfs ruleset number 1..65535 (default: derived from jail name)" << std::endl;
+  std::cout << "  --output-dir DIR    write artefacts to files in DIR instead of stdout" << std::endl;
+  std::cout << "  -h, --help          show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "See docs/bhyve-jailer.md for the threat model and the manual recipe." << std::endl;
+  std::cout << "" << std::endl;
+}
+
 static void usageReplicate() {
   std::cout << "usage: crate replicate <jail> --to <[user@]host>" << std::endl;
   std::cout << "                       --dest-dataset <pool/jails/name>" << std::endl;
@@ -682,7 +718,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.8.15" << std::endl;
+        std::cout << "crate 0.8.16" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -693,7 +729,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.8.15" << std::endl;
+          std::cout << "crate 0.8.16" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -1415,6 +1451,26 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.throttleTarget = argv[a];
         } else {
           err("too many arguments for 'throttle' command");
+        }
+        break;
+      case CmdVmWrap:
+        if (auto argShort = isShort(argv[a])) {
+          if (argShort == 'h') { usageVmWrap(); exit(0); }
+          err("unsupported short option '%s'", argv[a]);
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) { usageVmWrap(); exit(0); }
+          else if (strEq(argLong, "jail"))        args.vmWrapJailName = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "dataset"))     args.vmWrapDataset = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "tap"))         args.vmWrapTap = (int)Util::toUInt(getArgParam(++a, argc, argv));
+          else if (strEq(argLong, "nmdm"))        args.vmWrapNmdm = (int)Util::toUInt(getArgParam(++a, argc, argv));
+          else if (strEq(argLong, "path"))        args.vmWrapPath = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "ruleset"))     args.vmWrapRuleset = Util::toUInt(getArgParam(++a, argc, argv));
+          else if (strEq(argLong, "output-dir"))  args.vmWrapOutputDir = getArgParam(++a, argc, argv);
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.vmWrapVmName.empty()) {
+          args.vmWrapVmName = argv[a];
+        } else {
+          err("too many arguments for 'vm-wrap' command");
         }
         break;
       }

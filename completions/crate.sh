@@ -19,7 +19,7 @@ if [ -n "$BASH_VERSION" ]; then
                     snapshot export import gui stack stats logs \
                     stop restart top inter-dns vpn inspect migrate \
                     backup restore backup-prune replicate template \
-                    retune throttle doctor"
+                    retune throttle doctor vm-wrap"
     local global_opts="-h --help -V --version --no-color -p --log-progress"
 
     case "$prev" in
@@ -139,6 +139,10 @@ if [ -n "$BASH_VERSION" ]; then
         COMPREPLY=( $(compgen -W "-j --json -h --help" -- "$cur") )
         return
         ;;
+      vm-wrap)
+        COMPREPLY=( $(compgen -W "--jail --dataset --tap --nmdm --path --ruleset --output-dir -h --help" -- "$cur") )
+        return
+        ;;
       -s|--spec)
         COMPREPLY=( $(compgen -f -X '!*.yml' -- "$cur") )
         return
@@ -203,6 +207,7 @@ if [ -n "$ZSH_VERSION" ]; then
       'retune:live RCTL adjustment without restart'
       'throttle:dummynet token-bucket network shaping'
       'doctor:health check for crate host'
+      'vm-wrap:bhyve jailer; render devfs ruleset + jail.conf'
     )
 
     _arguments -C \
@@ -399,6 +404,18 @@ if [ -n "$ZSH_VERSION" ]; then
             _arguments \
               '(-j --json)'{-j,--json}'[machine-readable output]' \
               '(-h --help)'{-h,--help}'[show help]'
+            ;;
+          vm-wrap)
+            _arguments \
+              '--jail[enclosure jail name]:name:' \
+              '--dataset[ZFS dataset to delegate]:dataset:' \
+              '--tap[tap index]:N:' \
+              '--nmdm[nmdm pair index]:N:' \
+              '--path[jail path]:path:_files -/' \
+              '--ruleset[devfs ruleset number]:N:' \
+              '--output-dir[write artefacts to DIR]:dir:_files -/' \
+              '(-h --help)'{-h,--help}'[show help]' \
+              '1:vmname:'
             ;;
           vpn)
             _arguments \

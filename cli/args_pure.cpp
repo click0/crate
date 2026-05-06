@@ -65,6 +65,7 @@ Command isCommand(const char *arg) {
   if (strEq(arg, "retune"))    return CmdRetune;
   if (strEq(arg, "throttle"))  return CmdThrottle;
   if (strEq(arg, "doctor"))    return CmdDoctor;
+  if (strEq(arg, "vm-wrap"))   return CmdVmWrap;
   return CmdNone;
 }
 
@@ -261,6 +262,12 @@ void Args::validate() {
     break;
   case CmdDoctor:
     // No required arguments — run all checks unconditionally.
+    break;
+  case CmdVmWrap:
+    if (vmWrapVmName.empty())
+      ERR("the 'vm-wrap' command requires a bhyve VM name (positional arg)")
+    if (vmWrapJailName.empty())
+      ERR("the 'vm-wrap' command requires --jail <name>")
     break;
   default:
     ERR("no command was given")

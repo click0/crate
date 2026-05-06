@@ -46,6 +46,11 @@ A. (feature, large) Full bhyve backend for crate.
 
 B. (feature, small) `crate vm-wrap` — jail wrapper around an
    existing bhyve VM (Firecracker "jailer" pattern, FreeBSD-flavoured).
+   *Shipped in 0.8.16 as a renderer (print-mode default, --output-dir
+   for file-mode). The argv builders for `service devfs restart`,
+   `jail -c -f` and `zfs jail` ship in lib/vmwrap_pure.cpp so a
+   future --apply mode can drive them without a second design pass.
+   Full VM-lifecycle backend (item A below) is still open.*
 
    Operator already manages bhyve their own way (vm-bhyve, custom
    scripts, hand-rolled bhyveload). `crate vm-wrap <vmname>
