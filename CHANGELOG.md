@@ -6,6 +6,73 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.17] — 2026-05-06
+
+`network: auto` — top-level spec shorthand for zero-config vnet
+networking. Closes the medium-priority TODO item for desktop-app
+jails: a single line at spec root replaces the four-line
+`options.net` block that pulls everything together.
+
+```yaml
+# Before — works since 0.7.18 (verbose form)
+options:
+  net:
+    mode: auto
+
+# Now (0.8.17) — same effect, no nesting
+network: auto
+```
+
+Both spellings continue to work; pick whichever reads better. The
+runtime is unchanged — `mode: auto` already expanded into the full
+bridge + auto-create-bridge + ip-auto chain since 0.7.18, which
+in turn drives:
+
+- Auto-create the configured default bridge (`crate.yml`'s
+  `default_bridge:`, falling back to `crate0`)
+- Auto-allocate an IPv4 from the configured `network_pool:` (or
+  fall back to DHCP if no pool is configured)
+- Auto-render SNAT + per-port rdr rules into pf or ipfw, picking
+  whichever firewall is loaded (`firewall_backend:` config field
+  forces the choice if both are loaded)
+- Auto-detect the egress interface via `route -4 get default` if
+  `network_interface:` is unset
+
+So the full zero-config chain is one line of YAML on top of two
+optional config knobs. This release closes that loop.
+
+### Implementation
+
+Top-level `network:` parses through a tiny pure validator
+`SpecPure::validateTopLevelNetwork` that today accepts only `auto`
+— other values (`host`, `none`, a literal bridge name, ...) are
+reserved for future shortcuts and rejected with a diagnostic
+pointing at `options.net` for richer config.
+
+Conflict detection: if both top-level `network: auto` and
+`options.net.mode: bridge|passthrough|netgraph` are present, the
+parser refuses the spec rather than silently picking one. Two
+"auto"s in different places resolve consistently.
+
+3 ATF unit cases cover the validator (accept "auto", reject empty,
+reject reserved-for-future values).
+
+### What this release does NOT do
+
+- **`gui: auto`** — same shorthand-on-top-of-existing-pieces story
+  for X11/Wayland desktop-app jails. Tracked for 0.8.18 (next
+  release in this batch).
+- **Top-level `ports:` shorthand** — operators who want auto-rdr
+  port-forwards still write `options.net.inbound-tcp: [80, 443]`.
+  Adding a top-level `ports:` is straightforward but interacts
+  with at-least-three other features (firewall: per-container
+  rules, socket_proxy: Tor mode, X11 forwarding ports) so it
+  warrants its own design pass.
+
+1019/1019 unit tests pass locally.
+
+---
+
 ## [0.8.16] — 2026-05-06
 
 `crate vm-wrap` — bhyve jailer (FreeBSD-flavoured analogue of

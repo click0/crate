@@ -12,6 +12,7 @@
 #include <atf-c++.hpp>
 
 #include "spec.h"
+#include "spec_pure.h"
 #include "err.h"
 
 // Build a minimal valid Spec — having a runCmdExecutable is enough.
@@ -575,8 +576,44 @@ ATF_TEST_CASE_BODY(terminal_devfs_default_ok)
 	s.validate();
 }
 
+// ===================================================================
+// 0.8.17: top-level `network:` shorthand validator
+// ===================================================================
+
+ATF_TEST_CASE_WITHOUT_HEAD(top_level_network_auto_accepted);
+ATF_TEST_CASE_BODY(top_level_network_auto_accepted)
+{
+	ATF_REQUIRE_EQ(SpecPure::validateTopLevelNetwork("auto"), std::string());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(top_level_network_empty_rejected);
+ATF_TEST_CASE_BODY(top_level_network_empty_rejected)
+{
+	auto err = SpecPure::validateTopLevelNetwork("");
+	ATF_REQUIRE(!err.empty());
+	ATF_REQUIRE(err.find("auto") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(top_level_network_unsupported_value_rejected);
+ATF_TEST_CASE_BODY(top_level_network_unsupported_value_rejected)
+{
+	// Reserved-for-future values must NOT silently work today —
+	// "host", "none", a bridge name. Operators get a diagnostic
+	// pointing at options.net for richer config.
+	for (auto v : {"host", "none", "bridge0", "wireguard", "Auto"}) {
+		auto err = SpecPure::validateTopLevelNetwork(v);
+		ATF_REQUIRE(!err.empty());
+		ATF_REQUIRE(err.find("options.net") != std::string::npos);
+	}
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
+	// 0.8.17: top-level network shorthand
+	ATF_ADD_TEST_CASE(tcs, top_level_network_auto_accepted);
+	ATF_ADD_TEST_CASE(tcs, top_level_network_empty_rejected);
+	ATF_ADD_TEST_CASE(tcs, top_level_network_unsupported_value_rejected);
+
 	// must do something
 	ATF_ADD_TEST_CASE(tcs, must_have_something_to_run);
 	ATF_ADD_TEST_CASE(tcs, executable_only_ok);
