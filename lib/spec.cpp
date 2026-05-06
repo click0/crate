@@ -1090,9 +1090,26 @@ static Spec parseSpecFromNode(YAML::Node top) {
         }
       }
     } else if (isKey(k, "gui")) {
-      // GUI session management (§19)
+      // GUI session management (§19).
+      // 0.7.19: accept scalar shorthand `gui: auto` (or any other
+      // mode value) as equivalent to `gui: { mode: <value> }`.
+      // This makes the typical desktop-app spec a single line:
+      //     gui: auto
+      // instead of:
+      //     gui:
+      //       mode: auto
+      if (k.second.IsScalar()) {
+        std::string mode = AsString(k.second);
+        if (mode != "nested" && mode != "headless"
+            && mode != "gpu" && mode != "auto")
+          ERR("gui scalar shorthand must be 'nested', 'headless', 'gpu', or 'auto' (got '"
+              << mode << "')")
+        spec.guiOptions = std::make_unique<Spec::GuiOptions>();
+        spec.guiOptions->mode = mode;
+        continue;
+      }
       if (!k.second.IsMap())
-        ERR("gui must be a map")
+        ERR("gui must be a scalar (mode shorthand) or a map")
       spec.guiOptions = std::make_unique<Spec::GuiOptions>();
       for (auto b : k.second) {
         if (isKey(b, "mode")) {

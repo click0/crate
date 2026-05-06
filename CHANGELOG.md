@@ -6,6 +6,85 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.19] — 2026-05-06
+
+`gui: auto` scalar shortcut — companion to 0.7.18's `mode: auto`
+for the GUI side. Operators write:
+
+```yaml
+gui: auto
+```
+
+instead of the equivalent map form:
+
+```yaml
+gui:
+  mode: auto
+```
+
+The runtime side (`run_gui.cpp::resolveGuiMode`) already had the
+`auto` mode branch — at jail start it inspects the host:
+
+| Host condition                     | Resolved mode |
+|------------------------------------|---------------|
+| `/dev/dri/card0` exists, no $DISPLAY | `gpu`         |
+| `$DISPLAY` set                       | `nested`      |
+| Otherwise                            | `headless`    |
+
+So the only piece missing was the spec ergonomics — operators
+had to write 2 lines for what was conceptually 1. This release
+adds the scalar shorthand to the parser; everything else flows
+through the existing GUI runtime.
+
+### Accepted scalar values
+
+`gui: auto`, `gui: nested`, `gui: headless`, `gui: gpu` — same
+set as the existing `gui.mode:` map field. Anything else is
+rejected with a clear error message.
+
+### Implementation
+
+- `lib/spec.cpp` — `else if (isKey(k, "gui"))` branch now
+  accepts a scalar in addition to the existing map form. When
+  scalar, builds a `GuiOptions` with just `mode` set.
+
+### Combined with 0.7.18
+
+The two shortcuts compose naturally for typical desktop-app
+specs:
+
+```yaml
+options:
+  net:
+    mode: auto    # 0.7.18: bridge + auto-IP + auto-create-bridge
+
+gui: auto         # 0.7.19: pick gpu/nested/headless from host
+
+start: firefox
+```
+
+That's the whole spec for "run firefox in a jail" — pre-0.7.18
+the same spec needed ~10 lines.
+
+### Tests
+
+No new unit tests — the change is a 6-line scalar branch in the
+parser. Existing `gui:` map-form tests continue to pass; FreeBSD
+CI exercises the integration path. **947/947 unit tests pass
+locally** (no new tests added).
+
+### NOT in this release (future)
+
+- **Auto-bind `/tmp/.X11-unix`** when GUI is detected — currently
+  operator must add it to `mounts:` explicitly. Phase 2.
+- **Auto-add `/dev/dri/*` to devfs ruleset** when GPU mode picked
+  — currently operator must list devices. Phase 2.
+- **Auto-detect GUI need from `start:` command** (e.g. firefox
+  → enable GUI implicitly). Risky (false positives); deferred
+  until requested.
+
+---
+
 ## [0.7.18] — 2026-05-06
 
 `mode: auto` spec shortcut — single-line replacement of the
