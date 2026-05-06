@@ -35,6 +35,9 @@
 
 #include "control_socket.h"
 #include "control_socket_pure.h"
+#include "rate_limit.h"
+#include "rate_limit_pure.h"
+#include "sandbox.h"
 #include "../lib/jail_query.h"
 #include "../lib/pool_pure.h"
 #include "../lib/util.h"
@@ -263,6 +266,12 @@ void handleConnection(int connFd,
     }
   }
 
+  // Capsicum (0.7.14): once we've extracted peer creds, the only ops
+  // this fd needs are recv/send/shutdown. Limit it before any HTTP
+  // parsing runs, so a parser-side bug can't repurpose the fd into
+  // anything else.
+  Sandbox::applyConnectionRights(connFd);
+
   bool bad = false;
   auto headBlob = readUntilNeedle(connFd, "\r\n\r\n", kMaxHeader, bad);
   if (bad) {
@@ -319,6 +328,30 @@ void handleConnection(int connFd,
   in.poolSeparator     = poolSeparator;
 
   auto d = ControlSocketPure::authorize(in);
+  if (d == ControlSocketPure::Decision::Allow) {
+    // Rate-limit (0.7.15): per-uid + per-action bucket. PATCH gets
+    // the tighter `kMutating` cap; reads use `kRead`. Key includes
+    // the unix-group gid so multiple users in the same operator
+    // group share a bucket — that's intentional: a runaway tray
+    // app deserves the same throttle as a runaway script run by
+    // the operator beside them.
+    auto cap = ControlSocketPure::actionIsMutating(route.action)
+                 ? RateLimit::kMutating : RateLimit::kRead;
+    std::string key = "uid:" + std::to_string(peerUid)
+                    + "|gid:" + std::to_string(peerGid)
+                    + "|"     + ControlSocketPure::actionLabel(route.action);
+    if (!RateLimit::check(key, cap)) {
+      auto r = ControlSocketPure::buildHttpResponse(
+        429,
+        ControlSocketPure::renderErrorJson(
+          "rate limit exceeded; retry in "
+          + std::to_string(RateLimitPure::retryAfterSeconds())
+          + "s"));
+      writeAll(connFd, r);
+      ::close(connFd);
+      return;
+    }
+  }
   if (d != ControlSocketPure::Decision::Allow) {
     std::string msg;
     switch (d) {
@@ -418,6 +451,11 @@ int bindSocketOrThrow(const ControlSocketPure::ControlSocketSpec &spec,
     ::close(fd);
     throw std::runtime_error("listen " + spec.path + ": " + std::strerror(e));
   }
+  // Capsicum (0.7.14): listener fd needs only accept(2). If a
+  // memory-corruption bug snags this fd reference, an attacker can't
+  // turn it into a sender — only an acceptor of new connections.
+  // No-op on platforms without HAVE_CAPSICUM.
+  Sandbox::applyListenerRights(fd);
   return fd;
 }
 

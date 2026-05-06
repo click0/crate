@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdBackupPrune, CmdReplicate, CmdTemplate, CmdRetune, CmdThrottle};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdBackupPrune, CmdReplicate, CmdTemplate, CmdRetune, CmdThrottle, CmdDoctor};
 
 class Args {
 public:
@@ -35,6 +35,7 @@ public:
 
   // validate parameters
   std::string validateSpec;
+  bool        validateStrict = false;  // --strict: promote warnings + extra structural checks to errors
 
   // snapshot parameters
   std::string snapshotSubcmd;   // "create", "list", "restore", "delete", "diff"
@@ -153,6 +154,9 @@ public:
   std::vector<std::string> retunePairs; // repeatable --rctl KEY=VALUE
   std::vector<std::string> retuneClear; // repeatable --clear KEY (drops the rule)
   bool        retuneShow = false;       // --show: dump usage before+after
+
+  // doctor parameters
+  bool doctorJson = false;             // -j/--json: machine-readable output
 
   // throttle parameters (dummynet token-bucket network shaping)
   std::string throttleTarget;        // jail name or JID

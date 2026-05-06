@@ -35,6 +35,12 @@ struct Settings {
   std::string networkInterface;   // default: "" (auto-detect)
   std::string defaultBridge;      // default: "" (no default bridge for bridge mode)
   bool staticMacDefault;          // default: false (deterministic MAC for bridge/passthrough/netgraph)
+  // CIDR pool for `network: auto` IP allocation (0.7.17). Empty
+  // disables auto-allocation; specs using `network: auto` then
+  // fall back to DHCP. Default unset — operators opt in by writing
+  // `network_pool: 10.66.0.0/24` in /usr/local/etc/crate.yml or
+  // ~/.config/crate/crate.yml.
+  std::string networkPool;
 
   // Base system
   std::string bootstrapMethod;    // default: "base_txz"

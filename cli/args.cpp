@@ -65,6 +65,7 @@ static void usage() {
   std::cout << "  template warm TARGET --output DS  capture jail's on-disk state as a ZFS warm template" << std::endl;
   std::cout << "  retune TARGET --rctl K=V...   live-tune jail RCTL limits without restart (--show, --clear)" << std::endl;
   std::cout << "  throttle TARGET --ingress R --egress R    dummynet token-bucket network shaping" << std::endl;
+  std::cout << "  doctor [-j]                health check for crate host (kernel modules, commands, ZFS, jails, ...)" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -159,12 +160,19 @@ static void usageImport() {
 }
 
 static void usageValidate() {
-  std::cout << "usage: crate validate [-h|--help] <spec-file>" << std::endl;
+  std::cout << "usage: crate validate [--strict] <spec-file>" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Validates a +CRATE.SPEC YAML file for syntax, schema and logical consistency." << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Options:" << std::endl;
-  std::cout << "  -h, --help                         show this help screen" << std::endl;
+  std::cout << "      --strict      promote warnings AND extra structural checks to errors:" << std::endl;
+  std::cout << "                       - duplicate inbound TCP/UDP host ports" << std::endl;
+  std::cout << "                       - duplicate share destinations" << std::endl;
+  std::cout << "                       - empty mount source/destination" << std::endl;
+  std::cout << "                       - x11/mode=shared (no display isolation)" << std::endl;
+  std::cout << "                       - missing memoryuse/maxproc RCTL caps" << std::endl;
+  std::cout << "                     Exits non-zero on first error class found." << std::endl;
+  std::cout << "  -h, --help        show this help screen" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -407,6 +415,24 @@ static void usageBackupPrune() {
   std::cout << "  base kept     -> incremental kept (chain stays restorable)" << std::endl;
   std::cout << "  base removed  -> incremental flagged 'orphan' (kept by default)" << std::endl;
   std::cout << "                   --delete-orphans removes them too." << std::endl;
+  std::cout << "" << std::endl;
+}
+
+static void usageDoctor() {
+  std::cout << "usage: crate doctor [-j|--json] [-h|--help]" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Run a one-shot health check on the crate host: kernel modules," << std::endl;
+  std::cout << "external commands, filesystem dirs + free space, ZFS pools," << std::endl;
+  std::cout << "crated.conf parseability, running jails, audit-log size." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Output format:" << std::endl;
+  std::cout << "  default                   human-readable categorized table" << std::endl;
+  std::cout << "  -j, --json                 machine-readable {checks: [...], summary}" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Exit codes:" << std::endl;
+  std::cout << "  0   all checks PASS" << std::endl;
+  std::cout << "  1   at least one WARN, no FAIL  (degraded but functional)" << std::endl;
+  std::cout << "  2   at least one FAIL          (operator action needed)" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -656,7 +682,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.7.12" << std::endl;
+        std::cout << "crate 0.7.19" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -667,7 +693,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.7.12" << std::endl;
+          std::cout << "crate 0.7.19" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -797,6 +823,8 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           if (strEq(argLong, "help")) {
             usageValidate();
             exit(0);
+          } else if (strEq(argLong, "strict")) {
+            args.validateStrict = true;
           } else {
             err("unsupported long option '%s'", argv[a]);
           }
@@ -1352,6 +1380,21 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.retuneTarget = argv[a];
         } else {
           err("too many arguments for 'retune' command");
+        }
+        break;
+      case CmdDoctor:
+        if (auto argShort = isShort(argv[a])) {
+          switch (argShort) {
+          case 'h': usageDoctor(); exit(0);
+          case 'j': args.doctorJson = true; break;
+          default:  err("unsupported short option '%s'", argv[a]);
+          }
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help"))      { usageDoctor(); exit(0); }
+          else if (strEq(argLong, "json")) args.doctorJson = true;
+          else err("unsupported long option '%s'", argv[a]);
+        } else {
+          err("'doctor' command takes no positional arguments");
         }
         break;
       case CmdThrottle:

@@ -17,6 +17,8 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/create.cpp lib/run.cpp \
            lib/pool_pure.cpp lib/warm_pure.cpp lib/warm.cpp \
            lib/retune_pure.cpp lib/retune.cpp \
            lib/throttle_pure.cpp lib/throttle.cpp \
+           lib/doctor_pure.cpp lib/doctor.cpp \
+           lib/ip_alloc_pure.cpp lib/network_lease.cpp \
            lib/share_pure.cpp \
            lib/top_pure.cpp lib/top.cpp \
            lib/bridge_pure.cpp \
@@ -41,7 +43,9 @@ DAEMON_SRCS = daemon/main.cpp daemon/config.cpp daemon/server.cpp \
               daemon/metrics.cpp daemon/metrics_pure.cpp \
               daemon/ws_pure.cpp daemon/ws_console.cpp \
               daemon/transfer_pure.cpp \
-              daemon/control_socket_pure.cpp daemon/control_socket.cpp
+              daemon/control_socket_pure.cpp daemon/control_socket.cpp \
+              daemon/sandbox_pure.cpp daemon/sandbox.cpp \
+              daemon/rate_limit_pure.cpp daemon/rate_limit.cpp
 
 SNMPD_SRCS = snmpd/main.cpp snmpd/collector.cpp \
              snmpd/mib.cpp snmpd/mib_pure.cpp
@@ -189,7 +193,9 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              datacenter_pure_test backup_pure_test replicate_pure_test \
              ha_pure_test pool_pure_test warm_pure_test \
              retune_pure_test throttle_pure_test \
-             backup_prune_pure_test control_socket_pure_test
+             backup_prune_pure_test control_socket_pure_test \
+             doctor_pure_test sandbox_pure_test rate_limit_pure_test \
+             ip_alloc_pure_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)
@@ -223,7 +229,8 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  lib/snapshot_pure.cpp lib/crypto_pure.cpp lib/log_pure.cpp \
                  lib/sign_pure.cpp lib/audit_pure.cpp lib/pool_pure.cpp \
                  lib/warm_pure.cpp lib/retune_pure.cpp \
-                 lib/throttle_pure.cpp \
+                 lib/throttle_pure.cpp lib/doctor_pure.cpp \
+                 lib/ip_alloc_pure.cpp \
                  lib/share_pure.cpp lib/top_pure.cpp lib/bridge_pure.cpp \
                  lib/inter_dns_pure.cpp lib/wireguard_pure.cpp \
                  lib/ipsec_pure.cpp lib/inspect_pure.cpp \
@@ -233,6 +240,7 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  cli/args_pure.cpp daemon/metrics_pure.cpp \
                  daemon/routes_pure.cpp daemon/ws_pure.cpp \
                  daemon/transfer_pure.cpp daemon/control_socket_pure.cpp \
+                 daemon/sandbox_pure.cpp daemon/rate_limit_pure.cpp \
                  hub/aggregator_pure.cpp \
                  hub/datacenter_pure.cpp hub/ha_pure.cpp \
                  snmpd/mib_pure.cpp
@@ -254,16 +262,34 @@ TEST_INCLUDES = -Ilib -Icli -Idaemon -Isnmpd -Ihub
 # survive the build instead of being deleted after the test binary
 # links — critical for incremental rebuilds (`make build-unit-tests`
 # twice in a row should be a no-op, not 30 recompiles).
+#
+# -MMD -MP emits per-object dependency files (.d) tracking every
+# header the .cpp pulls in. We include them at the bottom so a
+# header change (e.g. lib/args.h) triggers a recompile of every
+# object that #include's it. Without this, 0.7.16 would silently
+# build against a stale args.h and tests would fail with
+# "validate() did not throw" because the object knows about an
+# older Args layout.
 .SECONDARY: $(TEST_LINK_OBJS) $(TEST_STUB_OBJ)
 
 $(TEST_OBJ_DIR)/%.o: %.cpp lib/lst-all-script-sections.h
 	@mkdir -p $(@D)
-	$(CXX) -std=c++17 $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -c $< -o $@
+	$(CXX) -std=c++17 $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -MMD -MP -c $< -o $@
 
 # Test binary: compile its own .cpp inline (one source -> one
-# binary), link against the cached TEST_LINK_OBJS + stub.
+# binary), link against the cached TEST_LINK_OBJS + stub. The .cpp
+# is compiled at link time here (single -o $@ $< ...). Header
+# dependencies for that compile are NOT tracked by .d (no separate
+# .o), but tests/unit/*.cpp is small per file and fast to recompile.
 tests/unit/%: tests/unit/%.cpp $(TEST_LINK_OBJS) $(TEST_STUB_OBJ) lib/lst-all-script-sections.h
 	$(CXX) -std=c++17 $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -o $@ $< $(TEST_LINK_OBJS) $(TEST_STUB_OBJ) $(COVERAGE_LDFLAGS) -L/usr/local/lib -latf-c++ -latf-c
+
+# Auto-generated header dependency files. The leading `-` makes make
+# tolerate them not yet existing (first build); after the first
+# compile of each .cpp, its .d is created and subsequent runs see
+# the proper header chain.
+-include $(TEST_LINK_OBJS:.o=.d)
+-include $(TEST_STUB_OBJ:.o=.d)
 
 # coverage: build unit tests with gcov instrumentation, run them, and
 # render an HTML report under coverage-html/. Requires lcov + genhtml.

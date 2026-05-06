@@ -12,6 +12,9 @@
 #include "bridge_pure.h"
 #include "wireguard_runtime_pure.h"
 #include "warm_pure.h"
+#include "config.h"
+#include "ip_alloc_pure.h"
+#include "network_lease.h"
 #include "ifconfig_ops.h"
 #include "scripts.h"
 #include "ctx.h"
@@ -692,6 +695,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // set up networking
   RunAtEnd destroyEpipeAtEnd;
   RunAtEnd destroyBridgeEpairAtEnd;
+  // 0.7.17: release the network-pool lease on teardown if we
+  // allocated one. Declared at function scope so it's reachable
+  // from inside the bridge-mode IP-config block below.
+  RunAtEnd releaseLeaseAtEnd;
   RunAtEnd reclaimPassthroughAtEnd;
   RunAtEnd destroyNetgraphAtEnd;
   std::vector<RunAtEnd> destroyExtraInterfaces;
@@ -769,9 +776,39 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
       LOG("bridge mode: static IP " << optionNet->staticIp << " on " << bridgeInfo.ifaceB)
     } else if (optionNet->ipMode != Spec::NetOptDetails::IpMode::None) {
-      // Auto or unspecified — default to DHCP for bridge mode
-      RunNet::configureDhcp(bridgeInfo.ifaceB, jailPath, jid, jidStr, execInJail);
-      LOG("bridge mode: DHCP (auto) on " << bridgeInfo.ifaceB)
+      // Auto / unspecified.
+      // 0.7.17: if Settings.networkPool is configured, allocate from
+      // the pool and configure as a static IP — gives operators
+      // bridged jails without running DHCP. Falls back to DHCP if
+      // no pool is configured (preserves pre-0.7.17 behaviour).
+      const auto &cfg = Config::get();
+      if (!cfg.networkPool.empty()) {
+        IpAllocPure::Network pool;
+        if (auto e = IpAllocPure::parseCidr(cfg.networkPool, pool); !e.empty())
+          ERR("network_pool '" << cfg.networkPool << "': " << e)
+        // Lease key = jail directory basename ("jail-<name>-<hex>"),
+        // unique per jail instance and stable for its lifetime.
+        auto leaseName = std::filesystem::path(jailPath).filename().string();
+        uint32_t addr = NetworkLease::allocateFor(leaseName, pool);
+        auto ip = IpAllocPure::formatIp(addr) + "/"
+                + std::to_string(pool.prefixLen);
+        auto gw = IpAllocPure::formatIp(IpAllocPure::gatewayFor(pool));
+        RunNet::configureStaticIp(bridgeInfo.ifaceB, ip, gw, jid, execInJail);
+        Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
+        LOG("bridge mode: auto-allocated IP " << ip
+            << " (gw " << gw << ") on " << bridgeInfo.ifaceB)
+        // Release the lease on teardown so the IP comes back into
+        // the pool. Best-effort: a failure here logs but doesn't
+        // mask the real teardown error.
+        releaseLeaseAtEnd.reset([leaseName, &args]() {
+          LOG("network: releasing lease for " << leaseName)
+          try { NetworkLease::releaseFor(leaseName); } catch (...) {}
+        });
+      } else {
+        // No pool configured -- fall back to DHCP (pre-0.7.17 default).
+        RunNet::configureDhcp(bridgeInfo.ifaceB, jailPath, jid, jidStr, execInJail);
+        LOG("bridge mode: DHCP (auto) on " << bridgeInfo.ifaceB)
+      }
     }
 
     // IPv6 configuration

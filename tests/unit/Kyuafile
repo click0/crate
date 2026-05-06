@@ -56,3 +56,7 @@ atf_test_program{name="retune_pure_test"}
 atf_test_program{name="throttle_pure_test"}
 atf_test_program{name="backup_prune_pure_test"}
 atf_test_program{name="control_socket_pure_test"}
+atf_test_program{name="doctor_pure_test"}
+atf_test_program{name="sandbox_pure_test"}
+atf_test_program{name="rate_limit_pure_test"}
+atf_test_program{name="ip_alloc_pure_test"}

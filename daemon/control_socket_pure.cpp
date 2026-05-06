@@ -364,6 +364,28 @@ int httpStatusFor(Decision d) {
   return 500;
 }
 
+const char *actionLabel(Action a) {
+  switch (a) {
+  case Action::ListContainers:    return "list";
+  case Action::GetContainer:      return "get";
+  case Action::GetContainerStats: return "stats";
+  case Action::PatchResources:    return "patch";
+  case Action::Unknown:           return "unknown";
+  }
+  return "unknown";
+}
+
+bool actionIsMutating(Action a) {
+  switch (a) {
+  case Action::PatchResources:    return true;
+  case Action::ListContainers:
+  case Action::GetContainer:
+  case Action::GetContainerStats:
+  case Action::Unknown:           return false;
+  }
+  return false;
+}
+
 bool poolVisibleOnSocket(const std::string &pool,
                          const std::vector<std::string> &socketPools) {
   for (const auto &p : socketPools) {
@@ -389,6 +411,7 @@ const char *reasonForStatus(int status) {
   case 405: return "Method Not Allowed";
   case 411: return "Length Required";
   case 413: return "Payload Too Large";
+  case 429: return "Too Many Requests";
   case 500: return "Internal Server Error";
   default:  return "Unknown";
   }

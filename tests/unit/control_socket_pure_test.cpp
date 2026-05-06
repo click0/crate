@@ -4,6 +4,7 @@
 
 #include <atf-c++.hpp>
 
+#include <set>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,8 @@ using ControlSocketPure::Decision;
 using ControlSocketPure::ParsedHttp;
 using ControlSocketPure::ParsedRoute;
 using ControlSocketPure::ResourcesPatch;
+using ControlSocketPure::actionIsMutating;
+using ControlSocketPure::actionLabel;
 using ControlSocketPure::authorize;
 using ControlSocketPure::buildHttpResponse;
 using ControlSocketPure::httpStatusFor;
@@ -449,6 +452,45 @@ ATF_TEST_CASE_BODY(pool_visibility) {
 }
 
 // ----------------------------------------------------------------------
+// Action labels (0.7.15) — used as rate-limit bucket keys
+// ----------------------------------------------------------------------
+
+ATF_TEST_CASE_WITHOUT_HEAD(action_labels_distinct);
+ATF_TEST_CASE_BODY(action_labels_distinct) {
+  // Labels feed into the rate-limit key. Collisions would lump
+  // unrelated actions into one bucket.
+  std::set<std::string> seen;
+  Action all[] = {
+    Action::ListContainers, Action::GetContainer,
+    Action::GetContainerStats, Action::PatchResources,
+    Action::Unknown,
+  };
+  for (auto a : all) {
+    std::string l = actionLabel(a);
+    ATF_REQUIRE(!l.empty());
+    ATF_REQUIRE(seen.insert(l).second);
+  }
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(action_labels_stable);
+ATF_TEST_CASE_BODY(action_labels_stable) {
+  // Pin exact strings — operators may alert/grep on them.
+  ATF_REQUIRE_EQ(std::string(actionLabel(Action::ListContainers)),    std::string("list"));
+  ATF_REQUIRE_EQ(std::string(actionLabel(Action::GetContainer)),      std::string("get"));
+  ATF_REQUIRE_EQ(std::string(actionLabel(Action::GetContainerStats)), std::string("stats"));
+  ATF_REQUIRE_EQ(std::string(actionLabel(Action::PatchResources)),    std::string("patch"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(action_is_mutating_only_for_patch);
+ATF_TEST_CASE_BODY(action_is_mutating_only_for_patch) {
+  ATF_REQUIRE( actionIsMutating(Action::PatchResources));
+  ATF_REQUIRE(!actionIsMutating(Action::ListContainers));
+  ATF_REQUIRE(!actionIsMutating(Action::GetContainer));
+  ATF_REQUIRE(!actionIsMutating(Action::GetContainerStats));
+  ATF_REQUIRE(!actionIsMutating(Action::Unknown));
+}
+
+// ----------------------------------------------------------------------
 // HTTP parsing (0.7.11)
 // ----------------------------------------------------------------------
 
@@ -606,4 +648,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, http_parse_rejects_bad_method_chars);
   ATF_ADD_TEST_CASE(tcs, http_response_shape);
   ATF_ADD_TEST_CASE(tcs, http_response_status_codes);
+  ATF_ADD_TEST_CASE(tcs, action_labels_distinct);
+  ATF_ADD_TEST_CASE(tcs, action_labels_stable);
+  ATF_ADD_TEST_CASE(tcs, action_is_mutating_only_for_patch);
 }

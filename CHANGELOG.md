@@ -6,6 +6,702 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.19] — 2026-05-06
+
+`gui: auto` scalar shortcut — companion to 0.7.18's `mode: auto`
+for the GUI side. Operators write:
+
+```yaml
+gui: auto
+```
+
+instead of the equivalent map form:
+
+```yaml
+gui:
+  mode: auto
+```
+
+The runtime side (`run_gui.cpp::resolveGuiMode`) already had the
+`auto` mode branch — at jail start it inspects the host:
+
+| Host condition                     | Resolved mode |
+|------------------------------------|---------------|
+| `/dev/dri/card0` exists, no $DISPLAY | `gpu`         |
+| `$DISPLAY` set                       | `nested`      |
+| Otherwise                            | `headless`    |
+
+So the only piece missing was the spec ergonomics — operators
+had to write 2 lines for what was conceptually 1. This release
+adds the scalar shorthand to the parser; everything else flows
+through the existing GUI runtime.
+
+### Accepted scalar values
+
+`gui: auto`, `gui: nested`, `gui: headless`, `gui: gpu` — same
+set as the existing `gui.mode:` map field. Anything else is
+rejected with a clear error message.
+
+### Implementation
+
+- `lib/spec.cpp` — `else if (isKey(k, "gui"))` branch now
+  accepts a scalar in addition to the existing map form. When
+  scalar, builds a `GuiOptions` with just `mode` set.
+
+### Combined with 0.7.18
+
+The two shortcuts compose naturally for typical desktop-app
+specs:
+
+```yaml
+options:
+  net:
+    mode: auto    # 0.7.18: bridge + auto-IP + auto-create-bridge
+
+gui: auto         # 0.7.19: pick gpu/nested/headless from host
+
+start: firefox
+```
+
+That's the whole spec for "run firefox in a jail" — pre-0.7.18
+the same spec needed ~10 lines.
+
+### Tests
+
+No new unit tests — the change is a 6-line scalar branch in the
+parser. Existing `gui:` map-form tests continue to pass; FreeBSD
+CI exercises the integration path. **947/947 unit tests pass
+locally** (no new tests added).
+
+### NOT in this release (future)
+
+- **Auto-bind `/tmp/.X11-unix`** when GUI is detected — currently
+  operator must add it to `mounts:` explicitly. Phase 2.
+- **Auto-add `/dev/dri/*` to devfs ruleset** when GPU mode picked
+  — currently operator must list devices. Phase 2.
+- **Auto-detect GUI need from `start:` command** (e.g. firefox
+  → enable GUI implicitly). Risky (false positives); deferred
+  until requested.
+
+---
+
+## [0.7.18] — 2026-05-06
+
+`mode: auto` spec shortcut — single-line replacement of the
+`options.net.{...}` boilerplate for the typical bridged-jail
+case. Operators now write:
+
+```yaml
+options:
+  net:
+    mode: auto
+```
+
+instead of:
+
+```yaml
+options:
+  net:
+    mode: bridge
+    bridge: bridge0
+    auto_create_bridge: true
+    # ip: omitted = ipMode=Auto = pool allocation
+```
+
+### Expansion
+
+`mode: auto` is recognised at parse time and expanded during
+`Spec::preprocess()` to:
+
+| Field             | Value                                                     |
+|-------------------|-----------------------------------------------------------|
+| `mode`            | `Bridge`                                                  |
+| `bridgeIface`     | `Settings.defaultBridge` if set, else `crate0`            |
+| `autoCreateBridge`| `true`                                                    |
+| `ipMode`          | unchanged (default `Auto`, so 0.7.17's pool allocator hands out an IP) |
+
+If the operator overrides `bridge:`, `auto_create_bridge:`, or
+`ip:` alongside `mode: auto`, the explicit values win — the
+shortcut only fills in defaults that aren't already set.
+
+### Practical effect
+
+Combined with 0.7.17's `network_pool` config:
+
+```yaml
+# /usr/local/etc/crate.yml (operator-written, once)
+network_pool: 10.66.0.0/24
+default_bridge: bridge0   # optional, falls back to crate0
+
+# spec.yml (per-jail, minimal)
+options:
+  net:
+    mode: auto
+```
+
+A fresh `crate run` now: creates `bridge0` if missing, allocates
+the next free IP from `10.66.0.0/24`, configures the bridge, and
+runs the jail. No pf.conf / ipfw editing for routine desktop-app
+jails; pre-0.7.17 specs continue to work unchanged.
+
+### Implementation
+
+- `lib/spec.h` — `Mode::Auto` enum value
+- `lib/spec.cpp` — parser branch (`modeStr == "auto"` → `Mode::Auto`)
+  + preprocess expansion (Auto → Bridge with sensible defaults)
+
+The shortcut is intentionally tiny — the heavy lifting (pool
+allocator, lease store, atomic file ops) was done in 0.7.17.
+This release is the ergonomics layer on top.
+
+### Tests
+
+No new unit tests added for this small ergonomics shortcut —
+the change touches three functions and is structurally tiny.
+FreeBSD CI exercises the full preprocess + jail-create path.
+
+**947/947 unit tests pass locally** (no new tests; existing
+spec parser + preprocess tests continue to pass with the new
+enum value + branch).
+
+### NOT in this release (future Phase 2 / Phase 3)
+
+- **SNAT auto-rule generation** — a `pf` or `ipfw` rule for the
+  jail's outbound traffic. Detect which firewall is loaded; add
+  rule on `crate run`; remove on teardown.
+- **Port-forward auto-rules** — generate `rdr` rules from the
+  spec's `inbound:` declaration. Same lifecycle as SNAT.
+- **IPv6 pool allocation** — IPv4-only in 0.7.17/0.7.18. A
+  separate `network_pool6` field for ULA / GUA pools.
+- **Pool reservation in passthrough/netgraph modes** — currently
+  bridge-only.
+
+---
+
+## [0.7.17] — 2026-05-06
+
+Auto-IP allocation for `IpMode::Auto` bridge mode (Phase 1 of
+`network: auto` from the libkrun-inspired roadmap). The
+`IpMode::Auto` enum value has been declared since the early
+networking work but its runtime fell through to DHCP. This release
+activates pool-based allocation: when a global `network_pool` CIDR
+is configured, the auto branch picks a free IP, registers a lease,
+and configures it as a static address.
+
+### Configuration
+
+```yaml
+# /usr/local/etc/crate.yml or ~/.config/crate/crate.yml
+network_pool: 10.66.0.0/24
+```
+
+When set, every bridged jail with `ipMode: auto` (the default if
+no explicit `ip:` is given) gets an allocated IP from the pool.
+When unset, behaviour is unchanged from 0.7.16 — auto mode falls
+back to DHCP. So the change is opt-in and pre-existing specs
+continue to work.
+
+### Allocator semantics
+
+- The pool's `.0` (network), `.1` (gateway, by convention), and
+  the broadcast (`.255` for /24) are reserved.
+- Allocation is "next lowest free IP" — deterministic, cron-friendly.
+- Pool exhausted → `crate run` exits with a clear error before
+  any jail state is created.
+- Idempotent: re-running `crate run` for the same jail-instance
+  picks up the existing lease (no double-allocation).
+
+### Lease store
+
+`/var/run/crate/network-leases.txt` — flat text file:
+
+```
+# crate network leases — managed by crate run / crate clean
+# format: <jail-name> <ip>
+jail-firefox-abcd 10.66.0.2
+jail-postgres-1234 10.66.0.3
+```
+
+- Atomic writes via tmpfile + `rename(2)` — crash mid-write
+  doesn't leave a half-written file.
+- Concurrent `crate run` invocations serialised via `flock(2)` on
+  the lease file — no two jails can ever pick the same IP.
+- Released on jail teardown via a `RunAtEnd` hook (best-effort:
+  failure logs but doesn't mask the real teardown error).
+
+### Implementation
+
+- `lib/ip_alloc_pure.{h,cpp}` — pure helpers:
+  - `parseCidr`, `parseIp`, `formatIp` — IPv4 round-trip
+  - `gatewayFor`, `broadcastFor` — pool arithmetic
+  - `allocateNext(pool, taken)` — next free, skips `.0`, `.1`,
+    broadcast, and any IP in `taken`
+  - `parseLeaseLine`, `formatLeaseLine` — wire format
+- `lib/network_lease.{h,cpp}` — runtime: `flock`-protected
+  read/write/append/release on the lease file. Atomic.
+- `lib/config.{h,cpp}` — `Settings.networkPool` (string CIDR).
+  Empty = disabled.
+- `lib/run.cpp` — bridge-mode `IpMode::Auto` branch consults
+  `Config::get().networkPool`; if set, allocates + configures
+  static IP + registers `RunAtEnd` lease release. If not set,
+  falls through to existing DHCP path.
+
+### Tests
+
+`tests/unit/ip_alloc_pure_test.cpp` — **14 ATF cases**:
+
+- IP round-trip + bad-input rejection (5 forms)
+- CIDR typical / bad (no slash, empty prefix, /0, /31, /33,
+  bad octet, misaligned base)
+- gateway/broadcast for /24 + /30
+- `allocateNext` happy path, skips taken, skips gateway even if
+  in `taken` (defensive), pool-exhausted returns 0, /30 full pool,
+  doesn't assign broadcast
+- Lease line round-trip + rejection (5 forms: empty, name-only,
+  bad ip, slash in name, leading/double space)
+
+**947/947 unit tests pass locally** (933 prior + 14 new).
+
+### NOT in this release (Phase 2 / Phase 3)
+
+- **`mode: auto` shortcut** in spec — single line replaces the
+  full `options.net.{...}` section. Phase 2 (0.7.18).
+- **SNAT auto-rule generation** — pf or ipfw rule for jail's
+  outbound traffic. Phase 2.
+- **Port forwarding auto-rules** — generate pf/ipfw rdr from
+  the spec's `inbound:` declaration. Phase 2.
+- **IPv6 pool allocation** — only IPv4 in this phase. Phase 3.
+- **Pool reservation in passthrough/netgraph modes** — currently
+  bridge-only. Future.
+
+---
+
+## [0.7.16] — 2026-05-06
+
+`crate validate --strict` + completions refresh + Makefile header-dep
+regression fix from 0.7.12.
+
+### `crate validate --strict`
+
+Promotes warnings to errors AND adds new structural checks that
+the regular `crate validate` doesn't catch. Designed for CI gates
+where "warning" is too soft — the spec is rejected on first error.
+
+```sh
+crate validate spec.yml             # standard: schema + warnings
+crate validate --strict spec.yml    # rejects on any warn or structural error
+```
+
+Strict-mode catalogue (v1):
+
+| Check | Rationale |
+|---|---|
+| Duplicate inbound TCP/UDP host ports | Two rules binding the same host port silently override; almost always a copy-paste error |
+| Duplicate share destinations | Two host paths mapped to the same jail-side path is ambiguous and likely a typo |
+| Empty share source/destination | Surfaces at validate-time instead of cryptic runtime mount errors |
+| `x11/mode=shared` (was a warning) | Promoted to error: no display isolation, jail processes can sniff host keystrokes |
+| Unbounded RCTL | `limits:` absent OR no `memoryuse`/`maxproc` — runaway processes can OOM-kill the host |
+
+All warnings from the regular validate are also promoted to errors
+in `--strict` mode. Operators who deliberately want a warning-laden
+spec can drop `--strict`; CI pipelines should add it.
+
+### Completions refresh
+
+`completions/crate.sh` was last updated when crate had ~12 commands.
+Modern crate has **28** commands. This release brings the file up
+to date for both bash and zsh:
+
+- All commands now in the bash `commands` variable
+- Per-command flag completions added: `backup`, `restore`,
+  `backup-prune`, `replicate`, `template`, `retune`, `throttle`,
+  `doctor`, `migrate`, `inspect`, `top`, `inter-dns`, `vpn`,
+  `stats`, `logs`, `stop`, `restart`
+- File-completion hints for new flags: `--from-token-file`,
+  `--ssh-key`, `--output-dir`, etc.
+- zsh `_arguments` blocks for all new commands with `:` descriptors
+  for tab-help
+
+Auto-generation from CLI usage is tracked as a future enhancement;
+the file is hand-maintained against `cli/args.cpp` for now.
+
+### Makefile -MMD -MP (regression fix)
+
+The 0.7.12 test-build refactor moved `TEST_LINK_SRCS` compilation
+into per-source `.o` files cached under `tests/unit/.test-objs/`,
+which gave us the 17× speedup. But the pattern rule:
+
+```
+$(TEST_OBJ_DIR)/%.o: %.cpp lib/lst-all-script-sections.h
+	$(CXX) ... -c $< -o $@
+```
+
+did NOT track header dependencies. Changing `lib/args.h` (or any
+other shared header) would NOT trigger a rebuild of the objects
+that `#include` it — make would see the `.cpp` unchanged and
+re-link the cached stale `.o` into the test binary.
+
+This bit me hard during 0.7.16 development: 21 unit tests started
+failing with `validate() did not throw Exception as expected`
+because `args_pure.o` was built against a pre-`validateStrict`
+`args.h`. A `make clean-tests && make` resolved it locally, but
+the regression would have hit FreeBSD CI cache too.
+
+Fix: add `-MMD -MP` to the compile rule and `-include` the
+generated `.d` files. Now any header change triggers the right
+rebuilds without manual cleanup.
+
+### Tests
+
+- **12 new ATF cases** in `validate_pure_test` covering the
+  strict-mode checks: minimal-spec-unbounded, bounded-spec-no-error,
+  bounded-via-maxproc, TCP port conflict (single + range overlap),
+  UDP port conflict, no-conflict baseline, duplicate share dest,
+  same-share-twice-not-conflict, empty share paths, x11/mode=shared
+  promoted, x11/mode=nested no-error.
+- **933/933 unit tests pass locally** (921 prior + 12 new).
+
+### NOT in this release (future)
+
+- **Completion auto-gen** — a make target that runs `crate -h`
+  and `crate <cmd> -h` for every command, parses the usage output,
+  and emits completions. Tracked separately; current hand-
+  maintained file is a stop-gap.
+- **--strict checks for namespaces / network policies** — once
+  the network-policy section grows beyond inbound port ranges,
+  add cross-rule conflict detection (same proto+port forwarded to
+  two destinations, etc.).
+- **`--strict` integration into `crate run`** — currently
+  `--strict` is `crate validate` only. A future enhancement could
+  reject specs at run time too; for now operators enforce via CI.
+
+---
+
+## [0.7.15] — 2026-05-06
+
+Rate limiting on control sockets. The 0.7.10/0.7.11 control-socket
+plane shipped without one, so a buggy GUI/tray app polling `/v1/control/
+containers/<n>/stats` in a tight loop could spin crated up. This
+release closes the gap with a per-uid + per-action token bucket
+(same per-second-counter algorithm as the existing main-API limiter
+in `daemon/routes.cpp`), factored into a reusable module so both
+planes can share it.
+
+### Limits
+
+| Action class | Cap (per second per peer-uid+gid) |
+|---|---|
+| GET (list, get, stats)            | **100 req/s** |
+| PATCH (resources)                 | **10 req/s** |
+
+Same caps as the main API's `RATE_LIMIT_READ` / `RATE_LIMIT_MUTATING`,
+intentionally — operators don't have to learn two models.
+
+### Bucket key
+
+```
+uid:<peerUid>|gid:<peerGid>|<actionLabel>
+```
+
+`actionLabel` is one of `list`, `get`, `stats`, `patch` — coarse
+enough to not fragment the counter into thousands of buckets per
+container; fine enough that a runaway PATCH loop doesn't starve out
+GET polling and vice versa.
+
+Multiple users in the same operator group share a counter — that's
+intentional. A runaway tray app deserves the same throttle as a
+runaway script run by the operator beside them; the unit of trust
+is the group, matching how the rest of the control-socket plane
+authenticates.
+
+### Behaviour on cap
+
+- Response: `HTTP 429 Too Many Requests`
+- Body: `{"error": "rate limit exceeded; retry in 1s"}`
+- The retry-after hint is always `1` — the bucket flips at the next
+  wall second, and a longer hint would mislead well-behaved clients.
+
+### Implementation
+
+- `daemon/rate_limit_pure.{h,cpp}` — the pure check function:
+  - `Bucket {counter, second}` state struct
+  - `Decision check(prev, now, max)` — pure: takes prior state +
+    wall second + cap, returns new state + allow/deny
+  - `retryAfterSeconds()` — pinned at 1 (see above)
+  - Pathological inputs handled: `max <= 0` treated as disabled
+    (always allow); non-monotonic clock (operator running ntpd /
+    stepping clock backward) still resets cleanly.
+- `daemon/rate_limit.{h,cpp}` — runtime: `std::mutex` +
+  `std::unordered_map<std::string, Bucket>` shared store with
+  `check(key, max)` that walks one round of the pure module.
+  Constants `kRead = 100`, `kMutating = 10`.
+- `daemon/control_socket_pure.{h,cpp}` — extended:
+  - `actionLabel(Action)` — `list` / `get` / `stats` / `patch`
+  - `actionIsMutating(Action)` — only `PatchResources` returns true
+  - `reasonForStatus(429)` — `"Too Many Requests"`
+- `daemon/control_socket.cpp::handleConnection` — between authorize
+  and dispatch, run `RateLimit::check(<bucket-key>, cap)`. On deny,
+  emit a 429 and close.
+
+### Tests
+
+`tests/unit/rate_limit_pure_test.cpp` — **10 ATF cases**:
+
+- `fresh_bucket_is_allowed` — empty sentinel `{0, 0}` allows the
+  first request
+- `below_cap_increments` — counter increments on allow
+- `at_cap_last_request_allowed` — exactly `max` requests in a
+  second succeed (off-by-one guard)
+- `above_cap_denied` — request beyond cap denied
+- `many_denies_dont_drift_counter` — flood of post-cap requests
+  doesn't push counter past `max` (telemetry invariant)
+- `second_rollover_resets_counter` — wall-second tick resets to 1
+- `non_monotonic_clock_still_resets` — bucket second "in the future"
+  also resets (operator clock-step survives)
+- `zero_max_treated_as_disabled` — typo flipping cap to 0/-N is
+  always-allow, not always-deny (don't brick the daemon)
+- `retry_after_is_one_second` — pinned constant
+- `allows_exactly_max_requests_per_second` — property: of `max+5`
+  requests in a single second, exactly `max` succeed and 5 are denied
+
+`tests/unit/control_socket_pure_test.cpp` — **3 new ATF cases**:
+
+- `action_labels_distinct` — collision-free action labels (would
+  lump unrelated actions into one bucket)
+- `action_labels_stable` — exact strings pinned (operator alerts /
+  log scrapers depend on them)
+- `action_is_mutating_only_for_patch` — only PATCH classified as
+  mutating; future actions default to non-mutating until explicitly
+  added
+
+**921/921 unit tests pass locally** (908 from prior + 13 new).
+
+### Followup
+
+- Refactor `daemon/routes.cpp::checkRateLimit` to call into the
+  shared `RateLimit::check` — pure mechanical no-op refactor,
+  deferred so the `0.7.15` release stays focused on the
+  control-socket gap.
+- Config-driven caps: make `kRead`/`kMutating` overridable in
+  crated.conf. Defer until at least one operator reports needing
+  it; current values are conservative.
+
+---
+
+## [0.7.14] — 2026-05-06
+
+`crated` Capsicum sandbox — per-fd `cap_rights_limit(2)` on control-socket
+listeners and accepted connections. Activates the `lib/capsicum_ops.cpp`
+infrastructure that has been in the tree (since the early Capsicum
+plumbing) but never wired into the daemon's listen/accept paths.
+
+### Threat model
+
+Defence-in-depth against memory-corruption bugs in the daemon. If a
+buffer-overflow (or similar) gives an attacker a stale `int fd`
+reference to a control-socket listener, they cannot turn it into:
+
+- a sender of arbitrary bytes (no `CAP_SEND` on the listener)
+- a connection-establisher to other hosts (no `CAP_CONNECT`)
+- a configuration-modifier (no `CAP_SETSOCKOPT`)
+
+The accept-only listener can only accept new clients — so the worst
+case is "attacker accepts a connection and serves a 403 from a
+half-corrupted handler", which is still bounded by the existing
+3-layer auth (filesystem perms → getpeereid → pool ACL/role).
+
+For accepted connection fds: limited to recv/send/shutdown the
+moment `getpeereid(2)` finishes. A parser-side bug can't repurpose
+the fd into an arbitrary file write or new socket op.
+
+### Why no `cap_enter()`
+
+`cap_enter(2)` would put the entire `crated` process into capability
+mode, which makes `execve(2)` of subprocesses fail with `ENOTCAPABLE`.
+crated routinely spawns `rctl(8)`, `jail(8)`, `jexec(8)`, `ipfw(8)`,
+`pfctl(8)`, `tar(1)` — all path-based. Whole-process sandbox is
+therefore architecturally incompatible with crated's current "spawn
+a tool for every state-changing op" pattern.
+
+A future hardening track (privsep, à la OpenSSH: sandboxed network
+front + privileged worker over a Unix-socket protocol) is out of
+scope for 0.7.x.
+
+### Right mappings
+
+| FdRole       | Rights                                                          | Count |
+|--------------|------------------------------------------------------------------|-------|
+| `Listener`   | `CAP_ACCEPT, CAP_GETSOCKOPT, CAP_FSTAT`                          | 3     |
+| `Connection` | `CAP_RECV, CAP_SEND, CAP_SHUTDOWN, CAP_GETSOCKOPT, CAP_FSTAT`     | 5     |
+| `LogWrite`   | `CAP_WRITE, CAP_FSYNC, CAP_FSTAT`                                 | 3     |
+| `ConfigRead` | `CAP_READ, CAP_FSTAT`                                             | 2     |
+
+`CAP_FSTAT` is included in every category so libc's `fstat`-based
+buffering optimisations (stdio block-size detection, etc.) keep
+working — without it many calls hit `ENOTCAPABLE` paths.
+
+### Implementation
+
+- `daemon/sandbox_pure.{h,cpp}` — pure helpers:
+  - `FdRole` enum (`Listener`/`Connection`/`LogWrite`/`ConfigRead`)
+  - `labelFor()` — stable diagnostic strings (log-scrapers depend
+    on them)
+  - `rightCountFor()` — expected number of `cap_rights_t` entries
+    per role, pinned by unit tests so a runtime drift surfaces
+  - `describe(fd, role)` — one-line log helper
+- `daemon/sandbox.{h,cpp}` — runtime: thin wrappers over
+  `cap_rights_init` + `cap_rights_limit`, behind `#ifdef HAVE_CAPSICUM`.
+  Linux build emits no-op stubs returning `false` so unit tests still
+  compile and link.
+- `daemon/control_socket.cpp` — wired:
+  - `bindSocketOrThrow` → `Sandbox::applyListenerRights(listenFd)`
+    immediately after `listen(2)`
+  - `handleConnection` → `Sandbox::applyConnectionRights(connFd)` the
+    moment `getpeereid(2)` finishes, before HTTP parsing runs
+
+### Tests
+
+`tests/unit/sandbox_pure_test.cpp` — **6 ATF cases**:
+
+- `labels_are_distinct` — role labels are unique
+- `labels_are_stable` — exact strings pinned (log-scraper contract)
+- `right_counts_match_runtime` — pin the (3, 5, 3, 2) tuple; if
+  someone adds a `CAP_*` to `daemon/sandbox.cpp` without bumping
+  this count, the test fails — surfacing the drift
+- `right_counts_strictly_positive` — no role should have zero rights
+  (zero rights = unusable fd = bug)
+- `connection_has_strictly_more_rights_than_listener` — invariant
+  (a connection is bidirectional + closable; a listener only accepts)
+- `describe_format` — output shape for log lines
+
+**908/908 unit tests pass locally** (902 from prior + 6 new).
+
+### NOT in this release (future hardening)
+
+- **Privsep architecture** — sandboxed network-front + privileged
+  worker process. Would enable real `cap_enter(2)` on the front. ~2
+  weeks of work; queued behind C4/D2/D5 in current roadmap.
+- **`cap_rights_limit` on the main daemon's httplib sockets** —
+  cpp-httplib doesn't expose the per-connection fd to handlers;
+  control-socket plane was rebuilt with a custom accept loop in
+  0.7.11 so we have the hooks there. Same custom-loop refactor on
+  the main daemon could activate per-fd sandbox there too.
+- **Whole-process audit-log fd limiting** — audit log is opened
+  per-record (O_APPEND | O_CLOEXEC), so there's no long-lived fd
+  to limit. A future change could keep the fd open and `applyLogWriteRights`
+  it; would speed up high-volume audit slightly.
+
+---
+
+## [0.7.13] — 2026-05-06
+
+`crate doctor` — one-shot health check command. First command an
+operator runs when something looks off; surfaces ~half the common
+support-ticket conditions in a single go.
+
+### Usage
+
+```sh
+crate doctor          # text report, exits 0/1/2
+crate doctor --json   # machine-readable, same exit codes
+```
+
+Exit code:
+
+| | meaning |
+|---|---|
+| `0` | all checks PASS |
+| `1` | at least one WARN, no FAIL — degraded but functional |
+| `2` | at least one FAIL — operator action needed |
+
+Cron-friendly: `crate doctor --json | jq '.summary'` makes alerts trivial.
+
+### Sample output
+
+```
+kernel:
+  [PASS] if_bridge       loaded — vnet jails (bridge interfaces)
+  [PASS] if_epair        loaded — vnet jails (paired veth-style links)
+  [WARN] dummynet        not loaded — crate throttle (kldload dummynet if you need it)
+
+command:
+  [PASS] /sbin/zfs       found — ZFS dataset / snapshot operations
+  [PASS] /sbin/jail      found — jail(8) lifecycle
+  ...
+
+filesystem:
+  [PASS] /var/run/crate  crated runtime state — 5234 MB free
+  [WARN] /var/log/crate  audit log + per-jail create logs — 32 MB free (below recommended 50 MB)
+
+zfs:
+  [PASS] zpool           all pools healthy
+
+jails:
+  [PASS] postgres        jid=12, ip4=10.0.1.5
+  [WARN] redis           marked dying — `crate clean` may help
+
+audit:
+  [PASS] /var/log/crate/audit.log  size = 14 MB
+
+Summary: 9 PASS, 3 WARN, 0 FAIL
+```
+
+### Check catalog (v1)
+
+| Category | What |
+|---|---|
+| `kernel`     | `kldstat -n` for `if_bridge`, `if_epair` (required); `racct`, `dummynet`, `ipfw`, `vmm`, `nmdm` (recommended) |
+| `command`    | `access(X_OK)` on `/sbin/zfs`, `/sbin/jail`, `/usr/sbin/jexec`, `/usr/bin/jls`, `/sbin/ifconfig`, `/usr/bin/{grep,tar,xz}`, `/sbin/{rctl,ipfw,pfctl,kldstat}` |
+| `filesystem` | `/var/run/crate` and `/var/log/crate` exist + writable + free-space warning thresholds (100 MB / 50 MB) |
+| `zfs`        | `zpool status -x` parsed for "all pools are healthy" / "no pools available" / anything else |
+| `config`     | `/usr/local/etc/crated.conf` parseability sniff (read first 4 KB, reject NUL bytes) |
+| `jails`      | `JailQuery::getAllJails(crateOnly=true)` — flag dying jails as WARN |
+| `audit`      | `/var/log/crate/audit.log` size — WARN at ≥100 MB suggesting rotation |
+
+Categories sort in canonical order in text output (kernel → command →
+filesystem → zfs → config → jails → audit) so day-to-day diffs are
+clean. Within a category, checks sort alphabetically by name.
+
+### Implementation
+
+- `lib/doctor_pure.{h,cpp}` — `Check`/`Severity`/`Report` data model,
+  `passCheck`/`warnCheck`/`failCheck` constructors, text + JSON
+  rendering, exit-code aggregation. No system surface — testable on
+  any platform.
+- `lib/doctor.cpp` — runtime: kldstat per-module, `access(X_OK)` on
+  command paths, `statvfs(2)` for free-space, `zpool status -x` parse,
+  `crated.conf` text-sniff, JailQuery walk, `stat(2)` on audit log.
+  Read-only by construction.
+- `cli/args.cpp` + `cli/args_pure.cpp` — `CmdDoctor`, `-j/--json`
+  flag, no positional args.
+- `lib/audit.cpp` — added to the `isReadOnly` whitelist (alongside
+  list/info/stats/logs/top/inspect) so `crate doctor` runs don't
+  fill the audit log on a polled monitor.
+
+### Tests
+
+`tests/unit/doctor_pure_test.cpp` — **13 ATF cases**:
+
+- Constructor severity, label strings, tally counters, exit-code priorities (FAIL > WARN > PASS)
+- Text rendering: groups by category, severity labels present, summary
+  line, ANSI-colour gating (`--no-color`), detail field surfaced,
+  canonical category order
+- JSON rendering: top-level shape, empty-report shape, escapes for
+  quotes/newlines
+
+**902/902 unit tests pass locally** (889 from prior + 13 new).
+
+### NOT in this release (future)
+
+- **Network policy check** — would inspect ipfw rules vs operator-
+  defined rules for conflicts. Tricky to do without false positives.
+- **Per-jail RCTL drift** — verify the actual rctl rules match what
+  the spec said. Needs spec-loading machinery; deferred.
+- **WireGuard / IPsec config sanity** — render to /tmp and diff
+  against installed config. Defer until operators ask.
+
+---
+
 ## [0.7.12] — 2026-05-05
 
 Build infrastructure: Makefile test-link refactor. The per-test

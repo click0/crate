@@ -256,6 +256,27 @@ Spec Spec::preprocess() const {
   if (auto optNet = spec.optionNetWr()) {
     auto &cfg = Config::get();
 
+    // 0.7.18: expand `mode: auto` into a sensible bridge config.
+    // Operators write a single line and get bridge mode + auto-IP
+    // (which then uses the 0.7.17 pool allocator if network_pool
+    // is set, else falls back to DHCP).
+    if (optNet->mode == NetOptDetails::Mode::Auto) {
+      optNet->mode = NetOptDetails::Mode::Bridge;
+      // Bridge interface: prefer system default, fall back to
+      // "crate0" so the spec works on a fresh install where the
+      // operator hasn't configured a default bridge yet.
+      if (optNet->bridgeIface.empty())
+        optNet->bridgeIface = cfg.defaultBridge.empty()
+                                ? std::string("crate0")
+                                : cfg.defaultBridge;
+      // Always auto-create the bridge in this mode — that's the
+      // whole point of "auto": no manual setup.
+      optNet->autoCreateBridge = true;
+      // ipMode stays at its default (Auto), which the 0.7.17
+      // bridge runtime translates into pool allocation.
+    }
+
+
     // Resolve named network for primary interface
     if (!optNet->networkName.empty()) {
       auto it = cfg.networks.find(optNet->networkName);
@@ -571,8 +592,10 @@ static Spec parseSpecFromNode(YAML::Node top) {
                       optNetDetails->mode = Spec::NetOptDetails::Mode::Passthrough;
                     else if (modeStr == "netgraph")
                       optNetDetails->mode = Spec::NetOptDetails::Mode::Netgraph;
+                    else if (modeStr == "auto")
+                      optNetDetails->mode = Spec::NetOptDetails::Mode::Auto;
                     else
-                      ERR("options/net/mode must be 'nat', 'bridge', 'passthrough', or 'netgraph'")
+                      ERR("options/net/mode must be 'nat', 'bridge', 'passthrough', 'netgraph', or 'auto'")
                   } else if (AsString(netOpt.first) == "bridge") {
                     optNetDetails->bridgeIface = AsString(netOpt.second);
                   } else if (AsString(netOpt.first) == "auto_create_bridge") {
@@ -1067,9 +1090,26 @@ static Spec parseSpecFromNode(YAML::Node top) {
         }
       }
     } else if (isKey(k, "gui")) {
-      // GUI session management (§19)
+      // GUI session management (§19).
+      // 0.7.19: accept scalar shorthand `gui: auto` (or any other
+      // mode value) as equivalent to `gui: { mode: <value> }`.
+      // This makes the typical desktop-app spec a single line:
+      //     gui: auto
+      // instead of:
+      //     gui:
+      //       mode: auto
+      if (k.second.IsScalar()) {
+        std::string mode = AsString(k.second);
+        if (mode != "nested" && mode != "headless"
+            && mode != "gpu" && mode != "auto")
+          ERR("gui scalar shorthand must be 'nested', 'headless', 'gpu', or 'auto' (got '"
+              << mode << "')")
+        spec.guiOptions = std::make_unique<Spec::GuiOptions>();
+        spec.guiOptions->mode = mode;
+        continue;
+      }
       if (!k.second.IsMap())
-        ERR("gui must be a map")
+        ERR("gui must be a scalar (mode shorthand) or a map")
       spec.guiOptions = std::make_unique<Spec::GuiOptions>();
       for (auto b : k.second) {
         if (isKey(b, "mode")) {

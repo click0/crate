@@ -53,6 +53,7 @@ static void applyYaml(Settings &s, const YAML::Node &cfg) {
   if (cfg["network_interface"]) s.networkInterface = cfg["network_interface"].as<std::string>();
   if (cfg["default_bridge"])    s.defaultBridge = cfg["default_bridge"].as<std::string>();
   if (cfg["static_mac_default"]) s.staticMacDefault = cfg["static_mac_default"].as<bool>();
+  if (cfg["network_pool"])      s.networkPool = cfg["network_pool"].as<std::string>();
 
   if (cfg["bootstrap_method"]) s.bootstrapMethod = cfg["bootstrap_method"].as<std::string>();
 
