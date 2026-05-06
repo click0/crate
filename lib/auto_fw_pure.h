@@ -24,6 +24,7 @@
 //
 
 #include <string>
+#include <vector>
 
 namespace AutoFwPure {
 
@@ -100,5 +101,47 @@ std::string formatRdrAnchorLine(const std::string &externalIface,
                                 unsigned hostPortLo, unsigned hostPortHi,
                                 const std::string &jailAddr,
                                 unsigned jailPortLo, unsigned jailPortHi);
+
+// --- ipfw alternative backend (0.8.2) ---
+//
+// Operators using ipfw instead of pf get the same auto-fw via
+// `ipfw nat` instances. Each jail gets its own NAT instance id
+// (derived from JID) and one rule that activates it.
+//
+// Conventions:
+//   natIdFor(jid) = 30000 + jid
+//   ruleIdFor(jid) = 40000 + jid
+//   (high numbers leave the low ranges for operator-defined rules.)
+//
+// We use SHELL ARGV form here (matching how `lib/throttle_pure.cpp`
+// builds ipfw invocations) — much simpler than parsing an
+// ipfw.conf chunk like pf needs.
+
+unsigned natIdForJail(int jid);
+unsigned ruleIdForJail(int jid);
+
+// Validate the NAT instance id range. Returns "" on success.
+// Caller passes the result of natIdForJail; this is a sanity belt.
+std::string validateIpfwNatId(unsigned id);
+
+// Build argv for `ipfw nat <id> config if <iface>` — installs the
+// NAT instance for outbound translation. No port redirects in this
+// release (port-forward via ipfw is deferred to 0.8.3).
+std::vector<std::string> buildIpfwNatConfigArgv(unsigned natId,
+                                                const std::string &externalIface);
+
+// Build argv for the rule that activates the NAT for the jail's
+// outbound traffic:
+//   ipfw add <ruleId> nat <natId> ip from <jailAddr> to any out via <iface>
+std::vector<std::string> buildIpfwNatRuleArgv(unsigned ruleId,
+                                              unsigned natId,
+                                              const std::string &jailAddr,
+                                              const std::string &externalIface);
+
+// Build argv for cleanup at jail teardown:
+//   ipfw delete <ruleId>
+//   ipfw nat <natId> delete
+std::vector<std::string> buildIpfwRuleDeleteArgv(unsigned ruleId);
+std::vector<std::string> buildIpfwNatDeleteArgv(unsigned natId);
 
 } // namespace AutoFwPure

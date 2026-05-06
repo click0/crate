@@ -6,6 +6,103 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.2] — 2026-05-06
+
+`mode: auto` ipfw alternative — operators using `ipfw(8)` instead
+of `pf(4)` now also get auto-fw. Backend detected at jail-start
+via `kldstat -n {pf,ipfw}`; pf preferred if both loaded (matches
+0.8.0/0.8.1 behaviour), ipfw used if only ipfw is loaded.
+
+### ipfw NAT path
+
+```sh
+# Per jail (jid=5, network_interface=em0, allocated IP 10.66.0.5):
+ipfw nat 30005 config if em0
+ipfw add 40005 nat 30005 ip from 10.66.0.5 to any out via em0
+```
+
+ID conventions:
+- NAT instance id: `30000 + jid`
+- Rule id: `40000 + jid`
+
+These ranges sit above throttle's 10000/20000 (0.7.7), leaving
+the low rule numbers for operator-defined ipfw.
+
+### Cleanup
+
+`RunAtEnd ipfwAutoFwCleanup` declared at function scope; reset on
+successful setup. On jail teardown:
+
+```sh
+ipfw delete 40005           # delete rule first ...
+ipfw nat 30005 delete       # ... then NAT instance
+```
+
+Same word-order quirk as 0.7.7 throttle ("delete" comes LAST in
+`ipfw nat <id> delete`).
+
+### Backend selection
+
+| pf loaded | ipfw loaded | Path                                       |
+|-----------|-------------|--------------------------------------------|
+| yes       | yes         | pf (matches 0.8.0/0.8.1 behaviour)         |
+| yes       | no          | pf                                         |
+| no        | yes         | ipfw (this release)                        |
+| no        | no          | warn + skip; jail starts but no auto-fw    |
+
+### Asymmetric feature set (port-forward)
+
+The ipfw path in this release supports SNAT only. Port-forward
+via `ipfw nat ... redir_port` is planned for 0.8.3. If the spec
+declares `inbound:` ports AND ipfw is the active backend, the
+auto-fw step warns:
+
+```
+auto-fw[ipfw]: inbound: declarations ignored in 0.8.2 (port-forward
+via ipfw redir_port deferred to 0.8.3); switch to pf for full
+auto-fw or add ipfw fwd rules manually
+```
+
+This is a deliberate scope split — the pf path was the primary
+workflow; the ipfw path catches up over 0.8.2 + 0.8.3.
+
+### Implementation
+
+- `lib/auto_fw_pure.{h,cpp}` — extended:
+  - `natIdForJail(jid)` / `ruleIdForJail(jid)` — deterministic
+    per-jid ids in reserved ranges
+  - `validateIpfwNatId` — sanity belt against typos
+  - `buildIpfwNatConfigArgv`, `buildIpfwNatRuleArgv`,
+    `buildIpfwRuleDeleteArgv`, `buildIpfwNatDeleteArgv` — argv
+    builders (string-form, no shell escaping needed)
+- `lib/run.cpp` — backend detection (`kldstat -n {pf,ipfw}`),
+  dispatch on result, register `ipfwAutoFwCleanup` `RunAtEnd` for
+  the ipfw path. Soft-fail with `std::cerr` warnings on every
+  failure mode (backend not loaded, ipfw setup fails) — jail still
+  starts.
+
+### Tests
+
+`tests/unit/auto_fw_pure_test.cpp` extended with **6 new ATF cases**:
+
+- `ipfw_ids_deterministic_per_jid` — same jid → same ids
+- `ipfw_ids_in_reserved_ranges` — 30000+/40000+ above throttle's range
+- `ipfw_validate_id_range` — rejects below-base + above-16-bit
+- `ipfw_nat_config_argv_shape` — `ipfw nat <id> config if <iface>`
+- `ipfw_nat_rule_argv_shape` — full rule + from/to/out/via tokens pinned
+- `ipfw_delete_argvs` — rule delete + NAT delete word-order quirk
+
+**974/974 unit tests pass locally** (968 prior + 6 new).
+
+### NOT in this release (Phase 2 continued)
+
+- **ipfw port-forward** via `redir_port` in the nat config — 0.8.3.
+- **icmp passthrough** — neither pf nor ipfw path supports icmp
+  yet. Defer.
+- **IPv6 NAT** — IPv4-only. Defer until 0.8.x adds IPv6 pool.
+
+---
+
 ## [0.8.1] — 2026-05-06
 
 Auto port-forward (pf rdr) for `mode: auto` jails — the second

@@ -6,11 +6,18 @@
 
 #include <string>
 
+using AutoFwPure::buildIpfwNatConfigArgv;
+using AutoFwPure::buildIpfwNatDeleteArgv;
+using AutoFwPure::buildIpfwNatRuleArgv;
+using AutoFwPure::buildIpfwRuleDeleteArgv;
 using AutoFwPure::formatRdrAnchorLine;
 using AutoFwPure::formatRdrRule;
 using AutoFwPure::formatSnatAnchorLine;
 using AutoFwPure::formatSnatRule;
+using AutoFwPure::natIdForJail;
+using AutoFwPure::ruleIdForJail;
 using AutoFwPure::validateExternalIface;
+using AutoFwPure::validateIpfwNatId;
 using AutoFwPure::validatePort;
 using AutoFwPure::validateProto;
 using AutoFwPure::validateRuleAddress;
@@ -221,6 +228,97 @@ ATF_TEST_CASE_BODY(rdr_anchor_line_has_trailing_newline) {
   ATF_REQUIRE(line.find("rdr on em0") == 0u);
 }
 
+// ----------------------------------------------------------------------
+// ipfw backend (0.8.2)
+// ----------------------------------------------------------------------
+
+ATF_TEST_CASE_WITHOUT_HEAD(ipfw_ids_deterministic_per_jid);
+ATF_TEST_CASE_BODY(ipfw_ids_deterministic_per_jid) {
+  // Two calls with the same JID return the same IDs — required for
+  // idempotent re-runs (and for cleanup to find the right rule).
+  ATF_REQUIRE_EQ(natIdForJail(5),  natIdForJail(5));
+  ATF_REQUIRE_EQ(ruleIdForJail(5), ruleIdForJail(5));
+  // Different JIDs map to different IDs.
+  ATF_REQUIRE(natIdForJail(5)  != natIdForJail(6));
+  ATF_REQUIRE(ruleIdForJail(5) != ruleIdForJail(6));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(ipfw_ids_in_reserved_ranges);
+ATF_TEST_CASE_BODY(ipfw_ids_in_reserved_ranges) {
+  // NAT base 30000, rule base 40000 — leaves low IDs for operator
+  // rules. Throttle (0.7.7) uses 10000+pipe / 20000+rule, so our
+  // 30000+/40000+ don't collide.
+  ATF_REQUIRE_EQ(natIdForJail(0),  30000u);
+  ATF_REQUIRE_EQ(ruleIdForJail(0), 40000u);
+  ATF_REQUIRE_EQ(natIdForJail(42),  30042u);
+  ATF_REQUIRE_EQ(ruleIdForJail(42), 40042u);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(ipfw_validate_id_range);
+ATF_TEST_CASE_BODY(ipfw_validate_id_range) {
+  // Belt: cap at 16-bit.
+  ATF_REQUIRE_EQ(validateIpfwNatId(30000), std::string());
+  ATF_REQUIRE_EQ(validateIpfwNatId(40000), std::string());
+  ATF_REQUIRE(!validateIpfwNatId(0).empty());        // below base
+  ATF_REQUIRE(!validateIpfwNatId(29999).empty());    // below base
+  ATF_REQUIRE(!validateIpfwNatId(70000).empty());    // > 16-bit
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(ipfw_nat_config_argv_shape);
+ATF_TEST_CASE_BODY(ipfw_nat_config_argv_shape) {
+  // ipfw nat <id> config if <iface>
+  auto v = buildIpfwNatConfigArgv(30005, "em0");
+  ATF_REQUIRE_EQ(v.size(), (size_t)6);
+  ATF_REQUIRE_EQ(v[0], std::string("/sbin/ipfw"));
+  ATF_REQUIRE_EQ(v[1], std::string("nat"));
+  ATF_REQUIRE_EQ(v[2], std::string("30005"));
+  ATF_REQUIRE_EQ(v[3], std::string("config"));
+  ATF_REQUIRE_EQ(v[4], std::string("if"));
+  ATF_REQUIRE_EQ(v[5], std::string("em0"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(ipfw_nat_rule_argv_shape);
+ATF_TEST_CASE_BODY(ipfw_nat_rule_argv_shape) {
+  // ipfw add <ruleId> nat <natId> ip from <jailAddr> to any out via <iface>
+  auto v = buildIpfwNatRuleArgv(40005, 30005, "10.66.0.5", "em0");
+  ATF_REQUIRE_EQ(v[0], std::string("/sbin/ipfw"));
+  ATF_REQUIRE_EQ(v[1], std::string("add"));
+  ATF_REQUIRE_EQ(v[2], std::string("40005"));
+  ATF_REQUIRE_EQ(v[3], std::string("nat"));
+  ATF_REQUIRE_EQ(v[4], std::string("30005"));
+  // Pin the from/to/out/via tokens — operator-readable & ipfw-strict.
+  bool sawFrom = false, sawTo = false, sawOut = false, sawVia = false;
+  for (const auto &a : v) {
+    if (a == "from") sawFrom = true;
+    if (a == "to")   sawTo   = true;
+    if (a == "out")  sawOut  = true;
+    if (a == "via")  sawVia  = true;
+  }
+  ATF_REQUIRE(sawFrom);
+  ATF_REQUIRE(sawTo);
+  ATF_REQUIRE(sawOut);
+  ATF_REQUIRE(sawVia);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(ipfw_delete_argvs);
+ATF_TEST_CASE_BODY(ipfw_delete_argvs) {
+  // ipfw delete <ruleId>
+  auto rd = buildIpfwRuleDeleteArgv(40005);
+  ATF_REQUIRE_EQ(rd.size(), (size_t)3);
+  ATF_REQUIRE_EQ(rd[0], std::string("/sbin/ipfw"));
+  ATF_REQUIRE_EQ(rd[1], std::string("delete"));
+  ATF_REQUIRE_EQ(rd[2], std::string("40005"));
+
+  // ipfw nat <natId> delete  (note: "delete" is LAST, mirrors
+  // the throttle-pipe-delete word-order quirk we documented in 0.7.7).
+  auto nd = buildIpfwNatDeleteArgv(30005);
+  ATF_REQUIRE_EQ(nd.size(), (size_t)4);
+  ATF_REQUIRE_EQ(nd[0], std::string("/sbin/ipfw"));
+  ATF_REQUIRE_EQ(nd[1], std::string("nat"));
+  ATF_REQUIRE_EQ(nd[2], std::string("30005"));
+  ATF_REQUIRE_EQ(nd[3], std::string("delete"));
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, iface_typical_accepted);
   ATF_ADD_TEST_CASE(tcs, iface_invalid_rejected);
@@ -243,4 +341,10 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, rdr_uses_iface_token_for_dest);
   ATF_ADD_TEST_CASE(tcs, rdr_inet_qualifier_present);
   ATF_ADD_TEST_CASE(tcs, rdr_anchor_line_has_trailing_newline);
+  ATF_ADD_TEST_CASE(tcs, ipfw_ids_deterministic_per_jid);
+  ATF_ADD_TEST_CASE(tcs, ipfw_ids_in_reserved_ranges);
+  ATF_ADD_TEST_CASE(tcs, ipfw_validate_id_range);
+  ATF_ADD_TEST_CASE(tcs, ipfw_nat_config_argv_shape);
+  ATF_ADD_TEST_CASE(tcs, ipfw_nat_rule_argv_shape);
+  ATF_ADD_TEST_CASE(tcs, ipfw_delete_argvs);
 }

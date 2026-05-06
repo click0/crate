@@ -108,4 +108,57 @@ std::string formatRdrAnchorLine(const std::string &externalIface,
                        jailAddr, jailPortLo, jailPortHi) + "\n";
 }
 
+// --- ipfw alternative backend ---
+
+namespace {
+
+// Reserved high-number ranges (matches throttle's 10000/20000 bases).
+constexpr unsigned kIpfwNatBase  = 30000;
+constexpr unsigned kIpfwRuleBase = 40000;
+constexpr unsigned kIpfwIdMax    = 65535;  // ipfw rule numbers are 16-bit
+
+} // anon
+
+unsigned natIdForJail(int jid) {
+  // Cast through unsigned so a negative jid (which shouldn't happen
+  // in practice) doesn't underflow the base.
+  unsigned u = static_cast<unsigned>(jid);
+  return kIpfwNatBase + u;
+}
+
+unsigned ruleIdForJail(int jid) {
+  unsigned u = static_cast<unsigned>(jid);
+  return kIpfwRuleBase + u;
+}
+
+std::string validateIpfwNatId(unsigned id) {
+  if (id < kIpfwNatBase) return "ipfw NAT id below 30000 reserved range";
+  if (id > kIpfwIdMax)   return "ipfw NAT id exceeds 16-bit max";
+  return "";
+}
+
+std::vector<std::string> buildIpfwNatConfigArgv(unsigned natId,
+                                                const std::string &externalIface) {
+  return {"/sbin/ipfw", "nat", std::to_string(natId),
+          "config", "if", externalIface};
+}
+
+std::vector<std::string> buildIpfwNatRuleArgv(unsigned ruleId,
+                                              unsigned natId,
+                                              const std::string &jailAddr,
+                                              const std::string &externalIface) {
+  return {"/sbin/ipfw", "add", std::to_string(ruleId),
+          "nat", std::to_string(natId),
+          "ip", "from", jailAddr, "to", "any",
+          "out", "via", externalIface};
+}
+
+std::vector<std::string> buildIpfwRuleDeleteArgv(unsigned ruleId) {
+  return {"/sbin/ipfw", "delete", std::to_string(ruleId)};
+}
+
+std::vector<std::string> buildIpfwNatDeleteArgv(unsigned natId) {
+  return {"/sbin/ipfw", "nat", std::to_string(natId), "delete"};
+}
+
 } // namespace AutoFwPure

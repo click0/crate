@@ -700,6 +700,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // allocated one. Declared at function scope so it's reachable
   // from inside the bridge-mode IP-config block below.
   RunAtEnd releaseLeaseAtEnd;
+  // 0.8.2: ipfw NAT rule + instance cleanup. Only used on hosts
+  // running ipfw (not pf). Declared next to the other auto-fw
+  // teardown so the destruction ordering matches.
+  RunAtEnd ipfwAutoFwCleanup;
   RunAtEnd reclaimPassthroughAtEnd;
   RunAtEnd destroyNetgraphAtEnd;
   std::vector<RunAtEnd> destroyExtraInterfaces;
@@ -848,16 +852,76 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
             }
           }
 
-          auto anchor = std::string("crate/") + jailXname;
+          // 0.8.2: detect firewall backend. pf preferred (matches
+          // 0.8.0/0.8.1 behaviour). If only ipfw loaded, use the
+          // ipfw NAT path. If neither, warn and skip.
+          int pfStatus = 1, ipfwStatus = 1;
           try {
-            PfctlOps::addRules(anchor, rule);
-            LOG("auto-fw: SNAT rule added to anchor " << anchor
-                << " (" << ipBare << " -> " << cfg.networkInterface << ")")
-          } catch (const std::exception &ex) {
-            // Don't kill the run if pf isn't loaded; warn loudly.
+            pfStatus   = Util::execCommandGetStatus({"/sbin/kldstat", "-n", "pf"},   "kldstat pf");
+          } catch (...) { pfStatus = 1; }
+          try {
+            ipfwStatus = Util::execCommandGetStatus({"/sbin/kldstat", "-n", "ipfw"}, "kldstat ipfw");
+          } catch (...) { ipfwStatus = 1; }
+
+          if (pfStatus == 0) {
+            auto anchor = std::string("crate/") + jailXname;
+            try {
+              PfctlOps::addRules(anchor, rule);
+              LOG("auto-fw[pf]: rules added to anchor " << anchor
+                  << " (" << ipBare << " -> " << cfg.networkInterface << ")")
+            } catch (const std::exception &ex) {
+              std::cerr << rang::fg::yellow
+                        << "auto-fw[pf]: SNAT/rdr load failed: " << ex.what()
+                        << " — outbound traffic may not work; configure pf manually"
+                        << rang::style::reset << std::endl;
+            }
+          } else if (ipfwStatus == 0) {
+            // 0.8.2: ipfw alternative. SNAT only in this release;
+            // port-forward via ipfw redir_port deferred to 0.8.3.
+            unsigned natId  = AutoFwPure::natIdForJail(jid);
+            unsigned ruleId = AutoFwPure::ruleIdForJail(jid);
+            try {
+              Util::execCommand(
+                AutoFwPure::buildIpfwNatConfigArgv(natId, cfg.networkInterface),
+                "ipfw nat config");
+              Util::execCommand(
+                AutoFwPure::buildIpfwNatRuleArgv(ruleId, natId, ipBare, cfg.networkInterface),
+                "ipfw add nat rule");
+              LOG("auto-fw[ipfw]: NAT instance " << natId << " + rule " << ruleId
+                  << " (" << ipBare << " -> " << cfg.networkInterface << ")")
+              // Cleanup: delete rule first, then NAT instance.
+              ipfwAutoFwCleanup.reset([natId, ruleId, &args]() {
+                LOG("auto-fw[ipfw]: cleanup rule " << ruleId
+                    << " + nat " << natId)
+                try {
+                  Util::execCommand(AutoFwPure::buildIpfwRuleDeleteArgv(ruleId),
+                                    "ipfw delete rule");
+                } catch (...) {}
+                try {
+                  Util::execCommand(AutoFwPure::buildIpfwNatDeleteArgv(natId),
+                                    "ipfw nat delete");
+                } catch (...) {}
+              });
+              if (!optionNet->inboundPortsTcp.empty()
+                  || !optionNet->inboundPortsUdp.empty()) {
+                std::cerr << rang::fg::yellow
+                          << "auto-fw[ipfw]: inbound: declarations ignored "
+                             "in 0.8.2 (port-forward via ipfw redir_port "
+                             "deferred to 0.8.3); switch to pf for full "
+                             "auto-fw or add ipfw fwd rules manually"
+                          << rang::style::reset << std::endl;
+              }
+            } catch (const std::exception &ex) {
+              std::cerr << rang::fg::yellow
+                        << "auto-fw[ipfw]: SNAT setup failed: " << ex.what()
+                        << " — outbound traffic may not work"
+                        << rang::style::reset << std::endl;
+            }
+          } else {
             std::cerr << rang::fg::yellow
-                      << "auto-fw: SNAT rule load failed: " << ex.what()
-                      << " — outbound traffic may not work; configure pf manually"
+                      << "auto-fw: neither pf nor ipfw loaded; skipping "
+                         "SNAT/rdr auto-rules — outbound traffic from "
+                      << ipBare << " will require manual firewall config"
                       << rang::style::reset << std::endl;
           }
         } else {
