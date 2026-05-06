@@ -48,7 +48,8 @@ DAEMON_SRCS = daemon/main.cpp daemon/config.cpp daemon/server.cpp \
               daemon/transfer_pure.cpp \
               daemon/control_socket_pure.cpp daemon/control_socket.cpp \
               daemon/sandbox_pure.cpp daemon/sandbox.cpp \
-              daemon/rate_limit_pure.cpp daemon/rate_limit.cpp
+              daemon/rate_limit_pure.cpp daemon/rate_limit.cpp \
+              daemon/socket_perms_pure.cpp
 
 SNMPD_SRCS = snmpd/main.cpp snmpd/collector.cpp \
              snmpd/mib.cpp snmpd/mib_pure.cpp
@@ -200,7 +201,7 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              doctor_pure_test sandbox_pure_test rate_limit_pure_test \
              ip_alloc_pure_test auto_fw_pure_test \
              ipsec_runtime_pure_test net_detect_pure_test \
-             vmwrap_pure_test
+             vmwrap_pure_test socket_perms_pure_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)
@@ -249,6 +250,7 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  daemon/routes_pure.cpp daemon/ws_pure.cpp \
                  daemon/transfer_pure.cpp daemon/control_socket_pure.cpp \
                  daemon/sandbox_pure.cpp daemon/rate_limit_pure.cpp \
+                 daemon/socket_perms_pure.cpp \
                  hub/aggregator_pure.cpp \
                  hub/datacenter_pure.cpp hub/ha_pure.cpp \
                  snmpd/mib_pure.cpp

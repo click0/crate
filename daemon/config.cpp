@@ -1,6 +1,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "config.h"
+#include "socket_perms_pure.h"
 #include "../lib/auth_pure.h"
 
 #include <yaml-cpp/yaml.h>
@@ -19,6 +20,22 @@ Config Config::load(const std::string &path) {
       cfg.tcpPort = listen["tcp_port"].as<unsigned>();
     if (listen["tcp_bind"])
       cfg.tcpBind = listen["tcp_bind"].as<std::string>();
+    // 0.8.19: filesystem-perm gate
+    if (listen["unix_owner"])
+      cfg.unixSocketOwner = listen["unix_owner"].as<std::string>();
+    if (listen["unix_group"])
+      cfg.unixSocketGroup = listen["unix_group"].as<std::string>();
+    if (listen["unix_mode"]) {
+      auto raw = listen["unix_mode"].as<std::string>();
+      unsigned m = 0;
+      if (auto e = SocketPermsPure::parseUnixModeStr(raw, &m); !e.empty())
+        throw std::runtime_error("listen.unix_mode: " + e);
+      cfg.unixSocketMode = m;
+    }
+    if (auto e = SocketPermsPure::validateUnixSocketPerms(
+          cfg.unixSocketOwner, cfg.unixSocketGroup, cfg.unixSocketMode);
+        !e.empty())
+      throw std::runtime_error("listen.unix_*: " + e);
   }
 
   if (auto tls = root["tls"]) {

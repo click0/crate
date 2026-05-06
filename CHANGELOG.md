@@ -6,6 +6,91 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.19] — 2026-05-06
+
+Operator-controlled filesystem perms on `/var/run/crate/crated.sock`.
+First step toward closing the long-standing TODO item
+"`daemon/auth.cpp::isUnixSocketPeer` trusts an empty REMOTE_ADDR
+as proof of unix-socket origin". Pre-0.8.19 the only knob was the
+OS umask at bind time — operators couldn't scope access to a
+custom group without manual `chmod`/`chown` after `crated` started.
+
+### What this release adds
+
+Three new `crated.conf` knobs under `listen:`:
+
+```yaml
+listen:
+    unix: /var/run/crate/crated.sock
+    unix_owner: root        # default: leave at bind-time state
+    unix_group: crate-ops   # default: leave at bind-time state
+    unix_mode: "0660"       # default: 0660
+```
+
+After `crated` binds the unix socket, it `chown`s + `chmod`s the
+file to those values. Operators get an OS-level allowlist (only
+members of `crate-ops` can `connect()`) without touching `pf` /
+`ipfw` / userland session managers.
+
+Mode is parsed via `SocketPermsPure::parseUnixModeStr`, which
+accepts the three spellings operators come from: `"0660"`,
+`"660"`, `"0o660"`. Owner/group go through length + alphabet
+validators that mirror FreeBSD's `pw(8)` constraints. `chmod` /
+`chown` failures log to stderr but don't abort startup — the
+socket remains usable at the umask-default mode.
+
+If the configured mode is looser than `0660` (e.g. world-
+readable), `crated` prints a one-shot warning to stderr at startup
+so operators see the "looser than typical" choice in their logs.
+
+### What this release does NOT do
+
+- **Per-connection `getpeereid(2)`** — cpp-httplib's accept loop
+  owns the connection fd and doesn't expose it to handlers. A
+  proper getpeereid fix would require either forking httplib
+  internally or replacing the unix-socket transport with a
+  hand-rolled accept loop (the same pattern as
+  `daemon/control_socket.cpp` since 0.7.11). That's tractable
+  but outside this release's scope.
+- **Closing the bind-to-chmod race** — there's a window between
+  cpp-httplib's `bind()` (inside `listen()`, in another thread)
+  and our perm fixup in which the socket has the umask-default
+  mode (typically world-writable). Pre-0.8.19 had the same race;
+  this release narrows it by also applying owner/group, doesn't
+  close it.
+
+The TODO item stays open with a more concrete path forward
+documented in `crated.conf.sample`.
+
+### Implementation
+
+Pure helpers in `daemon/socket_perms_pure.{h,cpp}`:
+
+- `parseUnixModeStr(s, *out)` — three octal spellings; rejects
+  hex (`0x660`), decimal-but-non-octal (`888`, `999`), too-long
+  (>4 digits), leading whitespace
+- `validateUserName` / `validateGroupName` — `[A-Za-z0-9_-]`,
+  length 1..32, no leading dash; empty string accepted as
+  "leave alone"
+- `validateUnixSocketPerms` — one-shot validator over the triple
+- `isModeTight` — predicate for the "<=0660 with no world bits"
+  startup warning
+
+Runtime in `daemon/server.cpp`:
+
+- After spawning the unix-socket thread, a fixup helper polls
+  for the socket file (max ~2s), resolves owner/group via
+  `getpwnam`/`getgrnam`, and calls `chown`/`chmod`
+- All errors log to stderr; nothing is fatal
+
+8 ATF unit cases cover the pure helpers (mode parsing across
+spellings + garbage rejection, name validation, triple
+short-circuit, tight/loose mode predicate).
+
+1033/1033 unit tests pass locally.
+
+---
+
 ## [0.8.18] — 2026-05-06
 
 `gui: auto` now also auto-handles X11 cookies and Wayland sockets,

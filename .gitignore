@@ -67,6 +67,7 @@ tests/unit/auto_fw_pure_test
 tests/unit/ipsec_runtime_pure_test
 tests/unit/net_detect_pure_test
 tests/unit/vmwrap_pure_test
+tests/unit/socket_perms_pure_test
 tests/unit/.test-objs/
 *.gcda
 *.gcno
