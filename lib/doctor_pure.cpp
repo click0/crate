@@ -83,6 +83,7 @@ int categoryRank(const std::string &c) {
   if (c == "jails")      return 5;
   if (c == "audit")      return 6;
   if (c == "auto-fw")    return 7;  // 0.8.9
+  if (c == "network")    return 8;  // 0.8.14
   return 100;  // unknown -> after known
 }
 

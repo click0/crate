@@ -20,6 +20,8 @@
 #include <sys/statvfs.h>
 #include <unistd.h>
 
+#include <set>
+
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -317,6 +319,132 @@ void checkAuditLog(Report &r) {
   }
 }
 
+// --- check: ipfw rule-number conflicts (0.8.14) ---
+//
+// crate's auto-features each reserve a high rule-number range:
+//   throttle (0.7.7):       pipe 10000+jid*2,    rule 20000+jid*2
+//   auto-fw   (0.8.2/0.8.3): nat  30000+jid,     rule 40000+jid
+// Operator's manual ipfw rules SHOULD live at low numbers (<10000)
+// to avoid colliding. Doctor scans `ipfw list` for entries in the
+// reserved ranges that didn't come from crate (no matching jail) —
+// that's a sign of an operator typo or a stale rule from a
+// destroyed jail.
+
+void checkIpfwReservedRanges(Report &r) {
+  if (::access("/sbin/ipfw", X_OK) != 0) {
+    r.checks.push_back(passCheck("network", "ipfw",
+      "/sbin/ipfw not present — skipping reserved-range check"));
+    return;
+  }
+  std::string out;
+  try {
+    out = Util::execCommandGetOutput({"/sbin/ipfw", "-q", "list"},
+                                      "ipfw -q list");
+  } catch (const std::exception &e) {
+    r.checks.push_back(warnCheck("network", "ipfw",
+      std::string("ipfw list failed: ") + e.what()));
+    return;
+  }
+  // Look at first column (rule number) of each line. Flag rules
+  // in the reserved ranges that don't correspond to a running jail.
+  std::vector<JailQuery::JailInfo> jails;
+  try {
+    jails = JailQuery::getAllJails(/*crateOnly=*/true);
+  } catch (...) {}
+
+  std::set<unsigned> validNatRuleIds;
+  std::set<unsigned> validThrottleRuleIds;
+  for (const auto &j : jails) {
+    validNatRuleIds.insert(40000u + (unsigned)j.jid);  // auto-fw
+    validThrottleRuleIds.insert(20000u + (unsigned)j.jid * 2u);
+    validThrottleRuleIds.insert(20000u + (unsigned)j.jid * 2u + 1u);
+  }
+
+  std::istringstream is(out);
+  std::string line;
+  unsigned orphanCount = 0;
+  while (std::getline(is, line)) {
+    // First whitespace-separated token is the rule number.
+    std::size_t sp = line.find(' ');
+    if (sp == std::string::npos) continue;
+    auto ruleNumStr = line.substr(0, sp);
+    unsigned n = 0;
+    bool digits = !ruleNumStr.empty();
+    for (char c : ruleNumStr) {
+      if (c < '0' || c > '9') { digits = false; break; }
+      n = n * 10 + (unsigned)(c - '0');
+    }
+    if (!digits) continue;
+    if (n >= 20000 && n < 30000) {
+      // throttle range
+      if (!validThrottleRuleIds.count(n)) orphanCount++;
+    } else if (n >= 40000 && n < 50000) {
+      // auto-fw NAT-rule range
+      if (!validNatRuleIds.count(n)) orphanCount++;
+    }
+  }
+  if (orphanCount == 0) {
+    r.checks.push_back(passCheck("network", "ipfw",
+      "no orphan rules in crate-reserved ranges (20000+, 40000+)"));
+  } else {
+    std::ostringstream detail;
+    detail << orphanCount << " ipfw rule(s) in crate-reserved ranges "
+              "without a matching running jail — likely stale from "
+              "a destroyed jail; clean with `ipfw delete <N>` or wait "
+              "for next `crate clean` to surface them";
+    r.checks.push_back(warnCheck("network", "ipfw", detail.str()));
+  }
+}
+
+// --- check: per-jail RCTL drift (0.8.14) ---
+//
+// When a spec declares `limits: { memoryuse: 2G }`, crate run
+// loads an rctl rule. Operators sometimes hand-edit rules later
+// via `rctl -a/-r`, leaving the kernel state out of sync with
+// what `crate inspect` would report from the spec.
+//
+// Doctor surfaces "rules present" / "rules absent" — we can't
+// know the spec at doctor time without re-loading, so this is
+// information rather than an authoritative drift check.
+
+void checkRctlPresence(Report &r) {
+  if (::access("/sbin/rctl", X_OK) != 0) {
+    r.checks.push_back(passCheck("network", "rctl",
+      "/sbin/rctl not present — skipping RCTL presence check"));
+    return;
+  }
+  std::vector<JailQuery::JailInfo> jails;
+  try {
+    jails = JailQuery::getAllJails(/*crateOnly=*/true);
+  } catch (...) { return; }
+  for (const auto &j : jails) {
+    std::string out;
+    try {
+      out = Util::execCommandGetOutput(
+        {"/sbin/rctl", "-l", "jail:" + j.name},
+        "rctl -l jail");
+    } catch (...) {
+      r.checks.push_back(warnCheck("network", j.name,
+        "rctl -l failed — cannot verify RCTL rules"));
+      continue;
+    }
+    // Count non-empty lines as "rules present".
+    unsigned ruleCount = 0;
+    std::istringstream is(out);
+    std::string line;
+    while (std::getline(is, line)) if (!line.empty()) ruleCount++;
+    if (ruleCount > 0) {
+      r.checks.push_back(passCheck("network", j.name,
+        "rctl rules: " + std::to_string(ruleCount)
+        + " (verify with `crate inspect " + j.name + "`)"));
+    } else {
+      r.checks.push_back(warnCheck("network", j.name,
+        "no rctl rules — jail can OOM the host (FAIL if "
+        "spec declared limits:; check `crate inspect`)"));
+    }
+  }
+}
+
 // --- check: auto-fw rules loaded for each running jail (0.8.9) ---
 //
 // 0.8.0+ auto-loads SNAT/rdr rules into per-jail anchors (pf) or
@@ -436,7 +564,9 @@ bool doctorCommand(const Args &args) {
   checkCratedConf(r);
   checkJails(r);
   checkAuditLog(r);
-  checkAutoFwRules(r);  // 0.8.9
+  checkAutoFwRules(r);             // 0.8.9
+  checkIpfwReservedRanges(r);      // 0.8.14
+  checkRctlPresence(r);            // 0.8.14
 
   if (args.doctorJson) {
     std::cout << DoctorPure::renderJson(r) << std::endl;

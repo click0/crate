@@ -6,6 +6,73 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.14] — 2026-05-06
+
+`crate doctor` extended with two new operational checks:
+
+### `network` category — ipfw reserved-range orphans
+
+crate's auto-features each reserve a high rule-number range:
+- `crate throttle` (0.7.7): pipe `10000+jid*2`, rule `20000+jid*2`
+- `crate run --auto-fw` (0.8.2/0.8.3): nat `30000+jid`, rule `40000+jid`
+
+Operator-defined rules SHOULD live below 10000. Doctor now scans
+`ipfw -q list`, finds rules in the reserved ranges (20000+, 40000+),
+and flags any that don't correspond to a currently-running jail —
+typically stale rules from a destroyed jail that didn't get cleaned
+up (crash mid-teardown, manual `kill -9` of crate run, etc.).
+
+```
+network:
+  [PASS] ipfw   no orphan rules in crate-reserved ranges (20000+, 40000+)
+  [WARN] ipfw   3 ipfw rule(s) in crate-reserved ranges without a
+                matching running jail — likely stale from a destroyed
+                jail; clean with `ipfw delete <N>` or wait for next
+                `crate clean` to surface them
+```
+
+### `network` category — per-jail RCTL presence
+
+For each running crate-managed jail, invokes `rctl -l jail:<name>`
+and counts active rules. Surfaces:
+- Rules present → PASS (jail bounded; spec presumably declared limits)
+- Zero rules → WARN ("jail can OOM the host — FAIL if spec
+  declared limits:; check `crate inspect`")
+
+Doctor doesn't re-load specs at runtime, so this is informational
+not authoritative — operators with NAT-mode unbounded jails will
+see WARN, which is correct (those jails CAN exhaust the host).
+
+### Implementation
+
+`lib/doctor.cpp`:
+- `checkIpfwReservedRanges` — `ipfw -q list` + parse first column,
+  cross-reference against `JailQuery::getAllJails(crateOnly=true)`
+  for valid IDs, count orphans
+- `checkRctlPresence` — `rctl -l jail:<name>` per running jail,
+  count non-empty lines
+
+`lib/doctor_pure.cpp` — added `network` to canonical category sort
+order (rank 8, after `auto-fw`).
+
+### Tests
+
+No new pure tests — both checks are shell-out heavy + per-host.
+Existing `doctor_pure_test` cases (13) continue to pass.
+
+**994/994 unit tests pass locally**.
+
+### NOT in this release
+
+- **Spec-aware FAIL promotion** — load each spec's `limits:` and
+  compare against actual `rctl -l` output for true drift detection.
+  Tracked.
+- **pf rule count** — analogue of the ipfw orphan check for pf
+  anchors. Defer — pf anchors auto-flush on jail teardown via
+  `destroyPfAnchor` `RunAtEnd`, so orphans are rare.
+
+---
+
 ## [0.8.13] — 2026-05-06
 
 Lifecycle endpoints on control sockets — POST stop / restart from
