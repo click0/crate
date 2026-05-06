@@ -20,6 +20,7 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/create.cpp lib/run.cpp \
            lib/doctor_pure.cpp lib/doctor.cpp \
            lib/ip_alloc_pure.cpp lib/network_lease.cpp \
            lib/auto_fw_pure.cpp \
+           lib/net_detect_pure.cpp lib/net_detect.cpp \
            lib/share_pure.cpp \
            lib/top_pure.cpp lib/top.cpp \
            lib/bridge_pure.cpp \
@@ -197,7 +198,7 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              backup_prune_pure_test control_socket_pure_test \
              doctor_pure_test sandbox_pure_test rate_limit_pure_test \
              ip_alloc_pure_test auto_fw_pure_test \
-             ipsec_runtime_pure_test
+             ipsec_runtime_pure_test net_detect_pure_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)
@@ -233,6 +234,7 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  lib/warm_pure.cpp lib/retune_pure.cpp \
                  lib/throttle_pure.cpp lib/doctor_pure.cpp \
                  lib/ip_alloc_pure.cpp lib/auto_fw_pure.cpp \
+                 lib/net_detect_pure.cpp \
                  lib/share_pure.cpp lib/top_pure.cpp lib/bridge_pure.cpp \
                  lib/inter_dns_pure.cpp lib/wireguard_pure.cpp \
                  lib/ipsec_pure.cpp lib/inspect_pure.cpp \

@@ -6,6 +6,97 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.6] — 2026-05-06
+
+`network_interface` auto-detect via `route -4 get default`. Closes
+the "operator must set network_interface in crate.yml" requirement
+that the auto-fw work (0.8.0+) introduced.
+
+### Behaviour
+
+```yaml
+# crate.yml
+network_pool: 10.66.0.0/24
+# network_interface: em0   <-- now optional
+```
+
+When unset, `crate run` invokes `route -4 get default`, parses the
+`interface:` line, and uses the result for SNAT / port-forward
+rules. Operator can still pin the value explicitly (recommended
+for hosts with multiple uplinks where the default route changes).
+
+Cached: detection happens once per daemon lifetime. `crate doctor`
++ future hooks can `NetDetect::clearCache()` to force a re-detect.
+
+### Defence in depth
+
+- Parser only accepts FreeBSD-shaped iface names (1..15 chars,
+  alnum + `.` + `_`). Garbage after the `interface:` token (e.g.
+  shell-injection attempt via a malicious `route` binary on
+  `$PATH`) returns empty and falls back to skip.
+- Tab/space tolerance, CRLF tolerance — survives operators piping
+  output through tools that mangle whitespace.
+- Localised output not supported (we match English `interface:`
+  only). FreeBSD `route(8)` doesn't localise output, so this is
+  safe in practice.
+
+### Soft-fail
+
+If both `network_interface` is unset AND auto-detection fails
+(no default route, route(8) missing), the warning gets more
+useful:
+
+```
+auto-fw: network_interface unset in crate.yml AND default-route
+auto-detection failed (no `route -4 get default` interface line);
+skipping SNAT auto-rule — outbound traffic from 10.66.0.5 will
+require operator-written pf/ipfw rules
+```
+
+### Implementation
+
+- `lib/net_detect_pure.{h,cpp}` — pure parser:
+  - `parseRouteOutput(text) -> ifaceName | ""`
+  - Robust against whitespace variations, CRLF, multiple
+    interface lines (takes first), garbage after the colon
+- `lib/net_detect.{h,cpp}` — runtime: invokes
+  `/sbin/route -4 get default`, caches result with mutex.
+  `defaultIfaceCached()` API + `clearCache()` for test/doctor
+  hooks.
+- `lib/run.cpp` — auto-fw block now resolves to either
+  `cfg.networkInterface` (explicit) or `NetDetect::defaultIfaceCached()`
+  (auto). Validates result either way before passing to pf/ipfw.
+
+### Tests
+
+`tests/unit/net_detect_pure_test.cpp` — **9 ATF cases**:
+
+- `typical_route_output` — exact FreeBSD 14 `route -4 get default`
+  format pinned
+- `vlan_iface` — dotted form (`vlan0.100`) accepted
+- `no_interface_line` — fallback returns ""
+- `empty_input` — handles empty file/output
+- `crlf_line_endings` — survives Windows-edited inputs
+- `rejects_garbage_value` — shell-injection / spaces / empty value
+  all rejected
+- `takes_first_match` — robustness invariant
+- `rejects_oversized_iface` — > 15 chars (IFNAMSIZ - 1) rejected
+- `tab_separator_accepted` — whitespace tolerance
+
+**994/994 unit tests pass locally** (985 prior + 9 new).
+
+### NOT in this release
+
+- **Cache invalidation on host network change** — operator could
+  manually `service crated restart` if their default route
+  switches; auto-invalidation via routing socket events
+  (`route monitor`) is a future hook.
+- **IPv6 default route detection** — currently IPv4-only. When
+  IPv6 NPTv6 lands (future), we'll need
+  `route -6 get default ::/0` parsing.
+
+---
+
 ## [0.8.5] — 2026-05-06
 
 Log-streaming tail now uses `kqueue(2)` + `kevent(2)` instead of

@@ -17,6 +17,7 @@
 #include "ip_alloc_pure.h"
 #include "network_lease.h"
 #include "auto_fw_pure.h"
+#include "net_detect.h"
 #include "ifconfig_ops.h"
 #include "scripts.h"
 #include "ctx.h"
@@ -845,12 +846,26 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         // the jail's existing pf anchor crate/<jailXname>; the
         // anchor is flushed at teardown by the existing destroyPfAnchor
         // RunAtEnd, so cleanup is automatic.
-        if (!cfg.networkInterface.empty()) {
-          if (auto e = AutoFwPure::validateExternalIface(cfg.networkInterface); !e.empty())
-            ERR("network_interface '" << cfg.networkInterface << "': " << e)
+        //
+        // 0.8.6: if network_interface is unset in crate.yml, fall
+        // back to NetDetect::defaultIfaceCached() which parses
+        // `route -4 get default`. Only auto-detect once per daemon
+        // lifetime (cached). Operator can still override by
+        // setting network_interface explicitly.
+        std::string externalIface = cfg.networkInterface;
+        if (externalIface.empty()) {
+          externalIface = NetDetect::defaultIfaceCached();
+          if (!externalIface.empty()) {
+            LOG("auto-fw: network_interface not set in crate.yml; "
+                "auto-detected default route via " << externalIface);
+          }
+        }
+        if (!externalIface.empty()) {
+          if (auto e = AutoFwPure::validateExternalIface(externalIface); !e.empty())
+            ERR("network_interface '" << externalIface << "': " << e)
           if (auto e = AutoFwPure::validateRuleAddress(ipBare); !e.empty())
             ERR("auto-fw: jail IP failed validation: " << e)
-          auto rule = AutoFwPure::formatSnatAnchorLine(cfg.networkInterface, ipBare);
+          auto rule = AutoFwPure::formatSnatAnchorLine(externalIface, ipBare);
 
           // 0.8.1: also emit per-port rdr rules from the spec's
           // inbound: declarations. Same anchor as SNAT — both
@@ -861,7 +876,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
                 && AutoFwPure::validatePort(jail.first).empty()
                 && AutoFwPure::validatePort(jail.second).empty()) {
               rule += AutoFwPure::formatRdrAnchorLine(
-                cfg.networkInterface, "tcp",
+                externalIface, "tcp",
                 host.first, host.second,
                 ipBare,
                 jail.first, jail.second);
@@ -873,7 +888,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
                 && AutoFwPure::validatePort(jail.first).empty()
                 && AutoFwPure::validatePort(jail.second).empty()) {
               rule += AutoFwPure::formatRdrAnchorLine(
-                cfg.networkInterface, "udp",
+                externalIface, "udp",
                 host.first, host.second,
                 ipBare,
                 jail.first, jail.second);
@@ -896,7 +911,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
             try {
               PfctlOps::addRules(anchor, rule);
               LOG("auto-fw[pf]: rules added to anchor " << anchor
-                  << " (" << ipBare << " -> " << cfg.networkInterface << ")")
+                  << " (" << ipBare << " -> " << externalIface << ")")
             } catch (const std::exception &ex) {
               std::cerr << rang::fg::yellow
                         << "auto-fw[pf]: SNAT/rdr load failed: " << ex.what()
@@ -932,13 +947,13 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
             }
             try {
               Util::execCommand(
-                AutoFwPure::buildIpfwNatConfigWithRedirsArgv(natId, cfg.networkInterface, redirs),
+                AutoFwPure::buildIpfwNatConfigWithRedirsArgv(natId, externalIface, redirs),
                 "ipfw nat config");
               Util::execCommand(
-                AutoFwPure::buildIpfwNatRuleArgv(ruleId, natId, ipBare, cfg.networkInterface),
+                AutoFwPure::buildIpfwNatRuleArgv(ruleId, natId, ipBare, externalIface),
                 "ipfw add nat rule");
               LOG("auto-fw[ipfw]: NAT instance " << natId << " + rule " << ruleId
-                  << " (" << ipBare << " -> " << cfg.networkInterface << ", "
+                  << " (" << ipBare << " -> " << externalIface << ", "
                   << redirs.size() << " redir_port clauses)")
               // Cleanup: delete rule first, then NAT instance.
               ipfwAutoFwCleanup.reset([natId, ruleId, &args]() {
@@ -968,8 +983,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
           }
         } else {
           std::cerr << rang::fg::yellow
-                    << "auto-fw: network_interface unset in crate.yml; "
-                       "skipping SNAT auto-rule — outbound traffic from "
+                    << "auto-fw: network_interface unset in crate.yml AND "
+                       "default-route auto-detection failed (no `route -4 get "
+                       "default` interface line); skipping SNAT auto-rule — "
+                       "outbound traffic from "
                     << ipBare << " will require operator-written pf/ipfw rules"
                     << rang::style::reset << std::endl;
         }
