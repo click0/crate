@@ -16,6 +16,8 @@
 #include "config.h"
 #include "ip_alloc_pure.h"
 #include "network_lease.h"
+#include "ip6_alloc_pure.h"
+#include "network_lease6.h"
 #include "auto_fw_pure.h"
 #include "net_detect.h"
 #include "ifconfig_ops.h"
@@ -809,6 +811,8 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // allocated one. Declared at function scope so it's reachable
   // from inside the bridge-mode IP-config block below.
   RunAtEnd releaseLeaseAtEnd;
+  // 0.8.20: same pattern for the IPv6 pool lease (network_pool6).
+  RunAtEnd releaseLease6AtEnd;
   // 0.8.2: ipfw NAT rule + instance cleanup. Only used on hosts
   // running ipfw (not pf). Declared next to the other auto-fw
   // teardown so the destruction ordering matches.
@@ -918,6 +922,32 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
           LOG("network: releasing lease for " << leaseName)
           try { NetworkLease::releaseFor(leaseName); } catch (...) {}
         });
+
+        // 0.8.20: IPv6 pool allocation. If network_pool6 is
+        // configured in crate.yml, allocate a v6 from it and
+        // configure as a static address alongside the v4. Same
+        // lease-store pattern as v4 but in a separate file
+        // (/var/run/crate/network-leases6.txt) so v4-only tooling
+        // doesn't choke on v6 lines.
+        //
+        // No SNAT/NAT66/NPTv6 yet: this release just gets the
+        // address onto the jail interface so operators can verify
+        // ULA reachability from the jail. Egress translation is
+        // tracked for a future release.
+        if (!cfg.networkPool6.empty()) {
+          Ip6AllocPure::Network6 pool6;
+          if (auto e = Ip6AllocPure::parseCidr6(cfg.networkPool6, pool6); !e.empty())
+            ERR("network_pool6 '" << cfg.networkPool6 << "': " << e)
+          auto addr6 = NetworkLease6::allocateFor(leaseName, pool6);
+          auto ip6Bare = Ip6AllocPure::formatIp6(addr6);
+          auto ip6 = ip6Bare + "/" + std::to_string(pool6.prefixLen);
+          RunNet::configureStaticIp6(bridgeInfo.ifaceB, ip6, jid, execInJail);
+          LOG("bridge mode: auto-allocated IPv6 " << ip6
+              << " on " << bridgeInfo.ifaceB)
+          releaseLease6AtEnd.reset([leaseName]() {
+            try { NetworkLease6::releaseFor(leaseName); } catch (...) {}
+          });
+        }
 
         // 0.8.0: SNAT auto-rule. Without this, packets from the jail
         // leave the host with a 10.66.0.x source addr that never

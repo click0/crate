@@ -6,6 +6,120 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.20] — 2026-05-06
+
+IPv6 NPTv6 — **Phase 2: runtime allocator + jail interface
+configuration.** Builds on 0.8.15's Phase 1 hook (the
+`network_pool6:` config field) so `network: auto` jails now get
+an actual IPv6 address from the configured ULA pool, not just an
+accepted-but-ignored config line.
+
+### What this release adds
+
+```yaml
+# crate.yml — already accepted since 0.8.15
+network_pool6: fd00:0:0:0::/64
+```
+
+…now triggers, alongside the existing IPv4 path:
+
+1. **Allocate** an IPv6 from the pool via `NetworkLease6::allocateFor`
+   (atomic, flock-protected, idempotent — same jail re-running
+   keeps its existing address).
+2. **Configure** the address as a static IPv6 on the jail-side
+   epair via `RunNet::configureStaticIp6` — the same code path
+   `options.net.ipv6: <addr>` already used.
+3. **Release** the lease on jail teardown so the address comes
+   back into the pool.
+
+The lease store lives at `/var/run/crate/network-leases6.txt` —
+parallel to the existing `/var/run/crate/network-leases.txt`.
+Kept separate so v4-only tooling that reads the old file doesn't
+choke on hex-shaped lines.
+
+Example session:
+
+```sh
+% cat /usr/local/etc/crate.yml
+network_pool:  10.66.0.0/24
+network_pool6: fd00::/64
+default_bridge: crate0
+
+% cat firefox.yml
+network: auto
+start: firefox
+
+% sudo crate run -f firefox.crate
+bridge mode: auto-allocated IP 10.66.0.2/24 (gw 10.66.0.1) on bridge_b
+bridge mode: auto-allocated IPv6 fd00::2/64 on bridge_b
+
+% sudo jexec firefox ifconfig bridge_b
+bridge_b: flags=8843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+        inet 10.66.0.2 netmask 0xffffff00
+        inet6 fd00::2 prefixlen 64
+```
+
+### Implementation
+
+Pure module `lib/ip6_alloc_pure.{h,cpp}`:
+
+- `Addr6` (16 raw bytes) + `Network6` types
+- `parseIp6` / `formatIp6` — RFC 5952 canonical form (lowercase
+  hex, longest run of >=2 zeros collapsed to `::`, ties broken
+  leftmost)
+- `parseCidr6` — rejects unaligned base addresses, double `::`,
+  malformed groups, prefix outside 1..128
+- `gatewayFor` (base + 1), `allocateNext` (skips base + gateway +
+  taken set; bounded scan cap so a /127 misconfig doesn't loop),
+  `inPool` predicate
+- `Lease6` + `parseLeaseLine6` / `formatLeaseLine6`
+- 18 ATF unit cases covering parser edge cases (full form,
+  shorthand at ends/middle, double-`::` rejection, 9-group
+  rejection, 5-digit-group rejection), formatter cases (RFC 5952
+  longest-run, single-zero-no-collapse, all-zero, lowercase
+  normalisation), CIDR (aligned/unaligned), allocator (skips
+  base/gateway/taken), pool predicate, lease round-trip.
+
+Runtime module `lib/network_lease6.{h,cpp}`:
+
+- Mirror of `NetworkLease` but typed for IPv6 — same flock +
+  atomic-rename pattern, same idempotency guarantee
+- Separate file path so v4-only operator scripts don't break
+
+`lib/run.cpp` wiring: in the bridge-mode IP-config block, after
+the v4 lease has succeeded, call into the v6 path if
+`Settings.networkPool6` is non-empty. Best-effort release on
+teardown via a separate `RunAtEnd releaseLease6AtEnd`.
+
+### What this release does NOT do
+
+- **NPTv6 / NAT66 pf rules** — the jail gets a ULA address but
+  packets leaving the host with `fd00::2` source aren't
+  translated to a globally-routable v6. Operators wanting external
+  v6 reachability still configure NPTv6 manually in `pf.conf`
+  for now. The auto-rule will reuse the existing `auto_fw_pure`
+  pattern from 0.8.0 — tracked for a future release.
+- **ipfw IPv6 path** — only the lease + interface configuration
+  ships here. Hosts running ipfw rather than pf still need to
+  hand-roll their v6 firewall rules.
+- **`route -6 get default` auto-detect** — the v4 path uses
+  `NetDetect::defaultIfaceCached` (0.8.6) to pick the egress
+  interface when `network_interface:` is unset; v6 needs the
+  same treatment paired with NPTv6 since the egress iface is
+  also where the prefix translation rule lands.
+- **Doctor IPv6 checks** — `crate doctor` doesn't yet verify
+  `network_pool6:` is parseable / aligned. The runtime catches
+  that with an ERR at first jail run; operators who want
+  upfront validation can run `crate validate` against a spec
+  with `network: auto` after setting the pool.
+- **Per-spec static v6** — `options.net.ipv6: <static-addr>`
+  still works for operators who want a specific address; the
+  pool path only kicks in when ipv6 is left as default.
+
+1051/1051 unit tests pass locally.
+
+---
+
 ## [0.8.19] — 2026-05-06
 
 Operator-controlled filesystem perms on `/var/run/crate/crated.sock`.

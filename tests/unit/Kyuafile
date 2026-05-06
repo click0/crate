@@ -65,3 +65,4 @@ atf_test_program{name="ipsec_runtime_pure_test"}
 atf_test_program{name="net_detect_pure_test"}
 atf_test_program{name="vmwrap_pure_test"}
 atf_test_program{name="socket_perms_pure_test"}
+atf_test_program{name="ip6_alloc_pure_test"}
