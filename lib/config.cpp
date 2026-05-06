@@ -54,6 +54,13 @@ static void applyYaml(Settings &s, const YAML::Node &cfg) {
   if (cfg["default_bridge"])    s.defaultBridge = cfg["default_bridge"].as<std::string>();
   if (cfg["static_mac_default"]) s.staticMacDefault = cfg["static_mac_default"].as<bool>();
   if (cfg["network_pool"])      s.networkPool = cfg["network_pool"].as<std::string>();
+  if (cfg["firewall_backend"]) {
+    auto v = cfg["firewall_backend"].as<std::string>();
+    if (v != "" && v != "pf" && v != "ipfw" && v != "none")
+      throw std::runtime_error(
+        "firewall_backend must be one of: '' (auto), 'pf', 'ipfw', 'none' — got '" + v + "'");
+    s.firewallBackend = v;
+  }
 
   if (cfg["bootstrap_method"]) s.bootstrapMethod = cfg["bootstrap_method"].as<std::string>();
 

@@ -6,6 +6,69 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.7] — 2026-05-06
+
+`firewall_backend:` config override for hybrid pf+ipfw hosts and
+operators who want explicit control over auto-fw routing.
+
+```yaml
+# crate.yml
+firewall_backend: pf       # force pf even if ipfw is also loaded
+# OR
+firewall_backend: ipfw     # force ipfw even if pf is loaded
+# OR
+firewall_backend: none     # skip auto-fw entirely; operator owns rules
+# OR
+# (omitted)                # auto-detect via kldstat (0.8.0..0.8.6 default)
+```
+
+### When this matters
+
+FreeBSD supports running both pf and ipfw simultaneously (different
+rule chains, no collision). Pre-0.8.7 if both were loaded, crate
+auto-fw silently picked pf. That's the right default but didn't
+help operators who:
+- Use ipfw+dummynet for shaping (0.7.7 throttle) and want auto-fw
+  in the same backend for visibility
+- Run pf for inbound DMZ filtering but want auto-fw isolated to ipfw
+- Want zero auto-fw because they have a custom rule generator
+
+### Implementation
+
+- `lib/config.{h,cpp}` — `Settings.firewallBackend` field; YAML
+  parser validates against `["", "pf", "ipfw", "none"]` whitelist
+  and throws on bad value
+- `lib/run.cpp` — auto-fw branch consults `cfg.firewallBackend`
+  before kldstat detection. Forced backends skip the kldstat
+  invocation entirely (small startup-time saving). `"none"` value
+  emits a LOG line and skips both pf and ipfw paths.
+
+### Defence in depth
+
+- Whitelist enforcement at config-load time. Typos like
+  `firewall_backend: pflog` fail-fast at daemon start with a
+  clear error message rather than silently falling back to
+  auto-detect.
+
+### Tests
+
+No new unit tests — the change is a 4-way switch on a string
+value (pf / ipfw / none / unset) with the validation already
+covered at YAML-parse time. Existing test suite continues to
+pass.
+
+**994/994 unit tests pass locally** (no new tests; behaviour
+change exercised by FreeBSD CI's compile path).
+
+### NOT in this release
+
+- **Per-jail firewall_backend override** in the spec. Currently
+  hostwide only. Defer until requested.
+- **`firewall_backend: nft`** for hypothetical Linux port. Not
+  applicable until Linux support lands.
+
+---
+
 ## [0.8.6] — 2026-05-06
 
 `network_interface` auto-detect via `route -4 get default`. Closes

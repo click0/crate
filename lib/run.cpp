@@ -898,15 +898,32 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
           // 0.8.2: detect firewall backend. pf preferred (matches
           // 0.8.0/0.8.1 behaviour). If only ipfw loaded, use the
           // ipfw NAT path. If neither, warn and skip.
+          //
+          // 0.8.7: operator can override via firewall_backend in
+          // crate.yml — "pf"/"ipfw" forces that path, "none" skips
+          // auto-fw entirely (operator owns pf/ipfw rules), ""
+          // keeps the kldstat-based auto-detect.
           int pfStatus = 1, ipfwStatus = 1;
-          try {
-            pfStatus   = Util::execCommandGetStatus({"/sbin/kldstat", "-n", "pf"},   "kldstat pf");
-          } catch (...) { pfStatus = 1; }
-          try {
-            ipfwStatus = Util::execCommandGetStatus({"/sbin/kldstat", "-n", "ipfw"}, "kldstat ipfw");
-          } catch (...) { ipfwStatus = 1; }
+          if (cfg.firewallBackend == "pf") {
+            pfStatus = 0;  // force pf path
+          } else if (cfg.firewallBackend == "ipfw") {
+            ipfwStatus = 0;  // force ipfw path
+          } else if (cfg.firewallBackend == "none") {
+            // Skip both branches; the existing else clause warns.
+          } else {
+            // "" or unset — auto-detect via kldstat.
+            try {
+              pfStatus   = Util::execCommandGetStatus({"/sbin/kldstat", "-n", "pf"},   "kldstat pf");
+            } catch (...) { pfStatus = 1; }
+            try {
+              ipfwStatus = Util::execCommandGetStatus({"/sbin/kldstat", "-n", "ipfw"}, "kldstat ipfw");
+            } catch (...) { ipfwStatus = 1; }
+          }
 
-          if (pfStatus == 0) {
+          if (cfg.firewallBackend == "none") {
+            LOG("auto-fw: firewall_backend=none in crate.yml; "
+                "skipping SNAT/rdr auto-rules per operator request")
+          } else if (pfStatus == 0) {
             auto anchor = std::string("crate/") + jailXname;
             try {
               PfctlOps::addRules(anchor, rule);

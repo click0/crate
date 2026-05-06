@@ -41,6 +41,15 @@ struct Settings {
   // `network_pool: 10.66.0.0/24` in /usr/local/etc/crate.yml or
   // ~/.config/crate/crate.yml.
   std::string networkPool;
+  // 0.8.7: explicit firewall backend choice for auto-fw. Accepted
+  // values:
+  //   ""     — auto-detect via kldstat (pf preferred, then ipfw)
+  //            [pre-0.8.7 behaviour]
+  //   "pf"   — force pf path even if ipfw is also loaded
+  //   "ipfw" — force ipfw path even if pf is also loaded
+  //   "none" — never auto-load fw rules; operator owns pf/ipfw
+  // Default empty — back-compat with 0.8.0..0.8.6.
+  std::string firewallBackend;
 
   // Base system
   std::string bootstrapMethod;    // default: "base_txz"
