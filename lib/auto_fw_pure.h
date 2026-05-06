@@ -66,4 +66,39 @@ std::string formatSnatRule(const std::string &externalIface,
 std::string formatSnatAnchorLine(const std::string &externalIface,
                                  const std::string &jailAddr);
 
+// --- Port-forward (rdr) rules (0.8.1) ---
+
+// Validate the proto field for an rdr rule. Returns "" on success,
+// human-readable error otherwise. Accepted: "tcp", "udp".
+std::string validateProto(const std::string &proto);
+
+// Validate a port number for an rdr rule (1..65535). Returns "" on
+// success.
+std::string validatePort(unsigned port);
+
+// Format a single rdr rule. The host-side and jail-side ports can
+// be either single ports (a == b) or ranges (a < b). Output:
+//
+//   rdr on em0 inet proto tcp from any to (em0) port 8080 -> 10.66.0.5 port 80
+//   rdr on em0 inet proto tcp from any to (em0) port 8080:8090 -> 10.66.0.5 port 80:90
+//
+// Range/single decision is per-side: the spec parser produces
+// `pair<unsigned,unsigned>` host + jail tuples where first==second
+// for a single port and first<second for a range. We mirror that
+// in the rule output by switching to "X:Y" syntax only when needed.
+//
+// Caller is responsible for invoking the validators above first.
+std::string formatRdrRule(const std::string &externalIface,
+                          const std::string &proto,
+                          unsigned hostPortLo, unsigned hostPortHi,
+                          const std::string &jailAddr,
+                          unsigned jailPortLo, unsigned jailPortHi);
+
+// Same with trailing newline for clean line concatenation.
+std::string formatRdrAnchorLine(const std::string &externalIface,
+                                const std::string &proto,
+                                unsigned hostPortLo, unsigned hostPortHi,
+                                const std::string &jailAddr,
+                                unsigned jailPortLo, unsigned jailPortHi);
+
 } // namespace AutoFwPure

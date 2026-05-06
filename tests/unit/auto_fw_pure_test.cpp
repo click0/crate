@@ -6,9 +6,13 @@
 
 #include <string>
 
+using AutoFwPure::formatRdrAnchorLine;
+using AutoFwPure::formatRdrRule;
 using AutoFwPure::formatSnatAnchorLine;
 using AutoFwPure::formatSnatRule;
 using AutoFwPure::validateExternalIface;
+using AutoFwPure::validatePort;
+using AutoFwPure::validateProto;
 using AutoFwPure::validateRuleAddress;
 
 // ----------------------------------------------------------------------
@@ -126,6 +130,97 @@ ATF_TEST_CASE_BODY(anchor_line_starts_with_rule) {
   ATF_REQUIRE(line.find("nat on em0 inet from 10.66.0.5") == 0u);
 }
 
+// ----------------------------------------------------------------------
+// Proto + port validators (0.8.1 — port-forward)
+// ----------------------------------------------------------------------
+
+ATF_TEST_CASE_WITHOUT_HEAD(proto_typical);
+ATF_TEST_CASE_BODY(proto_typical) {
+  ATF_REQUIRE_EQ(validateProto("tcp"), std::string());
+  ATF_REQUIRE_EQ(validateProto("udp"), std::string());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(proto_invalid);
+ATF_TEST_CASE_BODY(proto_invalid) {
+  ATF_REQUIRE(!validateProto("").empty());
+  ATF_REQUIRE(!validateProto("TCP").empty());     // case-sensitive — pf lowercase
+  ATF_REQUIRE(!validateProto("icmp").empty());    // not supported in v1
+  ATF_REQUIRE(!validateProto("tcp;rm").empty());  // injection
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(port_typical);
+ATF_TEST_CASE_BODY(port_typical) {
+  ATF_REQUIRE_EQ(validatePort(80),    std::string());
+  ATF_REQUIRE_EQ(validatePort(443),   std::string());
+  ATF_REQUIRE_EQ(validatePort(8080),  std::string());
+  ATF_REQUIRE_EQ(validatePort(65535), std::string());
+  ATF_REQUIRE_EQ(validatePort(1),     std::string());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(port_invalid);
+ATF_TEST_CASE_BODY(port_invalid) {
+  ATF_REQUIRE(!validatePort(0).empty());           // port 0 reserved
+  ATF_REQUIRE(!validatePort(65536).empty());       // > 16-bit
+  ATF_REQUIRE(!validatePort(100000).empty());
+}
+
+// ----------------------------------------------------------------------
+// formatRdrRule — single port and range forms
+// ----------------------------------------------------------------------
+
+ATF_TEST_CASE_WITHOUT_HEAD(rdr_single_port_shape);
+ATF_TEST_CASE_BODY(rdr_single_port_shape) {
+  // Single port both sides — emit "port 8080" not "port 8080:8080".
+  ATF_REQUIRE_EQ(formatRdrRule("em0", "tcp", 8080, 8080,
+                               "10.66.0.5", 80, 80),
+                 std::string("rdr on em0 inet proto tcp from any to (em0) "
+                             "port 8080 -> 10.66.0.5 port 80"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(rdr_range_both_sides);
+ATF_TEST_CASE_BODY(rdr_range_both_sides) {
+  ATF_REQUIRE_EQ(formatRdrRule("em0", "udp", 5000, 5099,
+                               "10.66.0.7", 5000, 5099),
+                 std::string("rdr on em0 inet proto udp from any to (em0) "
+                             "port 5000:5099 -> 10.66.0.7 port 5000:5099"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(rdr_range_host_single_jail);
+ATF_TEST_CASE_BODY(rdr_range_host_single_jail) {
+  // Asymmetric: host range -> single jail port. pf accepts both
+  // forms; the rule still parses.
+  auto r = formatRdrRule("em0", "tcp", 8000, 8010,
+                         "10.66.0.5", 80, 80);
+  ATF_REQUIRE(r.find("port 8000:8010 ->") != std::string::npos);
+  ATF_REQUIRE(r.find("port 80")           != std::string::npos);
+  ATF_REQUIRE(r.find("port 80:80")        == std::string::npos);  // collapsed
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(rdr_uses_iface_token_for_dest);
+ATF_TEST_CASE_BODY(rdr_uses_iface_token_for_dest) {
+  // "(em0)" with parens — match whatever address is currently on
+  // em0. Robust against DHCP lease changes.
+  auto r = formatRdrRule("em0", "tcp", 8080, 8080,
+                         "10.66.0.5", 80, 80);
+  ATF_REQUIRE(r.find("to (em0) port") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(rdr_inet_qualifier_present);
+ATF_TEST_CASE_BODY(rdr_inet_qualifier_present) {
+  // Same IPv4-only invariant as SNAT.
+  auto r = formatRdrRule("em0", "tcp", 8080, 8080,
+                         "10.66.0.5", 80, 80);
+  ATF_REQUIRE(r.find(" inet proto tcp ") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(rdr_anchor_line_has_trailing_newline);
+ATF_TEST_CASE_BODY(rdr_anchor_line_has_trailing_newline) {
+  auto line = formatRdrAnchorLine("em0", "tcp", 8080, 8080,
+                                   "10.66.0.5", 80, 80);
+  ATF_REQUIRE_EQ(line.back(), '\n');
+  ATF_REQUIRE(line.find("rdr on em0") == 0u);
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, iface_typical_accepted);
   ATF_ADD_TEST_CASE(tcs, iface_invalid_rejected);
@@ -138,4 +233,14 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, snat_rule_uses_iface_token);
   ATF_ADD_TEST_CASE(tcs, anchor_line_has_trailing_newline);
   ATF_ADD_TEST_CASE(tcs, anchor_line_starts_with_rule);
+  ATF_ADD_TEST_CASE(tcs, proto_typical);
+  ATF_ADD_TEST_CASE(tcs, proto_invalid);
+  ATF_ADD_TEST_CASE(tcs, port_typical);
+  ATF_ADD_TEST_CASE(tcs, port_invalid);
+  ATF_ADD_TEST_CASE(tcs, rdr_single_port_shape);
+  ATF_ADD_TEST_CASE(tcs, rdr_range_both_sides);
+  ATF_ADD_TEST_CASE(tcs, rdr_range_host_single_jail);
+  ATF_ADD_TEST_CASE(tcs, rdr_uses_iface_token_for_dest);
+  ATF_ADD_TEST_CASE(tcs, rdr_inet_qualifier_present);
+  ATF_ADD_TEST_CASE(tcs, rdr_anchor_line_has_trailing_newline);
 }

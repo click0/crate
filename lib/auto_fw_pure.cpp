@@ -58,4 +58,54 @@ std::string formatSnatAnchorLine(const std::string &externalIface,
   return formatSnatRule(externalIface, jailAddr) + "\n";
 }
 
+// --- Port-forward (rdr) ---
+
+std::string validateProto(const std::string &proto) {
+  if (proto.empty()) return "proto is empty";
+  if (proto != "tcp" && proto != "udp")
+    return "proto must be 'tcp' or 'udp', got '" + proto + "'";
+  return "";
+}
+
+std::string validatePort(unsigned port) {
+  if (port == 0)     return "port 0 is invalid";
+  if (port > 65535)  return "port " + std::to_string(port) + " > 65535";
+  return "";
+}
+
+namespace {
+
+std::string formatPortToken(unsigned lo, unsigned hi) {
+  if (lo == hi) return std::to_string(lo);
+  std::ostringstream o;
+  o << lo << ":" << hi;
+  return o.str();
+}
+
+} // anon
+
+std::string formatRdrRule(const std::string &externalIface,
+                          const std::string &proto,
+                          unsigned hostPortLo, unsigned hostPortHi,
+                          const std::string &jailAddr,
+                          unsigned jailPortLo, unsigned jailPortHi) {
+  std::ostringstream o;
+  o << "rdr on " << externalIface
+    << " inet proto " << proto
+    << " from any to (" << externalIface << ")"
+    << " port " << formatPortToken(hostPortLo, hostPortHi)
+    << " -> " << jailAddr
+    << " port " << formatPortToken(jailPortLo, jailPortHi);
+  return o.str();
+}
+
+std::string formatRdrAnchorLine(const std::string &externalIface,
+                                const std::string &proto,
+                                unsigned hostPortLo, unsigned hostPortHi,
+                                const std::string &jailAddr,
+                                unsigned jailPortLo, unsigned jailPortHi) {
+  return formatRdrRule(externalIface, proto, hostPortLo, hostPortHi,
+                       jailAddr, jailPortLo, jailPortHi) + "\n";
+}
+
 } // namespace AutoFwPure

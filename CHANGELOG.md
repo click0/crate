@@ -6,6 +6,99 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.1] — 2026-05-06
+
+Auto port-forward (pf rdr) for `mode: auto` jails — the second
+slice of network DX Phase 2 (after 0.8.0's SNAT auto-rule).
+
+When the spec declares inbound TCP/UDP ports, `crate run` now
+emits one `rdr` rule per port (or range) into the jail's pf
+anchor, alongside the SNAT rule from 0.8.0:
+
+```yaml
+options:
+  net:
+    mode: auto
+    inbound:
+      tcp:
+        - { from: 8080,       to: 80 }
+        - { from: 5000-5099,  to: 5000-5099 }
+      udp:
+        - { from: 53, to: 53 }
+```
+
+becomes (per-jail anchor `crate/<jailXname>`):
+
+```
+nat on em0 inet from 10.66.0.5 to ! 10.66.0.5 -> (em0)
+rdr on em0 inet proto tcp from any to (em0) port 8080 -> 10.66.0.5 port 80
+rdr on em0 inet proto tcp from any to (em0) port 5000:5099 -> 10.66.0.5 port 5000:5099
+rdr on em0 inet proto udp from any to (em0) port 53 -> 10.66.0.5 port 53
+```
+
+Operator does NOT need to write any pf.conf rdr rules. Same anchor
+as SNAT, so cleanup is automatic via the existing
+`destroyPfAnchor` `RunAtEnd`.
+
+### Format details
+
+- Single port form (`port 8080`) when host range collapses to one
+  port (lo == hi); range form (`port 8080:8090`) otherwise. Same
+  for the jail side independently — asymmetric host-range to
+  jail-single is also supported (pf accepts both).
+- `(<iface>)` parens for the destination match — robust against
+  DHCP changes on the host's external interface.
+- `inet` qualifier confines to IPv4.
+
+### Defence in depth
+
+- **proto whitelisted**: `tcp` or `udp` only. `icmp` and others
+  rejected (would need different rule shape; defer).
+- **port range 1..65535**: port 0 rejected.
+- **silent skip on validation failure**: a malformed port pair
+  is dropped without aborting the run; the rest of the rules
+  still load. The spec parser already validates port ranges
+  upstream, so this is belt-and-braces.
+
+### Implementation
+
+- `lib/auto_fw_pure.{h,cpp}` — extended with:
+  - `validateProto` — whitelist `tcp` / `udp`
+  - `validatePort` — 1..65535
+  - `formatRdrRule` / `formatRdrAnchorLine` — per-rule formatter
+    with smart range-vs-single output
+- `lib/run.cpp` — extends the SNAT auto-fw block: iterate
+  `optionNet->inboundPortsTcp` and `inboundPortsUdp`, append
+  rdr lines to the same anchor text loaded via
+  `PfctlOps::addRules`.
+
+### Tests
+
+`tests/unit/auto_fw_pure_test.cpp` extended with **10 new ATF cases**:
+
+- `proto_typical` / `proto_invalid` — whitelist + injection guard
+- `port_typical` / `port_invalid` — 0 reserved, > 65535 rejected
+- `rdr_single_port_shape` — `port 8080` form (no `:8080:8080`)
+- `rdr_range_both_sides` — `port 5000:5099 -> ... port 5000:5099`
+- `rdr_range_host_single_jail` — asymmetric form, range collapsed
+  to single on the jail side
+- `rdr_uses_iface_token_for_dest` — `to (em0)` parens pinned
+- `rdr_inet_qualifier_present` — `inet proto tcp` invariant
+- `rdr_anchor_line_has_trailing_newline` — concatenation contract
+
+**968/968 unit tests pass locally** (958 prior + 10 new).
+
+### NOT in this release (Phase 2 continued / Phase 3)
+
+- **ipfw alternative** — for operators who use ipfw instead of
+  pf. Different rule shape (`ipfw fwd` for port-forward,
+  `ipfw nat` for SNAT). Tracked as 0.8.2.
+- **icmp passthrough** — needs separate pf rule type. Defer.
+- **IPv6 rdr** — currently IPv4-only. Defer until 0.8.x adds
+  IPv6 pool support.
+
+---
+
 ## [0.8.0] — 2026-05-06
 
 **Major version bump.** First release on the `0.8.0` branch.

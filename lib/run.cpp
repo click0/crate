@@ -819,6 +819,35 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
           if (auto e = AutoFwPure::validateRuleAddress(ipBare); !e.empty())
             ERR("auto-fw: jail IP failed validation: " << e)
           auto rule = AutoFwPure::formatSnatAnchorLine(cfg.networkInterface, ipBare);
+
+          // 0.8.1: also emit per-port rdr rules from the spec's
+          // inbound: declarations. Same anchor as SNAT — both
+          // flushed together at jail teardown.
+          for (const auto &[host, jail] : optionNet->inboundPortsTcp) {
+            if (AutoFwPure::validatePort(host.first).empty()
+                && AutoFwPure::validatePort(host.second).empty()
+                && AutoFwPure::validatePort(jail.first).empty()
+                && AutoFwPure::validatePort(jail.second).empty()) {
+              rule += AutoFwPure::formatRdrAnchorLine(
+                cfg.networkInterface, "tcp",
+                host.first, host.second,
+                ipBare,
+                jail.first, jail.second);
+            }
+          }
+          for (const auto &[host, jail] : optionNet->inboundPortsUdp) {
+            if (AutoFwPure::validatePort(host.first).empty()
+                && AutoFwPure::validatePort(host.second).empty()
+                && AutoFwPure::validatePort(jail.first).empty()
+                && AutoFwPure::validatePort(jail.second).empty()) {
+              rule += AutoFwPure::formatRdrAnchorLine(
+                cfg.networkInterface, "udp",
+                host.first, host.second,
+                ipBare,
+                jail.first, jail.second);
+            }
+          }
+
           auto anchor = std::string("crate/") + jailXname;
           try {
             PfctlOps::addRules(anchor, rule);
