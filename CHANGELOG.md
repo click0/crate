@@ -6,6 +6,86 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.10] — 2026-05-06
+
+`options.ipsec.conf:` — auto-install strongSwan conn snippet
+into `/usr/local/etc/strongswan.d/` at jail start, remove on
+teardown. Operator no longer pre-loads the conn into ipsec.conf.
+
+### Spec
+
+```yaml
+options:
+  ipsec:
+    conn: my-tunnel-1
+    conf: /etc/crate/ipsec/my-tunnel-1.conf   # NEW (0.8.10)
+```
+
+### Lifecycle
+
+| When | What |
+|---|---|
+| Jail start | Copy `<conf>` → `/usr/local/etc/strongswan.d/crate-<jail>.conf`; `ipsec reread`; `ipsec auto --add/--up <conn>` (existing 0.8.4 behaviour) |
+| Jail teardown | `ipsec auto --down/--delete <conn>`; remove the installed file; `ipsec reread` (cleanup) |
+
+`conf:` is optional — if omitted, behaviour matches 0.8.4 (operator
+preconfigures the conn). If specified, the file is auto-deployed.
+
+### Pairs naturally with `crate vpn ipsec render-conf`
+
+```sh
+# operator workflow:
+crate vpn ipsec render-conf my-tunnel.yml > /etc/crate/ipsec/my-tunnel-1.conf
+# spec.yml then references it:
+#   options:
+#     ipsec:
+#       conn: my-tunnel-1
+#       conf: /etc/crate/ipsec/my-tunnel-1.conf
+crate run -f my-jail.crate
+```
+
+`render-conf` (0.6.10) writes the strongSwan conn block; `conf:`
+(this release) auto-deploys it. Operator does both steps once;
+crate handles the lifecycle from there.
+
+### Implementation
+
+- `lib/spec.h` — `IpsecOptDetails::confPath` field
+- `lib/spec.cpp` — `options.ipsec.conf` parser
+- `lib/run.cpp` — at jail start (after WireGuard, before bringing
+  conn up): if `confPath` set, validate file exists, copy to
+  `/usr/local/etc/strongswan.d/crate-<jail>.conf`, invoke
+  `ipsec reread`. `RunAtEnd ipsecConfCleanup` removes the file
+  + reread on teardown.
+
+### Defence in depth
+
+- File-exists check before copy — surfaces operator typos at jail
+  start with clear error rather than silently leaving the conn
+  unloaded.
+- `ipsec reread` failure is soft-fail (warn, continue) — same
+  posture as wg-quick errors. Better to start the jail and let
+  the operator `crate doctor` later than block on a strongSwan
+  hiccup.
+
+### Tests
+
+No new unit tests — the change is runtime I/O (file copy + shell
+exec), not pure logic. Existing IPsec tests cover the conn-name
+side. **994/994 unit tests pass locally**.
+
+### NOT in this release
+
+- **Conn name auto-derive** from spec — currently operator must
+  match the conn name in conn snippet to the `conn:` value. Auto-
+  derive (parse the snippet's `conn <name>` line) is a future
+  ergonomics win.
+- **Multi-conn install** — currently one conn per jail. If
+  operators want N conns, they pre-load them all into
+  ipsec.conf and reference one by name.
+
+---
+
 ## [0.8.9] — 2026-05-06
 
 `crate doctor` now verifies auto-fw rules are actually loaded for

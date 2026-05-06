@@ -398,9 +398,41 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // and `--down/--delete` on teardown. Operator preconfigures the
   // strongSwan conn (via ipsec.conf or include); we only toggle it
   // around the jail's lifetime.
+  //
+  // 0.8.10: optional `conf:` field auto-installs the conn snippet
+  // into /usr/local/etc/strongswan.d/crate-<jail>.conf at jail
+  // start (then `ipsec reread`) and removes it on teardown.
   RunAtEnd ipsecDownAtEnd;
+  RunAtEnd ipsecConfCleanup;
   if (auto *ip = spec.optionIpsec()) {
     if (IpsecRuntimePure::isEnabled(ip->connName)) {
+      // 0.8.10: install conf snippet first if provided.
+      std::string installedPath;
+      if (!ip->confPath.empty()) {
+        if (!Util::Fs::fileExists(ip->confPath))
+          ERR("options/ipsec/conf: file not found: " << ip->confPath)
+        installedPath = "/usr/local/etc/strongswan.d/crate-"
+                      + nameComponent + ".conf";
+        Util::Fs::copyFile(ip->confPath, installedPath);
+        LOG("ipsec: installed conn snippet at " << installedPath)
+        try {
+          Util::execCommand({"/usr/local/sbin/ipsec", "reread"},
+                            "ipsec reread");
+        } catch (const std::exception &ex) {
+          std::cerr << rang::fg::yellow
+                    << "ipsec: reread failed: " << ex.what()
+                    << " — strongSwan may not pick up the new conn"
+                    << rang::style::reset << std::endl;
+        }
+        ipsecConfCleanup.reset([installedPath]() {
+          try { Util::Fs::unlink(installedPath); } catch (...) {}
+          try {
+            Util::execCommand({"/usr/local/sbin/ipsec", "reread"},
+                              "ipsec reread (cleanup)");
+          } catch (...) {}
+        });
+      }
+
       LOG("ipsec: adding + bringing up conn '" << ip->connName << "'")
       Util::execCommand(IpsecRuntimePure::buildAddArgv(ip->connName),
                         "ipsec auto --add");

@@ -717,12 +717,16 @@ static Spec parseSpecFromNode(YAML::Node top) {
               // 0.8.4: strongSwan conn name. Operator pre-loads the
               // conn into ipsec.conf (or an include); runtime brings
               // it up at jail start and tears it down on teardown.
+              // 0.8.10: optional `conf:` field — path to a conn
+              // snippet on host; auto-installed into strongswan.d/.
               optVal = std::make_shared<Spec::IpsecOptDetails>();
               if (soptVal.IsMap()) {
                 auto ip = static_cast<Spec::IpsecOptDetails*>(optVal.get());
                 for (auto ipOpt : soptVal) {
                   if (AsString(ipOpt.first) == "conn")
                     ip->connName = AsString(ipOpt.second);
+                  else if (AsString(ipOpt.first) == "conf")
+                    ip->confPath = AsString(ipOpt.second);
                   else
                     ERR("the invalid value options/ipsec/" << ipOpt.first << " supplied")
                 }
