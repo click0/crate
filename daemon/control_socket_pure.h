@@ -183,6 +183,23 @@ std::string renderPatchOkJson(const ResourcesPatch &applied);
 // HTTP status code that should accompany a Decision.
 int httpStatusFor(Decision d);
 
+// Stable short label for an Action — used as part of the rate-limit
+// bucket key so each action class (list / get / stats / patch) gets
+// its own counter per peer uid. Matches the route's "verb" rather
+// than its URL path, so per-jail granularity doesn't fragment the
+// counter into thousands of buckets.
+//   ListContainers     -> "list"
+//   GetContainer       -> "get"
+//   GetContainerStats  -> "stats"
+//   PatchResources     -> "patch"
+//   Unknown            -> "unknown"
+const char *actionLabel(Action a);
+
+// True if this action is a state-changing one (PATCH today; future:
+// any method that mutates server state). Caller picks a tighter
+// rate-limit cap for these.
+bool actionIsMutating(Action a);
+
 // Filter a vector of pool names against the socket's pools list:
 // returns the input pools that are visible to the socket. "*" in
 // socketPools means "everything". Used by GET /containers handlers

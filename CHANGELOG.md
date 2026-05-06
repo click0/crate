@@ -6,6 +6,117 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.15] — 2026-05-06
+
+Rate limiting on control sockets. The 0.7.10/0.7.11 control-socket
+plane shipped without one, so a buggy GUI/tray app polling `/v1/control/
+containers/<n>/stats` in a tight loop could spin crated up. This
+release closes the gap with a per-uid + per-action token bucket
+(same per-second-counter algorithm as the existing main-API limiter
+in `daemon/routes.cpp`), factored into a reusable module so both
+planes can share it.
+
+### Limits
+
+| Action class | Cap (per second per peer-uid+gid) |
+|---|---|
+| GET (list, get, stats)            | **100 req/s** |
+| PATCH (resources)                 | **10 req/s** |
+
+Same caps as the main API's `RATE_LIMIT_READ` / `RATE_LIMIT_MUTATING`,
+intentionally — operators don't have to learn two models.
+
+### Bucket key
+
+```
+uid:<peerUid>|gid:<peerGid>|<actionLabel>
+```
+
+`actionLabel` is one of `list`, `get`, `stats`, `patch` — coarse
+enough to not fragment the counter into thousands of buckets per
+container; fine enough that a runaway PATCH loop doesn't starve out
+GET polling and vice versa.
+
+Multiple users in the same operator group share a counter — that's
+intentional. A runaway tray app deserves the same throttle as a
+runaway script run by the operator beside them; the unit of trust
+is the group, matching how the rest of the control-socket plane
+authenticates.
+
+### Behaviour on cap
+
+- Response: `HTTP 429 Too Many Requests`
+- Body: `{"error": "rate limit exceeded; retry in 1s"}`
+- The retry-after hint is always `1` — the bucket flips at the next
+  wall second, and a longer hint would mislead well-behaved clients.
+
+### Implementation
+
+- `daemon/rate_limit_pure.{h,cpp}` — the pure check function:
+  - `Bucket {counter, second}` state struct
+  - `Decision check(prev, now, max)` — pure: takes prior state +
+    wall second + cap, returns new state + allow/deny
+  - `retryAfterSeconds()` — pinned at 1 (see above)
+  - Pathological inputs handled: `max <= 0` treated as disabled
+    (always allow); non-monotonic clock (operator running ntpd /
+    stepping clock backward) still resets cleanly.
+- `daemon/rate_limit.{h,cpp}` — runtime: `std::mutex` +
+  `std::unordered_map<std::string, Bucket>` shared store with
+  `check(key, max)` that walks one round of the pure module.
+  Constants `kRead = 100`, `kMutating = 10`.
+- `daemon/control_socket_pure.{h,cpp}` — extended:
+  - `actionLabel(Action)` — `list` / `get` / `stats` / `patch`
+  - `actionIsMutating(Action)` — only `PatchResources` returns true
+  - `reasonForStatus(429)` — `"Too Many Requests"`
+- `daemon/control_socket.cpp::handleConnection` — between authorize
+  and dispatch, run `RateLimit::check(<bucket-key>, cap)`. On deny,
+  emit a 429 and close.
+
+### Tests
+
+`tests/unit/rate_limit_pure_test.cpp` — **10 ATF cases**:
+
+- `fresh_bucket_is_allowed` — empty sentinel `{0, 0}` allows the
+  first request
+- `below_cap_increments` — counter increments on allow
+- `at_cap_last_request_allowed` — exactly `max` requests in a
+  second succeed (off-by-one guard)
+- `above_cap_denied` — request beyond cap denied
+- `many_denies_dont_drift_counter` — flood of post-cap requests
+  doesn't push counter past `max` (telemetry invariant)
+- `second_rollover_resets_counter` — wall-second tick resets to 1
+- `non_monotonic_clock_still_resets` — bucket second "in the future"
+  also resets (operator clock-step survives)
+- `zero_max_treated_as_disabled` — typo flipping cap to 0/-N is
+  always-allow, not always-deny (don't brick the daemon)
+- `retry_after_is_one_second` — pinned constant
+- `allows_exactly_max_requests_per_second` — property: of `max+5`
+  requests in a single second, exactly `max` succeed and 5 are denied
+
+`tests/unit/control_socket_pure_test.cpp` — **3 new ATF cases**:
+
+- `action_labels_distinct` — collision-free action labels (would
+  lump unrelated actions into one bucket)
+- `action_labels_stable` — exact strings pinned (operator alerts /
+  log scrapers depend on them)
+- `action_is_mutating_only_for_patch` — only PATCH classified as
+  mutating; future actions default to non-mutating until explicitly
+  added
+
+**921/921 unit tests pass locally** (908 from prior + 13 new).
+
+### Followup
+
+- Refactor `daemon/routes.cpp::checkRateLimit` to call into the
+  shared `RateLimit::check` — pure mechanical no-op refactor,
+  deferred so the `0.7.15` release stays focused on the
+  control-socket gap.
+- Config-driven caps: make `kRead`/`kMutating` overridable in
+  crated.conf. Defer until at least one operator reports needing
+  it; current values are conservative.
+
+---
+
 ## [0.7.14] — 2026-05-06
 
 `crated` Capsicum sandbox — per-fd `cap_rights_limit(2)` on control-socket

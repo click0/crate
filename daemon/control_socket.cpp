@@ -35,6 +35,8 @@
 
 #include "control_socket.h"
 #include "control_socket_pure.h"
+#include "rate_limit.h"
+#include "rate_limit_pure.h"
 #include "sandbox.h"
 #include "../lib/jail_query.h"
 #include "../lib/pool_pure.h"
@@ -326,6 +328,30 @@ void handleConnection(int connFd,
   in.poolSeparator     = poolSeparator;
 
   auto d = ControlSocketPure::authorize(in);
+  if (d == ControlSocketPure::Decision::Allow) {
+    // Rate-limit (0.7.15): per-uid + per-action bucket. PATCH gets
+    // the tighter `kMutating` cap; reads use `kRead`. Key includes
+    // the unix-group gid so multiple users in the same operator
+    // group share a bucket — that's intentional: a runaway tray
+    // app deserves the same throttle as a runaway script run by
+    // the operator beside them.
+    auto cap = ControlSocketPure::actionIsMutating(route.action)
+                 ? RateLimit::kMutating : RateLimit::kRead;
+    std::string key = "uid:" + std::to_string(peerUid)
+                    + "|gid:" + std::to_string(peerGid)
+                    + "|"     + ControlSocketPure::actionLabel(route.action);
+    if (!RateLimit::check(key, cap)) {
+      auto r = ControlSocketPure::buildHttpResponse(
+        429,
+        ControlSocketPure::renderErrorJson(
+          "rate limit exceeded; retry in "
+          + std::to_string(RateLimitPure::retryAfterSeconds())
+          + "s"));
+      writeAll(connFd, r);
+      ::close(connFd);
+      return;
+    }
+  }
   if (d != ControlSocketPure::Decision::Allow) {
     std::string msg;
     switch (d) {
