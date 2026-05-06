@@ -23,8 +23,12 @@ public:
     // Reference to named network from system config (crate.yml)
     std::string networkName;
 
-    // Network mode: nat (default), bridge, passthrough, netgraph
-    enum class Mode { Nat, Bridge, Passthrough, Netgraph };
+    // Network mode: nat (default), bridge, passthrough, netgraph,
+    // or auto (0.7.18 — expands to bridge mode with sensible
+    // defaults during preprocess: bridgeIface=Settings.defaultBridge,
+    // autoCreateBridge=true, ipMode=Auto so 0.7.17's pool allocator
+    // hands out an IP).
+    enum class Mode { Nat, Bridge, Passthrough, Netgraph, Auto };
     Mode mode = Mode::Nat;
 
     // NAT mode (existing)

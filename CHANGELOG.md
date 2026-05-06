@@ -6,6 +6,99 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.18] — 2026-05-06
+
+`mode: auto` spec shortcut — single-line replacement of the
+`options.net.{...}` boilerplate for the typical bridged-jail
+case. Operators now write:
+
+```yaml
+options:
+  net:
+    mode: auto
+```
+
+instead of:
+
+```yaml
+options:
+  net:
+    mode: bridge
+    bridge: bridge0
+    auto_create_bridge: true
+    # ip: omitted = ipMode=Auto = pool allocation
+```
+
+### Expansion
+
+`mode: auto` is recognised at parse time and expanded during
+`Spec::preprocess()` to:
+
+| Field             | Value                                                     |
+|-------------------|-----------------------------------------------------------|
+| `mode`            | `Bridge`                                                  |
+| `bridgeIface`     | `Settings.defaultBridge` if set, else `crate0`            |
+| `autoCreateBridge`| `true`                                                    |
+| `ipMode`          | unchanged (default `Auto`, so 0.7.17's pool allocator hands out an IP) |
+
+If the operator overrides `bridge:`, `auto_create_bridge:`, or
+`ip:` alongside `mode: auto`, the explicit values win — the
+shortcut only fills in defaults that aren't already set.
+
+### Practical effect
+
+Combined with 0.7.17's `network_pool` config:
+
+```yaml
+# /usr/local/etc/crate.yml (operator-written, once)
+network_pool: 10.66.0.0/24
+default_bridge: bridge0   # optional, falls back to crate0
+
+# spec.yml (per-jail, minimal)
+options:
+  net:
+    mode: auto
+```
+
+A fresh `crate run` now: creates `bridge0` if missing, allocates
+the next free IP from `10.66.0.0/24`, configures the bridge, and
+runs the jail. No pf.conf / ipfw editing for routine desktop-app
+jails; pre-0.7.17 specs continue to work unchanged.
+
+### Implementation
+
+- `lib/spec.h` — `Mode::Auto` enum value
+- `lib/spec.cpp` — parser branch (`modeStr == "auto"` → `Mode::Auto`)
+  + preprocess expansion (Auto → Bridge with sensible defaults)
+
+The shortcut is intentionally tiny — the heavy lifting (pool
+allocator, lease store, atomic file ops) was done in 0.7.17.
+This release is the ergonomics layer on top.
+
+### Tests
+
+No new unit tests added for this small ergonomics shortcut —
+the change touches three functions and is structurally tiny.
+FreeBSD CI exercises the full preprocess + jail-create path.
+
+**947/947 unit tests pass locally** (no new tests; existing
+spec parser + preprocess tests continue to pass with the new
+enum value + branch).
+
+### NOT in this release (future Phase 2 / Phase 3)
+
+- **SNAT auto-rule generation** — a `pf` or `ipfw` rule for the
+  jail's outbound traffic. Detect which firewall is loaded; add
+  rule on `crate run`; remove on teardown.
+- **Port-forward auto-rules** — generate `rdr` rules from the
+  spec's `inbound:` declaration. Same lifecycle as SNAT.
+- **IPv6 pool allocation** — IPv4-only in 0.7.17/0.7.18. A
+  separate `network_pool6` field for ULA / GUA pools.
+- **Pool reservation in passthrough/netgraph modes** — currently
+  bridge-only.
+
+---
+
 ## [0.7.17] — 2026-05-06
 
 Auto-IP allocation for `IpMode::Auto` bridge mode (Phase 1 of
