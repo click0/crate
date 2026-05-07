@@ -7,6 +7,7 @@
 #include "jail_query.h"
 #include "lifecycle_pure.h"
 #include "pathnames.h"
+#include "run_jail.h"
 #include "util.h"
 #include "err.h"
 
@@ -224,6 +225,39 @@ bool statsCrate(const Args &args) {
       std::cout << "  Read:  " << humanBytes(safeStoull(usage["readbps"])) << "/s" << std::endl;
     if (usage.count("writebps"))
       std::cout << "  Write: " << humanBytes(safeStoull(usage["writebps"])) << "/s" << std::endl;
+  }
+
+  // 0.8.33: --rctl-pressure renders a per-resource usage% column
+  // for every RCTL deny rule on this jail. Uses the in-memory
+  // usage + limits maps already fetched above (see line ~70 / ~92)
+  // so no additional rctl(8) fork+exec — RunJail::getRctlUsagePercent
+  // takes the prefetched maps as optional pointer args (0.8.33
+  // signature extension). Operators run this when they want to
+  // see "how close is the jail to its caps" before running
+  // `crate retune`.
+  //
+  // RCTL resources we surface: the union of operator-set deny rules
+  // (from `limits`) — only those resources where a limit is
+  // configured make sense to display as a percentage. Pre-0.8.33
+  // there was no way to see this short of `rctl -l` + manual maths.
+  if (args.statsRctlPressure && !limits.empty()) {
+    std::cout << std::endl << "RCTL pressure (usage / limit):" << std::endl;
+    // Stable order: alphabetical by resource name so repeated runs
+    // produce identical output (operator can diff snapshots).
+    for (const auto &kv : limits) {
+      const auto &resource = kv.first;
+      int pct = RunJail::getRctlUsagePercent(jail->jid, resource,
+                                             &usage, &limits);
+      if (pct < 0) continue;   // no usage data for this resource
+      // Highlight pressure: yellow at >=70%, red at >=90%.
+      const char *colour = "";
+      if (pct >= 90)      colour = "\x1b[31m";   // red
+      else if (pct >= 70) colour = "\x1b[33m";   // yellow
+      const char *reset  = (pct >= 70) ? "\x1b[0m" : "";
+      std::cout << "  " << std::left << std::setw(16) << resource
+                << std::right << std::setw(4) << colour << pct << "%"
+                << reset << std::endl;
+    }
   }
 
   return true;

@@ -261,49 +261,81 @@ bool wasKilledByRctl(int jid, int exitStatus) {
 // Return current RCTL usage of |resource| for jail |jid| as a percentage
 // (0–100) of the configured limit.  Returns -1 if no limit is set for the
 // given resource.  This enables memory-pressure monitoring in higher layers.
-int getRctlUsagePercent(int jid, const std::string &resource) {
+int getRctlUsagePercent(int jid, const std::string &resource,
+                        const std::map<std::string, std::string> *prefetchedUsage,
+                        const std::map<std::string, std::string> *prefetchedLimits) {
   auto jidStr = std::to_string(jid);
 
-  // Get current usage
+  // 0.8.33: defensive numeric parser. rctl(8)'s `-u` output is
+  // raw integer bytes/counts on stock FreeBSD, but operators
+  // sometimes pipe it through humanize_number-aware tooling
+  // before re-feeding into a map. std::stoll silently truncates
+  // partial input ("1G" -> 1), so we explicitly require the whole
+  // string to be digits before accepting.
+  auto parseAllDigits = [](const std::string &s) -> long long {
+    if (s.empty()) return -1;
+    for (char c : s)
+      if (c < '0' || c > '9') return -1;
+    try { return std::stoll(s); } catch (...) { return -1; }
+  };
+
+  // 0.8.33: usage lookup — prefer prefetched map (zero fork+exec)
+  // when caller has already fetched `rctl -u`, fall back to a
+  // fresh shell call otherwise.
   long long usage = -1;
-  try {
-    auto usageOutput = Util::execCommandGetOutput(
-      {CRATE_PATH_RCTL, "-u", STR("jail:" << jidStr)}, "query RCTL usage");
-    std::istringstream is(usageOutput);
-    std::string line;
-    while (std::getline(is, line)) {
-      auto eqPos = line.find('=');
-      if (eqPos == std::string::npos) continue;
-      if (line.substr(0, eqPos) == resource) {
-        usage = std::stoll(line.substr(eqPos + 1));
-        break;
+  if (prefetchedUsage != nullptr) {
+    auto it = prefetchedUsage->find(resource);
+    if (it != prefetchedUsage->end())
+      usage = parseAllDigits(it->second);
+  } else {
+    try {
+      auto usageOutput = Util::execCommandGetOutput(
+        {CRATE_PATH_RCTL, "-u", STR("jail:" << jidStr)}, "query RCTL usage");
+      std::istringstream is(usageOutput);
+      std::string line;
+      while (std::getline(is, line)) {
+        auto eqPos = line.find('=');
+        if (eqPos == std::string::npos) continue;
+        if (line.substr(0, eqPos) == resource) {
+          usage = std::stoll(line.substr(eqPos + 1));
+          break;
+        }
       }
+    } catch (...) {
+      return -1;
     }
-  } catch (...) {
-    return -1;
   }
 
   if (usage < 0)
     return -1;
 
-  // Get the limit for this resource
+  // 0.8.33: same prefetch shortcut for limits. Caller's map (from
+  // `rctl -l`) keys by resource name only — strip "jail:<jid>:"
+  // prefix isn't needed because lifecycle.cpp's stats path
+  // already keys by bare resource name.
   long long limit = -1;
-  try {
-    auto listing = Util::execCommandGetOutput(
-      {CRATE_PATH_RCTL, "-l", STR("jail:" << jidStr)}, "query RCTL limits");
-    std::istringstream is(listing);
-    std::string line;
-    while (std::getline(is, line)) {
-      // Format: jail:<jid>:<resource>:deny=<value>
-      if (line.find(":" + resource + ":deny=") != std::string::npos) {
-        auto eqPos = line.rfind('=');
-        if (eqPos != std::string::npos)
-          limit = std::stoll(line.substr(eqPos + 1));
-        break;
+  if (prefetchedLimits != nullptr) {
+    auto it = prefetchedLimits->find(resource);
+    if (it != prefetchedLimits->end())
+      limit = parseAllDigits(it->second);
+  } else {
+    try {
+      auto listing = Util::execCommandGetOutput(
+        {CRATE_PATH_RCTL, "-l", STR("jail:" << jidStr)}, "query RCTL limits");
+      std::istringstream is(listing);
+      std::string line;
+      while (std::getline(is, line)) {
+        // Format: jail:<jid>:<resource>:deny=<value>
+        if (line.find(":" + resource + ":deny=") != std::string::npos) {
+          auto eqPos = line.rfind('=');
+          if (eqPos != std::string::npos)
+            limit = std::stoll(line.substr(eqPos + 1));
+          break;
+        }
       }
+    } catch (...) {
+      return -1;
     }
-  } catch (...) {
-    return -1;
   }
 
   if (limit <= 0)

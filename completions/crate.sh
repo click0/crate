@@ -76,7 +76,7 @@ if [ -n "$BASH_VERSION" ]; then
         return
         ;;
       stats)
-        COMPREPLY=( $(compgen -W "-j -h --help" -- "$cur") )
+        COMPREPLY=( $(compgen -W "-j --json --rctl-pressure -h --help" -- "$cur") )
         return
         ;;
       logs)

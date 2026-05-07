@@ -6,6 +6,89 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.33] — 2026-05-07
+
+`crate stats --rctl-pressure` — operator-facing view into how
+close a jail is to its RCTL caps, before
+`crate retune` becomes necessary. Wires `RunJail::getRctlUsagePercent`
+which was scaffolding from 0.7.x — declared, unit-tested, and
+never called from production.
+
+```
+% crate stats myapp --rctl-pressure
+NAME          CPU%    MEM         MEM LIM   PIDS      PID LIM   ...
+myapp         42%     512.0M      1G        87        200       ...
+
+RCTL pressure (usage / limit):
+  memoryuse        50%
+  pcpu             42%
+  maxproc          43%
+  writebps         87%       <- yellow
+  readbps          92%       <- red
+```
+
+Pressure column highlights:
+
+- `>=70%` — yellow (operator may want to plan retune)
+- `>=90%` — red (jail is about to hit cap; OOM/throttle imminent)
+
+### Implementation
+
+- New `--rctl-pressure` flag, `Args.statsRctlPressure` boolean,
+  parser branch in `cli/args.cpp::CmdStats`.
+- New rendering block in `lib/lifecycle.cpp::statsCrate` that
+  iterates over the already-fetched `limits` map (alphabetical
+  for stable diff) and calls `RunJail::getRctlUsagePercent`
+  for each.
+
+### Signature extension on `getRctlUsagePercent`
+
+The pre-existing helper did 2× `rctl(8)` fork+exec per call (one
+for `-u`, one for `-l`). Naively iterating it for `crate stats`
+would have done 2N forks for N resources — too expensive for an
+interactive command. So the function gains two optional pointer
+params:
+
+```cpp
+int getRctlUsagePercent(int jid, const std::string &resource,
+                        const std::map<std::string, std::string> *prefetchedUsage = nullptr,
+                        const std::map<std::string, std::string> *prefetchedLimits = nullptr);
+```
+
+Stats passes its already-parsed maps; old single-resource
+callers stay shell-shelling. Defaulted to `nullptr` so the
+existing zero-call signature still compiles (no-op cleanup
+since pre-0.8.33 there were no callers anyway).
+
+### Defensive numeric parser
+
+`rctl(8) -u` output is raw integers on stock FreeBSD, but
+operators sometimes pipe it through humanize-aware tooling.
+`std::stoll("1G")` silently returns `1` (parses leading digits
+only), which would produce nonsense pressure %. The pre-0.8.33
+helper had the same bug — surfaced only now because nobody was
+calling it. New `parseAllDigits` lambda inside
+`getRctlUsagePercent` rejects anything non-digit and returns
+-1, causing the stats path to skip that resource gracefully.
+
+### What this release does NOT do
+
+- **`isOomKill` / `wasKilledByRctl` wired into restart policy** —
+  these need raw exit status, which `cli/main.cpp`'s on-failure
+  loop doesn't have today. Plumbing requires a `runCrate`
+  signature change to pipe `int *outStatus` alongside
+  `outReturnCode`. Tracked separately.
+- **JSON output for pressure** — only the human-readable table
+  rendering ships. JSON could land later; needs a sub-object
+  in the existing JSON schema.
+- **`crate top --rctl-pressure`** — `crate top` already shows a
+  CPU% column; adding pressure% is a UI re-layout. Out of
+  scope here; same `getRctlUsagePercent` would be the call.
+
+1070/1070 unit tests pass locally.
+
+---
+
 ## [0.8.32] — 2026-05-07
 
 Two small dead-code removals + one audit-finding correction.

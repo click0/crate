@@ -6,6 +6,7 @@
 #include "util.h"
 #include "spec.h"
 
+#include <map>
 #include <string>
 #include <vector>
 #include <functional>
@@ -39,7 +40,14 @@ bool wasKilledByRctl(int jid, int exitStatus);
 
 // Return RCTL usage of a resource as a percentage of its limit (0-100),
 // or -1 if no limit is set.  Enables memory pressure monitoring.
-int getRctlUsagePercent(int jid, const std::string &resource);
+//
+// 0.8.33: optional pre-fetched maps short-circuit the two `rctl(8)`
+// fork+exec calls. `crate stats` passes its already-fetched maps;
+// post-exit / single-resource callers pass nullptr and the function
+// fetches via rctl(8) as before.
+int getRctlUsagePercent(int jid, const std::string &resource,
+                        const std::map<std::string, std::string> *prefetchedUsage = nullptr,
+                        const std::map<std::string, std::string> *prefetchedLimits = nullptr);
 
 // Apply ZFS disk quota (refquota) to container dataset
 void applyDiskQuota(const Spec &spec, const std::string &jailPath, bool logProgress);

@@ -86,6 +86,7 @@ public:
   // stats parameters
   std::string statsTarget;      // jail name or JID
   bool statsJson = false;       // -j: output as JSON
+  bool statsRctlPressure = false; // 0.8.33: --rctl-pressure: append per-resource usage% column
 
   // logs parameters
   std::string logsTarget;       // jail name or JID

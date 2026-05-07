@@ -286,19 +286,24 @@ static void usageStack() {
 }
 
 static void usageStats() {
-  std::cout << "usage: crate stats [-h|--help] [-j|--json] <name|JID>" << std::endl;
+  std::cout << "usage: crate stats [-h|--help] [-j|--json] [--rctl-pressure] <name|JID>" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Show resource usage statistics for a running container." << std::endl;
   std::cout << "Displays CPU%, memory, PIDs, I/O, and network I/O." << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Options:" << std::endl;
   std::cout << "  -j, --json                         output as JSON" << std::endl;
+  std::cout << "      --rctl-pressure                append per-resource usage% column for RCTL deny" << std::endl;
+  std::cout << "                                     rules (yellow at >=70%, red at >=90%); shows" << std::endl;
+  std::cout << "                                     how close the jail is to its caps before" << std::endl;
+  std::cout << "                                     `crate retune` becomes necessary" << std::endl;
   std::cout << "  -h, --help                         show this help screen" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Examples:" << std::endl;
   std::cout << "  crate stats myapp                  show stats for 'myapp'" << std::endl;
   std::cout << "  crate stats 5                      show stats for jail with JID 5" << std::endl;
   std::cout << "  crate stats myapp --json           output stats as JSON" << std::endl;
+  std::cout << "  crate stats myapp --rctl-pressure  show RCTL usage% per resource" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -718,7 +723,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.8.32" << std::endl;
+        std::cout << "crate 0.8.33" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -729,7 +734,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.8.32" << std::endl;
+          std::cout << "crate 0.8.33" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -1188,6 +1193,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         } else if (auto argLong = isLong(argv[a])) {
           if (strEq(argLong, "help")) { usageStats(); exit(0); }
           else if (strEq(argLong, "json")) args.statsJson = true;
+          else if (strEq(argLong, "rctl-pressure")) args.statsRctlPressure = true;
           else err("unsupported long option '%s'", argv[a]);
         } else if (args.statsTarget.empty()) {
           args.statsTarget = argv[a];
