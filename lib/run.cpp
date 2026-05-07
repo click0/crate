@@ -613,6 +613,14 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   }
 
   // MAC bsdextended rules (§8)
+  // 0.8.31: cleanup handler now actually REMOVES the rules at
+  // teardown (pre-0.8.31 it just listed them — the rules
+  // accumulated across runs in /dev/ugidfw, eventually filling
+  // the kernel's rule table). The handler captures a shared
+  // jid pointer because the jid isn't known until later in this
+  // function (RunJail::createJail). Pre-init value -1 means
+  // "no jail created yet, nothing scoped to remove".
+  auto macJidShared = std::make_shared<int>(-1);
   RunAtEnd removeMacRules;
   if (spec.securityAdvanced) {
     if (!spec.securityAdvanced->macRules.empty()) {
@@ -622,17 +630,55 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         LOG("adding MAC rule: " << rule)
         MacOps::addUgidfwRuleRaw(rule);
       }
-      removeMacRules.reset([&args]() {
-        LOG("removing MAC bsdextended rules")
-        std::vector<std::string> rules;
-        MacOps::listUgidfwRules(rules);
+      removeMacRules.reset([macJidShared, &args]() {
+        if (*macJidShared <= 0) {
+          // Jail never came up; rules were added without a jailid
+          // scope so we can't selectively remove them. Operator
+          // sees a warning. (mac_bsdextended rules without jailid
+          // apply host-wide — a separate pre-existing bug.)
+          LOG("MAC bsdextended cleanup: jail never created; rules "
+              "left in place — run `ugidfw list` and clean by hand")
+          return;
+        }
+        LOG("removing MAC bsdextended rules for jid " << *macJidShared)
+        try {
+          MacOps::removeUgidfwRules(*macJidShared);
+        } catch (const std::exception &ex) {
+          std::cerr << rang::fg::yellow
+                    << "MAC bsdextended cleanup failed: " << ex.what()
+                    << " — leftover rules may persist; run "
+                    << "`ugidfw list` and clean by hand"
+                    << rang::style::reset << std::endl;
+        }
       });
     }
     if (!spec.securityAdvanced->macAllowPorts.empty()) {
       LOG("loading MAC portacl rules")
       Util::ensureKernelModuleIsLoaded("mac_portacl");
-      for (auto port : spec.securityAdvanced->macAllowPorts)
+      // 0.8.31: actually install the portacl rules. Pre-0.8.31
+      // this loop only LOG'd each port and called
+      // ensureKernelModuleIsLoaded but never reached
+      // MacOps::setPortaclRules — the operator's allow-list was
+      // silently dropped. Bug found by 0.8.30 audit follow-up.
+      // Build the rule list with uid=0 (rules apply to anyone
+      // running inside the jail by default) for tcp+udp on each
+      // configured port; setPortaclRules writes the
+      // security.mac.portacl.rules sysctl atomically.
+      std::vector<MacOps::PortaclRule> portaclRules;
+      for (auto port : spec.securityAdvanced->macAllowPorts) {
         LOG("MAC portacl: allowing port " << port)
+        portaclRules.push_back({0, "tcp", (int)port});
+        portaclRules.push_back({0, "udp", (int)port});
+      }
+      try {
+        MacOps::setPortaclRules(portaclRules);
+      } catch (const std::exception &ex) {
+        std::cerr << rang::fg::yellow
+                  << "MAC portacl: setPortaclRules failed: " << ex.what()
+                  << " — port restrictions NOT applied; check that "
+                  << "mac_portacl is loaded and crate has root."
+                  << rang::style::reset << std::endl;
+      }
     }
   }
 
@@ -744,6 +790,13 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   auto jailInfo = RunJail::createJail(spec, jailPath, args.logProgress);
   int jid = jailInfo.jid;
 
+  // 0.8.31: publish jid to the MAC bsdextended cleanup handler so
+  // it can scope removeUgidfwRules() to this jail. See the
+  // RunAtEnd removeMacRules block earlier in this function for
+  // the rationale (cleanup needed jid which wasn't yet available
+  // when the handler was wired).
+  *macJidShared = jid;
+
   // 0.8.21: register the {jail-name -> .crate path} pair so the
   // daemon's control-plane PostStart can find the spec on a later
   // `start <name>` request. Skipped for warm-base runs (no .crate
@@ -809,6 +862,14 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // apply RCTL resource limits (§5)
   RunAtEnd removeRctlRules = RunJail::applyRctlLimits(spec, jid, args.logProgress);
+
+  // 0.8.31: apply ZFS refquota from spec.diskQuota. Pre-0.8.31 the
+  // YAML key parsed and validated cleanly (lib/spec.cpp:805) but
+  // applyDiskQuota was never invoked — operator's quota was
+  // silently dropped. Bug found by 0.8.30 audit follow-up. Set
+  // before attachZfsDatasets so a delegated dataset inherits the
+  // quota at attach time.
+  RunJail::applyDiskQuota(spec, jailPath, args.logProgress);
 
   // attach ZFS datasets to jail
   RunAtEnd detachZfsDatasets = RunJail::attachZfsDatasets(spec, jid, args.logProgress);

@@ -6,6 +6,87 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.31] — 2026-05-07
+
+**Bug-fix release.** Three operator-facing YAML keys were parsed
+and validated cleanly but their runtime side was either missing
+or broken. All three are real broken-contract bugs surfaced
+by the deeper read of the 0.8.21 dead-code audit findings.
+
+### Fix #1: `disk_quota: 10G` actually applies refquota now
+
+`lib/spec.cpp:805-820` parsed `disk_quota`, validated the K/M/G/T
+suffix, stored it in `spec.diskQuota`. `lib/run_jail.cpp:316`
+had `applyDiskQuota` that computes the dataset and calls
+`ZfsOps::setRefquota`. **`lib/run.cpp` never invoked
+`applyDiskQuota`.**
+
+Operator wrote `disk_quota: 10G`, validation succeeded, ZFS
+refquota was never set, jail could fill the entire pool. Bug
+since 0.3.0 when the YAML key was added.
+
+Wired in after `RunJail::applyRctlLimits` and before
+`attachZfsDatasets`, so a delegated dataset inherits the quota
+at attach time.
+
+### Fix #2: `mac_portacl.allow_ports` actually installs rules now
+
+`lib/spec.cpp:1107-1119` parsed
+`security_advanced.mac_portacl.allow_ports: [80, 443]` into
+`spec.securityAdvanced->macAllowPorts`. `lib/run.cpp:631-636`
+loaded the kernel module + LOG'd each port… but **never called
+`MacOps::setPortaclRules`**. Operator's allow-list silently
+dropped.
+
+Now build a `MacOps::PortaclRule[]` (uid=0, tcp+udp per port)
+and call `setPortaclRules` which writes the
+`security.mac.portacl.rules` sysctl atomically. Soft-fail with
+operator-visible warning if the module isn't loaded or the
+sysctl fails.
+
+### Fix #3: `mac_bsdextended` cleanup actually removes rules now
+
+`lib/run.cpp:625-628` had a cleanup `RunAtEnd` whose body was:
+
+```cpp
+removeMacRules.reset([&args]() {
+  std::vector<std::string> rules;
+  MacOps::listUgidfwRules(rules);   // <-- collects, doesn't remove
+});
+```
+
+It listed rules into a local vector that immediately fell out of
+scope. **Rules persisted in `/dev/ugidfw` between runs** —
+`ugidfw list` showed accumulated entries from every previous
+`crate run` since 0.5.x.
+
+The remover (`MacOps::removeUgidfwRules(jid)`) needs the jid,
+which isn't available at the point the lambda is wired (the
+`RunAtEnd` is declared before `RunJail::createJail` returns).
+Fix uses a `std::shared_ptr<int>` published after createJail —
+the lambda checks `*shared > 0` and skips cleanup if the jail
+never came up.
+
+The pre-existing companion bug — `addUgidfwRuleRaw` doesn't
+inject `jailid <jid>` so operator rules apply host-wide — is
+**not fixed here**, only documented in the cleanup-skipped
+branch's log message. That's a spec-level issue (rule strings
+come from the operator) and needs a separate design pass.
+
+### What this release does NOT do
+
+- **Fix the host-wide-rule bug for `mac_bsdextended`** —
+  needs spec-side rewrite to inject `jailid <jid>` into each
+  operator-supplied rule string. Tracked separately.
+- **Add tests for the runtime wiring** — the runtime side calls
+  ZFS / mac kernel modules / spec parsing, none of which can
+  be exercised on Linux dev boxes via ATF. Verifying these on
+  FreeBSD is integration-test territory (Kyua + a real jail).
+
+1070/1070 unit tests pass locally.
+
+---
+
 ## [0.8.30] — 2026-05-07
 
 `IpfwOps::configureNat` + `IpfwOps::deleteNat` wired into the
