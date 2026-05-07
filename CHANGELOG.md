@@ -6,6 +6,73 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.37] — 2026-05-07
+
+`crate clean` now sweeps orphan ipfw rules and NAT instances in
+crate's reserved ranges. Wires `IpfwOps::deleteRule` and
+`IpfwOps::deleteNat` (already used at jail-teardown for
+non-orphan paths) into a sweep section that removes leftovers
+from crashed jails. `crate doctor` (0.8.14) has been *warning*
+about these for a while; this release actually deletes them.
+
+### What this release adds
+
+A 5th section in `lib/clean.cpp::cleanCrates` between the
+existing COW-overlay sweep and the spec-registry orphan sweep.
+Three reserved ranges are checked:
+
+| Range | Purpose | Delete via |
+|---|---|---|
+| `20000..29999` | throttle pipe binds (per-jail pair, 0.7.7) | `IpfwOps::deleteRule` |
+| `30000..39999` | auto-fw NAT instances (per-jail, 0.8.0) | `IpfwOps::deleteNat` |
+| `40000..49999` | auto-fw NAT-rule pointers (per-jail, 0.8.0) | `IpfwOps::deleteRule` |
+
+For each range, pure helper in `lib/auto_fw_pure.cpp` parses
+`ipfw -q list` (or `ipfw nat show`), maps rule number → jid,
+and returns the orphan IDs. `crate clean` then iterates and
+deletes via the IpfwOps helpers.
+
+Throttle bind delete is soft-fail: throttle uses *pairs* of
+rules per jail (`20000+jid*2`, `20000+jid*2+1`) and operators
+sometimes half-clear via `crate throttle --clear`, leaving one
+rule of a pair. Best-effort delete avoids spurious warnings on
+that path.
+
+### Pure helpers
+
+Three new functions in `AutoFwPure`:
+
+- `pickOrphanIpfwRulesByJid(listOutput, runningJids)` —
+  rules in `40000..49999` whose `n - 40000` jid isn't running
+- `pickOrphanIpfwThrottleRulesByJid(...)` — same for
+  `20000..29999`, jid derived as `(n - 20000) / 2`
+- `pickOrphanIpfwNatIds(natListOutput, runningJids)` —
+  parses `ipfw nat <id> config ...` lines (different format
+  than rule list)
+
+6 ATF unit cases cover normal path, out-of-range filtering,
+CRLF tolerance, throttle pair-divisor logic, NAT-line skip
+for non-NAT noise.
+
+### What this release does NOT do
+
+- **Wire `IpfwOps::deleteRulesInSet`** — the audit-targeted
+  helper. Crate's per-jail rule numbers aren't grouped into
+  ipfw "sets" today; they're individual numbered rules. Wiring
+  `deleteRulesInSet` requires the auto-fw runtime to refactor
+  toward `add set <set> <num> ...` form, which is a larger
+  architectural change. Tracked in `lib/ipfw_ops.h` doc comment.
+- **Refactor `doctor::checkIpfwReservedRanges`** to use the new
+  pure helpers — it does its own inline scan today. Could share
+  with clean now; deferred to keep this release minimal.
+- **Throttle pipe deletion** (`10000..19999`) — pipes need
+  `ipfw pipe N delete` which doesn't have an IpfwOps wrapper
+  yet. Operator runs that by hand for now.
+
+1076/1076 unit tests pass locally.
+
+---
+
 ## [0.8.36] — 2026-05-07
 
 `crate gui screenshot` uses native libX11 when available, dropping

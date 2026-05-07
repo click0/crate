@@ -4,6 +4,7 @@
 
 #include <atf-c++.hpp>
 
+#include <set>
 #include <string>
 
 using AutoFwPure::RedirPort;
@@ -394,6 +395,101 @@ ATF_TEST_CASE_BODY(ipfw_nat_redir_multiple) {
   ATF_REQUIRE_EQ(redirPortCount, 3u);
 }
 
+// --- 0.8.37: orphan-rule scan tests ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(orphan_rules_picks_non_running);
+ATF_TEST_CASE_BODY(orphan_rules_picks_non_running) {
+  // jids 5 and 7 are running; rules at 40005 + 40007 valid,
+  // 40009 + 40012 are orphans.
+  std::set<int> running{5, 7};
+  std::string out =
+    "40005 nat 30005 ip from 10.66.0.5 to any out via em0\n"
+    "40007 nat 30007 ip from 10.66.0.7 to any out via em0\n"
+    "40009 nat 30009 ip from 10.66.0.9 to any out via em0\n"
+    "40012 nat 30012 ip from 10.66.0.12 to any out via em0\n";
+  auto orphans = AutoFwPure::pickOrphanIpfwRulesByJid(out, running);
+  ATF_REQUIRE_EQ(orphans.size(), (size_t)2);
+  ATF_REQUIRE_EQ(orphans[0], 40009u);
+  ATF_REQUIRE_EQ(orphans[1], 40012u);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(orphan_rules_skips_out_of_range);
+ATF_TEST_CASE_BODY(orphan_rules_skips_out_of_range) {
+  // Operator-defined rules below 40000 and above 49999 must be
+  // ignored — they're not in crate's reserved range.
+  std::set<int> running;   // none running
+  std::string out =
+    "100 allow ip from any to any\n"
+    "39999 allow ip from any to any\n"
+    "40000 allow ip from any to any\n"   // jid 0 = orphan
+    "49999 allow ip from any to any\n"   // jid 9999 = orphan
+    "50000 allow ip from any to any\n"
+    "60000 allow ip from any to any\n";
+  auto orphans = AutoFwPure::pickOrphanIpfwRulesByJid(out, running);
+  ATF_REQUIRE_EQ(orphans.size(), (size_t)2);
+  ATF_REQUIRE_EQ(orphans[0], 40000u);
+  ATF_REQUIRE_EQ(orphans[1], 49999u);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(orphan_rules_handles_crlf_blanks);
+ATF_TEST_CASE_BODY(orphan_rules_handles_crlf_blanks) {
+  std::set<int> running;
+  std::string out =
+    "\r\n"
+    "40001 nat 30001 ip from 10.66.0.1 to any out via em0\r\n"
+    "\n"
+    "header without rule num\r\n"
+    "40002 nat 30002 ip from 10.66.0.2 to any out via em0\r\n";
+  auto orphans = AutoFwPure::pickOrphanIpfwRulesByJid(out, running);
+  ATF_REQUIRE_EQ(orphans.size(), (size_t)2);
+  ATF_REQUIRE_EQ(orphans[0], 40001u);
+  ATF_REQUIRE_EQ(orphans[1], 40002u);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(orphan_throttle_pair_jid_division);
+ATF_TEST_CASE_BODY(orphan_throttle_pair_jid_division) {
+  // Throttle uses (20000+jid*2, 20000+jid*2+1). jid 5 -> 20010,20011.
+  // running={5}: 20010+20011 valid; 20020 (jid=10) is orphan.
+  std::set<int> running{5};
+  std::string out =
+    "20010 pipe 10010 ip from any to any\n"
+    "20011 pipe 10011 ip from any to any\n"
+    "20020 pipe 10020 ip from any to any\n"   // jid 10 = orphan
+    "20021 pipe 10021 ip from any to any\n";  // jid 10 = orphan
+  auto orphans = AutoFwPure::pickOrphanIpfwThrottleRulesByJid(out, running);
+  ATF_REQUIRE_EQ(orphans.size(), (size_t)2);
+  ATF_REQUIRE_EQ(orphans[0], 20020u);
+  ATF_REQUIRE_EQ(orphans[1], 20021u);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(orphan_nat_ids_basic);
+ATF_TEST_CASE_BODY(orphan_nat_ids_basic) {
+  std::set<int> running{5};   // jid 5 running -> 30005 valid
+  std::string out =
+    "ipfw nat 30005 config if em0\n"
+    "ipfw nat 30009 config if em0\n"   // jid 9 orphan
+    "ipfw nat 30012 config if em0 redir_port tcp 10.66.0.12:80 8080\n";
+  auto orphans = AutoFwPure::pickOrphanIpfwNatIds(out, running);
+  ATF_REQUIRE_EQ(orphans.size(), (size_t)2);
+  ATF_REQUIRE_EQ(orphans[0], 30009u);
+  ATF_REQUIRE_EQ(orphans[1], 30012u);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(orphan_nat_ids_skips_non_nat_lines);
+ATF_TEST_CASE_BODY(orphan_nat_ids_skips_non_nat_lines) {
+  std::set<int> running;
+  std::string out =
+    "header line\n"
+    "ipfw nat 30001 config if em0\n"
+    "ipfw add 100 allow ip from any to any\n"   // not a nat line
+    "ipfw nat abc config if em0\n"               // non-numeric
+    "ipfw nat 29999 config if em0\n"             // below range
+    "ipfw nat 40000 config if em0\n";            // above range
+  auto orphans = AutoFwPure::pickOrphanIpfwNatIds(out, running);
+  ATF_REQUIRE_EQ(orphans.size(), (size_t)1);
+  ATF_REQUIRE_EQ(orphans[0], 30001u);
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, iface_typical_accepted);
   ATF_ADD_TEST_CASE(tcs, iface_invalid_rejected);
@@ -427,4 +523,10 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, ipfw_nat_redir_range);
   ATF_ADD_TEST_CASE(tcs, ipfw_nat_redir_asymmetric_range);
   ATF_ADD_TEST_CASE(tcs, ipfw_nat_redir_multiple);
+  ATF_ADD_TEST_CASE(tcs, orphan_rules_picks_non_running);
+  ATF_ADD_TEST_CASE(tcs, orphan_rules_skips_out_of_range);
+  ATF_ADD_TEST_CASE(tcs, orphan_rules_handles_crlf_blanks);
+  ATF_ADD_TEST_CASE(tcs, orphan_throttle_pair_jid_division);
+  ATF_ADD_TEST_CASE(tcs, orphan_nat_ids_basic);
+  ATF_ADD_TEST_CASE(tcs, orphan_nat_ids_skips_non_nat_lines);
 }

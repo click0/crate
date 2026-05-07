@@ -185,4 +185,98 @@ std::vector<std::string> buildIpfwNatDeleteArgv(unsigned natId) {
   return {"/sbin/ipfw", "nat", std::to_string(natId), "delete"};
 }
 
+namespace {
+
+// Parse the leading whitespace-separated token of `line` as an
+// unsigned integer. Returns -1 on non-digit / empty input.
+long parseLeadingNumber(const std::string &line) {
+  if (line.empty()) return -1;
+  size_t i = 0;
+  // Skip leading whitespace (rare in `ipfw -q list` output but be
+  // defensive for `ipfw list` without -q).
+  while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) i++;
+  if (i >= line.size() || line[i] < '0' || line[i] > '9') return -1;
+  long n = 0;
+  while (i < line.size() && line[i] >= '0' && line[i] <= '9') {
+    n = n * 10 + (line[i] - '0');
+    i++;
+    if (n > 99999) return -1;   // ipfw rule numbers are 5-digit max
+  }
+  return n;
+}
+
+} // anon
+
+std::vector<unsigned> pickOrphanIpfwRulesByJid(
+  const std::string &ipfwListOutput,
+  const std::set<int> &runningJids) {
+  std::vector<unsigned> orphans;
+  std::istringstream is(ipfwListOutput);
+  std::string line;
+  while (std::getline(is, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    long n = parseLeadingNumber(line);
+    if (n < 40000 || n >= 50000) continue;
+    int jid = static_cast<int>(n) - 40000;
+    if (runningJids.count(jid) == 0)
+      orphans.push_back(static_cast<unsigned>(n));
+  }
+  return orphans;
+}
+
+std::vector<unsigned> pickOrphanIpfwThrottleRulesByJid(
+  const std::string &ipfwListOutput,
+  const std::set<int> &runningJids) {
+  std::vector<unsigned> orphans;
+  std::istringstream is(ipfwListOutput);
+  std::string line;
+  while (std::getline(is, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    long n = parseLeadingNumber(line);
+    if (n < 20000 || n >= 30000) continue;
+    // Throttle uses pairs (20000+jid*2, 20000+jid*2+1) — derive
+    // jid by dividing the offset by 2 (integer division).
+    int jid = (static_cast<int>(n) - 20000) / 2;
+    if (runningJids.count(jid) == 0)
+      orphans.push_back(static_cast<unsigned>(n));
+  }
+  return orphans;
+}
+
+std::vector<unsigned> pickOrphanIpfwNatIds(
+  const std::string &ipfwNatListOutput,
+  const std::set<int> &runningJids) {
+  // `ipfw nat list` output (per FreeBSD 13+):
+  //   ipfw nat 30001 config if em0 redir_port tcp 10.66.0.1:80 8080
+  //   ipfw nat 30002 config if em0
+  // The interesting token is the 3rd whitespace-separated field.
+  std::vector<unsigned> orphans;
+  std::istringstream is(ipfwNatListOutput);
+  std::string line;
+  while (std::getline(is, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    // Tokenize first 3 fields.
+    std::istringstream ls(line);
+    std::string tok1, tok2, tok3;
+    if (!(ls >> tok1 >> tok2 >> tok3)) continue;
+    if (tok1 != "ipfw" || tok2 != "nat") continue;
+    long n = -1;
+    if (!tok3.empty()) {
+      n = 0;
+      bool digits = true;
+      for (char c : tok3) {
+        if (c < '0' || c > '9') { digits = false; break; }
+        n = n * 10 + (c - '0');
+        if (n > 99999) { digits = false; break; }
+      }
+      if (!digits) n = -1;
+    }
+    if (n < 30000 || n >= 40000) continue;
+    int jid = static_cast<int>(n) - 30000;
+    if (runningJids.count(jid) == 0)
+      orphans.push_back(static_cast<unsigned>(n));
+  }
+  return orphans;
+}
+
 } // namespace AutoFwPure

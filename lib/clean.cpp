@@ -2,10 +2,12 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "args.h"
-#include "locs.h"
-#include "jail_query.h"
-#include "pathnames.h"
+#include "auto_fw_pure.h"
 #include "ctx.h"
+#include "ipfw_ops.h"
+#include "jail_query.h"
+#include "locs.h"
+#include "pathnames.h"
 #include "spec_registry.h"
 #include "util.h"
 #include "err.h"
@@ -181,7 +183,92 @@ bool cleanCrates(const Args &args) {
     }
   }
 
-  // 5. Clean orphan spec-registry entries (0.8.34)
+  // 5. Clean orphan ipfw rules / NAT instances (0.8.37)
+  // `crate doctor` (0.8.14) has warned about these for a while;
+  // this section actually deletes them. Three reserved ranges:
+  //
+  //   20000..29999  throttle pipe binds (per-jail pair from 0.7.7)
+  //   30000..39999  auto-fw NAT instances (per-jail from 0.8.0)
+  //   40000..49999  auto-fw NAT-rule pointers (per-jail from 0.8.0)
+  //
+  // Each is keyed by jid: orphan when no running jail with that
+  // jid exists. Pure parsers in AutoFwPure::pickOrphan*; runtime
+  // delete via IpfwOps::deleteRule + IpfwOps::deleteNat.
+  std::cout << rang::style::bold << "Scanning for orphan ipfw rules / NAT instances..."
+            << rang::style::reset << std::endl;
+  if (::access("/sbin/ipfw", X_OK) != 0) {
+    std::cout << "  /sbin/ipfw not present — skipping ipfw orphan sweep" << std::endl;
+  } else {
+    std::set<int> runningJids;
+    try {
+      for (auto &j : JailQuery::getAllJails(/*crateOnly=*/true))
+        runningJids.insert(j.jid);
+    } catch (...) {}
+
+    // 5a. orphan auto-fw rules (40000-range) + throttle binds (20000-range).
+    try {
+      auto out = Util::execCommandGetOutput({"/sbin/ipfw", "-q", "list"},
+                                             "ipfw -q list");
+      auto autoFw = AutoFwPure::pickOrphanIpfwRulesByJid(out, runningJids);
+      auto throttles = AutoFwPure::pickOrphanIpfwThrottleRulesByJid(out, runningJids);
+      for (auto n : autoFw) {
+        if (dryRun) {
+          std::cout << "  [dry-run] would delete ipfw auto-fw rule " << n << std::endl;
+        } else {
+          std::cout << "  deleting ipfw auto-fw rule " << n << std::endl;
+          try { IpfwOps::deleteRule(n); cleaned++; }
+          catch (const std::exception &e) {
+            std::cerr << rang::fg::yellow << "  warning: deleteRule "
+                      << n << ": " << e.what()
+                      << rang::style::reset << std::endl;
+          }
+        }
+      }
+      for (auto n : throttles) {
+        if (dryRun) {
+          std::cout << "  [dry-run] would delete ipfw throttle bind " << n << std::endl;
+        } else {
+          std::cout << "  deleting ipfw throttle bind " << n << std::endl;
+          try { IpfwOps::deleteRule(n); cleaned++; }
+          catch (...) {
+            // Throttle binds come in pairs; one half failing is
+            // common (the pair was already half-removed by an
+            // earlier `crate throttle --clear`). Soft-fail.
+          }
+        }
+      }
+    } catch (const std::exception &e) {
+      std::cerr << rang::fg::yellow
+                << "  warning: ipfw -q list failed: " << e.what()
+                << rang::style::reset << std::endl;
+    }
+
+    // 5b. orphan NAT instances (30000-range). Separate ipfw call
+    // because `nat list` and `list` are different commands.
+    try {
+      auto natOut = Util::execCommandGetOutput({"/sbin/ipfw", "nat", "show"},
+                                                "ipfw nat show");
+      auto orphanNats = AutoFwPure::pickOrphanIpfwNatIds(natOut, runningJids);
+      for (auto n : orphanNats) {
+        if (dryRun) {
+          std::cout << "  [dry-run] would delete ipfw NAT instance " << n << std::endl;
+        } else {
+          std::cout << "  deleting ipfw NAT instance " << n << std::endl;
+          try { IpfwOps::deleteNat(n); cleaned++; }
+          catch (const std::exception &e) {
+            std::cerr << rang::fg::yellow << "  warning: deleteNat "
+                      << n << ": " << e.what()
+                      << rang::style::reset << std::endl;
+          }
+        }
+      }
+    } catch (...) {
+      // ipfw nat show fails on hosts without ipfw_nat.ko loaded —
+      // that's fine, no NAT instances to clean either way.
+    }
+  }
+
+  // 6. Clean orphan spec-registry entries (0.8.34)
   // The registry maps {jail-name -> abs-path-of-.crate-file} and
   // is populated by `crate run -f` (since 0.8.21). Entries
   // intentionally persist past stop/restart so the daemon's
