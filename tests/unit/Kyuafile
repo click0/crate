@@ -68,3 +68,4 @@ atf_test_program{name="socket_perms_pure_test"}
 atf_test_program{name="ip6_alloc_pure_test"}
 atf_test_program{name="spec_registry_pure_test"}
 atf_test_program{name="zfs_dataset_pure_test"}
+atf_test_program{name="hub_scheduling_pure_test"}

@@ -6,6 +6,120 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.40] — 2026-05-07
+
+Hub scheduling — `GET /api/v1/scheduling/least-loaded` returns a
+recommendation for which node to place the next jail on. Closes
+the medium-priority TODO item; operators get a one-liner to
+discover the best target host without manual `for host in $hosts;
+do curl .../containers; done | sort | head` analysis.
+
+### What this release adds
+
+```
+% curl -s http://hub:9001/api/v1/scheduling/least-loaded | jq
+{
+  "status": "ok",
+  "data": {
+    "target": "alpha",
+    "host": "alpha.example.com:9800",
+    "container_count": 3,
+    "runner_up_count": 5,
+    "confidence": 40,
+    "rationale": "place on 'alpha' (count 3 vs runner-up 'beta' count 5)"
+  }
+}
+```
+
+Operator workflow:
+
+```sh
+target=$(curl -s http://hub:9001/api/v1/scheduling/least-loaded \
+           | jq -r .data.host)
+crate migrate myjail --to "$target" \
+  --from-token-file .source-token --to-token-file .dest-token
+```
+
+### Anti-flap (`?current=<name>`)
+
+Without anti-flap, the recommendation can ping-pong: jail A on
+node `alpha` (count 3), jail B arrives on `beta` (count 4) —
+next call recommends `alpha` again, etc. The `?current=` query
+param lets the caller say "I'm already on this node; only
+recommend a move if it's a meaningful improvement":
+
+```
+% curl -s 'http://hub:9001/api/v1/scheduling/least-loaded?current=beta' | jq
+{
+  "data": {
+    "target": "beta",
+    "container_count": 5,
+    "rationale": "keep on 'beta' (count 5 within 10% of least-loaded 'alpha' count 5)"
+  }
+}
+```
+
+When the current node's count is within 10% of the least-loaded
+node, scheduling recommends keeping the container in place.
+Threshold is `SchedulingPure::kAntiFlapPercent` — 10% by design,
+configurable later if a real ask comes in.
+
+### Confidence score (0..100)
+
+| Scenario | Score |
+|---|---|
+| Single reachable node | 100 |
+| Anti-flap fires (keep current) | 100 |
+| Big spread (1 vs 100 containers) | ~99 |
+| Tight spread (10 vs 11) | ~9 |
+| Tied at non-zero | 0 |
+| All nodes empty (multi-tie at zero) | 50 |
+
+The score is a hint to the operator: low confidence means
+"either choice is fine, don't sweat it"; high means "this is
+clearly the right place".
+
+### Implementation
+
+Pure module `hub/scheduling_pure.{h,cpp}`:
+
+- `NodeView` — `{name, host, reachable, containerCount}`,
+  fed from existing `AggregatorPure::countTopLevelObjects`
+- `pickLeastLoaded(nodes, currentNodeHint = "")` — returns
+  `Recommendation` with target name/host, counts, confidence,
+  human-readable rationale
+- `renderRecommendationJson` — emits the data envelope shown above
+- 14 ATF unit cases cover empty input, all-unreachable,
+  lowest-count picking, unreachable-skip, stable name tie-breaker,
+  sole candidate, confidence scaling (big vs tight spread),
+  anti-flap keep / migrate / unknown-hint / unreachable-hint,
+  JSON shape + special-char quoting
+
+Endpoint in `hub/api.cpp` at `GET /api/v1/scheduling/least-loaded`,
+reuses the same poller-cached node statuses as `/api/v1/aggregate`.
+No additional polling.
+
+### What this release does NOT do
+
+- **`crate-hub schedule <crate-file>` CLI helper** — operators
+  on the curl + jq + migrate path today. CLI sugar tracked.
+- **CPU/memory-based scoring** — `containerCount` is a proxy.
+  Real load metrics need crated to expose `loadavg_1min` /
+  `mem_free` from `/api/v1/host` (currently static info only).
+  Tracked for a future "richer hub metrics" sprint.
+- **Datacenter-aware scheduling** — the endpoint operates on the
+  whole cluster; per-DC placement could be a `?datacenter=foo`
+  filter. Operator can filter clientside today via
+  `/api/v1/datacenters`.
+- **Resource-aware refusal** — endpoint always recommends
+  *something* if any reachable node exists. A future "no
+  candidate has capacity" gate would need the real-load
+  metrics above.
+
+1093/1093 unit tests pass locally.
+
+---
+
 ## [0.8.39] — 2026-05-07
 
 **Bug fix.** Closes long-standing **bug#239590** (host-LAN-loopback

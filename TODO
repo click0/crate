@@ -22,14 +22,16 @@ operational quality.)
   /usr/lib, /usr/sbin, etc. while the jail is using them — needs
   the snapshot-and-rollback dance).
 
-* (feature) Hub scheduling — automatic container placement on the
-  least-loaded host. Hub already has /api/v1/nodes with per-node
-  CPU/memory load; new endpoint /api/v1/scheduling/least-loaded
-  returns the best target node + a confidence score. CLI helper
-  `crate-hub schedule <crate-file>` resolves the target then
-  delegates to `crate migrate` for the actual move. Anti-flap:
-  prefer current host if its load is within 10% of the
-  least-loaded one.
+* (feature, partial) Hub scheduling — automatic container placement
+  on the least-loaded host. *Endpoint shipped in 0.8.40* —
+  `GET /api/v1/scheduling/least-loaded[?current=<name>]` returns
+  the best target node + 0..100 confidence score, with anti-flap
+  (within 10% of best -> keep current). Operator workflow:
+    target=$(curl ... | jq -r .data.host)
+    crate migrate myjail --to "$target" ...
+  Still open: a `crate-hub schedule <crate-file>` CLI helper that
+  wraps the curl + migrate dance. Operators on the curl path
+  today; CLI sugar tracked separately.
 
 === Out of scope (separate repository) ===
 

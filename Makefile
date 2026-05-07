@@ -219,7 +219,7 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              ipsec_runtime_pure_test net_detect_pure_test \
              vmwrap_pure_test socket_perms_pure_test \
              ip6_alloc_pure_test spec_registry_pure_test \
-             zfs_dataset_pure_test
+             zfs_dataset_pure_test hub_scheduling_pure_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)
@@ -274,6 +274,7 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  daemon/socket_perms_pure.cpp \
                  hub/aggregator_pure.cpp \
                  hub/datacenter_pure.cpp hub/ha_pure.cpp \
+                 hub/scheduling_pure.cpp \
                  snmpd/mib_pure.cpp
 
 # Map every src to a .o under TEST_OBJ_DIR keeping the source's
