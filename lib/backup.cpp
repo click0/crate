@@ -12,7 +12,11 @@
 #include "jail_query.h"
 #include "util.h"
 #include "zfs_dataset.h"
+#include "zfs_ops.h"
 #include "err.h"
+
+#include <cerrno>
+#include <cstring>
 
 #include <rang.hpp>
 
@@ -103,10 +107,24 @@ bool restoreCrate(const Args &args) {
 
   std::cerr << rang::fg::cyan << "restore: zfs recv ← " << args.restoreFile
             << " into " << args.restoreDataset
+            << " (" << (ZfsOps::available() ? "native libzfs" : "fork+exec zfs(8)") << ")"
             << rang::style::reset << std::endl;
-  // `zfs recv <destDataset>` reads stdin from the file.
-  Util::execPipeline({BackupPure::buildRecvArgv(args.restoreDataset)},
-                     "zfs recv from file", args.restoreFile, "");
+  // 0.8.29: native ZfsOps::recv when libzfs is linked — skips
+  // fork+exec'ing zfs(8) and avoids shell-quoting the dataset
+  // name. Open the .zstream file ourselves and hand the fd to
+  // ZfsOps::recv; the function falls back to fork+exec when
+  // HAVE_LIBZFS isn't built in. Pre-0.8.29 this used Util::
+  // execPipeline which always fork+exec'd.
+  int fd = ::open(args.restoreFile.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0)
+    ERR("cannot open " << args.restoreFile << ": " << std::strerror(errno))
+  try {
+    ZfsOps::recv(args.restoreDataset, fd);
+  } catch (...) {
+    ::close(fd);
+    throw;
+  }
+  ::close(fd);
 
   std::cout << rang::fg::green << "restore: " << args.restoreDataset
             << " recovered from " << args.restoreFile

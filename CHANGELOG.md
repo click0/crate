@@ -6,6 +6,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.29] — 2026-05-07
+
+`crate restore` uses `ZfsOps::recv` natively when libzfs is
+linked. Pre-0.8.29 the restore path always fork+exec'd
+`/sbin/zfs` via `Util::execPipeline`; now it opens the
+`.zstream` file in-process and hands the fd to
+`ZfsOps::recv`, which calls `lzc_receive(3)` directly when
+`HAVE_LIBZFS` is set, falling back to `fork+exec` only when
+the library wasn't linked at build time.
+
+```
+% crate restore /backups/web-2026-05-07.zstream --to tank/jails/web
+restore: zfs recv ← /backups/web-2026-05-07.zstream into tank/jails/web (native libzfs)
+restore: tank/jails/web recovered from /backups/web-2026-05-07.zstream
+```
+
+The "(native libzfs)" / "(fork+exec zfs(8))" hint is printed at
+start so the operator can confirm which path their build is on
+(matches the `crate doctor` `native-api/libzfs` check from
+0.8.26).
+
+### Why restore but not backup
+
+`ZfsOps::send(snapName, fd)` only does *full* sends — there's no
+`-i since` parameter for incremental streams. Most production
+backups are incremental (operators set `--auto-incremental`), so
+wiring full-only would be half a deliverable.
+
+`ZfsOps::recv` has no such limitation: a `zfs recv` from a
+.zstream file is the same call shape regardless of whether the
+sender did full or incremental — `lzc_receive(3)` walks the
+stream and figures it out. Restore is the clean win.
+
+### What this release does NOT do
+
+- **`zfs send` native path for backup** — needs ZfsOps::send API
+  extension to take an optional `sinceSnapName` for the
+  incremental case. Tracked separately.
+- **Replace the shell ssh pipeline in `crate replicate`** — that
+  pipeline is `zfs send | ssh ... 'zfs recv'`, all running on
+  the source host. Going native means re-implementing the SSH
+  stream multiplexing in C++. Not worth it; the existing
+  pipeline is robust.
+- **Doctor "restore native path active" check** — the existing
+  `native-api/libzfs` check from 0.8.26 already says whether
+  libzfs is linked. The runtime hint at restore time is the
+  same datapoint at the point of action.
+
+1070/1070 unit tests pass locally.
+
+---
+
 ## [0.8.28] — 2026-05-07
 
 `RunJail::diagnoseExitReason` wired into `lib/run.cpp` post-exit
