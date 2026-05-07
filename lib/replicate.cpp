@@ -13,6 +13,7 @@
 #include "jail_query.h"
 #include "replicate_pure.h"
 #include "util.h"
+#include "zfs_dataset.h"
 #include "err.h"
 
 #include <rang.hpp>
@@ -25,40 +26,8 @@
 
 #define ERR(msg...) ERR2("replicate", msg)
 
-namespace {
-
-std::string datasetForJail(const std::string &name) {
-  auto j = JailQuery::getJailByName(name);
-  if (!j) ERR("jail '" << name << "' not found or not running")
-  if (!Util::Fs::isOnZfs(j->path))
-    ERR("jail '" << name << "' is not on ZFS — replication requires ZFS")
-  return Util::Fs::getZfsDataset(j->path);
-}
-
-// Same as in lib/backup.cpp: walk `zfs list -H -t snapshot` and
-// return the lex-greatest backup-* suffix on the dataset.
-std::string findLatestBackupSuffix(const std::string &dataset) {
-  std::string out;
-  try {
-    auto raw = Util::execCommandGetOutput(
-      {"/sbin/zfs", "list", "-H", "-t", "snapshot",
-       "-o", "name", "-r", dataset},
-      "list ZFS snapshots");
-    std::istringstream is(raw);
-    std::string line;
-    std::regex re(R"(^.+@(backup-.+)$)");
-    while (std::getline(is, line)) {
-      std::smatch m;
-      if (std::regex_match(line, m, re)) {
-        std::string suffix = m[1].str();
-        if (suffix > out) out = suffix;
-      }
-    }
-  } catch (...) {}
-  return out;
-}
-
-} // anon
+// 0.8.25: datasetForJail + findLatestBackupSuffix moved to
+// lib/zfs_dataset.{h,cpp} where they're shared with backup.cpp.
 
 bool replicateCrate(const Args &args) {
   // Validate inputs (everything is shell-bound — paranoia-level
@@ -84,7 +53,7 @@ bool replicateCrate(const Args &args) {
       ERR("--since: " << e)
 
   ReplicatePure::ReplicateRequest req;
-  req.sourceDataset = datasetForJail(args.replicateTarget);
+  req.sourceDataset = ZfsDataset::datasetForJail(args.replicateTarget, "replicate");
   req.destDataset   = args.replicateDestDataset;
 
   // Plan: full vs. incremental.
@@ -92,7 +61,7 @@ bool replicateCrate(const Args &args) {
   in.sinceProvided = !args.replicateSince.empty();
   in.sinceName     = args.replicateSince;
   if (!in.sinceProvided && args.replicateAutoIncremental) {
-    auto prev = findLatestBackupSuffix(req.sourceDataset);
+    auto prev = ZfsDataset::findLatestBackupSuffix(req.sourceDataset);
     if (!prev.empty()) {
       in.priorBackupExists   = true;
       in.priorSnapshotSuffix = prev;

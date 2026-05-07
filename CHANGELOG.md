@@ -6,6 +6,74 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.25] — 2026-05-07
+
+Dedup of `datasetForJail` + `findLatestBackupSuffix` flagged by
+the 0.8.21 audit. Pre-0.8.25 these helpers were verbatim copies
+in `lib/backup.cpp` (35,48) and `lib/replicate.cpp` (30,40), with
+a third near-copy in `daemon/routes.cpp:620`.
+
+### What this release adds
+
+- **`lib/zfs_dataset_pure.{h,cpp}`** — pure parser of
+  `zfs list -H -t snapshot -o name -r <ds>` output:
+  - `pickLatestBackupSuffix(out)` — returns lex-greatest
+    `backup-*` suffix; tolerates CRLF, blank lines, comment
+    lines, recursive-descendant entries
+  - `validateDatasetName(ds)` — rejects relative paths, `..`
+    segments, shell metas, leading/trailing `/`
+- **`lib/zfs_dataset.{h,cpp}`** — runtime wrapper that calls
+  `zfs(8)` + delegates parsing to the pure module:
+  - `datasetForJail(name, errContext)` — strict (throws if jail
+    missing or path not on ZFS); `errContext` appears in
+    diagnostics so operators see which command failed
+  - `findLatestBackupSuffix(dataset)` — runs `zfs list` and
+    pipes through `pickLatestBackupSuffix`; returns "" on
+    `zfs(8)` error (caller treats as "no prior", same as the
+    pre-0.8.25 `try { ... } catch (...) {}` pattern)
+
+`lib/backup.cpp` and `lib/replicate.cpp` updated to delegate;
+~70 LOC of duplicate logic removed.
+
+`daemon/routes.cpp::datasetForJail` is **intentionally not
+unified** because its semantics differ — when the URL parameter
+doesn't match a running jail, it returns the parameter as-is
+(treating it as a dataset name), to support the snapshot
+endpoints' "operate on a raw dataset" path. Comment added so
+future readers don't try to merge it.
+
+### Tests
+
+9 ATF unit cases on `pickLatestBackupSuffix`:
+
+- empty input → empty
+- no backup-* snapshots → empty
+- multiple backup-* → lex-greatest wins (UTC-ISO-8601 lex
+  monotonicity is what makes this safe)
+- mixed with `daily-*` / `warm-*` / `manual-*` → only `backup-*`
+  count
+- CRLF + blank-line tolerance
+- comment-line tolerance
+- recursive-descendant entries (multi-line `zfs list -r`)
+
+3 cases on `validateDatasetName` — typical accepted, traversal/
+shell-meta/space rejection.
+
+### What this release does NOT do
+
+- **Native `ZfsOps`/`IfconfigOps`/`IpfwOps`/`PfctlOps`
+  wiring** — the audit's other "lost-functionality" finding.
+  Tracked for 0.8.26 (operator opt-in via
+  `prefer_native_apis: true`).
+- **`NvProtocol` documentation** — final audit closure item.
+  Tracked for 0.8.27.
+- **`daemon/routes.cpp` dedup** — different semantics, kept
+  separate (now with a comment).
+
+1070/1070 unit tests pass locally.
+
+---
+
 ## [0.8.24] — 2026-05-07
 
 Wires `lib/capsicum_ops.cpp` (~136 LOC) — third and last of the

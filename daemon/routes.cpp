@@ -617,11 +617,15 @@ static void handleContainerRestart(const httplib::Request &req, httplib::Respons
 
 // --- Snapshot helpers ---
 
+// 0.8.25: intentionally NOT unified with ZfsDataset::datasetForJail
+// (lib/zfs_dataset.{h,cpp}). The strict version in lib/ throws when
+// the jail isn't found or its path isn't on ZFS — that's what
+// backup/replicate need. This route helper falls through to
+// "treat the URL parameter as a dataset name as-is" so the snapshot
+// endpoints can operate on raw datasets (mirroring the CLI's
+// `crate snapshot` subcommand). Different semantics, different
+// function — kept separate by design.
 static std::string datasetForJail(const std::string &name) {
-  // The snapshot endpoints accept either a running jail name or a dataset
-  // name. If a running jail matches, derive its dataset from the path;
-  // otherwise treat the URL parameter as a dataset name as-is, mirroring
-  // how the CLI's snapshot subcommand operates on raw datasets.
   auto jail = JailQuery::getJailByName(name);
   if (jail)
     return Util::Fs::getZfsDataset(jail->path);
