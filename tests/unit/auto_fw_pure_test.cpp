@@ -415,20 +415,26 @@ ATF_TEST_CASE_BODY(orphan_rules_picks_non_running) {
 
 ATF_TEST_CASE_WITHOUT_HEAD(orphan_rules_skips_out_of_range);
 ATF_TEST_CASE_BODY(orphan_rules_skips_out_of_range) {
-  // Operator-defined rules below 40000 and above 49999 must be
-  // ignored — they're not in crate's reserved range.
+  // 0.8.39: scan now narrowed from "anything in 40000-49999" to
+  // the specific sub-ranges crate actually populates:
+  //   40000-40999  main NAT-activation rule (40000+jid)
+  //   41000-41999  host-loopback hairpin rule (41000+jid)
+  // Other rules in the broader 40000-49999 are operator-managed
+  // strays — left alone, NOT flagged as orphans.
   std::set<int> running;   // none running
   std::string out =
     "100 allow ip from any to any\n"
-    "39999 allow ip from any to any\n"
-    "40000 allow ip from any to any\n"   // jid 0 = orphan
-    "49999 allow ip from any to any\n"   // jid 9999 = orphan
-    "50000 allow ip from any to any\n"
+    "39999 allow ip from any to any\n"   // below crate range
+    "40000 allow ip from any to any\n"   // jid 0 = orphan (crate main)
+    "41005 allow ip from any to any\n"   // jid 5 = orphan (crate loopback)
+    "42000 allow ip from any to any\n"   // unknown crate sub-range; skip
+    "49999 allow ip from any to any\n"   // unknown crate sub-range; skip
+    "50000 allow ip from any to any\n"   // above crate range
     "60000 allow ip from any to any\n";
   auto orphans = AutoFwPure::pickOrphanIpfwRulesByJid(out, running);
   ATF_REQUIRE_EQ(orphans.size(), (size_t)2);
   ATF_REQUIRE_EQ(orphans[0], 40000u);
-  ATF_REQUIRE_EQ(orphans[1], 49999u);
+  ATF_REQUIRE_EQ(orphans[1], 41005u);
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(orphan_rules_handles_crlf_blanks);
@@ -473,6 +479,52 @@ ATF_TEST_CASE_BODY(orphan_nat_ids_basic) {
   ATF_REQUIRE_EQ(orphans.size(), (size_t)2);
   ATF_REQUIRE_EQ(orphans[0], 30009u);
   ATF_REQUIRE_EQ(orphans[1], 30012u);
+}
+
+// --- 0.8.39: bug#239590 host-loopback hairpin ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(loopback_rule_id_distinct_from_main);
+ATF_TEST_CASE_BODY(loopback_rule_id_distinct_from_main) {
+  // Same jid -> different rule IDs in different sub-ranges.
+  for (int jid = 1; jid <= 100; jid++) {
+    auto main = AutoFwPure::ruleIdForJail(jid);
+    auto loop = AutoFwPure::loopbackRuleIdForJail(jid);
+    ATF_REQUIRE(main != loop);
+    ATF_REQUIRE(loop > main);
+    ATF_REQUIRE(loop - main == 1000);
+  }
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(loopback_argv_shape);
+ATF_TEST_CASE_BODY(loopback_argv_shape) {
+  auto argv = AutoFwPure::buildIpfwHostLoopbackNatArgv(41005, 30005);
+  ATF_REQUIRE_EQ(argv.size(), (size_t)10);
+  ATF_REQUIRE_EQ(argv[0], std::string("/sbin/ipfw"));
+  ATF_REQUIRE_EQ(argv[1], std::string("add"));
+  ATF_REQUIRE_EQ(argv[2], std::string("41005"));
+  ATF_REQUIRE_EQ(argv[3], std::string("nat"));
+  ATF_REQUIRE_EQ(argv[4], std::string("30005"));
+  ATF_REQUIRE_EQ(argv[5], std::string("tcp"));
+  ATF_REQUIRE_EQ(argv[6], std::string("from"));
+  ATF_REQUIRE_EQ(argv[7], std::string("me"));
+  ATF_REQUIRE_EQ(argv[8], std::string("to"));
+  ATF_REQUIRE_EQ(argv[9], std::string("me"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(orphan_scan_recognises_loopback_range);
+ATF_TEST_CASE_BODY(orphan_scan_recognises_loopback_range) {
+  // jid 5 running -> 40005 (main) + 41005 (loopback) both valid.
+  // jid 9 not running -> 40009 + 41009 both orphans.
+  std::set<int> running{5};
+  std::string out =
+    "40005 nat 30005 ip from 10.66.0.5 to any out via em0\n"
+    "41005 nat 30005 tcp from me to me\n"
+    "40009 nat 30009 ip from 10.66.0.9 to any out via em0\n"
+    "41009 nat 30009 tcp from me to me\n";
+  auto orphans = AutoFwPure::pickOrphanIpfwRulesByJid(out, running);
+  ATF_REQUIRE_EQ(orphans.size(), (size_t)2);
+  ATF_REQUIRE_EQ(orphans[0], 40009u);
+  ATF_REQUIRE_EQ(orphans[1], 41009u);
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(orphan_nat_ids_skips_non_nat_lines);
@@ -529,4 +581,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, orphan_throttle_pair_jid_division);
   ATF_ADD_TEST_CASE(tcs, orphan_nat_ids_basic);
   ATF_ADD_TEST_CASE(tcs, orphan_nat_ids_skips_non_nat_lines);
+  ATF_ADD_TEST_CASE(tcs, loopback_rule_id_distinct_from_main);
+  ATF_ADD_TEST_CASE(tcs, loopback_argv_shape);
+  ATF_ADD_TEST_CASE(tcs, orphan_scan_recognises_loopback_range);
 }

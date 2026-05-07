@@ -365,6 +365,7 @@ void checkIpfwReservedRanges(Report &r) {
   std::set<unsigned> validThrottleRuleIds;
   for (const auto &j : jails) {
     validNatRuleIds.insert(40000u + (unsigned)j.jid);  // auto-fw
+    validNatRuleIds.insert(41000u + (unsigned)j.jid);  // 0.8.39 host-loopback
     validThrottleRuleIds.insert(20000u + (unsigned)j.jid * 2u);
     validThrottleRuleIds.insert(20000u + (unsigned)j.jid * 2u + 1u);
   }

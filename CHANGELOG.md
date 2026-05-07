@@ -6,6 +6,98 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.39] — 2026-05-07
+
+**Bug fix.** Closes long-standing **bug#239590** (host-LAN-loopback
+rejected by ipfw auto-fw). Pre-0.8.39, a jail with
+`network: auto` + `inbound-tcp: 8080` was reachable from external
+LAN clients (`nc <host-LAN-IP> 8080` from another machine works)
+but rejected from the host itself (`nc <host-LAN-IP> 8080` on the
+crate host returned "Connection refused"). External `pf` deployments
+weren't affected — the bug was specific to the ipfw auto-fw branch
+shipped in 0.8.2.
+
+### Why it broke
+
+Host-self packets to the host's own LAN IP take the kernel's lo0
+shortcut — they never traverse the external interface (`em0` /
+`vtnet0` / etc.). The existing auto-fw rules:
+
+```
+ipfw add 40000+jid nat 30000+jid ip from <jail> to any out via em0   # outbound SNAT
+ipfw nat 30000+jid config if em0 redir_port tcp 10.66.0.5:80 8080    # inbound rdr
+```
+
+…both pinned to `via em0`, so host-loopback bypassed them entirely.
+The packet hit the host's local TCP stack on port 8080, which had
+nothing bound, and got RST.
+
+### Fix
+
+One additional ipfw rule per jail at rule ID `41000+jid`:
+
+```
+ipfw add 41000+jid nat 30000+jid tcp from me to me
+```
+
+`from me to me` matches host-self TCP traffic without `via <iface>`,
+so it fires on the lo0 path too. The rule passes the packet through
+the same NAT instance (`30000+jid`); the redir_port table inside
+that NAT looks up dst-port and rewrites destination address+port
+to the jail. External clients still hit the original
+`40000+jid` + `via em0` rules — no behaviour change for the
+non-loopback path.
+
+Now from the host:
+
+```
+% nc 192.168.1.10 8080      # host's own LAN IP -> jail
+HTTP/1.1 200 OK
+...
+```
+
+### Implementation
+
+- Pure helpers in `lib/auto_fw_pure.{h,cpp}`:
+  - `loopbackRuleIdForJail(jid)` → `41000 + jid`
+  - `buildIpfwHostLoopbackNatArgv(ruleId, natId)` → the rule above
+- Reserved-range scanner (`pickOrphanIpfwRulesByJid`) narrowed
+  from "anything in 40000-49999" to specific sub-ranges
+  (`40000+jid` for main, `41000+jid` for loopback). Stray rules
+  in the broader range are now treated as operator-managed and
+  left alone — fewer false-positive orphans.
+- `lib/run.cpp` ipfw branch installs the loopback rule after the
+  main NAT-activation rule; cleanup deletes it before the main
+  rule. Soft-fail with warning if loopback install fails — the
+  external-LAN-client path still works.
+- `lib/doctor.cpp` updated to recognise `41000+jid` in its
+  `validNatRuleIds` set so doctor doesn't false-warn.
+
+3 new ATF unit cases:
+- `loopback_rule_id_distinct_from_main` — different sub-ranges
+- `loopback_argv_shape` — the canonical `from me to me` form
+- `orphan_scan_recognises_loopback_range` — round-trip with
+  the reserved-range scanner
+
+### What this release does NOT do
+
+- **UDP host-loopback** — only TCP. Operators rarely need
+  UDP-self-loopback (DNS / discovery don't typically loop this
+  way); tracked if a real ask comes in.
+- **pf branch** — pf already handles host-loopback correctly
+  via its built-in `route-to` / `redirect-to` semantics on lo0.
+  Operators on `firewall_backend: pf` aren't affected by
+  bug#239590.
+- **Range port-forwards (`ports: 8000-8999`)** — the loopback
+  rule fires regardless, but the NAT instance's redir_port table
+  must contain a matching entry. Range entries work the same way
+  as for external clients (per 0.8.3); the fix here just routes
+  host-self traffic into the same machinery.
+
+1079/1079 unit tests pass locally.
+
+---
+
 ## [0.8.38] — 2026-05-07
 
 **Documentation-only release.** Cleanup of TODO/TODO2 to reflect

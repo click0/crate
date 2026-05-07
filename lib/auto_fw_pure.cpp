@@ -113,9 +113,10 @@ std::string formatRdrAnchorLine(const std::string &externalIface,
 namespace {
 
 // Reserved high-number ranges (matches throttle's 10000/20000 bases).
-constexpr unsigned kIpfwNatBase  = 30000;
-constexpr unsigned kIpfwRuleBase = 40000;
-constexpr unsigned kIpfwIdMax    = 65535;  // ipfw rule numbers are 16-bit
+constexpr unsigned kIpfwNatBase           = 30000;
+constexpr unsigned kIpfwRuleBase          = 40000;
+constexpr unsigned kIpfwLoopbackRuleBase  = 41000;  // 0.8.39 (bug#239590)
+constexpr unsigned kIpfwIdMax             = 65535;  // ipfw rule numbers are 16-bit
 
 } // anon
 
@@ -129,6 +130,14 @@ unsigned natIdForJail(int jid) {
 unsigned ruleIdForJail(int jid) {
   unsigned u = static_cast<unsigned>(jid);
   return kIpfwRuleBase + u;
+}
+
+unsigned loopbackRuleIdForJail(int jid) {
+  // 0.8.39 (bug#239590): host-loopback NAT rule. Sits in 41000+
+  // to keep the main nat-activation rule (40000+jid) and the
+  // loopback hairpin rule visually distinct in `ipfw -q list`.
+  unsigned u = static_cast<unsigned>(jid);
+  return kIpfwLoopbackRuleBase + u;
 }
 
 std::string validateIpfwNatId(unsigned id) {
@@ -185,6 +194,31 @@ std::vector<std::string> buildIpfwNatDeleteArgv(unsigned natId) {
   return {"/sbin/ipfw", "nat", std::to_string(natId), "delete"};
 }
 
+std::vector<std::string> buildIpfwHostLoopbackNatArgv(unsigned ruleId,
+                                                     unsigned natId) {
+  // 0.8.39 (bug#239590): hairpin NAT rule for host-loopback traffic.
+  // Reproducer: jail listens on 8080 with `inbound-tcp: 8080`;
+  // external LAN clients connect fine, but `nc <host-LAN-IP> 8080`
+  // FROM THE HOST ITSELF gets connection-refused.
+  //
+  // Why: the NAT-activation rule is `from <jail> to any out via em0`
+  // for outbound, plus `redir_port` config that reverse-translates
+  // incoming traffic on em0. Host-self packets to the host's LAN IP
+  // never traverse em0 — the kernel routes them through lo0 — so
+  // neither rule fires, packet hits the host's local TCP stack on
+  // port 8080 (unbound), gets RST.
+  //
+  // Fix: this extra rule catches `from me to me` TCP and runs it
+  // through the same NAT instance. The redir_port table inside
+  // that NAT then matches dst-port and rewrites destination
+  // address+port to the jail. udp host-loopback is intentionally
+  // not handled here — operators rarely need it; tracked for a
+  // followup if a real ask comes in.
+  return {"/sbin/ipfw", "add", std::to_string(ruleId),
+          "nat", std::to_string(natId),
+          "tcp", "from", "me", "to", "me"};
+}
+
 namespace {
 
 // Parse the leading whitespace-separated token of `line` as an
@@ -217,7 +251,15 @@ std::vector<unsigned> pickOrphanIpfwRulesByJid(
     if (!line.empty() && line.back() == '\r') line.pop_back();
     long n = parseLeadingNumber(line);
     if (n < 40000 || n >= 50000) continue;
-    int jid = static_cast<int>(n) - 40000;
+    // 0.8.39: range 40000-49999 covers BOTH the main NAT-activation
+    // rule (40000+jid) and the host-loopback hairpin rule (41000+jid).
+    // For each, recover jid via modulo 1000 and skip rules whose jid
+    // doesn't map back into either base — those would be stray rules
+    // an operator added in our reserved range, not crate-managed.
+    int jid = -1;
+    if (n >= 41000 && n < 42000)       jid = static_cast<int>(n) - 41000;
+    else if (n >= 40000 && n < 41000)  jid = static_cast<int>(n) - 40000;
+    else                               continue;
     if (runningJids.count(jid) == 0)
       orphans.push_back(static_cast<unsigned>(n));
   }

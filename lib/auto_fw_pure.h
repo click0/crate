@@ -121,6 +121,11 @@ std::string formatRdrAnchorLine(const std::string &externalIface,
 unsigned natIdForJail(int jid);
 unsigned ruleIdForJail(int jid);
 
+// 0.8.39 (bug#239590): rule ID for the host-loopback hairpin NAT
+// rule. Sits in 41000+ to keep the main nat-activation rule
+// (40000+jid) visually distinct in `ipfw -q list` output.
+unsigned loopbackRuleIdForJail(int jid);
+
 // Validate the NAT instance id range. Returns "" on success.
 // Caller passes the result of natIdForJail; this is a sanity belt.
 std::string validateIpfwNatId(unsigned id);
@@ -173,6 +178,19 @@ std::vector<std::string> buildIpfwNatRuleArgv(unsigned ruleId,
 //   ipfw nat <natId> delete
 std::vector<std::string> buildIpfwRuleDeleteArgv(unsigned ruleId);
 std::vector<std::string> buildIpfwNatDeleteArgv(unsigned natId);
+
+// 0.8.39 (bug#239590): rule that loops host-self TCP traffic
+// through the jail's NAT instance, so `nc <host-LAN-IP> <hostPort>`
+// from the host itself reaches the jail's <jailPort> — same as
+// from another LAN host. Without this rule, host-self traffic
+// takes the kernel's lo0 shortcut and never traverses the
+// external interface, so the existing redir_port table never
+// gets a chance to translate.
+//   ipfw add <ruleId> nat <natId> tcp from me to me
+// UDP host-loopback isn't covered here; operators rarely need it
+// (DNS / discovery protocols don't typically loopback this way).
+std::vector<std::string> buildIpfwHostLoopbackNatArgv(unsigned ruleId,
+                                                     unsigned natId);
 
 // 0.8.37: orphan-rule scan helpers, used by `crate doctor`
 // (warn-only since 0.8.14) and `crate clean` (delete since this

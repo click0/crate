@@ -3,15 +3,7 @@ not yet fixed. Items are grouped by priority for production readiness.
 
 === Known bugs ===
 
-* (bug#239590) net/inbound: crates can listen on any ports for inbound
-  connections, but connections are rejected from the host itself.
-  ipfw rule doesn't forward TCP connections made through the host's LAN
-  address. Reproducer:
-    1. start a jail with `network: auto` and `inbound-tcp: 8080`
-    2. from another LAN host: `nc <host-LAN-addr> 8080` -> works
-    3. from the host itself: `nc <host-LAN-addr> 8080` -> rejected
-  Likely fix: add a redir_addr rule for the host's own LAN IP, or
-  loop the host's outgoing packet through the same nat instance.
+(none currently — bug#239590 host-LAN-loopback rejection FIXED in 0.8.39)
 
 === High priority — blocking production use ===
 

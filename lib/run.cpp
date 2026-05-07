@@ -1176,13 +1176,42 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
               Util::execCommand(
                 AutoFwPure::buildIpfwNatRuleArgv(ruleId, natId, ipBare, externalIface),
                 "ipfw add nat rule");
+              // 0.8.39 (bug#239590): hairpin rule so connections
+              // from the host itself to its own LAN address reach
+              // the jail. Best-effort — soft-warn if it fails;
+              // the SNAT/redir for external clients still works.
+              unsigned loopbackId = AutoFwPure::loopbackRuleIdForJail(jid);
+              bool loopbackInstalled = false;
+              try {
+                Util::execCommand(
+                  AutoFwPure::buildIpfwHostLoopbackNatArgv(loopbackId, natId),
+                  "ipfw add host-loopback nat rule");
+                loopbackInstalled = true;
+              } catch (const std::exception &ex) {
+                std::cerr << rang::fg::yellow
+                          << "auto-fw[ipfw]: host-loopback rule install failed: "
+                          << ex.what()
+                          << " — `nc <host-LAN-IP> <port>` from the host "
+                             "itself may be rejected; external LAN clients "
+                             "still work"
+                          << rang::style::reset << std::endl;
+              }
               LOG("auto-fw[ipfw]: NAT instance " << natId << " + rule " << ruleId
+                  << (loopbackInstalled ? " + loopback " + std::to_string(loopbackId) : "")
                   << " (" << ipBare << " -> " << externalIface << ", "
                   << redirs.size() << " redir_port clauses)")
-              // Cleanup: delete rule first, then NAT instance.
-              ipfwAutoFwCleanup.reset([natId, ruleId, &args]() {
+              // Cleanup: delete loopback rule, main rule, NAT instance.
+              ipfwAutoFwCleanup.reset([natId, ruleId, loopbackId,
+                                       loopbackInstalled, &args]() {
                 LOG("auto-fw[ipfw]: cleanup rule " << ruleId
+                    << (loopbackInstalled ? " + loopback " + std::to_string(loopbackId) : "")
                     << " + nat " << natId)
+                if (loopbackInstalled) {
+                  try {
+                    Util::execCommand(AutoFwPure::buildIpfwRuleDeleteArgv(loopbackId),
+                                      "ipfw delete host-loopback rule");
+                  } catch (...) {}
+                }
                 try {
                   Util::execCommand(AutoFwPure::buildIpfwRuleDeleteArgv(ruleId),
                                     "ipfw delete rule");
