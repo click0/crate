@@ -6,6 +6,7 @@
 #include "jail_query.h"
 #include "pathnames.h"
 #include "ctx.h"
+#include "spec_registry.h"
 #include "util.h"
 #include "err.h"
 
@@ -177,6 +178,50 @@ bool cleanCrates(const Args &args) {
         }
       }
       ::closedir(dir);
+    }
+  }
+
+  // 5. Clean orphan spec-registry entries (0.8.34)
+  // The registry maps {jail-name -> abs-path-of-.crate-file} and
+  // is populated by `crate run -f` (since 0.8.21). Entries
+  // intentionally persist past stop/restart so the daemon's
+  // control-plane PostStart can find the path again. But when
+  // the operator deletes the .crate file from disk, the entry
+  // becomes a dangling pointer — PostStart returns 410 Gone,
+  // confusingly. This section sweeps those.
+  std::cout << rang::style::bold << "Scanning for spec-registry orphans..."
+            << rang::style::reset << std::endl;
+  {
+    try {
+      auto entries = SpecRegistry::readAll();
+      for (const auto &e : entries) {
+        struct stat sb;
+        if (::stat(e.cratePath.c_str(), &sb) == 0) continue;  // file still there
+        if (dryRun) {
+          std::cout << "  [dry-run] would remove registry entry: "
+                    << e.name << " -> " << e.cratePath
+                    << " (file no longer exists)" << std::endl;
+        } else {
+          std::cout << "  removing registry entry: "
+                    << e.name << " -> " << e.cratePath << std::endl;
+          try {
+            SpecRegistry::remove(e.name);
+            cleaned++;
+          } catch (const std::exception &ex) {
+            std::cerr << rang::fg::yellow
+                      << "  warning: failed to remove registry entry "
+                      << e.name << ": " << ex.what()
+                      << rang::style::reset << std::endl;
+          }
+        }
+      }
+    } catch (const std::exception &e) {
+      // readAll throws on parse errors / permission issues — log,
+      // don't abort the rest of the cleanup.
+      std::cerr << rang::fg::yellow
+                << "  warning: spec-registry read failed: " << e.what()
+                << " (skipping orphan sweep)"
+                << rang::style::reset << std::endl;
     }
   }
 

@@ -203,7 +203,8 @@ static void usageClean() {
   std::cout << "usage: crate clean [-h|--help] [-n|--dry-run]" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Clean up orphaned resources from crashed or interrupted crate sessions." << std::endl;
-  std::cout << "Removes stale jail directories, interface records, and context entries." << std::endl;
+  std::cout << "Removes stale jail directories, interface records, context entries," << std::endl;
+  std::cout << "and (since 0.8.34) spec-registry entries pointing at deleted .crate files." << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Options:" << std::endl;
   std::cout << "  -n, --dry-run                      show what would be cleaned without making changes" << std::endl;
@@ -723,7 +724,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.8.33" << std::endl;
+        std::cout << "crate 0.8.34" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -734,7 +735,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.8.33" << std::endl;
+          std::cout << "crate 0.8.34" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);

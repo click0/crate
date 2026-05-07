@@ -6,6 +6,79 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.34] — 2026-05-07
+
+`crate clean` now sweeps spec-registry orphans — entries
+mapping `{jail-name -> abs-crate-path}` whose `.crate` file no
+longer exists on disk. Wires `SpecRegistry::remove` which was
+declared in 0.8.21 but had no caller until now.
+
+### Why this matters
+
+`crate run -f /home/op/firefox.crate` registers the path
+(0.8.21) so the daemon's control-plane PostStart can find the
+spec on a later `start <name>` request, even after the jail has
+stopped. Entries intentionally persist past stop/restart.
+
+But when the operator deletes or renames the `.crate` file from
+disk, the registry entry becomes a dangling pointer.
+PostStart then returns:
+
+```
+HTTP 410 Gone
+{"error":"registered .crate path no longer exists: /home/op/firefox.crate"}
+```
+
+…confusingly, since the operator never explicitly removed the
+entry. `crate clean` now sweeps these.
+
+### What this release adds
+
+A 5th section in `lib/clean.cpp::cleanCrates` after the
+existing four (jail dirs, interface records, context entries,
+COW overlays):
+
+```
+% sudo crate clean
+Scanning for orphaned jail directories...
+Scanning for stale interface records...
+Cleaning stale context entries...
+Scanning for stale COW overlays...
+Scanning for spec-registry orphans...
+  removing registry entry: firefox -> /home/op/firefox.crate
+  removing registry entry: postgres -> /tmp/postgres-2025.crate
+
+Cleanup complete: 2 items removed.
+```
+
+`--dry-run` prints `[dry-run] would remove registry entry: ...`
+without calling `SpecRegistry::remove`, matching the rest of
+the clean command's contract.
+
+`SpecRegistry::readAll` parse failures (corrupt registry file,
+permission errors) log a warning and skip just this section —
+they don't abort the rest of the cleanup, since registry health
+shouldn't gate jail-directory cleanup.
+
+### What this release does NOT do
+
+- **`--orphans` flag for the operator to opt INTO orphan
+  sweep** — sweep is now unconditional. Earlier sketch had
+  this as a flag but then `crate clean` would have asymmetric
+  behaviour (sweeps 4 things by default, 5 with the flag).
+  Always-on is more discoverable, and the existing
+  `--dry-run` covers the "I want to see first" case.
+- **`crate clean --orphan-ipfw` for `IpfwOps::deleteRulesInSet`** —
+  separate scaffolding, separate PR. Tracked.
+- **Pure helper for the orphan-pick logic** — could extract a
+  `pickOrphans(entries, exists_predicate)` to `zfs_dataset_pure`
+  pattern, but the side effect (file-exists check) is what
+  matters and the loop is 4 lines. Inlined.
+
+1070/1070 unit tests pass locally.
+
+---
+
 ## [0.8.33] — 2026-05-07
 
 `crate stats --rctl-pressure` — operator-facing view into how
