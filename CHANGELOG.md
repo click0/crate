@@ -6,6 +6,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.36] — 2026-05-07
+
+`crate gui screenshot` uses native libX11 when available, dropping
+two fork+exec calls per screenshot. Wires `X11Ops::screenshot`
+which existed since the X11 wrappers landed but had no production
+caller — `getResolution` was the only `X11Ops::*` function in use.
+
+### What changes
+
+| Build | Pipeline | fork+exec count |
+|---|---|---|
+| Pre-0.8.36 | `xwd` -> `xwdtopnm` -> `pnmtopng` -> PNG | 3 |
+| 0.8.36, `WITH_X11` | `X11Ops::screenshot` (in-process PPM) -> `pnmtopng` -> PNG | 1 |
+| 0.8.36, no `WITH_X11` | falls back to xwd pipeline | 3 |
+| 0.8.36, `.ppm`/`.pnm` output | `X11Ops::screenshot` only | 0 |
+
+Operator sees which path was used in the success message:
+
+```
+% crate gui screenshot firefox -o snap.png
+Screenshot saved (native libX11): snap.png
+
+% crate gui screenshot firefox -o snap.ppm
+Screenshot saved (native libX11, PPM): snap.ppm
+```
+
+`xwd` + `xwdtopnm` are still required for builds without
+`WITH_X11`, so the `xorg-xwd` package dependency stays for
+non-libX11 builds. With `WITH_X11=1`, only `pnmtopng` is needed
+on the host (and only for non-PPM output).
+
+### Implementation
+
+- `gui.cpp::guiScreenshot` branches on `X11Ops::available()`
+- Lower-cases the output filename to detect `.ppm` / `.pnm`
+  suffixes — those skip the conversion entirely
+- Soft-fall-through: if X11Ops is built in but `XOpenDisplay`
+  fails (XAuth not copied in, display permissions, etc.),
+  warns and falls back to `xwd` rather than aborting
+- Makefile moves `lib/x11_ops.cpp` out of the `WITH_X11`
+  conditional — `available()` always links and returns
+  false-or-true per build
+
+### What this release does NOT do
+
+- **Wire `X11Ops::isDisplayAvailable` / `setResolution`** —
+  no natural caller. `gui resize` already uses xrandr(1)
+  shell; refactoring to native is a separate effort.
+- **PNG output without `pnmtopng`** — needs libpng linkage,
+  which is a new dependency. Defer.
+- **Multi-monitor / partial-region capture** — `screenshot`
+  only does the root window. Operators wanting subregion
+  pass through xwd's `-icmap -silent` flags by hand.
+
+1070/1070 unit tests pass locally.
+
+---
+
 ## [0.8.35] — 2026-05-07
 
 `crate doctor --refresh-cache` — drops the in-memory NetDetect

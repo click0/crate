@@ -103,9 +103,13 @@ endif
 LIB_SRCS += lib/vnc_server.cpp
 ifdef WITH_X11
 CXXFLAGS += -DHAVE_X11
-LIB_SRCS += lib/x11_ops.cpp
 LIBS     += -lX11 -lXrandr -lXext
 endif
+# 0.8.36: x11_ops.cpp is always compiled. Internal #ifdef HAVE_X11
+# guards stub out the libX11-specific code so X11Ops::available()
+# returns false on non-WITH_X11 builds and lib/gui.cpp's screenshot
+# path falls back to the xwd + xwdtopnm + pnmtopng pipeline.
+LIB_SRCS += lib/x11_ops.cpp
 ifdef WITH_LIBSEAT
 CXXFLAGS += -DHAVE_LIBSEAT
 LIBS     += -lseat
