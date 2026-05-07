@@ -113,4 +113,49 @@ Message sendCommand(const std::string &socketPath, const Message &cmd) {
   return response;
 }
 
+bool available() {
+#ifdef __FreeBSD__
+  return true;
+#else
+  return false;
+#endif
+}
+
+// 0.8.27: in-process round-trip test. socketpair() + sendMessage()
+// + recvMessage() so the codepaths are exercised without needing
+// a live daemon. On Linux (no libnv) returns false without side
+// effects.
+bool selfTest() {
+#ifdef __FreeBSD__
+  int sv[2];
+  if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0)
+    return false;
+
+  Message out;
+  out.action = "selftest";
+  out.params["k"] = "v";
+  out.status = 7;
+  out.error = "";
+
+  bool ok = sendMessage(sv[0], out);
+  if (!ok) {
+    ::close(sv[0]); ::close(sv[1]);
+    return false;
+  }
+
+  Message in;
+  ok = recvMessage(sv[1], in);
+  ::close(sv[0]); ::close(sv[1]);
+  if (!ok) return false;
+
+  if (in.action != out.action) return false;
+  if (in.status != out.status) return false;
+  auto it = in.params.find("k");
+  if (it == in.params.end() || it->second != "v") return false;
+  return true;
+#else
+  return false;
+#endif
+}
+
 }

@@ -18,6 +18,7 @@
 #include "ifconfig_ops.h"
 #include "ipfw_ops.h"
 #include "jail_query.h"
+#include "nv_protocol.h"
 #include "pfctl_ops.h"
 #include "util.h"
 #include "zfs_ops.h"
@@ -618,6 +619,35 @@ void checkDrmSession(Report &r) {
 // who care about latency can rebuild with the appropriate
 // HAVE_LIB* macros and the runtime will pick up the native
 // path on next invocation.
+// 0.8.27: nvlist-protocol round-trip — verifies the
+// scaffolding for the future control-plane v2 still works.
+// Currently the only production caller of NvProtocol; surfacing
+// it here means the code path stays exercised so it doesn't
+// rot. Failure mode is informational on Linux dev builds (libnv
+// unavailable) and a warning on FreeBSD (libnv broken or
+// socketpair failure — exotic).
+void checkNvProtocol(Report &r) {
+  if (!NvProtocol::available()) {
+    r.checks.push_back(passCheck("native-api", "nvlist-protocol",
+      "libnv not built in (Linux dev build) — nvlist wire format "
+      "for the future control-plane v2 unavailable. Fine on "
+      "FreeBSD; on Linux the production crate uses HTTP+JSON "
+      "anyway."));
+    return;
+  }
+  if (NvProtocol::selfTest()) {
+    r.checks.push_back(passCheck("native-api", "nvlist-protocol",
+      "libnv round-trip works — scaffolding for the future "
+      "control-plane v2 (replaces hand-rolled HTTP parsing in "
+      "daemon/control_socket_pure.cpp) is ready."));
+  } else {
+    r.checks.push_back(warnCheck("native-api", "nvlist-protocol",
+      "libnv built in but socketpair round-trip failed — exotic. "
+      "Re-run `crate doctor` after a system update; if it persists, "
+      "file a bug with the FreeBSD version."));
+  }
+}
+
 void checkNativeApis(Report &r) {
   r.checks.push_back(passCheck("native-api", "libzfs",
     ZfsOps::available()
@@ -688,6 +718,7 @@ bool doctorCommand(const Args &args) {
   checkDrmSession(r);              // 0.8.23
   checkCapsicumSandbox(r);         // 0.8.24
   checkNativeApis(r);              // 0.8.26
+  checkNvProtocol(r);              // 0.8.27
 
   if (args.doctorJson) {
     std::cout << DoctorPure::renderJson(r) << std::endl;

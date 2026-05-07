@@ -6,6 +6,80 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.27] — 2026-05-07
+
+Wires `lib/nv_protocol.cpp` (~116 LOC) — last orphaned unit
+flagged by the 0.8.21 audit. Pre-0.8.27 the file built but had
+zero production callers; the only inter-call within the file
+itself was `sendCommand` invoking its own `connectToDaemon`/
+`sendMessage`/`recvMessage`. Operator linked nothing for it
+(libnv is in FreeBSD base, but the wire format wasn't speaking
+to anything).
+
+### Why kept and not deleted
+
+`NvProtocol` is the foundation for a future control-plane v2
+that bypasses cpp-httplib + the hand-rolled HTTP parser in
+`daemon/control_socket_pure.cpp`. The nvlist wire format is
+materially better than that manual HTTP parser:
+
+- native framing (no Content-Length tracking)
+- native peer-credential support over Unix sockets
+- smaller on the wire
+- no risk of misparsing HTTP edge cases (chunked, folded
+  headers, CRLF in values)
+
+Throwing the code away would lose ~116 LOC of FreeBSD-native
+plumbing that the eventual refactor needs. So the right move is
+**document it as scaffolding + give it a production caller** so
+it stops being silent dead code.
+
+### What this release adds
+
+- **`NvProtocol::available()`** — `true` on FreeBSD builds,
+  `false` on Linux dev boxes. Mirrors the `available()`
+  pattern from `ZfsOps`/`IfconfigOps`/`PfctlOps`/`IpfwOps`.
+- **`NvProtocol::selfTest()`** — opens a `socketpair(AF_UNIX,
+  SOCK_STREAM)`, sends a fixed test `Message` on one end, reads
+  it back on the other, validates round-trip equality. No
+  daemon needed — exercises the codepaths in-process.
+- **`crate doctor` `nvlist-protocol` check** in the
+  `native-api` category. Three outcomes:
+  - libnv not built in (Linux dev) → info pass
+  - libnv + selfTest succeeds → pass ("scaffolding ready")
+  - libnv + selfTest fails → warn ("exotic — file a bug")
+- **Header rewrite** — the file-top comment now explicitly
+  marks `NvProtocol` as scaffolding for the future
+  control-plane v2, lists the four reasons libnv is better
+  than the HTTP parser, and notes the doctor self-test as the
+  only production caller today.
+
+### Closes the 0.8.21 dead-code audit follow-up
+
+| Release | Audit finding | Closure |
+|---|---|---|
+| 0.8.22 | `lib/vnc_server.cpp` (~109 LOC) orphaned | wired via `gui.vnc_native: true` |
+| 0.8.22 | `releaseCpuset` RunAtEnd never reset | replaced with explanatory comment |
+| 0.8.23 | `lib/drm_session.cpp` (~80 LOC) orphaned | wired via `crate doctor` libseat probe |
+| 0.8.24 | `lib/capsicum_ops.cpp` (~136 LOC) orphaned | wired via `audit_syslog: true` |
+| 0.8.25 | `datasetForJail` + `findLatestBackupSuffix` duplicated 3× | extracted to `lib/zfs_dataset.{cpp,h}` + pure parser |
+| 0.8.26 | `*Ops::available` predicates never queried | wired via `native-api` doctor category |
+| 0.8.27 | `lib/nv_protocol.cpp` (~116 LOC) orphaned | wired via `nvlist-protocol` doctor self-test (this) |
+
+All seven audit findings now have a production caller, a
+documented rationale, or a removal commit. The full audit
+output (10 categories) was clean except for these seven; the
+codebase is in a state where deletions don't lose
+functionality and additions don't sit silent.
+
+Six releases (0.8.22 → 0.8.27) added a new `gui` + `audit` +
+`native-api` doctor category each, growing `crate doctor` from
+9 checks to 22.
+
+1070/1070 unit tests pass locally.
+
+---
+
 ## [0.8.26] — 2026-05-07
 
 Surfaces native-API build matrix via `crate doctor`. The 0.8.21
