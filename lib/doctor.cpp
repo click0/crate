@@ -12,6 +12,7 @@
 #include "doctor_pure.h"
 #include "auto_fw_pure.h"
 #include "commands.h"
+#include "drm_session.h"
 #include "jail_query.h"
 #include "util.h"
 #include "err.h"
@@ -553,6 +554,46 @@ void checkAutoFwRules(Report &r) {
   }
 }
 
+// 0.8.23: DRM session via libseat. Surfaces seatd setup issues
+// before they bite at jail start time. Three outcomes:
+//   - libseat not compiled in -> info-level pass (operator's
+//     build doesn't include the feature; not a fault)
+//   - /dev/dri/card0 absent on host -> info pass (no GPU)
+//   - libseat present + /dev/dri/card0 present + probe works -> pass
+//   - libseat present + /dev/dri/card0 present + probe fails -> warn
+//     (seatd not running, user not on seat0, etc.)
+void checkDrmSession(Report &r) {
+  Check c;
+  c.category = "gui";
+  c.name = "drm-session-libseat";
+
+  if (!DrmSession::available()) {
+    c.message = "crate built without WITH_LIBSEAT — DRM device "
+                "acquisition uses direct open(O_RDWR). Fine for "
+                "the setuid-root crate today; matters once "
+                "rootless containers ship.";
+    passCheck(r, c);
+    return;
+  }
+  struct stat st{};
+  if (::stat("/dev/dri/card0", &st) != 0) {
+    c.message = "no /dev/dri/card0 on host — skipping libseat probe.";
+    passCheck(r, c);
+    return;
+  }
+  if (DrmSession::probeDevice("/dev/dri/card0")) {
+    c.message = "libseat session opens and grabs /dev/dri/card0 — "
+                "rootless GPU jails will work once that path lands.";
+    passCheck(r, c);
+  } else {
+    c.message = "libseat compiled in but probeDevice('/dev/dri/card0') "
+                "failed. seatd not running, or current user not on "
+                "an active seat. `service seatd onestart` and re-run "
+                "`crate doctor`.";
+    warnCheck(r, c);
+  }
+}
+
 } // anon
 
 bool doctorCommand(const Args &args) {
@@ -567,6 +608,7 @@ bool doctorCommand(const Args &args) {
   checkAutoFwRules(r);             // 0.8.9
   checkIpfwReservedRanges(r);      // 0.8.14
   checkRctlPresence(r);            // 0.8.14
+  checkDrmSession(r);              // 0.8.23
 
   if (args.doctorJson) {
     std::cout << DoctorPure::renderJson(r) << std::endl;

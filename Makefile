@@ -107,9 +107,13 @@ LIBS     += -lX11 -lXrandr -lXext
 endif
 ifdef WITH_LIBSEAT
 CXXFLAGS += -DHAVE_LIBSEAT
-LIB_SRCS += lib/drm_session.cpp
 LIBS     += -lseat
 endif
+# 0.8.23: drm_session.cpp is always compiled. Internal #ifdef
+# HAVE_LIBSEAT guards stub out the libseat-specific code so
+# DrmSession::available() returns false on builds without libseat
+# and probeDevice falls back to a plain open(O_RDWR) probe.
+LIB_SRCS += lib/drm_session.cpp
 
 CXXFLAGS += -Wall -std=c++17
 CXXFLAGS += -Ilib             # lib/ headers visible to all

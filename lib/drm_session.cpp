@@ -77,4 +77,26 @@ void closeSession() {
 #endif
 }
 
+bool probeDevice(const std::string &path) {
+#ifdef HAVE_LIBSEAT
+  if (!openSession()) return false;
+  int fd = openDevice(path);
+  if (fd < 0) {
+    closeSession();
+    return false;
+  }
+  closeDevice(fd);
+  closeSession();
+  return true;
+#else
+  // Direct open(O_RDWR) probe so the doctor check still runs on
+  // builds without libseat — gives operators a "device permission"
+  // datapoint even if seatd isn't in the picture.
+  int fd = ::open(path.c_str(), O_RDWR);
+  if (fd < 0) return false;
+  ::close(fd);
+  return true;
+#endif
+}
+
 }

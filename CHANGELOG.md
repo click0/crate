@@ -6,6 +6,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.23] — 2026-05-07
+
+Wires `lib/drm_session.cpp` (~80 LOC) — second of three orphaned
+units flagged by the 0.8.21 audit. Pre-0.8.23 the file built when
+`WITH_LIBSEAT=1` was set, but no production code path called any
+`DrmSession::` function. Operator linked libseat and got nothing.
+
+### What this release adds
+
+- **`DrmSession::probeDevice(path)`** — open + immediate close
+  via libseat (or via a plain `open(O_RDWR)` fallback when
+  libseat isn't built in). Surfaces seatd setup issues without
+  needing to start a jail first.
+- **`crate doctor` "drm-session-libseat" check** under the new
+  `gui` category. Three outcomes:
+  - `WITH_LIBSEAT` not built in → info-level pass ("not relevant
+    for setuid-root crate today; matters once rootless ships")
+  - `/dev/dri/card0` absent on host → info pass (no GPU)
+  - libseat + DRM device + probe succeeds → pass
+  - libseat + DRM device + probe fails → warn ("seatd not
+    running, or current user not on an active seat;
+    `service seatd onestart`")
+- **Makefile** moves `lib/drm_session.cpp` out of the
+  `WITH_LIBSEAT` conditional. The .cpp's internal
+  `#ifdef HAVE_LIBSEAT` guards already stub out the
+  libseat-specific code, and the doctor check needs the symbol
+  to link unconditionally.
+
+### Why "doctor check" rather than "wire into Xorg"
+
+The orphaned `DrmSession::openDevice` is the foundation for a
+**rootless containers** flow (TODO low-priority) where crate
+sheds setuid root and needs libseat coordination to legitimately
+open `/dev/dri/cardN` from a regular user's session. Today crate
+runs as setuid root, so the kernel lets it `open(O_RDWR)` the
+DRM device directly without libseat involvement — wiring
+DrmSession into the Xorg fork would add a layer with no
+operational benefit.
+
+The doctor check is the honest delivery for today: it makes the
+libseat path **observable + testable** so operators can
+pre-validate their seatd setup before the rootless work lands,
+and the module stops being pure scaffolding.
+
+### What this release does NOT do
+
+- **Wire DrmSession into Xorg startup** — needs the rootless
+  containers path first. The probe + doctor check are the
+  building blocks.
+- **Mouse/keyboard input on embedded VNC** — still tracked from
+  0.8.22.
+- **CapsicumOps wiring** — third dead-code finding from 0.8.21
+  audit. Tracked for 0.8.24.
+
+1061/1061 unit tests pass locally.
+
+---
+
 ## [0.8.22] — 2026-05-07
 
 Wires up two pieces of long-orphaned functionality flagged by the
