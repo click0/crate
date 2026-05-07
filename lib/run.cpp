@@ -18,6 +18,7 @@
 #include "network_lease.h"
 #include "ip6_alloc_pure.h"
 #include "network_lease6.h"
+#include "ipfw_ops.h"
 #include "spec_registry.h"
 #include "auto_fw_pure.h"
 #include "net_detect.h"
@@ -1093,9 +1094,24 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
               }
             }
             try {
-              Util::execCommand(
-                AutoFwPure::buildIpfwNatConfigWithRedirsArgv(natId, externalIface, redirs),
-                "ipfw nat config");
+              // 0.8.30: route NAT config through IpfwOps::configureNat
+              // instead of inline Util::execCommand so the (currently
+              // shell-only) implementation has a single replacement
+              // point when the native IP_FW3 path lands. configureNat
+              // also warns if the natInstance is already in use,
+              // catching cross-tool ID collisions early. The argv
+              // builder still produces the canonical "ipfw nat <id>
+              // config <…>" tokenization; we strip the
+              // ["/sbin/ipfw", "nat", "<id>", "config"] prefix and
+              // pass the rest as a single config string.
+              auto natArgv = AutoFwPure::buildIpfwNatConfigWithRedirsArgv(
+                natId, externalIface, redirs);
+              std::string natConfig;
+              for (size_t i = 4; i < natArgv.size(); i++) {
+                if (!natConfig.empty()) natConfig += ' ';
+                natConfig += natArgv[i];
+              }
+              IpfwOps::configureNat(natId, natConfig);
               Util::execCommand(
                 AutoFwPure::buildIpfwNatRuleArgv(ruleId, natId, ipBare, externalIface),
                 "ipfw add nat rule");
@@ -1110,9 +1126,13 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
                   Util::execCommand(AutoFwPure::buildIpfwRuleDeleteArgv(ruleId),
                                     "ipfw delete rule");
                 } catch (...) {}
+                // 0.8.30: ditto for the cleanup path. deleteNat
+                // already swallows its own exceptions and warns,
+                // so the outer try/catch is now redundant — kept
+                // for safety in case a future implementation
+                // changes behaviour.
                 try {
-                  Util::execCommand(AutoFwPure::buildIpfwNatDeleteArgv(natId),
-                                    "ipfw nat delete");
+                  IpfwOps::deleteNat(natId);
                 } catch (...) {}
               });
             } catch (const std::exception &ex) {

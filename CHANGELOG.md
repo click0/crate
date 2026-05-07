@@ -6,6 +6,86 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.30] — 2026-05-07
+
+`IpfwOps::configureNat` + `IpfwOps::deleteNat` wired into the
+auto-fw ipfw NAT path (lib/run.cpp). Closes the audit's "declared
+but uncalled" finding for those two functions.
+
+Pre-0.8.30, the ipfw branch of auto-fw fork+exec'd `ipfw nat <id>
+config <…>` and `ipfw nat <id> delete` directly via
+`Util::execCommand(AutoFwPure::buildIpfwNat*Argv(...))`. The
+`IpfwOps::configureNat` wrapper existed but had no callers — it
+was scaffolding for a future native `IP_FW3` setsockopt path
+that nobody had reached for.
+
+### What this release adds
+
+- **Single replacement point** — when the native `IP_FW3` path
+  for NAT instances finally lands, only `IpfwOps::configureNat`
+  needs to change. `lib/run.cpp` keeps calling the same
+  function.
+- **NAT-instance collision warning** — `IpfwOps::configureNat`
+  internally calls `isNatInstanceInUse(natId)` before writing.
+  If a previous `crate run` left a stale instance behind (or
+  another tool grabbed the same ID), the operator now sees:
+  ```
+  WARNING: ipfw NAT instance 30042 already exists — another
+  application may be using it; overwriting
+  ```
+  Pre-0.8.30 the second `crate run` would silently overwrite.
+- **Cleanup symmetry** — `IpfwOps::deleteNat` already swallowed
+  its own errors and warned via `WARN(...)`. The outer
+  try/catch in `run.cpp`'s `ipfwAutoFwCleanup` is now mostly
+  redundant; kept for safety in case a future impl changes.
+
+### What this release does NOT do
+
+- **Native `IP_FW3` setsockopt path for NAT** —
+  `IpfwOps::configureNat` itself still fork+exec's
+  `/sbin/ipfw`. Wiring through the facade lets that change
+  without touching callers when someone implements it.
+- **Wire `IfconfigOps::createVlan` / `setInet6Addr`** — both
+  are also shell-only stubs today. The natural callers
+  (`RunNet::createVlanInJail`, `RunNet::configureStaticIp6`)
+  run inside the jail context via the `execInJail` lambda,
+  not on the host, so swapping them in is non-trivial — the
+  jail-side ifconfig invocation has different argv shape
+  (`vlan create`, `vlan vlandev`, etc.) than the host-side
+  helper. Tracked separately as a `RunNet` refactor.
+- **`IfconfigOps::disableLroTso` / `setDown` / `setDescription`
+  / `useNativeApi` toggle / `setLogProgress`** — minor helpers
+  with no natural caller. Stay as scaffolding.
+
+1070/1070 unit tests pass locally.
+
+### Audit follow-up sprint summary
+
+Eight releases (0.8.22 → 0.8.29 → 0.8.30) on top of the
+0.8.21 dead-code audit:
+
+| Release | Audit finding | Closure |
+|---|---|---|
+| 0.8.22 | `lib/vnc_server.cpp` orphan | wired via `gui.vnc_native` |
+| 0.8.22 | `releaseCpuset` stray RunAtEnd | replaced with comment |
+| 0.8.23 | `lib/drm_session.cpp` orphan | wired via doctor probe |
+| 0.8.24 | `lib/capsicum_ops.cpp` orphan | wired via `audit_syslog` |
+| 0.8.25 | `datasetForJail` 3× duplicate | extracted to `zfs_dataset.{cpp,h}` |
+| 0.8.26 | `*Ops::available` predicates unused | wired via `native-api` doctor cat |
+| 0.8.27 | `lib/nv_protocol.cpp` orphan | wired via `nvlist-protocol` self-test |
+| 0.8.28 | `RunJail::diagnoseExitReason` unused | wired into post-exit logging |
+| 0.8.29 | `ZfsOps::recv` unused | wired into `crate restore` |
+| 0.8.30 | `IpfwOps::configureNat` / `deleteNat` unused | wired into auto-fw ipfw branch |
+
+10 distinct audit findings, all closed. The remaining unused
+functions in `MacOps`, `NetgraphOps`, `IfconfigOps` (the small
+helpers), `RunJail::applyDiskQuota`, `JailQuery::execInJailChecked`
+remain as scaffolding with no natural caller in the current
+architecture — documented in code, kept against future feature
+work.
+
+---
+
 ## [0.8.29] — 2026-05-07
 
 `crate restore` uses `ZfsOps::recv` natively when libzfs is
