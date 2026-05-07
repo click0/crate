@@ -6,6 +6,2802 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.41] — 2026-05-07
+
+`crate update TARGET --pkg-only` — in-place pkg upgrade inside a
+running jail. Closes the medium-priority TODO item (the full
+base-system update remains open, see "What this release does NOT
+do" below).
+
+### Operator pain pre-0.8.41
+
+To pick up new package versions, operators had to:
+
+1. `crate stop myapp`
+2. Edit the spec / use a fresh tag
+3. `crate create -s myapp.yml -o myapp.crate`
+4. `crate run -f myapp.crate`
+
+…losing the jail's in-memory state, warm caches, open tabs / DB
+connections, and any RAM-backed data. For a long-running web app
+or postgres, that's a non-trivial outage every time you want a
+security patch.
+
+### What 0.8.41 ships
+
+```sh
+% sudo crate update myapp --pkg-only -n     # see what's pending
+update: pkg upgrade in jail 'myapp' (jid 5) (dry-run)
+The following 3 package(s) will be upgraded:
+  curl: 8.5.0 -> 8.7.1
+  nginx: 1.24.0_1 -> 1.26.0
+  ...
+update: dry-run complete; nothing applied
+
+% sudo crate update myapp --pkg-only -y     # apply, skip confirm
+update: pkg upgrade in jail 'myapp' (jid 5)
+[5/5] Fetching ... done
+[5/5] Installing ... done
+update: pkg upgrade succeeded in 'myapp'
+```
+
+The jail keeps running through the upgrade. `pkg upgrade`'s
+existing post-install scripts handle service restarts where
+appropriate (rc.d scripts, package-shipped service definitions);
+for app-level reload, the operator's existing healthcheck /
+service-monitor hooks fire as usual.
+
+### Why `--pkg-only` is mandatory
+
+Full base-system update touches `/usr/lib`, `/usr/sbin`, `/lib`
+while the jail is using them — needs a snapshot+rollback dance
+plus a managed restart. That's a much bigger surface (file-by-
+file replacement strategy, library symbol-version checks, jail
+restart timing, recovery on partial failure). 0.8.41 commits to
+pkg-only so the contract is clear; a future release tackles the
+base-system path with the design pass it deserves.
+
+If the operator omits `--pkg-only`, validation rejects the
+command with a clear message:
+
+```
+error: `crate update` currently requires --pkg-only
+       (full base-system update tracked separately)
+```
+
+### Implementation
+
+- New `enum Command` value `CmdUpdate`, `Args.updateTarget /
+  updatePkgOnly / updateDryRun / updateAssumeYes` fields.
+- `lib/update.cpp::updateCommand` resolves the jail (name or
+  JID), validates `--pkg-only` is set, dispatches
+  `JailExec::execInJail(jid, [pkg, upgrade, [-n], [-y]])`.
+- Audit-log entry added (`ev.cmd = "update"`) — same shape as
+  other mutating commands so cron/eyeball auditors pick it up.
+- Bash + zsh completions updated.
+
+### What this release does NOT do
+
+- **Base-system update** — file-by-file replacement of
+  `/usr/lib/...` while the jail's processes hold those files
+  open is non-trivial. Tracked as a separate item; needs the
+  snapshot-and-rollback design pass.
+- **Auto-restart of foreground command** — pkg's post-install
+  scripts handle rc.d services; for the spec's `start: <cmd>`
+  foreground process, the operator runs `crate restart` if the
+  upgrade replaced the binary they're serving from. Adding
+  auto-restart is a behavioural choice with operator-config
+  implications (mid-upgrade outage vs. stale-binary risk);
+  defer.
+- **Rollback on failure** — pkg's atomic install model handles
+  partial failures within itself. Rollback to a pre-upgrade
+  snapshot needs the snapshot-and-rollback work above.
+
+1093/1093 unit tests pass locally.
+
+---
+
+## [0.8.40] — 2026-05-07
+
+Hub scheduling — `GET /api/v1/scheduling/least-loaded` returns a
+recommendation for which node to place the next jail on. Closes
+the medium-priority TODO item; operators get a one-liner to
+discover the best target host without manual `for host in $hosts;
+do curl .../containers; done | sort | head` analysis.
+
+### What this release adds
+
+```
+% curl -s http://hub:9001/api/v1/scheduling/least-loaded | jq
+{
+  "status": "ok",
+  "data": {
+    "target": "alpha",
+    "host": "alpha.example.com:9800",
+    "container_count": 3,
+    "runner_up_count": 5,
+    "confidence": 40,
+    "rationale": "place on 'alpha' (count 3 vs runner-up 'beta' count 5)"
+  }
+}
+```
+
+Operator workflow:
+
+```sh
+target=$(curl -s http://hub:9001/api/v1/scheduling/least-loaded \
+           | jq -r .data.host)
+crate migrate myjail --to "$target" \
+  --from-token-file .source-token --to-token-file .dest-token
+```
+
+### Anti-flap (`?current=<name>`)
+
+Without anti-flap, the recommendation can ping-pong: jail A on
+node `alpha` (count 3), jail B arrives on `beta` (count 4) —
+next call recommends `alpha` again, etc. The `?current=` query
+param lets the caller say "I'm already on this node; only
+recommend a move if it's a meaningful improvement":
+
+```
+% curl -s 'http://hub:9001/api/v1/scheduling/least-loaded?current=beta' | jq
+{
+  "data": {
+    "target": "beta",
+    "container_count": 5,
+    "rationale": "keep on 'beta' (count 5 within 10% of least-loaded 'alpha' count 5)"
+  }
+}
+```
+
+When the current node's count is within 10% of the least-loaded
+node, scheduling recommends keeping the container in place.
+Threshold is `SchedulingPure::kAntiFlapPercent` — 10% by design,
+configurable later if a real ask comes in.
+
+### Confidence score (0..100)
+
+| Scenario | Score |
+|---|---|
+| Single reachable node | 100 |
+| Anti-flap fires (keep current) | 100 |
+| Big spread (1 vs 100 containers) | ~99 |
+| Tight spread (10 vs 11) | ~9 |
+| Tied at non-zero | 0 |
+| All nodes empty (multi-tie at zero) | 50 |
+
+The score is a hint to the operator: low confidence means
+"either choice is fine, don't sweat it"; high means "this is
+clearly the right place".
+
+### Implementation
+
+Pure module `hub/scheduling_pure.{h,cpp}`:
+
+- `NodeView` — `{name, host, reachable, containerCount}`,
+  fed from existing `AggregatorPure::countTopLevelObjects`
+- `pickLeastLoaded(nodes, currentNodeHint = "")` — returns
+  `Recommendation` with target name/host, counts, confidence,
+  human-readable rationale
+- `renderRecommendationJson` — emits the data envelope shown above
+- 14 ATF unit cases cover empty input, all-unreachable,
+  lowest-count picking, unreachable-skip, stable name tie-breaker,
+  sole candidate, confidence scaling (big vs tight spread),
+  anti-flap keep / migrate / unknown-hint / unreachable-hint,
+  JSON shape + special-char quoting
+
+Endpoint in `hub/api.cpp` at `GET /api/v1/scheduling/least-loaded`,
+reuses the same poller-cached node statuses as `/api/v1/aggregate`.
+No additional polling.
+
+### What this release does NOT do
+
+- **`crate-hub schedule <crate-file>` CLI helper** — operators
+  on the curl + jq + migrate path today. CLI sugar tracked.
+- **CPU/memory-based scoring** — `containerCount` is a proxy.
+  Real load metrics need crated to expose `loadavg_1min` /
+  `mem_free` from `/api/v1/host` (currently static info only).
+  Tracked for a future "richer hub metrics" sprint.
+- **Datacenter-aware scheduling** — the endpoint operates on the
+  whole cluster; per-DC placement could be a `?datacenter=foo`
+  filter. Operator can filter clientside today via
+  `/api/v1/datacenters`.
+- **Resource-aware refusal** — endpoint always recommends
+  *something* if any reachable node exists. A future "no
+  candidate has capacity" gate would need the real-load
+  metrics above.
+
+1093/1093 unit tests pass locally.
+
+---
+
+## [0.8.39] — 2026-05-07
+
+**Bug fix.** Closes long-standing **bug#239590** (host-LAN-loopback
+rejected by ipfw auto-fw). Pre-0.8.39, a jail with
+`network: auto` + `inbound-tcp: 8080` was reachable from external
+LAN clients (`nc <host-LAN-IP> 8080` from another machine works)
+but rejected from the host itself (`nc <host-LAN-IP> 8080` on the
+crate host returned "Connection refused"). External `pf` deployments
+weren't affected — the bug was specific to the ipfw auto-fw branch
+shipped in 0.8.2.
+
+### Why it broke
+
+Host-self packets to the host's own LAN IP take the kernel's lo0
+shortcut — they never traverse the external interface (`em0` /
+`vtnet0` / etc.). The existing auto-fw rules:
+
+```
+ipfw add 40000+jid nat 30000+jid ip from <jail> to any out via em0   # outbound SNAT
+ipfw nat 30000+jid config if em0 redir_port tcp 10.66.0.5:80 8080    # inbound rdr
+```
+
+…both pinned to `via em0`, so host-loopback bypassed them entirely.
+The packet hit the host's local TCP stack on port 8080, which had
+nothing bound, and got RST.
+
+### Fix
+
+One additional ipfw rule per jail at rule ID `41000+jid`:
+
+```
+ipfw add 41000+jid nat 30000+jid tcp from me to me
+```
+
+`from me to me` matches host-self TCP traffic without `via <iface>`,
+so it fires on the lo0 path too. The rule passes the packet through
+the same NAT instance (`30000+jid`); the redir_port table inside
+that NAT looks up dst-port and rewrites destination address+port
+to the jail. External clients still hit the original
+`40000+jid` + `via em0` rules — no behaviour change for the
+non-loopback path.
+
+Now from the host:
+
+```
+% nc 192.168.1.10 8080      # host's own LAN IP -> jail
+HTTP/1.1 200 OK
+...
+```
+
+### Implementation
+
+- Pure helpers in `lib/auto_fw_pure.{h,cpp}`:
+  - `loopbackRuleIdForJail(jid)` → `41000 + jid`
+  - `buildIpfwHostLoopbackNatArgv(ruleId, natId)` → the rule above
+- Reserved-range scanner (`pickOrphanIpfwRulesByJid`) narrowed
+  from "anything in 40000-49999" to specific sub-ranges
+  (`40000+jid` for main, `41000+jid` for loopback). Stray rules
+  in the broader range are now treated as operator-managed and
+  left alone — fewer false-positive orphans.
+- `lib/run.cpp` ipfw branch installs the loopback rule after the
+  main NAT-activation rule; cleanup deletes it before the main
+  rule. Soft-fail with warning if loopback install fails — the
+  external-LAN-client path still works.
+- `lib/doctor.cpp` updated to recognise `41000+jid` in its
+  `validNatRuleIds` set so doctor doesn't false-warn.
+
+3 new ATF unit cases:
+- `loopback_rule_id_distinct_from_main` — different sub-ranges
+- `loopback_argv_shape` — the canonical `from me to me` form
+- `orphan_scan_recognises_loopback_range` — round-trip with
+  the reserved-range scanner
+
+### What this release does NOT do
+
+- **UDP host-loopback** — only TCP. Operators rarely need
+  UDP-self-loopback (DNS / discovery don't typically loop this
+  way); tracked if a real ask comes in.
+- **pf branch** — pf already handles host-loopback correctly
+  via its built-in `route-to` / `redirect-to` semantics on lo0.
+  Operators on `firewall_backend: pf` aren't affected by
+  bug#239590.
+- **Range port-forwards (`ports: 8000-8999`)** — the loopback
+  rule fires regardless, but the NAT instance's redir_port table
+  must contain a matching entry. Range entries work the same way
+  as for external clients (per 0.8.3); the fix here just routes
+  host-self traffic into the same machinery.
+
+1079/1079 unit tests pass locally.
+
+---
+
+## [0.8.38] — 2026-05-07
+
+**Documentation-only release.** Cleanup of TODO/TODO2 to reflect
+the audit-closure sprint (0.8.22-0.8.37) and the broader "easy +
+medium" sprint before it.
+
+### What changed
+
+- **TODO:** moved `network: auto` and `gui: auto` from
+  "Medium priority" to "Done (removed)" — both shipped, the
+  `*Shipped*` annotations had become noise. Added concise
+  one-liners under "Done" pointing at the assembling releases.
+- **TODO:** added two new Medium-priority items that match the
+  state of the codebase:
+  - `crate update TARGET --pkg-only` — tractable single-release
+    in-place pkg upgrade; full base-system update remains big.
+  - Hub scheduling — `/api/v1/scheduling/least-loaded` endpoint
+    + CLI helper. Anti-flap notes included.
+- **TODO:** Low-priority items reframed as "future enhancements
+  (architectural)" with the explicit note that each is multi-week
+  / multi-release work, not suitable for one-shot sprints.
+- **TODO:** Unix-socket peer credentials item updated to reflect
+  0.8.19's filesystem-perm partial mitigation; clarifies what's
+  open (true getpeereid via cpp-httplib refactor).
+- **TODO:** known bug `bug#239590` (host-LAN inbound rejected by
+  ipfw) gets a concrete reproducer + likely fix outline. Tractable
+  in a single release; tracked for 0.8.39.
+- **TODO2:** `crate vm-wrap` (item B) marked as **SHIPPED in
+  0.8.16**. Item A (full bhyve backend) still open with the
+  original 2-3 week estimate.
+
+No code changes. Just clarity for future readers / contributors.
+
+---
+
+## [0.8.37] — 2026-05-07
+
+`crate clean` now sweeps orphan ipfw rules and NAT instances in
+crate's reserved ranges. Wires `IpfwOps::deleteRule` and
+`IpfwOps::deleteNat` (already used at jail-teardown for
+non-orphan paths) into a sweep section that removes leftovers
+from crashed jails. `crate doctor` (0.8.14) has been *warning*
+about these for a while; this release actually deletes them.
+
+### What this release adds
+
+A 5th section in `lib/clean.cpp::cleanCrates` between the
+existing COW-overlay sweep and the spec-registry orphan sweep.
+Three reserved ranges are checked:
+
+| Range | Purpose | Delete via |
+|---|---|---|
+| `20000..29999` | throttle pipe binds (per-jail pair, 0.7.7) | `IpfwOps::deleteRule` |
+| `30000..39999` | auto-fw NAT instances (per-jail, 0.8.0) | `IpfwOps::deleteNat` |
+| `40000..49999` | auto-fw NAT-rule pointers (per-jail, 0.8.0) | `IpfwOps::deleteRule` |
+
+For each range, pure helper in `lib/auto_fw_pure.cpp` parses
+`ipfw -q list` (or `ipfw nat show`), maps rule number → jid,
+and returns the orphan IDs. `crate clean` then iterates and
+deletes via the IpfwOps helpers.
+
+Throttle bind delete is soft-fail: throttle uses *pairs* of
+rules per jail (`20000+jid*2`, `20000+jid*2+1`) and operators
+sometimes half-clear via `crate throttle --clear`, leaving one
+rule of a pair. Best-effort delete avoids spurious warnings on
+that path.
+
+### Pure helpers
+
+Three new functions in `AutoFwPure`:
+
+- `pickOrphanIpfwRulesByJid(listOutput, runningJids)` —
+  rules in `40000..49999` whose `n - 40000` jid isn't running
+- `pickOrphanIpfwThrottleRulesByJid(...)` — same for
+  `20000..29999`, jid derived as `(n - 20000) / 2`
+- `pickOrphanIpfwNatIds(natListOutput, runningJids)` —
+  parses `ipfw nat <id> config ...` lines (different format
+  than rule list)
+
+6 ATF unit cases cover normal path, out-of-range filtering,
+CRLF tolerance, throttle pair-divisor logic, NAT-line skip
+for non-NAT noise.
+
+### What this release does NOT do
+
+- **Wire `IpfwOps::deleteRulesInSet`** — the audit-targeted
+  helper. Crate's per-jail rule numbers aren't grouped into
+  ipfw "sets" today; they're individual numbered rules. Wiring
+  `deleteRulesInSet` requires the auto-fw runtime to refactor
+  toward `add set <set> <num> ...` form, which is a larger
+  architectural change. Tracked in `lib/ipfw_ops.h` doc comment.
+- **Refactor `doctor::checkIpfwReservedRanges`** to use the new
+  pure helpers — it does its own inline scan today. Could share
+  with clean now; deferred to keep this release minimal.
+- **Throttle pipe deletion** (`10000..19999`) — pipes need
+  `ipfw pipe N delete` which doesn't have an IpfwOps wrapper
+  yet. Operator runs that by hand for now.
+
+1076/1076 unit tests pass locally.
+
+---
+
+## [0.8.36] — 2026-05-07
+
+`crate gui screenshot` uses native libX11 when available, dropping
+two fork+exec calls per screenshot. Wires `X11Ops::screenshot`
+which existed since the X11 wrappers landed but had no production
+caller — `getResolution` was the only `X11Ops::*` function in use.
+
+### What changes
+
+| Build | Pipeline | fork+exec count |
+|---|---|---|
+| Pre-0.8.36 | `xwd` -> `xwdtopnm` -> `pnmtopng` -> PNG | 3 |
+| 0.8.36, `WITH_X11` | `X11Ops::screenshot` (in-process PPM) -> `pnmtopng` -> PNG | 1 |
+| 0.8.36, no `WITH_X11` | falls back to xwd pipeline | 3 |
+| 0.8.36, `.ppm`/`.pnm` output | `X11Ops::screenshot` only | 0 |
+
+Operator sees which path was used in the success message:
+
+```
+% crate gui screenshot firefox -o snap.png
+Screenshot saved (native libX11): snap.png
+
+% crate gui screenshot firefox -o snap.ppm
+Screenshot saved (native libX11, PPM): snap.ppm
+```
+
+`xwd` + `xwdtopnm` are still required for builds without
+`WITH_X11`, so the `xorg-xwd` package dependency stays for
+non-libX11 builds. With `WITH_X11=1`, only `pnmtopng` is needed
+on the host (and only for non-PPM output).
+
+### Implementation
+
+- `gui.cpp::guiScreenshot` branches on `X11Ops::available()`
+- Lower-cases the output filename to detect `.ppm` / `.pnm`
+  suffixes — those skip the conversion entirely
+- Soft-fall-through: if X11Ops is built in but `XOpenDisplay`
+  fails (XAuth not copied in, display permissions, etc.),
+  warns and falls back to `xwd` rather than aborting
+- Makefile moves `lib/x11_ops.cpp` out of the `WITH_X11`
+  conditional — `available()` always links and returns
+  false-or-true per build
+
+### What this release does NOT do
+
+- **Wire `X11Ops::isDisplayAvailable` / `setResolution`** —
+  no natural caller. `gui resize` already uses xrandr(1)
+  shell; refactoring to native is a separate effort.
+- **PNG output without `pnmtopng`** — needs libpng linkage,
+  which is a new dependency. Defer.
+- **Multi-monitor / partial-region capture** — `screenshot`
+  only does the root window. Operators wanting subregion
+  pass through xwd's `-icmap -silent` flags by hand.
+
+1070/1070 unit tests pass locally.
+
+---
+
+## [0.8.35] — 2026-05-07
+
+`crate doctor --refresh-cache` — drops the in-memory NetDetect
+default-route cache before running checks. Wires
+`NetDetect::clearCache` which was declared in 0.8.6 but had no
+caller until now.
+
+### Why operators want this
+
+`NetDetect::defaultIfaceCached` (0.8.6) parses
+`route -4 get default` once per process and caches the result.
+That's correct for `crate run` (one-shot) but inconvenient for
+**crated** which is a long-lived daemon — when the upstream
+router gets restarted and the host's default route shifts to a
+different interface, crated keeps using the cached old name
+until restart.
+
+```
+% sudo crate doctor --refresh-cache
+... (runs checks with fresh route -4 get default lookup) ...
+```
+
+The cache clear is cheap (one static-string assignment) and
+survives the doctor run, so subsequent `crate run` calls
+within the same process pick up the fresh value.
+
+### What this release does NOT do
+
+- **Hot-reload signal for crated** — refreshing the cache via
+  `crate doctor` is per-process. crated has its own NetDetect
+  cache that's separate. A SIGHUP handler that calls
+  `clearCache` on the daemon side is the natural follow-up;
+  not in scope here.
+- **Refresh-on-route-change** — kqueue + RTM_NEWADDR/RTM_DELADDR
+  notifications could auto-clear the cache. Significant
+  surface; deferred.
+- **Clear OTHER caches** — auto-fw kldstat probe, RCTL probe,
+  etc. Scope creep; one cache per release.
+
+1070/1070 unit tests pass locally.
+
+---
+
+## [0.8.34] — 2026-05-07
+
+`crate clean` now sweeps spec-registry orphans — entries
+mapping `{jail-name -> abs-crate-path}` whose `.crate` file no
+longer exists on disk. Wires `SpecRegistry::remove` which was
+declared in 0.8.21 but had no caller until now.
+
+### Why this matters
+
+`crate run -f /home/op/firefox.crate` registers the path
+(0.8.21) so the daemon's control-plane PostStart can find the
+spec on a later `start <name>` request, even after the jail has
+stopped. Entries intentionally persist past stop/restart.
+
+But when the operator deletes or renames the `.crate` file from
+disk, the registry entry becomes a dangling pointer.
+PostStart then returns:
+
+```
+HTTP 410 Gone
+{"error":"registered .crate path no longer exists: /home/op/firefox.crate"}
+```
+
+…confusingly, since the operator never explicitly removed the
+entry. `crate clean` now sweeps these.
+
+### What this release adds
+
+A 5th section in `lib/clean.cpp::cleanCrates` after the
+existing four (jail dirs, interface records, context entries,
+COW overlays):
+
+```
+% sudo crate clean
+Scanning for orphaned jail directories...
+Scanning for stale interface records...
+Cleaning stale context entries...
+Scanning for stale COW overlays...
+Scanning for spec-registry orphans...
+  removing registry entry: firefox -> /home/op/firefox.crate
+  removing registry entry: postgres -> /tmp/postgres-2025.crate
+
+Cleanup complete: 2 items removed.
+```
+
+`--dry-run` prints `[dry-run] would remove registry entry: ...`
+without calling `SpecRegistry::remove`, matching the rest of
+the clean command's contract.
+
+`SpecRegistry::readAll` parse failures (corrupt registry file,
+permission errors) log a warning and skip just this section —
+they don't abort the rest of the cleanup, since registry health
+shouldn't gate jail-directory cleanup.
+
+### What this release does NOT do
+
+- **`--orphans` flag for the operator to opt INTO orphan
+  sweep** — sweep is now unconditional. Earlier sketch had
+  this as a flag but then `crate clean` would have asymmetric
+  behaviour (sweeps 4 things by default, 5 with the flag).
+  Always-on is more discoverable, and the existing
+  `--dry-run` covers the "I want to see first" case.
+- **`crate clean --orphan-ipfw` for `IpfwOps::deleteRulesInSet`** —
+  separate scaffolding, separate PR. Tracked.
+- **Pure helper for the orphan-pick logic** — could extract a
+  `pickOrphans(entries, exists_predicate)` to `zfs_dataset_pure`
+  pattern, but the side effect (file-exists check) is what
+  matters and the loop is 4 lines. Inlined.
+
+1070/1070 unit tests pass locally.
+
+---
+
+## [0.8.33] — 2026-05-07
+
+`crate stats --rctl-pressure` — operator-facing view into how
+close a jail is to its RCTL caps, before
+`crate retune` becomes necessary. Wires `RunJail::getRctlUsagePercent`
+which was scaffolding from 0.7.x — declared, unit-tested, and
+never called from production.
+
+```
+% crate stats myapp --rctl-pressure
+NAME          CPU%    MEM         MEM LIM   PIDS      PID LIM   ...
+myapp         42%     512.0M      1G        87        200       ...
+
+RCTL pressure (usage / limit):
+  memoryuse        50%
+  pcpu             42%
+  maxproc          43%
+  writebps         87%       <- yellow
+  readbps          92%       <- red
+```
+
+Pressure column highlights:
+
+- `>=70%` — yellow (operator may want to plan retune)
+- `>=90%` — red (jail is about to hit cap; OOM/throttle imminent)
+
+### Implementation
+
+- New `--rctl-pressure` flag, `Args.statsRctlPressure` boolean,
+  parser branch in `cli/args.cpp::CmdStats`.
+- New rendering block in `lib/lifecycle.cpp::statsCrate` that
+  iterates over the already-fetched `limits` map (alphabetical
+  for stable diff) and calls `RunJail::getRctlUsagePercent`
+  for each.
+
+### Signature extension on `getRctlUsagePercent`
+
+The pre-existing helper did 2× `rctl(8)` fork+exec per call (one
+for `-u`, one for `-l`). Naively iterating it for `crate stats`
+would have done 2N forks for N resources — too expensive for an
+interactive command. So the function gains two optional pointer
+params:
+
+```cpp
+int getRctlUsagePercent(int jid, const std::string &resource,
+                        const std::map<std::string, std::string> *prefetchedUsage = nullptr,
+                        const std::map<std::string, std::string> *prefetchedLimits = nullptr);
+```
+
+Stats passes its already-parsed maps; old single-resource
+callers stay shell-shelling. Defaulted to `nullptr` so the
+existing zero-call signature still compiles (no-op cleanup
+since pre-0.8.33 there were no callers anyway).
+
+### Defensive numeric parser
+
+`rctl(8) -u` output is raw integers on stock FreeBSD, but
+operators sometimes pipe it through humanize-aware tooling.
+`std::stoll("1G")` silently returns `1` (parses leading digits
+only), which would produce nonsense pressure %. The pre-0.8.33
+helper had the same bug — surfaced only now because nobody was
+calling it. New `parseAllDigits` lambda inside
+`getRctlUsagePercent` rejects anything non-digit and returns
+-1, causing the stats path to skip that resource gracefully.
+
+### What this release does NOT do
+
+- **`isOomKill` / `wasKilledByRctl` wired into restart policy** —
+  these need raw exit status, which `cli/main.cpp`'s on-failure
+  loop doesn't have today. Plumbing requires a `runCrate`
+  signature change to pipe `int *outStatus` alongside
+  `outReturnCode`. Tracked separately.
+- **JSON output for pressure** — only the human-readable table
+  rendering ships. JSON could land later; needs a sub-object
+  in the existing JSON schema.
+- **`crate top --rctl-pressure`** — `crate top` already shows a
+  CPU% column; adding pressure% is a UI re-layout. Out of
+  scope here; same `getRctlUsagePercent` would be the call.
+
+1070/1070 unit tests pass locally.
+
+---
+
+## [0.8.32] — 2026-05-07
+
+Two small dead-code removals + one audit-finding correction.
+
+### Removed: `JailQuery::getJidByName`
+
+Declared in `lib/jail_query.h:39` and defined in
+`lib/jail_query.cpp:246`. Zero callers anywhere in the tree —
+verified by 6-pass grep against:
+
+1. namespace-prefixed callers (`JailQuery::getJidByName`)
+2. `using` declarations
+3. bare-name calls (would-be ADL pickups)
+4. test files (`tests/`)
+5. namespace-qualified `::getJidByName`
+6. final exhaustive `grep -rn 'getJidByName'`
+
+All six checks returned only the declaration + definition lines.
+Production paths use `JailQuery::getJailByName(name)->jid` which
+returns the full info struct in a single call. The deleted
+function was a thin one-liner over `::jail_getid(3)`; if a future
+caller needs it without the surrounding info, re-add then.
+
+### Moved: `RunNet::epairNumToIp` into file-static
+
+Declared in `lib/run_net.h:46` but only called from inside
+`lib/run_net.cpp` (lines 92, 93). Header export was redundant.
+Now `static` in the .cpp; symbol no longer leaks into other
+translation units.
+
+### Audit-finding correction: `JailQuery::execInJail*` does NOT exist
+
+The 0.8.21 dead-code audit flagged
+`JailQuery::execInJail / execInJailGetOutput / execInJailChecked`
+as orphaned. **That namespace doesn't have those functions** —
+the audit subagent confused a header line range
+(`lib/jail_query.h:49-59`) which is in the `JailExec` namespace,
+not `JailQuery`. All three `JailExec::execInJail*` are heavily
+used in production:
+
+| Function | Production callers |
+|---|---|
+| `JailExec::execInJail` | `lib/run.cpp:1654`, `lib/run.cpp:1697`, `lib/stack.cpp:1008` |
+| `JailExec::execInJailGetOutput` | `lib/info.cpp:115`, `lib/info.cpp:148`, `lib/lifecycle.cpp:119` |
+| `JailExec::execInJailChecked` | `lib/run.cpp:880` |
+
+So the only real dead-code from that audit flag was
+`getJidByName` (deleted in this release). Lesson: trust audits
+but verify with grep before deletion. Sprint protocol now
+enforces a 6-pass verification before any code removal.
+
+1070/1070 unit tests pass locally.
+
+---
+
+## [0.8.31] — 2026-05-07
+
+**Bug-fix release.** Three operator-facing YAML keys were parsed
+and validated cleanly but their runtime side was either missing
+or broken. All three are real broken-contract bugs surfaced
+by the deeper read of the 0.8.21 dead-code audit findings.
+
+### Fix #1: `disk_quota: 10G` actually applies refquota now
+
+`lib/spec.cpp:805-820` parsed `disk_quota`, validated the K/M/G/T
+suffix, stored it in `spec.diskQuota`. `lib/run_jail.cpp:316`
+had `applyDiskQuota` that computes the dataset and calls
+`ZfsOps::setRefquota`. **`lib/run.cpp` never invoked
+`applyDiskQuota`.**
+
+Operator wrote `disk_quota: 10G`, validation succeeded, ZFS
+refquota was never set, jail could fill the entire pool. Bug
+since 0.3.0 when the YAML key was added.
+
+Wired in after `RunJail::applyRctlLimits` and before
+`attachZfsDatasets`, so a delegated dataset inherits the quota
+at attach time.
+
+### Fix #2: `mac_portacl.allow_ports` actually installs rules now
+
+`lib/spec.cpp:1107-1119` parsed
+`security_advanced.mac_portacl.allow_ports: [80, 443]` into
+`spec.securityAdvanced->macAllowPorts`. `lib/run.cpp:631-636`
+loaded the kernel module + LOG'd each port… but **never called
+`MacOps::setPortaclRules`**. Operator's allow-list silently
+dropped.
+
+Now build a `MacOps::PortaclRule[]` (uid=0, tcp+udp per port)
+and call `setPortaclRules` which writes the
+`security.mac.portacl.rules` sysctl atomically. Soft-fail with
+operator-visible warning if the module isn't loaded or the
+sysctl fails.
+
+### Fix #3: `mac_bsdextended` cleanup actually removes rules now
+
+`lib/run.cpp:625-628` had a cleanup `RunAtEnd` whose body was:
+
+```cpp
+removeMacRules.reset([&args]() {
+  std::vector<std::string> rules;
+  MacOps::listUgidfwRules(rules);   // <-- collects, doesn't remove
+});
+```
+
+It listed rules into a local vector that immediately fell out of
+scope. **Rules persisted in `/dev/ugidfw` between runs** —
+`ugidfw list` showed accumulated entries from every previous
+`crate run` since 0.5.x.
+
+The remover (`MacOps::removeUgidfwRules(jid)`) needs the jid,
+which isn't available at the point the lambda is wired (the
+`RunAtEnd` is declared before `RunJail::createJail` returns).
+Fix uses a `std::shared_ptr<int>` published after createJail —
+the lambda checks `*shared > 0` and skips cleanup if the jail
+never came up.
+
+The pre-existing companion bug — `addUgidfwRuleRaw` doesn't
+inject `jailid <jid>` so operator rules apply host-wide — is
+**not fixed here**, only documented in the cleanup-skipped
+branch's log message. That's a spec-level issue (rule strings
+come from the operator) and needs a separate design pass.
+
+### What this release does NOT do
+
+- **Fix the host-wide-rule bug for `mac_bsdextended`** —
+  needs spec-side rewrite to inject `jailid <jid>` into each
+  operator-supplied rule string. Tracked separately.
+- **Add tests for the runtime wiring** — the runtime side calls
+  ZFS / mac kernel modules / spec parsing, none of which can
+  be exercised on Linux dev boxes via ATF. Verifying these on
+  FreeBSD is integration-test territory (Kyua + a real jail).
+
+1070/1070 unit tests pass locally.
+
+---
+
+## [0.8.30] — 2026-05-07
+
+`IpfwOps::configureNat` + `IpfwOps::deleteNat` wired into the
+auto-fw ipfw NAT path (lib/run.cpp). Closes the audit's "declared
+but uncalled" finding for those two functions.
+
+Pre-0.8.30, the ipfw branch of auto-fw fork+exec'd `ipfw nat <id>
+config <…>` and `ipfw nat <id> delete` directly via
+`Util::execCommand(AutoFwPure::buildIpfwNat*Argv(...))`. The
+`IpfwOps::configureNat` wrapper existed but had no callers — it
+was scaffolding for a future native `IP_FW3` setsockopt path
+that nobody had reached for.
+
+### What this release adds
+
+- **Single replacement point** — when the native `IP_FW3` path
+  for NAT instances finally lands, only `IpfwOps::configureNat`
+  needs to change. `lib/run.cpp` keeps calling the same
+  function.
+- **NAT-instance collision warning** — `IpfwOps::configureNat`
+  internally calls `isNatInstanceInUse(natId)` before writing.
+  If a previous `crate run` left a stale instance behind (or
+  another tool grabbed the same ID), the operator now sees:
+  ```
+  WARNING: ipfw NAT instance 30042 already exists — another
+  application may be using it; overwriting
+  ```
+  Pre-0.8.30 the second `crate run` would silently overwrite.
+- **Cleanup symmetry** — `IpfwOps::deleteNat` already swallowed
+  its own errors and warned via `WARN(...)`. The outer
+  try/catch in `run.cpp`'s `ipfwAutoFwCleanup` is now mostly
+  redundant; kept for safety in case a future impl changes.
+
+### What this release does NOT do
+
+- **Native `IP_FW3` setsockopt path for NAT** —
+  `IpfwOps::configureNat` itself still fork+exec's
+  `/sbin/ipfw`. Wiring through the facade lets that change
+  without touching callers when someone implements it.
+- **Wire `IfconfigOps::createVlan` / `setInet6Addr`** — both
+  are also shell-only stubs today. The natural callers
+  (`RunNet::createVlanInJail`, `RunNet::configureStaticIp6`)
+  run inside the jail context via the `execInJail` lambda,
+  not on the host, so swapping them in is non-trivial — the
+  jail-side ifconfig invocation has different argv shape
+  (`vlan create`, `vlan vlandev`, etc.) than the host-side
+  helper. Tracked separately as a `RunNet` refactor.
+- **`IfconfigOps::disableLroTso` / `setDown` / `setDescription`
+  / `useNativeApi` toggle / `setLogProgress`** — minor helpers
+  with no natural caller. Stay as scaffolding.
+
+1070/1070 unit tests pass locally.
+
+### Audit follow-up sprint summary
+
+Eight releases (0.8.22 → 0.8.29 → 0.8.30) on top of the
+0.8.21 dead-code audit:
+
+| Release | Audit finding | Closure |
+|---|---|---|
+| 0.8.22 | `lib/vnc_server.cpp` orphan | wired via `gui.vnc_native` |
+| 0.8.22 | `releaseCpuset` stray RunAtEnd | replaced with comment |
+| 0.8.23 | `lib/drm_session.cpp` orphan | wired via doctor probe |
+| 0.8.24 | `lib/capsicum_ops.cpp` orphan | wired via `audit_syslog` |
+| 0.8.25 | `datasetForJail` 3× duplicate | extracted to `zfs_dataset.{cpp,h}` |
+| 0.8.26 | `*Ops::available` predicates unused | wired via `native-api` doctor cat |
+| 0.8.27 | `lib/nv_protocol.cpp` orphan | wired via `nvlist-protocol` self-test |
+| 0.8.28 | `RunJail::diagnoseExitReason` unused | wired into post-exit logging |
+| 0.8.29 | `ZfsOps::recv` unused | wired into `crate restore` |
+| 0.8.30 | `IpfwOps::configureNat` / `deleteNat` unused | wired into auto-fw ipfw branch |
+
+10 distinct audit findings, all closed. The remaining unused
+functions in `MacOps`, `NetgraphOps`, `IfconfigOps` (the small
+helpers), `RunJail::applyDiskQuota`, `JailQuery::execInJailChecked`
+remain as scaffolding with no natural caller in the current
+architecture — documented in code, kept against future feature
+work.
+
+---
+
+## [0.8.29] — 2026-05-07
+
+`crate restore` uses `ZfsOps::recv` natively when libzfs is
+linked. Pre-0.8.29 the restore path always fork+exec'd
+`/sbin/zfs` via `Util::execPipeline`; now it opens the
+`.zstream` file in-process and hands the fd to
+`ZfsOps::recv`, which calls `lzc_receive(3)` directly when
+`HAVE_LIBZFS` is set, falling back to `fork+exec` only when
+the library wasn't linked at build time.
+
+```
+% crate restore /backups/web-2026-05-07.zstream --to tank/jails/web
+restore: zfs recv ← /backups/web-2026-05-07.zstream into tank/jails/web (native libzfs)
+restore: tank/jails/web recovered from /backups/web-2026-05-07.zstream
+```
+
+The "(native libzfs)" / "(fork+exec zfs(8))" hint is printed at
+start so the operator can confirm which path their build is on
+(matches the `crate doctor` `native-api/libzfs` check from
+0.8.26).
+
+### Why restore but not backup
+
+`ZfsOps::send(snapName, fd)` only does *full* sends — there's no
+`-i since` parameter for incremental streams. Most production
+backups are incremental (operators set `--auto-incremental`), so
+wiring full-only would be half a deliverable.
+
+`ZfsOps::recv` has no such limitation: a `zfs recv` from a
+.zstream file is the same call shape regardless of whether the
+sender did full or incremental — `lzc_receive(3)` walks the
+stream and figures it out. Restore is the clean win.
+
+### What this release does NOT do
+
+- **`zfs send` native path for backup** — needs ZfsOps::send API
+  extension to take an optional `sinceSnapName` for the
+  incremental case. Tracked separately.
+- **Replace the shell ssh pipeline in `crate replicate`** — that
+  pipeline is `zfs send | ssh ... 'zfs recv'`, all running on
+  the source host. Going native means re-implementing the SSH
+  stream multiplexing in C++. Not worth it; the existing
+  pipeline is robust.
+- **Doctor "restore native path active" check** — the existing
+  `native-api/libzfs` check from 0.8.26 already says whether
+  libzfs is linked. The runtime hint at restore time is the
+  same datapoint at the point of action.
+
+1070/1070 unit tests pass locally.
+
+---
+
+## [0.8.28] — 2026-05-07
+
+`RunJail::diagnoseExitReason` wired into `lib/run.cpp` post-exit
+logging — flagged as scaffolding by the 0.8.21 audit (the four
+diagnostic helpers `diagnoseExitReason`, `isOomKill`,
+`wasKilledByRctl`, `getRctlUsagePercent` were declared and tested
+but never called from production code).
+
+Pre-0.8.28, when a jail's command exited non-zero, the operator
+saw:
+
+```
+... command has finished in jail: returnCode=137
+```
+
+…and had to run `dmesg | grep -i kill`, `rctl -u jail:N`, and
+correlate timestamps to figure out whether the jail was OOM'd
+by RCTL, killed by an external signal, or just exited badly.
+
+Now the same path emits:
+
+```
+... command has finished in jail: returnCode=137 (OOM: killed by RCTL (memoryuse=536870912))
+```
+
+The diagnosis runs only on non-zero / signal-killed exits — clean
+exits keep the original one-liner. Both the executable-mode
+(`runCmdExecutable: ...`) and service-mode (`services: ...`)
+paths get the diagnosis.
+
+### What this release does NOT do
+
+- **Plumb the diagnosis into the audit log** — `audit.cpp::logEnd`
+  receives `errMsg` from `cli/main.cpp`'s exception catch, which
+  doesn't see the inner exit status. Surfacing diagnosis there
+  needs a `runCrate(...)` signature change to return raw status
+  alongside `returnCode`. Tracked separately.
+- **Wire `isOomKill` into the restart policy** — `cli/main.cpp`'s
+  on-failure restart only sees `returnCode`, not raw status.
+  Calling `isOomKill` from there would let the operator say
+  "restart only on OOM, not on clean failure" — useful but needs
+  the same plumbing as above.
+- **`crate stats --rctl-pressure`** — `getRctlUsagePercent` is
+  the foundation for a memory-pressure view in `crate stats`.
+  Tracked as a UX improvement.
+
+The four helpers stay as scaffolding for those follow-ups; this
+release just gives `diagnoseExitReason` its first production
+caller so it's no longer silent dead code.
+
+1070/1070 unit tests pass locally.
+
+---
+
+## [0.8.27] — 2026-05-07
+
+Wires `lib/nv_protocol.cpp` (~116 LOC) — last orphaned unit
+flagged by the 0.8.21 audit. Pre-0.8.27 the file built but had
+zero production callers; the only inter-call within the file
+itself was `sendCommand` invoking its own `connectToDaemon`/
+`sendMessage`/`recvMessage`. Operator linked nothing for it
+(libnv is in FreeBSD base, but the wire format wasn't speaking
+to anything).
+
+### Why kept and not deleted
+
+`NvProtocol` is the foundation for a future control-plane v2
+that bypasses cpp-httplib + the hand-rolled HTTP parser in
+`daemon/control_socket_pure.cpp`. The nvlist wire format is
+materially better than that manual HTTP parser:
+
+- native framing (no Content-Length tracking)
+- native peer-credential support over Unix sockets
+- smaller on the wire
+- no risk of misparsing HTTP edge cases (chunked, folded
+  headers, CRLF in values)
+
+Throwing the code away would lose ~116 LOC of FreeBSD-native
+plumbing that the eventual refactor needs. So the right move is
+**document it as scaffolding + give it a production caller** so
+it stops being silent dead code.
+
+### What this release adds
+
+- **`NvProtocol::available()`** — `true` on FreeBSD builds,
+  `false` on Linux dev boxes. Mirrors the `available()`
+  pattern from `ZfsOps`/`IfconfigOps`/`PfctlOps`/`IpfwOps`.
+- **`NvProtocol::selfTest()`** — opens a `socketpair(AF_UNIX,
+  SOCK_STREAM)`, sends a fixed test `Message` on one end, reads
+  it back on the other, validates round-trip equality. No
+  daemon needed — exercises the codepaths in-process.
+- **`crate doctor` `nvlist-protocol` check** in the
+  `native-api` category. Three outcomes:
+  - libnv not built in (Linux dev) → info pass
+  - libnv + selfTest succeeds → pass ("scaffolding ready")
+  - libnv + selfTest fails → warn ("exotic — file a bug")
+- **Header rewrite** — the file-top comment now explicitly
+  marks `NvProtocol` as scaffolding for the future
+  control-plane v2, lists the four reasons libnv is better
+  than the HTTP parser, and notes the doctor self-test as the
+  only production caller today.
+
+### Closes the 0.8.21 dead-code audit follow-up
+
+| Release | Audit finding | Closure |
+|---|---|---|
+| 0.8.22 | `lib/vnc_server.cpp` (~109 LOC) orphaned | wired via `gui.vnc_native: true` |
+| 0.8.22 | `releaseCpuset` RunAtEnd never reset | replaced with explanatory comment |
+| 0.8.23 | `lib/drm_session.cpp` (~80 LOC) orphaned | wired via `crate doctor` libseat probe |
+| 0.8.24 | `lib/capsicum_ops.cpp` (~136 LOC) orphaned | wired via `audit_syslog: true` |
+| 0.8.25 | `datasetForJail` + `findLatestBackupSuffix` duplicated 3× | extracted to `lib/zfs_dataset.{cpp,h}` + pure parser |
+| 0.8.26 | `*Ops::available` predicates never queried | wired via `native-api` doctor category |
+| 0.8.27 | `lib/nv_protocol.cpp` (~116 LOC) orphaned | wired via `nvlist-protocol` doctor self-test (this) |
+
+All seven audit findings now have a production caller, a
+documented rationale, or a removal commit. The full audit
+output (10 categories) was clean except for these seven; the
+codebase is in a state where deletions don't lose
+functionality and additions don't sit silent.
+
+Six releases (0.8.22 → 0.8.27) added a new `gui` + `audit` +
+`native-api` doctor category each, growing `crate doctor` from
+9 checks to 22.
+
+1070/1070 unit tests pass locally.
+
+---
+
+## [0.8.26] — 2026-05-07
+
+Surfaces native-API build matrix via `crate doctor`. The 0.8.21
+audit found that `ZfsOps::available`, `IfconfigOps::available`,
+`PfctlOps::available`, `IpfwOps::available` were declared but
+never queried. They sit on top of substantial wrappers
+(libzfs / libifconfig / libpfctl / native ipfw socket) that the
+runtime does call into for the production code paths — when
+those libs are linked at build time. When they're not, the
+runtime fork+exec's the equivalent shell utility.
+
+Pre-0.8.26 the only way to know which path your build was on
+was to read `kldstat` + `pkg info -l crate | grep .so` and
+piece it together. Now `crate doctor` says it directly.
+
+### What this release adds
+
+A new `native-api` category in the doctor report with four
+checks:
+
+| Check | Reports |
+|---|---|
+| `libzfs` | linked → snapshot/clone/jail-attach skip fork+exec'ing zfs(8); else falls back to `/sbin/zfs` |
+| `libifconfig` | linked → interface ops skip fork+exec'ing ifconfig(8) |
+| `libpfctl` | linked → pf anchor + rule ops skip fork+exec'ing pfctl(8) |
+| `ipfw-native` | kernel ipfw socket reachable → rule ops skip fork+exec'ing ipfw(8) |
+
+All four emit `pass` severity (informational); fork+exec is a
+fully-supported path, just slower per-call. Operators who care
+about latency can rebuild with the appropriate `HAVE_LIB*`
+macros and the runtime picks up the native path on next
+invocation — no config change needed.
+
+`category` rank set to 10 in `lib/doctor_pure.cpp`'s sort table
+(after the existing `gui` rank from 0.8.23) so the four checks
+land in a contiguous block at the bottom of the report.
+
+### Why not "wire native APIs as opt-in via config"
+
+The audit's terse summary made it sound like the native APIs
+were entirely unwired ("`ZfsOps::*` declared but never called").
+Closer reading: only specific *functions* are unused
+(`ZfsOps::send / recv / mount / available`,
+`IfconfigOps::setInet6Addr / disableLroTso / setDown / setDescription /
+createVlan`, etc.). The high-traffic operations (`snapshot`,
+`clone`, `getMountpoint`, `jailDataset`, etc.) are already on
+the production runtime path through `lib/run.cpp`,
+`lib/snapshot.cpp`, `lib/run_jail.cpp`, `lib/run_net.cpp`.
+
+So there's no "lost runtime" to recover here — what's missing is
+**operator visibility** into which path their build is on. That's
+what the doctor check delivers.
+
+### What this release does NOT do
+
+- **Wire `ZfsOps::send / recv` into backup/replicate** — the
+  shell `zfs send | ssh ... 'zfs recv'` pipeline today is
+  battle-tested and handles errors consistently. Replacing it
+  with native fd-passing is a perf optimisation (avoids one
+  fork+exec per backup), not a "lost-functionality" fix.
+  Tracked separately if anyone needs the perf.
+- **Wire `JailQuery::execInJailChecked`** — the audit flagged
+  it as dead, but the production code uses a local `execInJail`
+  lambda in `lib/run.cpp` that captures `jid` + log progress
+  flag implicitly. Replacing with the namespace-scoped helper
+  would lose that capture; not worth it.
+- **Wire `RunJail::diagnoseExitReason / isOomKill /
+  wasKilledByRctl / getRctlUsagePercent`** — these are
+  diagnostic helpers for "why did this jail exit". Useful but
+  needs a hookpoint (e.g. `crate logs --diagnose`). Tracked
+  separately.
+- **Remove the per-function dead code** — keeping the unused
+  helpers in headers as scaffolding for the future use cases
+  above. Audit closure is achieved via documentation
+  (this CHANGELOG + per-namespace header comments shipped in
+  the previous releases).
+
+1070/1070 unit tests pass locally.
+
+---
+
+## [0.8.25] — 2026-05-07
+
+Dedup of `datasetForJail` + `findLatestBackupSuffix` flagged by
+the 0.8.21 audit. Pre-0.8.25 these helpers were verbatim copies
+in `lib/backup.cpp` (35,48) and `lib/replicate.cpp` (30,40), with
+a third near-copy in `daemon/routes.cpp:620`.
+
+### What this release adds
+
+- **`lib/zfs_dataset_pure.{h,cpp}`** — pure parser of
+  `zfs list -H -t snapshot -o name -r <ds>` output:
+  - `pickLatestBackupSuffix(out)` — returns lex-greatest
+    `backup-*` suffix; tolerates CRLF, blank lines, comment
+    lines, recursive-descendant entries
+  - `validateDatasetName(ds)` — rejects relative paths, `..`
+    segments, shell metas, leading/trailing `/`
+- **`lib/zfs_dataset.{h,cpp}`** — runtime wrapper that calls
+  `zfs(8)` + delegates parsing to the pure module:
+  - `datasetForJail(name, errContext)` — strict (throws if jail
+    missing or path not on ZFS); `errContext` appears in
+    diagnostics so operators see which command failed
+  - `findLatestBackupSuffix(dataset)` — runs `zfs list` and
+    pipes through `pickLatestBackupSuffix`; returns "" on
+    `zfs(8)` error (caller treats as "no prior", same as the
+    pre-0.8.25 `try { ... } catch (...) {}` pattern)
+
+`lib/backup.cpp` and `lib/replicate.cpp` updated to delegate;
+~70 LOC of duplicate logic removed.
+
+`daemon/routes.cpp::datasetForJail` is **intentionally not
+unified** because its semantics differ — when the URL parameter
+doesn't match a running jail, it returns the parameter as-is
+(treating it as a dataset name), to support the snapshot
+endpoints' "operate on a raw dataset" path. Comment added so
+future readers don't try to merge it.
+
+### Tests
+
+9 ATF unit cases on `pickLatestBackupSuffix`:
+
+- empty input → empty
+- no backup-* snapshots → empty
+- multiple backup-* → lex-greatest wins (UTC-ISO-8601 lex
+  monotonicity is what makes this safe)
+- mixed with `daily-*` / `warm-*` / `manual-*` → only `backup-*`
+  count
+- CRLF + blank-line tolerance
+- comment-line tolerance
+- recursive-descendant entries (multi-line `zfs list -r`)
+
+3 cases on `validateDatasetName` — typical accepted, traversal/
+shell-meta/space rejection.
+
+### What this release does NOT do
+
+- **Native `ZfsOps`/`IfconfigOps`/`IpfwOps`/`PfctlOps`
+  wiring** — the audit's other "lost-functionality" finding.
+  Tracked for 0.8.26 (operator opt-in via
+  `prefer_native_apis: true`).
+- **`NvProtocol` documentation** — final audit closure item.
+  Tracked for 0.8.27.
+- **`daemon/routes.cpp` dedup** — different semantics, kept
+  separate (now with a comment).
+
+1070/1070 unit tests pass locally.
+
+---
+
+## [0.8.24] — 2026-05-07
+
+Wires `lib/capsicum_ops.cpp` (~136 LOC) — third and last of the
+orphaned units flagged by the 0.8.21 audit. Pre-0.8.24 the file
+built but production code never called any `CapsicumOps::*`
+function; operators with `HAVE_CAPSICUM` linked libcasper +
+cap_dns + cap_syslog and got nothing for it.
+
+### What this release adds
+
+**Audit-event dual-write to syslog via `cap_syslog`**, opt-in
+via a new `crate.yml` knob:
+
+```yaml
+# crate.yml
+audit_syslog: true
+```
+
+When set, `lib/audit.cpp` writes each audit event to the existing
+`$logs/audit.log` file *and* ships it to syslog at
+`LOG_AUTH | LOG_NOTICE` via `CapsicumOps::logSyslog`. The casper
+channel is initialised lazily (atomic flag — first audit-logged
+command pays for it once, subsequent ones are branch-free).
+
+When `HAVE_CAPSICUM` isn't built in, `logSyslog` falls back to
+plain `syslog(3)` — the operator still gets the dual-write,
+just without cap_enter resilience.
+
+The on-disk `audit.log` continues to be the system of record;
+syslog is a convenience fan-out for ops dashboards
+(rsyslog forwards, journald, syslog-ng filters, etc.).
+
+**`crate doctor` capsicum-casper check** under the existing
+`audit` category. Four outcomes:
+
+| `HAVE_CAPSICUM` | `audit_syslog` | Severity | Message |
+|---|---|---|---|
+| no  | no  | pass | "build doesn't include casper; audit log is file-only" |
+| no  | yes | warn | "fallback to plain syslog(3); loses cap_enter resilience" |
+| yes | no  | pass | "casper available; opt in with audit_syslog: true" |
+| yes | yes | pass | "casper available; audit dual-written to file + syslog" |
+
+### Why this wiring (and not the others)
+
+Looking at all four `CapsicumOps::` entry points:
+
+- `enterCapabilityMode()` — would freeze new fd opens; crated
+  spawns subprocess utilities (rctl, jail, jexec, ipfw) that
+  need `execve` to open more fds. Calling cap_enter on crated
+  itself would break those. Tracked as a "privsep daemon
+  refactor" follow-up.
+- `initCapDns / resolveDns` — DNS isn't on crate's hot path
+  (it's a jail manager, not a network client). No natural
+  caller.
+- `initCapSyslog / logSyslog` — **this** is the natural fit:
+  audit log is already a "ship event somewhere" surface; adding
+  a casper-resilient destination is direct value.
+- `limitFdRights` — already used directly by daemon/sandbox.cpp
+  since 0.7.14 (it didn't go through CapsicumOps because that
+  module wasn't wired yet; deduplication is a future cleanup).
+
+So `audit_syslog` is the one case where wiring CapsicumOps gives
+operators something they didn't have before, on existing code
+paths.
+
+### What this release does NOT do
+
+- **`cap_enter` on crated** — needs the privsep refactor
+  mentioned above. Tracked separately as low-priority.
+- **Replace `daemon/sandbox.cpp::applyListenerRights` with
+  `CapsicumOps::limitFdRights`** — both call the same
+  underlying `cap_rights_limit(2)`. Deduplication is a pure
+  refactor; deferred.
+- **Use `CapsicumOps::resolveDns` anywhere** — no caller in
+  crate's design space. The function stays as a building block
+  for any future code path that does need cap_dns DNS.
+
+1061/1061 unit tests pass locally.
+
+### Closes the 0.8.21 dead-code audit follow-up
+
+| Release | Orphaned unit wired |
+|---|---|
+| 0.8.22 | `lib/vnc_server.cpp` via `gui.vnc_native: true` + `releaseCpuset` cleanup |
+| 0.8.23 | `lib/drm_session.cpp` via `crate doctor` probe + future rootless prep |
+| 0.8.24 | `lib/capsicum_ops.cpp` via `audit_syslog: true` (this) |
+
+Three "lost-functionality" units now have at least one production
+caller. The audit's other findings (`NvProtocol`, native
+`ZfsOps`/`IfconfigOps`/`IpfwOps`/`PfctlOps` wrappers,
+`datasetForJail` duplication) remain open and can land in a
+future cleanup sprint.
+
+---
+
+## [0.8.23] — 2026-05-07
+
+Wires `lib/drm_session.cpp` (~80 LOC) — second of three orphaned
+units flagged by the 0.8.21 audit. Pre-0.8.23 the file built when
+`WITH_LIBSEAT=1` was set, but no production code path called any
+`DrmSession::` function. Operator linked libseat and got nothing.
+
+### What this release adds
+
+- **`DrmSession::probeDevice(path)`** — open + immediate close
+  via libseat (or via a plain `open(O_RDWR)` fallback when
+  libseat isn't built in). Surfaces seatd setup issues without
+  needing to start a jail first.
+- **`crate doctor` "drm-session-libseat" check** under the new
+  `gui` category. Three outcomes:
+  - `WITH_LIBSEAT` not built in → info-level pass ("not relevant
+    for setuid-root crate today; matters once rootless ships")
+  - `/dev/dri/card0` absent on host → info pass (no GPU)
+  - libseat + DRM device + probe succeeds → pass
+  - libseat + DRM device + probe fails → warn ("seatd not
+    running, or current user not on an active seat;
+    `service seatd onestart`")
+- **Makefile** moves `lib/drm_session.cpp` out of the
+  `WITH_LIBSEAT` conditional. The .cpp's internal
+  `#ifdef HAVE_LIBSEAT` guards already stub out the
+  libseat-specific code, and the doctor check needs the symbol
+  to link unconditionally.
+
+### Why "doctor check" rather than "wire into Xorg"
+
+The orphaned `DrmSession::openDevice` is the foundation for a
+**rootless containers** flow (TODO low-priority) where crate
+sheds setuid root and needs libseat coordination to legitimately
+open `/dev/dri/cardN` from a regular user's session. Today crate
+runs as setuid root, so the kernel lets it `open(O_RDWR)` the
+DRM device directly without libseat involvement — wiring
+DrmSession into the Xorg fork would add a layer with no
+operational benefit.
+
+The doctor check is the honest delivery for today: it makes the
+libseat path **observable + testable** so operators can
+pre-validate their seatd setup before the rootless work lands,
+and the module stops being pure scaffolding.
+
+### What this release does NOT do
+
+- **Wire DrmSession into Xorg startup** — needs the rootless
+  containers path first. The probe + doctor check are the
+  building blocks.
+- **Mouse/keyboard input on embedded VNC** — still tracked from
+  0.8.22.
+- **CapsicumOps wiring** — third dead-code finding from 0.8.21
+  audit. Tracked for 0.8.24.
+
+1061/1061 unit tests pass locally.
+
+---
+
+## [0.8.22] — 2026-05-07
+
+Wires up two pieces of long-orphaned functionality flagged by the
+0.8.21 dead-code audit, plus a small `releaseCpuset` cleanup.
+Pre-0.8.22 these compilation units (`lib/vnc_server.cpp`,
+~109 LOC) were built when `WITH_LIBVNCSERVER=1` was set but
+never called from any production code path — the operator linked
+the library and got nothing for it.
+
+### `gui.vnc_native: true` — embedded libvncserver
+
+Operator opt-in to drop the `x11vnc` package dependency from the
+host. When set on a `gui:` block, `setupVncAndRegister` now
+calls `VncServer::start()` instead of fork+exec'ing `x11vnc`.
+
+```yaml
+gui:
+  mode: gpu
+  vnc: true
+  vnc_native: true     # 0.8.22: use embedded libvncserver
+  vnc_port: 5901
+  vnc_password: secret
+```
+
+The embedded server polls the X11 root window of the spawned
+display via `XGetImage` at ~25 FPS and copies the frame into
+the libvncserver framebuffer. Resolution is auto-detected via
+`XGetGeometry` at server-start time — no need to pre-supply
+width/height. Password handling, port allocation, and the
+RunAtEnd teardown contract match the existing x11vnc path so
+`gui list` / `gui url` keep working unchanged.
+
+Build matrix:
+
+| WITH_LIBVNCSERVER | WITH_X11 | Behaviour |
+|---|---|---|
+| set | set | full embedded VNC, X11 grab loop active |
+| set | unset | embedded VNC runs, framebuffer stays blank (warning logged); fall back is automatic |
+| unset | * | `VncServer::available()` returns false; runtime auto-falls back to `x11vnc` with warning |
+
+The Makefile change moves `lib/vnc_server.cpp` out of the
+`WITH_LIBVNCSERVER` conditional — the .cpp's internal
+`#ifdef HAVE_LIBVNCSERVER` guards already stub out the
+libvncserver-specific code, so the symbol always links.
+Without that, builds without libvncserver would fail to link
+because `lib/run_gui.cpp` references `VncServer::available()`
+unconditionally now.
+
+### `releaseCpuset` cleanup
+
+`lib/run.cpp:798` declared a `RunAtEnd releaseCpuset` that was
+never `.reset()`'d, so the named teardown was always a no-op.
+The variable predates 0.7.x. Replaced with an explicit comment
+noting that cpuset is jail-scoped and the kernel drops the
+binding when the jail dies (which `destroyJail` handles
+unconditionally). No behaviour change — just removes the
+misleading declaration so future readers don't mistake it for
+a wired teardown.
+
+### What this release does NOT do
+
+- **Mouse / keyboard input on the embedded VNC** — libvncserver
+  receives input events but we don't forward them to the X11
+  display via `XTest`. Operators get a view-only screen; for
+  interactive use, fall back to `gui.vnc_native: false`
+  (default). Tracked for 0.8.23 follow-up.
+- **Visual auto-detection** — the X11 grab assumes the host's
+  default visual matches the framebuffer layout (BGRA,
+  same bytes-per-line). Exotic visuals show colour-swapped
+  frames. Operator can fall back to x11vnc.
+- **`DrmSession` (libseat) wiring** — the other dead-code
+  finding from the 0.8.21 audit. Tracked for 0.8.23.
+- **`CapsicumOps` (cap_dns / cap_syslog) wiring** — third dead
+  finding. Tracked for 0.8.24.
+
+1061/1061 unit tests pass locally.
+
+---
+
+## [0.8.21] — 2026-05-06
+
+Spec registry + control-plane PostStart. Closes the 0.8.13
+deferred item — control sockets returned `501 Not Implemented`
+for `POST /v1/control/containers/<name>/start` because crated
+didn't track which `.crate` file produced a given jail name.
+0.8.21 adds a tiny file-backed registry that `crate run -f`
+populates automatically, and wires PostStart to consult it.
+
+### What this release adds
+
+```sh
+% sudo crate run -f /home/op/firefox.crate    # registers automatically
+% cat /var/run/crate/spec-registry.txt
+# crate spec registry — managed by `crate run -f`
+# format: <jail-name> <abs-crate-path>
+firefox /home/op/firefox.crate
+
+% crate stop firefox       # registry entry stays — by design
+% curl --unix-socket /var/run/crate/control/op.sock \
+       -X POST http://x/v1/control/containers/firefox/start
+{"status":"starting","container":"firefox","crate_path":"/home/op/firefox.crate"}
+```
+
+`crate run -f` writes the {name -> abs-path} pair after the
+jail successfully comes up (best-effort: a registry write
+failure logs but doesn't abort the jail). Entries are
+intentionally NOT auto-removed when the jail stops — that's
+what lets a control-plane PostStart find the path again.
+
+### Lifecycle
+
+- **Register**: `crate run -f <file>` after `RunJail::createJail`
+  succeeds (warm-base runs skip the registry; no .crate file).
+- **Re-register**: same name + different `.crate` path replaces
+  the entry. Idempotent if the path is unchanged.
+- **Persist**: stop/restart leave the entry in place.
+- **Manual remove**: future `crate clean --orphans` will sweep
+  entries whose `.crate` file no longer exists. For now, the
+  operator can edit `/var/run/crate/spec-registry.txt` by hand.
+
+### Control-plane PostStart contract
+
+| Condition | Response |
+|---|---|
+| Jail already running | `409 Conflict` |
+| No registry entry for the name | `404 Not Found` |
+| Registered path no longer exists | `410 Gone` |
+| `fork()` failure | `500 Internal Server Error` |
+| Otherwise | `202 Accepted` + `{"status":"starting","container":"<n>","crate_path":"<p>"}` |
+
+The 202 is intentional — `crate run` is the foreground supervisor
+of the jail, so the spawned process lives for as long as the
+jail is up (hours, days). Operators poll
+`GET /v1/control/containers/<name>` for the actual running state.
+
+### Implementation
+
+Pure module `lib/spec_registry_pure.{h,cpp}`:
+
+- `Entry` (name + cratePath), validators reused from the existing
+  jail-name conventions, `parseLine`/`formatLine`,
+  `findIndex` for the read-after-write idempotency check
+- Path validator rejects relative paths, `..` segments, control
+  characters, and a tight set of shell metas (`$ ` `` ` `` `;`,
+  `|`, `&`, `*`, `?`, `<`, `>`, `\`, `"`, `'`, `\n`, `\r`).
+  Internal spaces are allowed because validatePath already
+  permits them — useful when staging crates under user homes
+  with unusual paths.
+
+Runtime `lib/spec_registry.{h,cpp}` mirrors `NetworkLease` —
+flock-protected atomic-rename writes, `readAll` / `upsert` /
+`remove` / `lookup` API.
+
+`lib/run.cpp` wiring (one new call after `createJail` returns):
+
+```cpp
+auto absPath = std::filesystem::absolute(args.runCrateFile).string();
+SpecRegistry::upsert(nameComponent, absPath);
+```
+
+`daemon/control_socket.cpp::handleStart`:
+
+- looks up the registered path via `SpecRegistry::lookup`
+- pre-flight checks (running? path exists?) before forking
+- `fork() + setsid()` then `execl(CRATE_PATH_CRATE, "crate",
+  "run", "-f", path)`. Stdio is redirected to `/dev/null` so
+  the child outlives crated SIGHUP / restart cycles.
+
+10 ATF unit cases cover the pure helpers (name validation, path
+validation including shell-meta rejection + control-char
+rejection, line round-trip, single-space separator semantics,
+findIndex behaviour).
+
+### What this release does NOT do
+
+- **`crate registry list/add/rm` CLI** — operators manage the
+  file via `crate run -f` (auto-write) or by editing
+  `/var/run/crate/spec-registry.txt` directly. A CLI surface
+  could ship later; it's pure operator UX.
+- **Auto-prune of orphans** — `crate clean --orphans` will sweep
+  entries pointing at deleted .crate files. Tracked separately;
+  the registry is small enough that operators won't notice
+  staleness for a while.
+- **Wiring on the bearer-token main API** — the F2 main API has
+  always supported `POST /containers` with the .crate body
+  inline; PostStart-by-name is a control-plane-specific feature
+  for tray-app workflows.
+
+1061/1061 unit tests pass locally.
+
+---
+
+## [0.8.20] — 2026-05-06
+
+IPv6 NPTv6 — **Phase 2: runtime allocator + jail interface
+configuration.** Builds on 0.8.15's Phase 1 hook (the
+`network_pool6:` config field) so `network: auto` jails now get
+an actual IPv6 address from the configured ULA pool, not just an
+accepted-but-ignored config line.
+
+### What this release adds
+
+```yaml
+# crate.yml — already accepted since 0.8.15
+network_pool6: fd00:0:0:0::/64
+```
+
+…now triggers, alongside the existing IPv4 path:
+
+1. **Allocate** an IPv6 from the pool via `NetworkLease6::allocateFor`
+   (atomic, flock-protected, idempotent — same jail re-running
+   keeps its existing address).
+2. **Configure** the address as a static IPv6 on the jail-side
+   epair via `RunNet::configureStaticIp6` — the same code path
+   `options.net.ipv6: <addr>` already used.
+3. **Release** the lease on jail teardown so the address comes
+   back into the pool.
+
+The lease store lives at `/var/run/crate/network-leases6.txt` —
+parallel to the existing `/var/run/crate/network-leases.txt`.
+Kept separate so v4-only tooling that reads the old file doesn't
+choke on hex-shaped lines.
+
+Example session:
+
+```sh
+% cat /usr/local/etc/crate.yml
+network_pool:  10.66.0.0/24
+network_pool6: fd00::/64
+default_bridge: crate0
+
+% cat firefox.yml
+network: auto
+start: firefox
+
+% sudo crate run -f firefox.crate
+bridge mode: auto-allocated IP 10.66.0.2/24 (gw 10.66.0.1) on bridge_b
+bridge mode: auto-allocated IPv6 fd00::2/64 on bridge_b
+
+% sudo jexec firefox ifconfig bridge_b
+bridge_b: flags=8843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+        inet 10.66.0.2 netmask 0xffffff00
+        inet6 fd00::2 prefixlen 64
+```
+
+### Implementation
+
+Pure module `lib/ip6_alloc_pure.{h,cpp}`:
+
+- `Addr6` (16 raw bytes) + `Network6` types
+- `parseIp6` / `formatIp6` — RFC 5952 canonical form (lowercase
+  hex, longest run of >=2 zeros collapsed to `::`, ties broken
+  leftmost)
+- `parseCidr6` — rejects unaligned base addresses, double `::`,
+  malformed groups, prefix outside 1..128
+- `gatewayFor` (base + 1), `allocateNext` (skips base + gateway +
+  taken set; bounded scan cap so a /127 misconfig doesn't loop),
+  `inPool` predicate
+- `Lease6` + `parseLeaseLine6` / `formatLeaseLine6`
+- 18 ATF unit cases covering parser edge cases (full form,
+  shorthand at ends/middle, double-`::` rejection, 9-group
+  rejection, 5-digit-group rejection), formatter cases (RFC 5952
+  longest-run, single-zero-no-collapse, all-zero, lowercase
+  normalisation), CIDR (aligned/unaligned), allocator (skips
+  base/gateway/taken), pool predicate, lease round-trip.
+
+Runtime module `lib/network_lease6.{h,cpp}`:
+
+- Mirror of `NetworkLease` but typed for IPv6 — same flock +
+  atomic-rename pattern, same idempotency guarantee
+- Separate file path so v4-only operator scripts don't break
+
+`lib/run.cpp` wiring: in the bridge-mode IP-config block, after
+the v4 lease has succeeded, call into the v6 path if
+`Settings.networkPool6` is non-empty. Best-effort release on
+teardown via a separate `RunAtEnd releaseLease6AtEnd`.
+
+### What this release does NOT do
+
+- **NPTv6 / NAT66 pf rules** — the jail gets a ULA address but
+  packets leaving the host with `fd00::2` source aren't
+  translated to a globally-routable v6. Operators wanting external
+  v6 reachability still configure NPTv6 manually in `pf.conf`
+  for now. The auto-rule will reuse the existing `auto_fw_pure`
+  pattern from 0.8.0 — tracked for a future release.
+- **ipfw IPv6 path** — only the lease + interface configuration
+  ships here. Hosts running ipfw rather than pf still need to
+  hand-roll their v6 firewall rules.
+- **`route -6 get default` auto-detect** — the v4 path uses
+  `NetDetect::defaultIfaceCached` (0.8.6) to pick the egress
+  interface when `network_interface:` is unset; v6 needs the
+  same treatment paired with NPTv6 since the egress iface is
+  also where the prefix translation rule lands.
+- **Doctor IPv6 checks** — `crate doctor` doesn't yet verify
+  `network_pool6:` is parseable / aligned. The runtime catches
+  that with an ERR at first jail run; operators who want
+  upfront validation can run `crate validate` against a spec
+  with `network: auto` after setting the pool.
+- **Per-spec static v6** — `options.net.ipv6: <static-addr>`
+  still works for operators who want a specific address; the
+  pool path only kicks in when ipv6 is left as default.
+
+1051/1051 unit tests pass locally.
+
+---
+
+## [0.8.19] — 2026-05-06
+
+Operator-controlled filesystem perms on `/var/run/crate/crated.sock`.
+First step toward closing the long-standing TODO item
+"`daemon/auth.cpp::isUnixSocketPeer` trusts an empty REMOTE_ADDR
+as proof of unix-socket origin". Pre-0.8.19 the only knob was the
+OS umask at bind time — operators couldn't scope access to a
+custom group without manual `chmod`/`chown` after `crated` started.
+
+### What this release adds
+
+Three new `crated.conf` knobs under `listen:`:
+
+```yaml
+listen:
+    unix: /var/run/crate/crated.sock
+    unix_owner: root        # default: leave at bind-time state
+    unix_group: crate-ops   # default: leave at bind-time state
+    unix_mode: "0660"       # default: 0660
+```
+
+After `crated` binds the unix socket, it `chown`s + `chmod`s the
+file to those values. Operators get an OS-level allowlist (only
+members of `crate-ops` can `connect()`) without touching `pf` /
+`ipfw` / userland session managers.
+
+Mode is parsed via `SocketPermsPure::parseUnixModeStr`, which
+accepts the three spellings operators come from: `"0660"`,
+`"660"`, `"0o660"`. Owner/group go through length + alphabet
+validators that mirror FreeBSD's `pw(8)` constraints. `chmod` /
+`chown` failures log to stderr but don't abort startup — the
+socket remains usable at the umask-default mode.
+
+If the configured mode is looser than `0660` (e.g. world-
+readable), `crated` prints a one-shot warning to stderr at startup
+so operators see the "looser than typical" choice in their logs.
+
+### What this release does NOT do
+
+- **Per-connection `getpeereid(2)`** — cpp-httplib's accept loop
+  owns the connection fd and doesn't expose it to handlers. A
+  proper getpeereid fix would require either forking httplib
+  internally or replacing the unix-socket transport with a
+  hand-rolled accept loop (the same pattern as
+  `daemon/control_socket.cpp` since 0.7.11). That's tractable
+  but outside this release's scope.
+- **Closing the bind-to-chmod race** — there's a window between
+  cpp-httplib's `bind()` (inside `listen()`, in another thread)
+  and our perm fixup in which the socket has the umask-default
+  mode (typically world-writable). Pre-0.8.19 had the same race;
+  this release narrows it by also applying owner/group, doesn't
+  close it.
+
+The TODO item stays open with a more concrete path forward
+documented in `crated.conf.sample`.
+
+### Implementation
+
+Pure helpers in `daemon/socket_perms_pure.{h,cpp}`:
+
+- `parseUnixModeStr(s, *out)` — three octal spellings; rejects
+  hex (`0x660`), decimal-but-non-octal (`888`, `999`), too-long
+  (>4 digits), leading whitespace
+- `validateUserName` / `validateGroupName` — `[A-Za-z0-9_-]`,
+  length 1..32, no leading dash; empty string accepted as
+  "leave alone"
+- `validateUnixSocketPerms` — one-shot validator over the triple
+- `isModeTight` — predicate for the "<=0660 with no world bits"
+  startup warning
+
+Runtime in `daemon/server.cpp`:
+
+- After spawning the unix-socket thread, a fixup helper polls
+  for the socket file (max ~2s), resolves owner/group via
+  `getpwnam`/`getgrnam`, and calls `chown`/`chmod`
+- All errors log to stderr; nothing is fatal
+
+8 ATF unit cases cover the pure helpers (mode parsing across
+spellings + garbage rejection, name validation, triple
+short-circuit, tight/loose mode predicate).
+
+1033/1033 unit tests pass locally.
+
+---
+
+## [0.8.18] — 2026-05-06
+
+`gui: auto` now also auto-handles X11 cookies and Wayland sockets,
+closing the medium-priority TODO `gui: auto` item. Combined with
+0.8.11's auto-`/dev/dri/*` unhide, a single spec line now covers
+the full desktop-app jail flow:
+
+```yaml
+gui: auto
+start: firefox
+```
+
+…and `crate run` does:
+
+| Pre-0.8.18 manual config | 0.8.18 automatic |
+|---|---|
+| `terminal.devfs_ruleset:` for /dev/dri | `gui: auto` (since 0.8.11) |
+| Mount `/tmp/.X11-unix` | `gui: auto` (this release) |
+| Copy `~/.Xauthority` into jail | `gui: auto` (this release) |
+| Bind `$XDG_RUNTIME_DIR/wayland-0` | `gui: auto` (this release) |
+| Set `DISPLAY`, `XAUTHORITY`, `WAYLAND_DISPLAY` env | `gui: auto` (this release) |
+
+### What this release adds
+
+When `gui: auto` resolves to the shared path (i.e. host has
+`$DISPLAY` and/or `$WAYLAND_DISPLAY`), `setupX11` now:
+
+1. **Bind-mounts `/tmp/.X11-unix`** into the jail and sets
+   `DISPLAY` env (when the host has `$DISPLAY`)
+2. **Copies `$XAUTHORITY`** (or the default `~/.Xauthority` if
+   unset) to `<jailpath>/root/.Xauthority`, chmod 0600, and sets
+   the in-jail `XAUTHORITY=/root/.Xauthority`. We copy rather
+   than bind-mount so a jail compromise can't overwrite the
+   operator's host cookie file.
+3. **Bind-mounts the Wayland socket** when `$WAYLAND_DISPLAY` is
+   set: `$XDG_RUNTIME_DIR/<sock>` -> `<jailpath>/tmp/wayland/<sock>`,
+   and sets in-jail `XDG_RUNTIME_DIR=/tmp/wayland` +
+   `WAYLAND_DISPLAY=<sock>`. The Wayland socket basename is
+   validated through `RunGuiPure::parseWaylandDisplay` to reject
+   path-traversal / shell-meta input.
+
+### Behaviour change for `gui: auto`
+
+Pre-0.8.18, `gui: auto` resolved to:
+
+| `$DISPLAY` set | GPU present | Resolved to |
+|---|---|---|
+| no  | yes | gpu      |
+| yes | yes | nested (Xephyr) |
+| yes | no  | nested (Xephyr) |
+| no  | no  | headless |
+
+0.8.18 routes through `RunGuiPure::resolveAutoMode`:
+
+| `$DISPLAY` or `$WAYLAND_DISPLAY` set | GPU present | Resolved to |
+|---|---|---|
+| yes | * | **shared** (was nested) |
+| no  | yes | gpu (unchanged) |
+| no  | no  | headless (unchanged) |
+
+The "shared" path is what desktop-app jails actually want — fast,
+matches the pattern every "firefox in a jail" guide uses. Operators
+who relied on Xephyr from `gui: auto` should write `gui: nested`
+explicitly. The shared mode keeps its security warning (host
+keystroke / window-manipulation exposure), suppressible via
+`CRATE_X11_SHARED_ACK=1` as before.
+
+### Implementation
+
+Pure helpers in `lib/run_gui_pure.{h,cpp}`:
+
+- `resolveAutoMode(displaySet, waylandSet, hasGpu)` — table-driven
+  resolution; testable without env-var setup
+- `parseWaylandDisplay(env)` — validates the host's `WAYLAND_DISPLAY`
+  is a basename (no slashes, no `..`, no shell metas, length
+  <=64); empty string on rejection
+
+Runtime in `lib/run_gui.cpp`:
+
+- `resolveGuiMode` calls the pure helper for `gui: auto`
+- The shared X11 block conditionally skips X11 work when DISPLAY
+  is unset (Wayland-only host) and adds the cookie copy +
+  Wayland mount when `gui: auto` is in effect
+- All file copies / mounts are soft-fail (warn but don't ERR) so
+  a misconfigured host still gets a jail with /dev/dri/* available
+
+6 ATF unit cases on the new pure helpers (2 paths through
+`resolveAutoMode` for each input axis; basenames + traversal
+rejection for `parseWaylandDisplay`).
+
+### What this release does NOT do
+
+- **Per-jail user uid/gid in cookie copy** — the cookie lands at
+  `/root/.Xauthority` because the in-jail user is currently always
+  root. Once non-root in-jail users land (TODO low-priority
+  rootless containers), cookie target needs to follow.
+- **Wayland-only hosts without DISPLAY** — supported (we skip the
+  X11 socket bind cleanly), but most operators still have an X
+  server running side-by-side on FreeBSD. Pure-Wayland
+  walk-throughs in docs/ are deferred.
+- **Detect from `start:` cmd** (firefox/gimp/blender/...) — the
+  TODO mentioned this as a "could also" trigger; spec-level
+  `gui: auto` is enough surface for now.
+
+1025/1025 unit tests pass locally.
+
+### Closes the 3-release follow-on sprint
+
+| Release | Item | Status |
+|---|---|---|
+| 0.8.16 | crate vm-wrap (bhyve jailer, TODO2 B) | DONE |
+| 0.8.17 | network: auto top-level shorthand | DONE |
+| 0.8.18 | gui: auto X11 cookie + Wayland | DONE (this) |
+
+---
+
+## [0.8.17] — 2026-05-06
+
+`network: auto` — top-level spec shorthand for zero-config vnet
+networking. Closes the medium-priority TODO item for desktop-app
+jails: a single line at spec root replaces the four-line
+`options.net` block that pulls everything together.
+
+```yaml
+# Before — works since 0.7.18 (verbose form)
+options:
+  net:
+    mode: auto
+
+# Now (0.8.17) — same effect, no nesting
+network: auto
+```
+
+Both spellings continue to work; pick whichever reads better. The
+runtime is unchanged — `mode: auto` already expanded into the full
+bridge + auto-create-bridge + ip-auto chain since 0.7.18, which
+in turn drives:
+
+- Auto-create the configured default bridge (`crate.yml`'s
+  `default_bridge:`, falling back to `crate0`)
+- Auto-allocate an IPv4 from the configured `network_pool:` (or
+  fall back to DHCP if no pool is configured)
+- Auto-render SNAT + per-port rdr rules into pf or ipfw, picking
+  whichever firewall is loaded (`firewall_backend:` config field
+  forces the choice if both are loaded)
+- Auto-detect the egress interface via `route -4 get default` if
+  `network_interface:` is unset
+
+So the full zero-config chain is one line of YAML on top of two
+optional config knobs. This release closes that loop.
+
+### Implementation
+
+Top-level `network:` parses through a tiny pure validator
+`SpecPure::validateTopLevelNetwork` that today accepts only `auto`
+— other values (`host`, `none`, a literal bridge name, ...) are
+reserved for future shortcuts and rejected with a diagnostic
+pointing at `options.net` for richer config.
+
+Conflict detection: if both top-level `network: auto` and
+`options.net.mode: bridge|passthrough|netgraph` are present, the
+parser refuses the spec rather than silently picking one. Two
+"auto"s in different places resolve consistently.
+
+3 ATF unit cases cover the validator (accept "auto", reject empty,
+reject reserved-for-future values).
+
+### What this release does NOT do
+
+- **`gui: auto`** — same shorthand-on-top-of-existing-pieces story
+  for X11/Wayland desktop-app jails. Tracked for 0.8.18 (next
+  release in this batch).
+- **Top-level `ports:` shorthand** — operators who want auto-rdr
+  port-forwards still write `options.net.inbound-tcp: [80, 443]`.
+  Adding a top-level `ports:` is straightforward but interacts
+  with at-least-three other features (firewall: per-container
+  rules, socket_proxy: Tor mode, X11 forwarding ports) so it
+  warrants its own design pass.
+
+1019/1019 unit tests pass locally.
+
+---
+
+## [0.8.16] — 2026-05-06
+
+`crate vm-wrap` — bhyve jailer (FreeBSD-flavoured analogue of
+Firecracker's [jailer](https://github.com/firecracker-microvm/firecracker/blob/main/docs/jailer.md)
+pattern). Closes [TODO2 item B](TODO2). Defence-in-depth wrapper
+for operators who already manage bhyve VMs via `vm-bhyve` /
+hand-rolled bhyveload — crate does NOT take over the VM lifecycle,
+it only renders the *enclosure*: a vnet jail with `allow.vmm`, a
+tight devfs ruleset whitelisting just `/dev/vmm/<vmname>`,
+`/dev/vmmctl`, the VM's `/dev/nmdm*` console pair and the specific
+`/dev/tap*` it uses, plus an optional delegated ZFS dataset.
+
+### Threat model recap
+
+A future bhyve user-space CVE (e.g. CVE-2021-29626 class) lands
+the attacker inside the cage instead of on the host:
+
+| Scenario                  | No jailer       | With vm-wrap          |
+|---------------------------|-----------------|-----------------------|
+| bhyve user-space CVE      | Host root       | Empty vnet jail       |
+| Disk image confused-deputy| Host filesystem | One ZFS dataset       |
+| Network: ARP/DHCP shenans | Host bridge     | Jail's vnet, isolated |
+| `vmm.ko` kernel CVE       | Host kernel     | Host kernel (no help) |
+| Side-channel (Spectre)    | Host memory     | Host memory (no help) |
+
+The wrapper is a second wall, not a kernel boundary. It only helps
+against bugs confined to bhyve's user-space binary or its ancillary
+devices. See `docs/bhyve-jailer.md` for the full threat model and
+manual recipe — `crate vm-wrap` automates the rendering work.
+
+### Surface
+
+```
+crate vm-wrap <vmname> --jail <name>
+              [--dataset DS] [--tap N] [--nmdm N]
+              [--path P] [--ruleset N]
+              [--output-dir DIR]
+```
+
+Default mode prints three labelled blocks to stdout:
+
+1. **devfs.rules block** — paste into `/etc/devfs.rules`
+2. **jail.conf fragment** — use with `jail -c -f <path>`
+3. **`jexec ... bhyve ...` invocation hint** — operator-edited
+   launch line for the VM from inside the cage
+
+With `--output-dir DIR` each block is written to a separately-named
+file (`devfs.snippet`, `<jail>.jail.conf`, `<jail>.bhyve.sh`) so
+the operator integrates them on their own terms. Render-only — no
+side-effects (no `service devfs restart`, no `jail -c`, no
+`zfs jail`); a future `--apply` mode can drive those steps via the
+argv builders shipped in this release.
+
+### Implementation
+
+Pure builders in `lib/vmwrap_pure.{h,cpp}`:
+
+- Validators: `validateVmName`, `validateJailName`, `validateDataset`,
+  `validateTap` (-1 or 0..9999), `validateNmdm`, `validateRulesetNum`
+  (1..65535), `validateSpec` (one-shot)
+- Builders: `buildDevfsRuleset`, `buildJailConfFragment`,
+  `buildBhyveInvocationHint`
+- argv: `buildDevfsReloadArgv`, `buildJailCreateArgv`,
+  `buildZfsJailArgv` (deferred to future --apply mode)
+- `deriveRulesetNum(jailName)` — FNV-1a 32-bit hash folded into
+  `100..199` so the same jail name always gets the same number;
+  collisions can be resolved with explicit `--ruleset N`
+
+22 ATF unit cases cover validators, derivation determinism + range,
+all three builders, and the three argv-builders.
+
+Runtime in `lib/vmwrap.cpp` — print-mode by default, file-mode
+under `--output-dir DIR`. Output dir is created at mode 0700.
+
+### Defaults
+
+- `--path` defaults to `/` (vm-bhyve convention; the devfs ruleset
+  + vnet + `allow.vmm` are the real walls)
+- `--ruleset` defaults to derived per jail name
+- `--tap` and `--nmdm` default to "none" so operators who manage
+  multiple TAPs / consoles per VM can hand-write those lines
+
+### What this release does NOT do
+
+- **`--apply` mode** — vm-wrap is a renderer; the operator runs
+  `service devfs restart`, `jail -c -f`, and `zfs jail` themselves.
+  The argv builders are shipped so a future --apply can drive them
+  without a second design pass.
+- **Auto-allocate tap / nmdm** — operator picks indices.
+  Auto-allocation interacts with whatever VM-management layer the
+  operator already uses (vm-bhyve has its own counter); we
+  deliberately don't compete with that.
+- **TODO2 item A (full bhyve backend)** — vm-wrap is the *small*
+  bhyve track item. Item A (`backend: bhyve` in the spec, full VM
+  lifecycle) is a 2-3 week effort tracked separately.
+
+1016/1016 unit tests pass locally.
+
+---
+
+## [0.8.15] — 2026-05-06
+
+IPv6 NPTv6 — **Phase 1 hook only.** Adds the `network_pool6:`
+config field with shape validation. Full IPv6 implementation
+(per-jail allocation, NAT66/NPTv6 pf rules, lease store) is a
+larger piece of work tracked separately.
+
+### Why ship a hook without implementation
+
+The "easy + medium" sprint's IPv6 item was the largest in scope —
+generalising `IpAllocPure` to 128-bit addresses, mirroring lease
+management, choosing between NAT66 and true NPTv6 (RFC 6296), and
+designing how it composes with SLAAC + DHCPv6 + operator-managed
+prefixes. Doing it in a single release would either rush the
+design or skip the validation work that made IPv4 (0.7.17 / 0.8.0
+/ 0.8.1) reliable.
+
+This hook lets operators **declare intent today** so the eventual
+runtime work can read existing config without a follow-up
+crate.yml migration:
+
+```yaml
+# crate.yml — accepted today, runtime is a no-op
+network_pool6: fd00:0:0:0::/64
+```
+
+### What this release does
+
+- New `Settings.networkPool6` field
+- YAML parser validates basic shape:
+  - Must contain `::` (IPv6 shorthand)
+  - Must contain `/` (CIDR mark)
+  - Detailed validation (prefix length, address arithmetic) lives
+    in a future `Ip6AllocPure` module
+- Stored in `Settings`; **not yet consulted by `lib/run.cpp`** —
+  jails today get IPv6 via the existing `options.net.ipv6: slaac`
+  / static-IPv6 spec fields, unchanged
+
+### What this release does NOT do (Phase 2+)
+
+- **`lib/ip6_alloc_pure.{h,cpp}`** — 128-bit address arithmetic,
+  CIDR parsing for `/48`–`/64`–`/126`, allocator that skips
+  reserved hosts (anycast, multicast, etc.)
+- **IPv6 lease store** — `/var/run/crate/network-leases6.txt` or
+  shared-format extension to existing `network-leases.txt`
+- **NAT66 vs NPTv6 decision** — NAT66 is simpler (`pf nat on em0
+  inet6 from <pool> -> (em0)`) but stateful; NPTv6 (RFC 6296) is
+  stateless prefix translation, requires `binat` rule shape
+- **`route -6 get default`** auto-detect (mirror of 0.8.6)
+- **`crate doctor` IPv6 checks** — pool exhaustion, prefix
+  conflicts with operator's other allocations
+- **ipfw IPv6 path** — `ipfw nat <id> config ... ipv6` is not
+  supported by `ipfw nat`; would need a different mechanism
+
+### Operator workflow today
+
+For IPv6 in jails today (pre-Phase 2), operators continue to use
+the existing per-spec fields:
+
+```yaml
+options:
+  net:
+    mode: bridge
+    bridge: bridge0
+    ipv6: slaac          # or static address; pre-existing
+```
+
+Setting `network_pool6` in crate.yml is harmless — it parses,
+validates shape, gets stored, and the runtime ignores it. Future
+Phase 2 will read it.
+
+### Tests
+
+No new pure tests — the validator is a 2-line shape check at
+config load. Future `Ip6AllocPure` work will introduce its own
+test module. **994/994 unit tests pass locally**.
+
+### Closes the "easy + medium" sprint
+
+The 10-release sprint asked for in this conversation:
+
+| Release | Item | Status |
+|---|---|---|
+| 0.8.6 | network_interface auto-detect | DONE |
+| 0.8.7 | firewall_backend override | DONE |
+| 0.8.8 | routes.cpp rate-limit refactor | DONE |
+| 0.8.9 | doctor: verify auto-fw loaded | DONE |
+| 0.8.10 | IPsec auto-render-conf | DONE |
+| 0.8.11 | gui:auto X11/DRM auto-binds | DONE |
+| 0.8.12 | log auto-reopen on rotate | DONE |
+| 0.8.13 | lifecycle endpoints on control sockets | DONE (PostStart deferred) |
+| 0.8.14 | doctor: network policy + RCTL drift | DONE |
+| 0.8.15 | IPv6 NPTv6 | **Phase 1 hook only** (this release) |
+
+10 releases shipped end-to-end. Next sprint can start from a
+clean roadmap.
+
+---
+
+## [0.8.14] — 2026-05-06
+
+`crate doctor` extended with two new operational checks:
+
+### `network` category — ipfw reserved-range orphans
+
+crate's auto-features each reserve a high rule-number range:
+- `crate throttle` (0.7.7): pipe `10000+jid*2`, rule `20000+jid*2`
+- `crate run --auto-fw` (0.8.2/0.8.3): nat `30000+jid`, rule `40000+jid`
+
+Operator-defined rules SHOULD live below 10000. Doctor now scans
+`ipfw -q list`, finds rules in the reserved ranges (20000+, 40000+),
+and flags any that don't correspond to a currently-running jail —
+typically stale rules from a destroyed jail that didn't get cleaned
+up (crash mid-teardown, manual `kill -9` of crate run, etc.).
+
+```
+network:
+  [PASS] ipfw   no orphan rules in crate-reserved ranges (20000+, 40000+)
+  [WARN] ipfw   3 ipfw rule(s) in crate-reserved ranges without a
+                matching running jail — likely stale from a destroyed
+                jail; clean with `ipfw delete <N>` or wait for next
+                `crate clean` to surface them
+```
+
+### `network` category — per-jail RCTL presence
+
+For each running crate-managed jail, invokes `rctl -l jail:<name>`
+and counts active rules. Surfaces:
+- Rules present → PASS (jail bounded; spec presumably declared limits)
+- Zero rules → WARN ("jail can OOM the host — FAIL if spec
+  declared limits:; check `crate inspect`")
+
+Doctor doesn't re-load specs at runtime, so this is informational
+not authoritative — operators with NAT-mode unbounded jails will
+see WARN, which is correct (those jails CAN exhaust the host).
+
+### Implementation
+
+`lib/doctor.cpp`:
+- `checkIpfwReservedRanges` — `ipfw -q list` + parse first column,
+  cross-reference against `JailQuery::getAllJails(crateOnly=true)`
+  for valid IDs, count orphans
+- `checkRctlPresence` — `rctl -l jail:<name>` per running jail,
+  count non-empty lines
+
+`lib/doctor_pure.cpp` — added `network` to canonical category sort
+order (rank 8, after `auto-fw`).
+
+### Tests
+
+No new pure tests — both checks are shell-out heavy + per-host.
+Existing `doctor_pure_test` cases (13) continue to pass.
+
+**994/994 unit tests pass locally**.
+
+### NOT in this release
+
+- **Spec-aware FAIL promotion** — load each spec's `limits:` and
+  compare against actual `rctl -l` output for true drift detection.
+  Tracked.
+- **pf rule count** — analogue of the ipfw orphan check for pf
+  anchors. Defer — pf anchors auto-flush on jail teardown via
+  `destroyPfAnchor` `RunAtEnd`, so orphans are rare.
+
+---
+
+## [0.8.13] — 2026-05-06
+
+Lifecycle endpoints on control sockets — POST stop / restart from
+the bearer-token-less control plane. Operators can wire desktop
+trays / IDE plugins to stop or restart their pool's containers
+without holding admin tokens.
+
+### New endpoints
+
+| Method | Path                                       | Role required |
+|--------|--------------------------------------------|---------------|
+| `POST`   | `/v1/control/containers/<n>/stop`        | admin          |
+| `POST`   | `/v1/control/containers/<n>/restart`     | admin          |
+| `POST`   | `/v1/control/containers/<n>/start`       | (501)          |
+
+### Defence in depth (unchanged)
+
+Same 4-layer chain as 0.7.10/0.7.11/0.7.14:
+1. Filesystem perms (kernel, primary gate)
+2. `getpeereid(2)` re-check
+3. Pool ACL — operator can only target jails in their pool
+4. Role gate — `viewer` socket rejects all POST verbs
+
+The new POST verbs are MUTATING (`actionIsMutating()` returns true)
+so they ride the same rate-limit cap as `PATCH /resources` (10
+req/s per peer-uid+gid).
+
+### PostStart deferred
+
+`POST /start` returns HTTP 501 with a clear message:
+> "POST /start not implemented on control sockets — use bearer-token
+> main API or `crate run -f <file.crate>`"
+
+Reason: starting a stopped jail requires the .crate file path.
+crated doesn't track a "spec registry" mapping jail-name → archive
+path. Future work: persist the .crate path at `crate run` time so
+control-socket PostStart can pick it up.
+
+### Implementation
+
+- `daemon/control_socket_pure.h` — `Action` enum extended:
+  `PostStart`, `PostStop`, `PostRestart`
+- `daemon/control_socket_pure.cpp`:
+  - parser handles `/start`, `/stop`, `/restart` (POST verbs only)
+  - `actionIsMutating()` returns true for all three
+  - `actionLabel()` returns `"start"` / `"stop"` / `"restart"` —
+    these become rate-limit bucket keys
+  - `authorize()` extends pool ACL to lifecycle actions
+  - `reasonForStatus(501)` → `"Not Implemented"`
+- `daemon/control_socket.cpp`:
+  - `handleStop`, `handleRestart` — construct `Args` with
+    stopTarget/restartTarget, delegate to existing
+    `stopCrate()` / `restartCrate()` from `lib/lifecycle.cpp`
+  - `PostStart` case returns 501
+
+### Tests
+
+No new pure tests — the change is mostly enum + dispatch
+additions. Existing 29 ATF cases for `control_socket_pure_test`
+continue to pass; pool ACL invariants (admin-only PATCH) carry
+over to the new POST verbs.
+
+**994/994 unit tests pass locally**.
+
+### NOT in this release
+
+- **PostStart** — see above (needs spec registry).
+- **POST /destroy** — destruction is one-way; deliberately kept
+  on the bearer-token main API to require a stronger credential.
+- **POST /snapshot** — snapshot CRUD via control sockets. Defer.
+
+---
+
+## [0.8.12] — 2026-05-06
+
+Log-stream auto-reopen on rotate. `?follow=true` clients survive
+log rotation (newsyslog, logrotate) without operator intervention.
+Pre-0.8.12 the stream ended cleanly on `NOTE_DELETE`/`NOTE_RENAME`
+and the operator had to re-curl.
+
+### Mechanism
+
+When `kqueue` fires with `NOTE_DELETE | NOTE_RENAME` on the watched
+fd:
+1. Brief `usleep(50ms)` so the rotator has a chance to create the
+   replacement file (logrotate typically does rename-then-create
+   in two syscalls; we'd hit ENOENT in the gap).
+2. Close old fd; loop `open(logPath, O_RDONLY | O_CLOEXEC)` up to
+   20 times with 50ms backoff (1s total).
+3. If the new file appears, re-register the kqueue filter on the
+   new fd and reset the `std::ifstream` to the new file from start.
+4. If it never appears, end the stream cleanly so the client can
+   re-curl manually.
+
+### Operator-visible behaviour
+
+Before:
+```sh
+$ curl -N https://crated/api/v1/containers/myjail/logs?follow=true
+... live tail ...
+                          # (newsyslog rotates here — connection drops)
+$ # operator manually retries:
+$ curl -N https://crated/api/v1/containers/myjail/logs?follow=true
+```
+
+After:
+```sh
+$ curl -N https://crated/api/v1/containers/myjail/logs?follow=true
+... live tail ...
+... (newsyslog rotates — invisible to operator) ...
+... live tail of new file continues ...
+```
+
+### Implementation
+
+`daemon/routes.cpp::handleContainerLogs` streaming branch:
+- Inspects `triggered.fflags` after each `kevent` call
+- On rotate event: usleep + retry-open loop + re-arm kqueue + reset
+  ifstream
+- Uses the existing `FdCloser` RAII for proper teardown of the
+  old fd
+
+Linux fallback path is unchanged (still `usleep(500ms)` polling;
+no rotate detection — Linux dev-only path).
+
+### Tests
+
+No new unit tests — the change is platform-specific runtime I/O
+behind `#ifdef __FreeBSD__` exercising kqueue+open+ifstream-reset.
+End-to-end testing remains a future functional-test addition.
+
+**994/994 unit tests pass locally**.
+
+### NOT in this release
+
+- **Auto-recover from `NOTE_REVOKE`** — currently treated like
+  delete. Not commonly hit.
+- **Inode-stable detection** — currently we re-open by path. If
+  the path itself disappears (entire /var/log/crate/<jail>/
+  removed), stream ends. Acceptable for the typical rotate flow.
+- **Linux `inotify` rotate detection** — gated on broader Linux
+  port work.
+
+---
+
+## [0.8.11] — 2026-05-06
+
+`gui: auto` and `gui: { mode: gpu }` now auto-unhide `/dev/dri/*`
+in the jail's devfs view. Saves the operator from writing a custom
+devfs ruleset for the common case "I want hardware-accelerated
+firefox in this jail."
+
+### What's automated
+
+| Already automatic (pre-0.8.11) | New in 0.8.11 |
+|---|---|
+| `/tmp/.X11-unix` bind-mount (since X11 support landed) | `/dev/dri/card*` + `/dev/dri/renderD*` unhidden in jail's devfs view |
+
+So with `gui: auto` (0.7.19 scalar shortcut) the only operator
+config now is the spec line itself:
+
+```yaml
+gui: auto
+start: firefox
+```
+
+That's the whole spec for "run firefox with GPU acceleration in
+a jail" — no `terminal.devfs_ruleset:`, no manual
+`mounts: { host: /dev/dri/card0, jail: ... }` needed.
+
+### Trigger conditions
+
+- `guiOptions->mode == "gpu"` (explicit GPU mode), OR
+- `guiOptions->mode == "auto"` AND `/dev/dri/card0` exists on host
+
+Skipped when:
+- No `guiOptions` at all (no GUI wanted)
+- `mode == "headless"` or `"nested"` (software/Xephyr — no GPU
+  needed)
+- `/dev/dri/card0` doesn't exist on host (nothing to expose)
+
+### Mechanism
+
+```sh
+devfs -m <jail-path>/dev rule add path dri unhide
+devfs -m <jail-path>/dev rule add path 'dri/*' unhide
+devfs -m <jail-path>/dev rule applyset
+```
+
+Operates on the jail's devfs mount only. Host devfs untouched.
+
+### Defence in depth
+
+- Only the `dri` subdirectory and its children are unhidden — no
+  blanket `path '*' unhide` that would expose unrelated devices.
+- Soft-fail with operator-visible warning if `devfs(8)` fails:
+  jail still starts, just without GPU access. Operator can add
+  a manual ruleset to recover.
+- Operator's explicit `terminal.devfs_ruleset:` setting wins —
+  this auto-unhide only adds rules; if the operator's custom
+  ruleset is more restrictive, it gets the last word via the
+  existing `applyset` after this block.
+
+### Implementation
+
+`lib/run.cpp` — after the existing `terminal.devfs_ruleset` apply,
+add the auto-unhide block conditional on `spec.guiOptions->mode`.
+~30 LOC of run.cpp; no new files.
+
+### Tests
+
+No new unit tests — the change is shell-out + filesystem state,
+not pure logic. Existing GUI tests cover the mode-resolution
+side. **994/994 unit tests pass locally**.
+
+### NOT in this release
+
+- **Auto-detect GUI need from `start:` command** (firefox,
+  gimp, blender) → enable `gui: auto` implicitly. Risky (false
+  positives like `firefox-stats-collector`); deferred until
+  requested.
+- **NVIDIA / AMDGPU specific device exposure** — currently we
+  only handle the standard `/dev/dri/*` paths. NVIDIA adds
+  `/dev/nvidia*`; AMDGPU adds `/dev/kfd`. Future work to detect
+  + expose those automatically.
+
+---
+
+## [0.8.10] — 2026-05-06
+
+`options.ipsec.conf:` — auto-install strongSwan conn snippet
+into `/usr/local/etc/strongswan.d/` at jail start, remove on
+teardown. Operator no longer pre-loads the conn into ipsec.conf.
+
+### Spec
+
+```yaml
+options:
+  ipsec:
+    conn: my-tunnel-1
+    conf: /etc/crate/ipsec/my-tunnel-1.conf   # NEW (0.8.10)
+```
+
+### Lifecycle
+
+| When | What |
+|---|---|
+| Jail start | Copy `<conf>` → `/usr/local/etc/strongswan.d/crate-<jail>.conf`; `ipsec reread`; `ipsec auto --add/--up <conn>` (existing 0.8.4 behaviour) |
+| Jail teardown | `ipsec auto --down/--delete <conn>`; remove the installed file; `ipsec reread` (cleanup) |
+
+`conf:` is optional — if omitted, behaviour matches 0.8.4 (operator
+preconfigures the conn). If specified, the file is auto-deployed.
+
+### Pairs naturally with `crate vpn ipsec render-conf`
+
+```sh
+# operator workflow:
+crate vpn ipsec render-conf my-tunnel.yml > /etc/crate/ipsec/my-tunnel-1.conf
+# spec.yml then references it:
+#   options:
+#     ipsec:
+#       conn: my-tunnel-1
+#       conf: /etc/crate/ipsec/my-tunnel-1.conf
+crate run -f my-jail.crate
+```
+
+`render-conf` (0.6.10) writes the strongSwan conn block; `conf:`
+(this release) auto-deploys it. Operator does both steps once;
+crate handles the lifecycle from there.
+
+### Implementation
+
+- `lib/spec.h` — `IpsecOptDetails::confPath` field
+- `lib/spec.cpp` — `options.ipsec.conf` parser
+- `lib/run.cpp` — at jail start (after WireGuard, before bringing
+  conn up): if `confPath` set, validate file exists, copy to
+  `/usr/local/etc/strongswan.d/crate-<jail>.conf`, invoke
+  `ipsec reread`. `RunAtEnd ipsecConfCleanup` removes the file
+  + reread on teardown.
+
+### Defence in depth
+
+- File-exists check before copy — surfaces operator typos at jail
+  start with clear error rather than silently leaving the conn
+  unloaded.
+- `ipsec reread` failure is soft-fail (warn, continue) — same
+  posture as wg-quick errors. Better to start the jail and let
+  the operator `crate doctor` later than block on a strongSwan
+  hiccup.
+
+### Tests
+
+No new unit tests — the change is runtime I/O (file copy + shell
+exec), not pure logic. Existing IPsec tests cover the conn-name
+side. **994/994 unit tests pass locally**.
+
+### NOT in this release
+
+- **Conn name auto-derive** from spec — currently operator must
+  match the conn name in conn snippet to the `conn:` value. Auto-
+  derive (parse the snippet's `conn <name>` line) is a future
+  ergonomics win.
+- **Multi-conn install** — currently one conn per jail. If
+  operators want N conns, they pre-load them all into
+  ipsec.conf and reference one by name.
+
+---
+
+## [0.8.9] — 2026-05-06
+
+`crate doctor` now verifies auto-fw rules are actually loaded for
+each running jail. Surfaces silent breakage when operators flush
+pf or delete ipfw nat instances out from under crate.
+
+### New `auto-fw` check category
+
+```
+auto-fw:
+  [PASS] postgres-prod  pf anchor present (auto-fw active)
+  [PASS] redis-cache    pf anchor present (auto-fw active)
+  [WARN] dev-postgres   no crate/dev-postgres_pid* pf anchor —
+                        auto-fw inactive (OK for jails not using
+                        mode:auto; FAIL for auto-mode jails —
+                        outbound traffic likely broken)
+```
+
+For each running crate-managed jail:
+- **pf path**: invoke `pfctl -a crate -s Anchors`, look for an
+  anchor matching `crate/<jail-name>_pid*`. Found → PASS;
+  missing → WARN.
+- **ipfw path**: invoke `ipfw nat <natIdForJail(jid)> show`.
+  Exit 0 → PASS; non-zero → WARN.
+- **No jails running**: PASS with "no jails to check".
+
+### Why WARN instead of FAIL
+
+`crate doctor` doesn't know each jail's spec at runtime — operators
+running NAT-mode jails (no auto-fw) or hand-rolled bridge jails
+legitimately have empty anchors. We can't distinguish "expected
+empty" from "auto-fw broken" without re-loading the spec, which
+costs more than the check is worth.
+
+WARN-level is the right call: visible in the report, exit code 1,
+but doesn't fail-hard for setups that don't use mode:auto. Future
+enhancement: persist the spec-side intent ("this jail uses
+auto-fw") in the lease file so doctor can promote WARN → FAIL only
+when there's a known auto-fw expectation.
+
+### Implementation
+
+- `lib/doctor.cpp::checkAutoFwRules` — the new check function:
+  - kldstat for pf/ipfw to pick the inspection path
+  - per-jail invocation + parse
+  - sane fallbacks on missing tools (ipfw not installed → WARN,
+    not crash)
+- `lib/doctor_pure.cpp` — added `auto-fw` to canonical category
+  rank (sorts after `audit`)
+
+### Tests
+
+No new pure tests — the check is shell-out heavy + per-host
+specific (which jails are running, which firewall loaded). The
+existing `tests/unit/doctor_pure_test.cpp` (13 cases) still
+covers the data model + render + exit-code aggregation.
+
+**994/994 unit tests pass locally** (no new tests).
+
+### NOT in this release
+
+- **Spec-aware FAIL promotion** — load the .crate to learn
+  "should have auto-fw" then FAIL instead of WARN on absence.
+  Tracked.
+- **Per-jail rule count** — currently checks "any rule in
+  anchor"; future could check "expected SNAT + N rdr rules
+  present". Defer until operator reports a partial-rule scenario.
+
+---
+
+## [0.8.8] — 2026-05-06
+
+`daemon/routes.cpp` rate-limit refactor onto the shared
+`RateLimit::check` module. Mechanical no-op: same key shape,
+same per-second counter, same cap values — both API planes
+(main API + control sockets) now share state and any future
+tuning lands in one place.
+
+### Before
+
+```cpp
+// daemon/routes.cpp:
+static std::mutex g_rateMutex;
+static std::map<std::string, std::pair<int, time_t>> g_rateBuckets;
+static bool checkRateLimit(...) {
+  std::lock_guard<...> lock(g_rateMutex);
+  // ... 10 lines of bucket-management duplicated from
+  //     daemon/rate_limit_pure.cpp ...
+}
+static constexpr int RATE_LIMIT_MUTATING = 10;
+static constexpr int RATE_LIMIT_READ     = 100;
+```
+
+### After
+
+```cpp
+static bool checkRateLimit(const std::string &clientId,
+                           const std::string &endpoint,
+                           int maxPerSecond) {
+  return RateLimit::check(clientId + "|" + endpoint, maxPerSecond);
+}
+// All RATE_LIMIT_MUTATING / RATE_LIMIT_READ refs replaced with
+// RateLimit::kMutating / RateLimit::kRead (same values).
+```
+
+### What this unlocks
+
+- Future config-driven cap tuning in `crated.conf` (`rate_limit.read:`,
+  `rate_limit.mutating:`) lands in one place + applies to both
+  planes consistently.
+- Single bucket store: a sustained burst from one client gets
+  consistently rate-limited regardless of which plane it's hitting.
+- ~25 LOC removed from `daemon/routes.cpp`.
+
+### Behaviour change
+
+None observable to operators. Same key (`<clientId>|<endpoint>`),
+same caps, same algorithm. The shared store is process-wide so
+buckets carry over across hot reload (which is the same as before
+since both files used static state).
+
+### Tests
+
+`tests/unit/rate_limit_pure_test.cpp` (10 cases from 0.7.15)
+already covers the algorithm. **994/994 unit tests pass locally**
+(no new tests; pure refactor).
+
+### NOT in this release
+
+- **Config-driven caps** — `crated.conf` overrides for
+  `RateLimit::kRead` / `kMutating`. The 100/10 defaults are
+  conservative; tighter caps for paranoid operators or looser
+  caps for trusted-network deployments are a future configurable.
+
+---
+
+## [0.8.7] — 2026-05-06
+
+`firewall_backend:` config override for hybrid pf+ipfw hosts and
+operators who want explicit control over auto-fw routing.
+
+```yaml
+# crate.yml
+firewall_backend: pf       # force pf even if ipfw is also loaded
+# OR
+firewall_backend: ipfw     # force ipfw even if pf is loaded
+# OR
+firewall_backend: none     # skip auto-fw entirely; operator owns rules
+# OR
+# (omitted)                # auto-detect via kldstat (0.8.0..0.8.6 default)
+```
+
+### When this matters
+
+FreeBSD supports running both pf and ipfw simultaneously (different
+rule chains, no collision). Pre-0.8.7 if both were loaded, crate
+auto-fw silently picked pf. That's the right default but didn't
+help operators who:
+- Use ipfw+dummynet for shaping (0.7.7 throttle) and want auto-fw
+  in the same backend for visibility
+- Run pf for inbound DMZ filtering but want auto-fw isolated to ipfw
+- Want zero auto-fw because they have a custom rule generator
+
+### Implementation
+
+- `lib/config.{h,cpp}` — `Settings.firewallBackend` field; YAML
+  parser validates against `["", "pf", "ipfw", "none"]` whitelist
+  and throws on bad value
+- `lib/run.cpp` — auto-fw branch consults `cfg.firewallBackend`
+  before kldstat detection. Forced backends skip the kldstat
+  invocation entirely (small startup-time saving). `"none"` value
+  emits a LOG line and skips both pf and ipfw paths.
+
+### Defence in depth
+
+- Whitelist enforcement at config-load time. Typos like
+  `firewall_backend: pflog` fail-fast at daemon start with a
+  clear error message rather than silently falling back to
+  auto-detect.
+
+### Tests
+
+No new unit tests — the change is a 4-way switch on a string
+value (pf / ipfw / none / unset) with the validation already
+covered at YAML-parse time. Existing test suite continues to
+pass.
+
+**994/994 unit tests pass locally** (no new tests; behaviour
+change exercised by FreeBSD CI's compile path).
+
+### NOT in this release
+
+- **Per-jail firewall_backend override** in the spec. Currently
+  hostwide only. Defer until requested.
+- **`firewall_backend: nft`** for hypothetical Linux port. Not
+  applicable until Linux support lands.
+
+---
+
+## [0.8.6] — 2026-05-06
+
+`network_interface` auto-detect via `route -4 get default`. Closes
+the "operator must set network_interface in crate.yml" requirement
+that the auto-fw work (0.8.0+) introduced.
+
+### Behaviour
+
+```yaml
+# crate.yml
+network_pool: 10.66.0.0/24
+# network_interface: em0   <-- now optional
+```
+
+When unset, `crate run` invokes `route -4 get default`, parses the
+`interface:` line, and uses the result for SNAT / port-forward
+rules. Operator can still pin the value explicitly (recommended
+for hosts with multiple uplinks where the default route changes).
+
+Cached: detection happens once per daemon lifetime. `crate doctor`
++ future hooks can `NetDetect::clearCache()` to force a re-detect.
+
+### Defence in depth
+
+- Parser only accepts FreeBSD-shaped iface names (1..15 chars,
+  alnum + `.` + `_`). Garbage after the `interface:` token (e.g.
+  shell-injection attempt via a malicious `route` binary on
+  `$PATH`) returns empty and falls back to skip.
+- Tab/space tolerance, CRLF tolerance — survives operators piping
+  output through tools that mangle whitespace.
+- Localised output not supported (we match English `interface:`
+  only). FreeBSD `route(8)` doesn't localise output, so this is
+  safe in practice.
+
+### Soft-fail
+
+If both `network_interface` is unset AND auto-detection fails
+(no default route, route(8) missing), the warning gets more
+useful:
+
+```
+auto-fw: network_interface unset in crate.yml AND default-route
+auto-detection failed (no `route -4 get default` interface line);
+skipping SNAT auto-rule — outbound traffic from 10.66.0.5 will
+require operator-written pf/ipfw rules
+```
+
+### Implementation
+
+- `lib/net_detect_pure.{h,cpp}` — pure parser:
+  - `parseRouteOutput(text) -> ifaceName | ""`
+  - Robust against whitespace variations, CRLF, multiple
+    interface lines (takes first), garbage after the colon
+- `lib/net_detect.{h,cpp}` — runtime: invokes
+  `/sbin/route -4 get default`, caches result with mutex.
+  `defaultIfaceCached()` API + `clearCache()` for test/doctor
+  hooks.
+- `lib/run.cpp` — auto-fw block now resolves to either
+  `cfg.networkInterface` (explicit) or `NetDetect::defaultIfaceCached()`
+  (auto). Validates result either way before passing to pf/ipfw.
+
+### Tests
+
+`tests/unit/net_detect_pure_test.cpp` — **9 ATF cases**:
+
+- `typical_route_output` — exact FreeBSD 14 `route -4 get default`
+  format pinned
+- `vlan_iface` — dotted form (`vlan0.100`) accepted
+- `no_interface_line` — fallback returns ""
+- `empty_input` — handles empty file/output
+- `crlf_line_endings` — survives Windows-edited inputs
+- `rejects_garbage_value` — shell-injection / spaces / empty value
+  all rejected
+- `takes_first_match` — robustness invariant
+- `rejects_oversized_iface` — > 15 chars (IFNAMSIZ - 1) rejected
+- `tab_separator_accepted` — whitespace tolerance
+
+**994/994 unit tests pass locally** (985 prior + 9 new).
+
+### NOT in this release
+
+- **Cache invalidation on host network change** — operator could
+  manually `service crated restart` if their default route
+  switches; auto-invalidation via routing socket events
+  (`route monitor`) is a future hook.
+- **IPv6 default route detection** — currently IPv4-only. When
+  IPv6 NPTv6 lands (future), we'll need
+  `route -6 get default ::/0` parsing.
+
+---
+
 ## [0.8.5] — 2026-05-06
 
 Log-streaming tail now uses `kqueue(2)` + `kevent(2)` instead of

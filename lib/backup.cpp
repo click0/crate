@@ -11,7 +11,12 @@
 #include "commands.h"
 #include "jail_query.h"
 #include "util.h"
+#include "zfs_dataset.h"
+#include "zfs_ops.h"
 #include "err.h"
+
+#include <cerrno>
+#include <cstring>
 
 #include <rang.hpp>
 
@@ -28,47 +33,10 @@
 
 #define ERR(msg...) ERR2("backup", msg)
 
-namespace {
-
-// Resolve jail name -> ZFS dataset by looking up the live jail and
-// asking Util::Fs::getZfsDataset for its path.
-std::string datasetForJail(const std::string &name) {
-  auto j = JailQuery::getJailByName(name);
-  if (!j) ERR("jail '" << name << "' not found or not running")
-  if (!Util::Fs::isOnZfs(j->path))
-    ERR("jail '" << name << "' is not on ZFS — backup requires ZFS")
-  return Util::Fs::getZfsDataset(j->path);
-}
-
-// Find the most-recent backup-* snapshot suffix on `dataset`, by
-// querying `zfs list -H -t snapshot -o name -r <dataset>` and
-// filtering. Returns the lexicographically-largest suffix, or
-// empty if none found. (snapshotSuffix() is lexicographically
-// monotone with time, so newest = largest.)
-std::string findLatestBackupSuffix(const std::string &dataset) {
-  std::string out;
-  try {
-    auto raw = Util::execCommandGetOutput(
-      {"/sbin/zfs", "list", "-H", "-t", "snapshot",
-       "-o", "name", "-r", dataset},
-      "list ZFS snapshots");
-    std::istringstream is(raw);
-    std::string line;
-    std::regex re(R"(^.+@(backup-.+)$)");
-    while (std::getline(is, line)) {
-      std::smatch m;
-      if (std::regex_match(line, m, re)) {
-        std::string suffix = m[1].str();
-        if (suffix > out) out = suffix;
-      }
-    }
-  } catch (...) {
-    // No snapshots, or ZFS error — caller treats as "no prior".
-  }
-  return out;
-}
-
-} // anon
+// 0.8.25: datasetForJail + findLatestBackupSuffix moved to
+// lib/zfs_dataset.{h,cpp} where they're shared with replicate.cpp.
+// The pure parsing of `zfs list` output lives in
+// lib/zfs_dataset_pure.cpp and is unit-tested.
 
 bool backupCrate(const Args &args) {
   if (auto e = BackupPure::validateJailName(args.backupTarget); !e.empty())
@@ -79,13 +47,13 @@ bool backupCrate(const Args &args) {
     if (auto e = BackupPure::validateSinceName(args.backupSince); !e.empty())
       ERR(e)
 
-  auto dataset = datasetForJail(args.backupTarget);
+  auto dataset = ZfsDataset::datasetForJail(args.backupTarget, "backup");
 
   BackupPure::Inputs in;
   in.sinceProvided = !args.backupSince.empty();
   in.sinceName     = args.backupSince;
   if (!in.sinceProvided && args.backupAutoIncremental) {
-    auto prev = findLatestBackupSuffix(dataset);
+    auto prev = ZfsDataset::findLatestBackupSuffix(dataset);
     if (!prev.empty()) {
       in.priorBackupExists      = true;
       in.priorSnapshotSuffix    = prev;
@@ -139,10 +107,24 @@ bool restoreCrate(const Args &args) {
 
   std::cerr << rang::fg::cyan << "restore: zfs recv ← " << args.restoreFile
             << " into " << args.restoreDataset
+            << " (" << (ZfsOps::available() ? "native libzfs" : "fork+exec zfs(8)") << ")"
             << rang::style::reset << std::endl;
-  // `zfs recv <destDataset>` reads stdin from the file.
-  Util::execPipeline({BackupPure::buildRecvArgv(args.restoreDataset)},
-                     "zfs recv from file", args.restoreFile, "");
+  // 0.8.29: native ZfsOps::recv when libzfs is linked — skips
+  // fork+exec'ing zfs(8) and avoids shell-quoting the dataset
+  // name. Open the .zstream file ourselves and hand the fd to
+  // ZfsOps::recv; the function falls back to fork+exec when
+  // HAVE_LIBZFS isn't built in. Pre-0.8.29 this used Util::
+  // execPipeline which always fork+exec'd.
+  int fd = ::open(args.restoreFile.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0)
+    ERR("cannot open " << args.restoreFile << ": " << std::strerror(errno))
+  try {
+    ZfsOps::recv(args.restoreDataset, fd);
+  } catch (...) {
+    ::close(fd);
+    throw;
+  }
+  ::close(fd);
 
   std::cout << rang::fg::green << "restore: " << args.restoreDataset
             << " recovered from " << args.restoreFile

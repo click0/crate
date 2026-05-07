@@ -3,10 +3,7 @@ not yet fixed. Items are grouped by priority for production readiness.
 
 === Known bugs ===
 
-* (bug) net/inbound: crates can listen on any ports for inbound connections,
-  but connections are rejected from the host itself.
-  See bug#239590: ipfw rule doesn't forward TCP connections made through
-  the host's LAN address.
+(none currently — bug#239590 host-LAN-loopback rejection FIXED in 0.8.39)
 
 === High priority — blocking production use ===
 
@@ -15,28 +12,24 @@ operational quality.)
 
 === Medium priority — operational quality ===
 
-* (feature) `network: auto` — zero-config networking mode for vnet
-  jails. Single spec line `network: auto` triggers: auto-allocate
-  IP from configured /27 pool, auto-create bridge+epair, auto-SNAT
-  rule, auto-port-forward from `ports:` declaration. Removes the
-  operator's need to maintain pf.conf / ipfw rules for simple
-  desktop-app jails. Inspired by libkrun's TSI pattern (libkrun
-  uses vsock proxying for VMs; jails get the same DX via
-  auto-bridge since they have direct host kernel access). Builds
-  on the auto-create-bridge mechanism from 0.6.3. Estimated 600
-  LOC, one release.
+* (feature, partial) `crate update TARGET --pkg-only` — in-place
+  pkg upgrade inside a running jail. *Shipped in 0.8.41.* Runs
+  `pkg upgrade [-n] [-y]` via jexec(8); jail keeps running.
+  Full base-system update remains open: it would need a
+  snapshot-and-rollback dance because /usr/lib, /usr/sbin, /lib
+  are in use by the jail's running processes. Tracked as a
+  separate larger item.
 
-* (feature) `gui: auto` — zero-config GUI mode for desktop-app
-  jails. Single spec line `gui: auto` (or auto-detect from
-  `start:` cmd: firefox/gimp/blender/...) triggers: copy
-  $XAUTHORITY -> jail-local cookie, bind-mount /tmp/.X11-unix,
-  expose /dev/dri/card0 + renderD128 via devfs ruleset, detect
-  Wayland and bind-mount $XDG_RUNTIME_DIR/wayland-0 if present.
-  Removes the per-jail X11/devfs config every desktop spec
-  currently has. Inspired by libkrun's virtio-gpu+venus path
-  (VM-only solution; jails get the same DX via direct DRM access
-  which is faster than virtio-gpu translation). Estimated 500
-  LOC, one release.
+* (feature, partial) Hub scheduling — automatic container placement
+  on the least-loaded host. *Endpoint shipped in 0.8.40* —
+  `GET /api/v1/scheduling/least-loaded[?current=<name>]` returns
+  the best target node + 0..100 confidence score, with anti-flap
+  (within 10% of best -> keep current). Operator workflow:
+    target=$(curl ... | jq -r .data.host)
+    crate migrate myjail --to "$target" ...
+  Still open: a `crate-hub schedule <crate-file>` CLI helper that
+  wraps the curl + migrate dance. Operators on the curl path
+  today; CLI sugar tracked separately.
 
 === Out of scope (separate repository) ===
 
@@ -52,32 +45,37 @@ operational quality.)
   dashboard in hub/web/ stays as a built-in fallback for
   tokenless local monitoring.
 
-=== Low priority — future enhancements ===
+=== Low priority — future enhancements (architectural) ===
 
-* (feature) Rootless containers — crate is setuid root (04755). Explore
-  rootless jail via jail(8) with allow.nfds.
+These items each represent multi-week / multi-release work. Not
+suitable for one-shot sprints; need their own design pass.
 
-* (feature) Hub scheduling — automatic container placement on the least
-  loaded host.
+* (feature) Rootless containers — crate is setuid root (04755).
+  Explore rootless jail via jail(8) with allow.nfds. Foundation
+  laid in 0.8.23 (`DrmSession::probeDevice` + `crate doctor`
+  libseat check) so operators can pre-validate seatd setup.
+  The actual rootless refactor touches: setuid bit removal,
+  capability re-acquisition path for jail_set/jail_remove,
+  uid-mapped ZFS dataset ownership, libseat-mediated DRM.
 
-* (feature) Layered images — ZFS-based layering through clones instead
-  of monolithic .crate archives.
+* (feature) Layered images — ZFS-based layering through clones
+  instead of monolithic .crate archives. Touches `crate create`,
+  `crate run`, `crate import`, `crate export` simultaneously —
+  the on-disk archive format becomes a manifest pointing at
+  multiple parent snapshots. Spec format extension required.
 
-* (feature) crate update TARGET — in-place base system and package update
-  inside a running jail without full recreate.
-
-* (security) Verify Unix-socket peer credentials in crated. Today
-  daemon/auth.cpp::isUnixSocketPeer trusts an empty REMOTE_ADDR as
-  proof of unix-socket origin and grants full admin access without
-  checking peer uid/gid. The unix-socket file mode (root:wheel
-  0660) is the only gate. A proper fix needs the underlying
-  connection fd to call getpeereid(2) — which cpp-httplib doesn't
-  expose — so this likely requires forking httplib's accept loop
-  or replacing the unix-socket transport with a hand-rolled
-  listener (similar to how WebSocket console got its own listener
-  in 0.6.4). The previous scaffolding for this lived as
-  `checkUnixPeerCredentials()` and was removed in PR #131 since it
-  was never wired up.
+* (security) True getpeereid(2)-based unix-socket auth in crated.
+  *Partial mitigation shipped in 0.8.19* — operators can now
+  scope `/var/run/crate/crated.sock` access via filesystem perms
+  (`listen.unix_owner / unix_group / unix_mode` in crated.conf).
+  That's group-based access control via the OS; sufficient for
+  the typical "same-host operator group" model.
+  The deeper getpeereid fix needs the underlying connection fd
+  which cpp-httplib doesn't expose — requires either forking
+  httplib's accept loop or replacing the unix-socket transport
+  with a hand-rolled listener (similar to how WebSocket console
+  got its own listener in 0.6.4 and control sockets got theirs
+  in 0.7.11). Tracked for a future privsep refactor sprint.
 
 === Done (removed) ===
 
@@ -102,7 +100,8 @@ Items completed and removed from this file:
 - RCTL I/O enforcement with verification (0.3.0 — run_jail.cpp)
 - OOM detection and exit diagnostics (0.3.0 — run_jail.cpp)
 - Per-container Prometheus metrics (0.3.0 — daemon/metrics.cpp)
-- ZFS disk quotas per-container (0.3.0 — zfs_ops.cpp)
+- ZFS disk quotas per-container (0.3.0 — zfs_ops.cpp; runtime
+  application bug fixed in 0.8.31)
 - Base system caching with SHA256 (0.3.0 — create.cpp)
 - CI: Linux unit tests, FreeBSD lite/full build, release binary workflow
 - pkg/add support — install pre-built .txz files via `pkg add` (0.5.5)
@@ -110,7 +109,8 @@ Items completed and removed from this file:
 - pkg/chroot output captured to /var/log/crate/create-<jail>.log (0.5.7)
 - Symmetric encryption for .crate (AES-256-CBC + PBKDF2 via -P) (0.5.4)
 - ed25519 signing for .crate (-K to sign, -V to verify; .sig sidecar) (0.5.8)
-- Audit logging — JSONL append to /var/log/crate/audit.log (0.5.9)
+- Audit logging — JSONL append to /var/log/crate/audit.log (0.5.9;
+  optional dual-write to syslog via cap_syslog added in 0.8.24)
 - Cross-device file shares — single-file nullfs bind fallback when host
   and jail-side path are on different devices (0.6.0 — lib/share_pure.cpp)
 - crated F2 write API (partial) — POST /restart, snapshot CRUD
@@ -200,90 +200,35 @@ Items completed and removed from this file:
   Empty datacenter is canonicalised to "default". Admin UI for
   editing DCs is left for later (0.6.15 — hub/datacenter_pure.cpp
   + hub/api.cpp + hub/web/{index.html,app.js})
-- crate backup / crate restore — ZFS-send-based snapshot streams.
-  `crate backup <jail> --output-dir DIR` takes a fresh snapshot,
-  emits `zfs send` (or `zfs send -i` with --since/--auto-incremental)
-  into `<jail>-<timestamp>.zstream`. Filenames sort lexicographically
-  by time so `ls -1 | tail -n +N` retention works trivially.
-  `crate restore STREAM --to <pool/jails/name>` runs `zfs recv`.
-  Pure module owns plan choice, argv builders, retention parser
-  (0.7.0 — lib/backup_pure.cpp + lib/backup.cpp).
+- crate backup / crate restore — ZFS-send-based snapshot streams
+  (0.7.0 — lib/backup_pure.cpp + lib/backup.cpp). Native libzfs
+  recv path added in 0.8.29.
 - API tokens with TTL + scope — crated.conf tokens gain optional
-  `expires_at:` (UTC ISO 8601) and `scope:` (list of path globs:
-  exact match or trailing /* prefix). isAuthorized() runs the
-  expiry + scope check before the role gate. Pre-0.7.1 configs
-  keep working unchanged: missing fields = never-expires + no
-  restriction (0.7.1 — lib/auth_pure.cpp + daemon/auth.cpp).
-- crate replicate — ZFS storage replication via ssh.
-  `crate replicate <jail> --to [user@]host --dest-dataset <ds>`
-  takes a fresh snapshot and streams `zfs send | ssh ... 'zfs
-  recv'`. Supports incremental (--since / --auto-incremental).
-  Operator-controllable SSH transport: --ssh-port, --ssh-key,
-  --ssh-config, repeatable --ssh-opt KEY=VAL (StrictHostKeyChecking,
-  UserKnownHostsFile, ProxyJump, ConnectTimeout, ...). All inputs
-  validated against shell metacharacters and `..` segments before
-  reaching execPipeline. BatchMode=yes + ServerAliveInterval=30
-  set as defaults (0.7.2 — lib/replicate_pure.cpp + lib/replicate.cpp).
-- HA failover policy in hub — operator declares per-container HA
-  spec in crate-hub.conf (`ha.specs:` with primary + ordered
-  partner_nodes, `ha.threshold_seconds:` for the anti-flap
-  window). Hub poller tracks first-down-at timestamp. New
-  GET /api/v1/ha/orders returns deterministic MigrationOrder list
-  the operator/cron consumes via `crate migrate`. Hub does NOT
-  hold admin tokens or auto-execute (preserves the 0.6.7
-  architecture where tokens stay in operator localStorage).
-  Anti-flap: orders only emit after threshold; first reachable
-  partner in declared order wins; no order when all partners
-  down (no half-failovers). (0.7.3 — hub/ha_pure.cpp +
-  hub/api.cpp + hub/poller.cpp).
+  `expires_at:` (UTC ISO 8601) and `scope:` (list of path globs)
+  (0.7.1 — lib/auth_pure.cpp + daemon/auth.cpp).
+- crate replicate — ZFS storage replication via ssh
+  (0.7.2 — lib/replicate_pure.cpp + lib/replicate.cpp).
+- HA failover policy in hub (0.7.3 — hub/ha_pure.cpp + hub/api.cpp +
+  hub/poller.cpp).
 - Resource pools + ACL — tokens in crated.conf gain optional
-  `pools:` whitelist; the pool of a container is inferred from
-  its jail name via `auth.pool_separator` (default "-", so
-  "dev-postgres" -> pool "dev"). F2 endpoints with `:name`
-  enforce pool match before role/scope checks. Empty `pools:` =
-  unrestricted (pre-0.7.4 behaviour); "*" = explicit all-pools.
-  Pool-less jails reachable only by unrestricted/wildcard tokens
-  (no silent leakage). WebSocket console enforces same ACL
-  (0.7.4 — lib/pool_pure.cpp + daemon/auth.cpp +
-  daemon/routes.cpp + daemon/ws_console.cpp).
-- ZFS warm-template caching (part 1) — `crate template warm
-  <jail> --output <dataset> [--promote]` snapshots a running
-  jail's dataset and clones it into a "warm template" the
-  operator can later use as a base to skip cold-create work
-  (pkg install, profile init, asset cache priming). Captures
-  on-disk state only — process memory / open tabs / X11
-  sessions need CRIU/bhyve and are documented as out-of-scope
-  for jail-based architectures. Pure validation against shell
-  metas + dataset alphabet; UTC-ISO-8601 lex-sortable snapshot
-  suffix matches the backup module convention. Optional
-  `--promote` detaches the clone from its parent snapshot so
-  retention pruning of warm snapshots can run independently
-  (0.7.5 — lib/warm_pure.cpp + lib/warm.cpp). Part 2
-  (`crate run --warm-base <dataset>` integration to actually
-  consume the template at run time) tracked separately.
-- crate retune — live RCTL adjustment for a running jail. No
-  restart required; the jail's in-memory state survives. Operator
-  throttles a runaway container (torrent client suddenly sucking
-  the disk) without losing it. `--rctl KEY=VALUE` (repeatable),
-  `--clear KEY` (drops the rule), `--show` (rctl -u dump
-  before+after). Whitelisted RCTL keys (typos give a helpful
-  diagnostic); human-friendly K/M/G/T suffixes (1024-based) for
-  byte rates, plain integers for IOPS/counts, 0..100 for pcpu.
-  Pure validators reject shell metas / out-of-range / suffix-on-
-  IOPS at parse time so the rctl(8) child never sees a malformed
-  rule (0.7.6 — lib/retune_pure.cpp + lib/retune.cpp).
-  Token-bucket-style network throttling (per-iface bandwidth
-  with burst) is the topic of 0.7.7 (dummynet integration).
+  `pools:` whitelist (0.7.4 — lib/pool_pure.cpp + daemon/auth.cpp).
+- ZFS warm-template caching (0.7.5 — lib/warm_pure.cpp + lib/warm.cpp).
+- crate retune — live RCTL adjustment for a running jail
+  (0.7.6 — lib/retune_pure.cpp + lib/retune.cpp).
 - crate throttle — TRUE token-bucket network rate limiting via
-  dummynet(4) accessed through ipfw(8). Sister to retune which
-  targets RCTL hard caps. `--ingress RATE --egress RATE
-  [--ingress-burst N --egress-burst N --queue N]`. Sustained
-  rate (ipfw `bw`) plus burst capacity (ipfw `burst`) — the
-  textbook token bucket Firecracker exposes. Pipe IDs derived
-  deterministically from JID (10000 + jid*2; +1 for egress) so
-  re-running the command replaces the prior config without
-  orphaning rules. `--clear` removes all pipes + binds for the
-  jail. Pure validators reject the bare "10M" rate form (forces
-  bit/s vs byte/s disambiguation), enforce queue-slot bounds
-  1..1000, validate IPv4 octets. 20 ATF tests
-  (0.7.7 — lib/throttle_pure.cpp + lib/throttle.cpp).
+  dummynet(4) accessed through ipfw(8) (0.7.7 — lib/throttle_pure.cpp
+  + lib/throttle.cpp).
+- `network: auto` — zero-config networking shorthand for vnet jails
+  (0.8.17 top-level, 0.7.18 nested form). Expands into bridge +
+  auto-create-bridge + auto-IP + auto-SNAT/rdr.
+- `gui: auto` — zero-config GUI mode for desktop-app jails. Single
+  spec line covers X11 cookie copy + /tmp/.X11-unix bind +
+  /dev/dri/* devfs unhide + Wayland socket bind (assembled across
+  0.7.19 / 0.8.11 / 0.8.18).
+- `crate vm-wrap` — bhyve jailer renderer (0.8.16; see TODO2 B).
+- IPv6 NPTv6 Phase 2 — `network_pool6:` config field actually
+  configures jail-side v6 (0.8.20). NAT66/NPTv6 pf rules tracked
+  separately for a future release.
+- Spec registry + control-plane PostStart (0.8.21).
+- 0.8.21 dead-code audit closure — see CHANGELOG entries for 0.8.22
+  through 0.8.37.

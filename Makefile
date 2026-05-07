@@ -18,8 +18,14 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/create.cpp lib/run.cpp \
            lib/retune_pure.cpp lib/retune.cpp \
            lib/throttle_pure.cpp lib/throttle.cpp \
            lib/doctor_pure.cpp lib/doctor.cpp \
+           lib/vmwrap_pure.cpp lib/vmwrap.cpp \
            lib/ip_alloc_pure.cpp lib/network_lease.cpp \
+           lib/ip6_alloc_pure.cpp lib/network_lease6.cpp \
+           lib/spec_registry_pure.cpp lib/spec_registry.cpp \
+           lib/zfs_dataset_pure.cpp lib/zfs_dataset.cpp \
+           lib/update.cpp \
            lib/auto_fw_pure.cpp \
+           lib/net_detect_pure.cpp lib/net_detect.cpp \
            lib/share_pure.cpp \
            lib/top_pure.cpp lib/top.cpp \
            lib/bridge_pure.cpp \
@@ -46,7 +52,8 @@ DAEMON_SRCS = daemon/main.cpp daemon/config.cpp daemon/server.cpp \
               daemon/transfer_pure.cpp \
               daemon/control_socket_pure.cpp daemon/control_socket.cpp \
               daemon/sandbox_pure.cpp daemon/sandbox.cpp \
-              daemon/rate_limit_pure.cpp daemon/rate_limit.cpp
+              daemon/rate_limit_pure.cpp daemon/rate_limit.cpp \
+              daemon/socket_perms_pure.cpp
 
 SNMPD_SRCS = snmpd/main.cpp snmpd/collector.cpp \
              snmpd/mib.cpp snmpd/mib_pure.cpp
@@ -87,19 +94,32 @@ LIBS     += -lvirt
 endif
 ifdef WITH_LIBVNCSERVER
 CXXFLAGS += -DHAVE_LIBVNCSERVER
-LIB_SRCS += lib/vnc_server.cpp
 LIBS     += -lvncserver
 endif
+# 0.8.22: vnc_server.cpp is always compiled. Internal #ifdef
+# HAVE_LIBVNCSERVER stubs out the libvncserver-specific code so
+# VncServer::available() returns false on builds without libvncserver
+# and lib/run_gui.cpp's `gui.vnc_native: true` path falls back to
+# fork+exec'ing x11vnc with an operator-visible warning.
+LIB_SRCS += lib/vnc_server.cpp
 ifdef WITH_X11
 CXXFLAGS += -DHAVE_X11
-LIB_SRCS += lib/x11_ops.cpp
 LIBS     += -lX11 -lXrandr -lXext
 endif
+# 0.8.36: x11_ops.cpp is always compiled. Internal #ifdef HAVE_X11
+# guards stub out the libX11-specific code so X11Ops::available()
+# returns false on non-WITH_X11 builds and lib/gui.cpp's screenshot
+# path falls back to the xwd + xwdtopnm + pnmtopng pipeline.
+LIB_SRCS += lib/x11_ops.cpp
 ifdef WITH_LIBSEAT
 CXXFLAGS += -DHAVE_LIBSEAT
-LIB_SRCS += lib/drm_session.cpp
 LIBS     += -lseat
 endif
+# 0.8.23: drm_session.cpp is always compiled. Internal #ifdef
+# HAVE_LIBSEAT guards stub out the libseat-specific code so
+# DrmSession::available() returns false on builds without libseat
+# and probeDevice falls back to a plain open(O_RDWR) probe.
+LIB_SRCS += lib/drm_session.cpp
 
 CXXFLAGS += -Wall -std=c++17
 CXXFLAGS += -Ilib             # lib/ headers visible to all
@@ -197,7 +217,10 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              backup_prune_pure_test control_socket_pure_test \
              doctor_pure_test sandbox_pure_test rate_limit_pure_test \
              ip_alloc_pure_test auto_fw_pure_test \
-             ipsec_runtime_pure_test
+             ipsec_runtime_pure_test net_detect_pure_test \
+             vmwrap_pure_test socket_perms_pure_test \
+             ip6_alloc_pure_test spec_registry_pure_test \
+             zfs_dataset_pure_test hub_scheduling_pure_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 test: $(UNIT_TEST_BINS)
@@ -232,7 +255,12 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  lib/sign_pure.cpp lib/audit_pure.cpp lib/pool_pure.cpp \
                  lib/warm_pure.cpp lib/retune_pure.cpp \
                  lib/throttle_pure.cpp lib/doctor_pure.cpp \
-                 lib/ip_alloc_pure.cpp lib/auto_fw_pure.cpp \
+                 lib/vmwrap_pure.cpp \
+                 lib/ip_alloc_pure.cpp lib/ip6_alloc_pure.cpp \
+                 lib/spec_registry_pure.cpp \
+                 lib/zfs_dataset_pure.cpp \
+                 lib/auto_fw_pure.cpp \
+                 lib/net_detect_pure.cpp \
                  lib/share_pure.cpp lib/top_pure.cpp lib/bridge_pure.cpp \
                  lib/inter_dns_pure.cpp lib/wireguard_pure.cpp \
                  lib/ipsec_pure.cpp lib/inspect_pure.cpp \
@@ -244,8 +272,10 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  daemon/routes_pure.cpp daemon/ws_pure.cpp \
                  daemon/transfer_pure.cpp daemon/control_socket_pure.cpp \
                  daemon/sandbox_pure.cpp daemon/rate_limit_pure.cpp \
+                 daemon/socket_perms_pure.cpp \
                  hub/aggregator_pure.cpp \
                  hub/datacenter_pure.cpp hub/ha_pure.cpp \
+                 hub/scheduling_pure.cpp \
                  snmpd/mib_pure.cpp
 
 # Map every src to a .o under TEST_OBJ_DIR keeping the source's

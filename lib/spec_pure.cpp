@@ -41,6 +41,19 @@ std::string substituteVars(const std::string &input,
   return result;
 }
 
+std::string validateTopLevelNetwork(const std::string &v) {
+  // "auto" is the only currently-supported value. Reserved for
+  // future: a bridge name (network: bridge0), "host" (host network
+  // namespace), "none" (no network at all). Be strict on input now
+  // so future expansions stay backwards-compatible.
+  if (v == "auto") return "";
+  if (v.empty())
+    return "top-level 'network:' must be a string (currently only 'auto' is supported)";
+  return "top-level 'network: " + v
+       + "' is not supported (the only currently-accepted value is 'auto'; "
+         "for richer config use 'options.net' instead)";
+}
+
 }
 
 // ===================================================================

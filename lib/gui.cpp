@@ -4,6 +4,7 @@
 #include "gui_registry.h"
 #include "pathnames.h"
 #include "util.h"
+#include "x11_ops.h"
 #include "err.h"
 
 #include <rang.hpp>
@@ -319,26 +320,77 @@ static bool guiScreenshot(const Args &args) {
   auto outFile = args.guiOutput.empty()
     ? STR(e.jailName << "-screenshot.png")
     : args.guiOutput;
-  auto xwdFile = STR("/tmp/crate-screenshot-" << e.displayNum << ".xwd");
 
+  // 0.8.36: prefer the in-process X11Ops::screenshot path when
+  // libX11 is linked. Drops xwd + xwdtopnm fork+exec; X11Ops
+  // writes PPM (P6) directly via XGetImage. We still need
+  // pnmtopng for the .png case (or skip it for .ppm/.pnm output).
+  // Falls back to the xwd pipeline when WITH_X11 wasn't built in.
+  bool isPnmOutput = false;
+  {
+    auto lower = outFile;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+    if (lower.size() >= 4 &&
+        (lower.substr(lower.size() - 4) == ".ppm"
+         || lower.substr(lower.size() - 4) == ".pnm"))
+      isPnmOutput = true;
+  }
+
+  if (X11Ops::available()) {
+    auto pnmTmp = isPnmOutput ? outFile :
+                  STR("/tmp/crate-screenshot-" << e.displayNum << ".ppm");
+    if (!X11Ops::screenshot(dispStr, pnmTmp)) {
+      // Fall through to the xwd pipeline below; libX11 is linked
+      // but the display may not be reachable from this process
+      // (XAuth, perms, etc.). Operator sees a one-line warning.
+      std::cerr << rang::fg::yellow
+                << "screenshot: X11Ops::screenshot failed for " << dispStr
+                << " — falling back to xwd pipeline"
+                << rang::style::reset << std::endl;
+    } else {
+      if (isPnmOutput) {
+        std::cout << "Screenshot saved (native libX11, PPM): " << outFile << std::endl;
+        return true;
+      }
+      // Convert PPM -> PNG via pnmtopng (one fork+exec instead of three).
+      try {
+        Util::execPipeline({{CRATE_PATH_PNMTOPNG, pnmTmp}},
+                           "convert screenshot PPM -> PNG", "", outFile);
+        Util::Fs::unlink(pnmTmp);
+      } catch (const Exception &ex) {
+        if (Util::Fs::fileExists(pnmTmp))
+          Util::Fs::unlink(pnmTmp);
+        ERR("screenshot conversion failed: " << ex.what())
+      }
+      std::cout << "Screenshot saved (native libX11): " << outFile << std::endl;
+      return true;
+    }
+  }
+
+  // Fallback: xwd + xwdtopnm + pnmtopng pipeline (pre-0.8.36 path).
+  auto xwdFile = STR("/tmp/crate-screenshot-" << e.displayNum << ".xwd");
   try {
-    // Capture with xwd
     Util::execCommand(
       {CRATE_PATH_XWD, "-root", "-display", dispStr, "-out", xwdFile},
       "capture screenshot");
-    // Convert xwd -> pnm -> png
-    Util::execPipeline(
-      {{CRATE_PATH_XWDTOPNM, xwdFile}, {CRATE_PATH_PNMTOPNG}},
-      "convert screenshot", "", outFile);
+    if (isPnmOutput) {
+      Util::execPipeline(
+        {{CRATE_PATH_XWDTOPNM, xwdFile}},
+        "convert screenshot xwd -> PNM", "", outFile);
+    } else {
+      Util::execPipeline(
+        {{CRATE_PATH_XWDTOPNM, xwdFile}, {CRATE_PATH_PNMTOPNG}},
+        "convert screenshot", "", outFile);
+    }
     Util::Fs::unlink(xwdFile);
   } catch (const Exception &ex) {
-    // Cleanup temp file
     if (Util::Fs::fileExists(xwdFile))
       Util::Fs::unlink(xwdFile);
     ERR("screenshot failed: " << ex.what())
   }
 
-  std::cout << "Screenshot saved: " << outFile << std::endl;
+  std::cout << "Screenshot saved (xwd pipeline): " << outFile << std::endl;
   return true;
 }
 

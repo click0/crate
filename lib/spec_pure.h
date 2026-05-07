@@ -19,4 +19,10 @@ PortRange parsePortRange(const std::string &str);
 std::string substituteVars(const std::string &input,
                            const std::map<std::string, std::string> &vars);
 
+// 0.8.17: top-level `network:` shorthand. Returns "" if the supplied
+// value is supported (currently only "auto"), or a diagnostic
+// otherwise. Reserved for future shortcuts: "bridge0", "host", ...
+//   network: auto      # vnet jail, auto-create bridge, auto-allocate IP
+std::string validateTopLevelNetwork(const std::string &v);
+
 }

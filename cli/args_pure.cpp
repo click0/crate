@@ -65,6 +65,8 @@ Command isCommand(const char *arg) {
   if (strEq(arg, "retune"))    return CmdRetune;
   if (strEq(arg, "throttle"))  return CmdThrottle;
   if (strEq(arg, "doctor"))    return CmdDoctor;
+  if (strEq(arg, "vm-wrap"))   return CmdVmWrap;
+  if (strEq(arg, "update"))    return CmdUpdate;
   return CmdNone;
 }
 
@@ -261,6 +263,19 @@ void Args::validate() {
     break;
   case CmdDoctor:
     // No required arguments — run all checks unconditionally.
+    break;
+  case CmdVmWrap:
+    if (vmWrapVmName.empty())
+      ERR("the 'vm-wrap' command requires a bhyve VM name (positional arg)")
+    if (vmWrapJailName.empty())
+      ERR("the 'vm-wrap' command requires --jail <name>")
+    break;
+  case CmdUpdate:
+    if (updateTarget.empty())
+      ERR("the 'update' command requires a jail name (positional arg)")
+    if (!updatePkgOnly)
+      ERR("`crate update` currently requires --pkg-only "
+          "(full base-system update tracked separately)")
     break;
   default:
     ERR("no command was given")

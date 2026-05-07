@@ -23,6 +23,7 @@
 // interface and pf-vs-ipfw is in lib/auto_fw.cpp.
 //
 
+#include <set>
 #include <string>
 #include <vector>
 
@@ -120,6 +121,11 @@ std::string formatRdrAnchorLine(const std::string &externalIface,
 unsigned natIdForJail(int jid);
 unsigned ruleIdForJail(int jid);
 
+// 0.8.39 (bug#239590): rule ID for the host-loopback hairpin NAT
+// rule. Sits in 41000+ to keep the main nat-activation rule
+// (40000+jid) visually distinct in `ipfw -q list` output.
+unsigned loopbackRuleIdForJail(int jid);
+
 // Validate the NAT instance id range. Returns "" on success.
 // Caller passes the result of natIdForJail; this is a sanity belt.
 std::string validateIpfwNatId(unsigned id);
@@ -172,5 +178,47 @@ std::vector<std::string> buildIpfwNatRuleArgv(unsigned ruleId,
 //   ipfw nat <natId> delete
 std::vector<std::string> buildIpfwRuleDeleteArgv(unsigned ruleId);
 std::vector<std::string> buildIpfwNatDeleteArgv(unsigned natId);
+
+// 0.8.39 (bug#239590): rule that loops host-self TCP traffic
+// through the jail's NAT instance, so `nc <host-LAN-IP> <hostPort>`
+// from the host itself reaches the jail's <jailPort> — same as
+// from another LAN host. Without this rule, host-self traffic
+// takes the kernel's lo0 shortcut and never traverses the
+// external interface, so the existing redir_port table never
+// gets a chance to translate.
+//   ipfw add <ruleId> nat <natId> tcp from me to me
+// UDP host-loopback isn't covered here; operators rarely need it
+// (DNS / discovery protocols don't typically loopback this way).
+std::vector<std::string> buildIpfwHostLoopbackNatArgv(unsigned ruleId,
+                                                     unsigned natId);
+
+// 0.8.37: orphan-rule scan helpers, used by `crate doctor`
+// (warn-only since 0.8.14) and `crate clean` (delete since this
+// release). Pure parsers — no shell-out — so the same logic
+// drives both surfaces.
+
+// Parse `ipfw -q list` output and return rule numbers in the
+// auto-fw reserved range (40000..49999) whose derived jid
+// (rulenum - 40000) is NOT in `runningJids`. Tolerates blank
+// lines, lines without a leading numeric (skipped), CRLF.
+std::vector<unsigned> pickOrphanIpfwRulesByJid(
+  const std::string &ipfwListOutput,
+  const std::set<int> &runningJids);
+
+// Same shape for the throttle-bind range (20000..29999). Each
+// jail gets two consecutive rules (20000+jid*2, 20000+jid*2+1)
+// per 0.7.7. A rule is orphan if EITHER its even or odd half
+// doesn't match a running jid pair.
+std::vector<unsigned> pickOrphanIpfwThrottleRulesByJid(
+  const std::string &ipfwListOutput,
+  const std::set<int> &runningJids);
+
+// Parse `ipfw nat list` output and return NAT instance numbers
+// in the auto-fw range (30000..39999) whose derived jid
+// (natId - 30000) is NOT in `runningJids`. ipfw nat list
+// formats each instance on a "ipfw nat <id> config ..." line.
+std::vector<unsigned> pickOrphanIpfwNatIds(
+  const std::string &ipfwNatListOutput,
+  const std::set<int> &runningJids);
 
 } // namespace AutoFwPure

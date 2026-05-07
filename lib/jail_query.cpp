@@ -243,14 +243,7 @@ std::string getJailParam(int jid, const std::string &paramName) {
   return ps.getString(1);
 }
 
-int getJidByName(const std::string &name) {
-  int jid = ::jail_getid(name.c_str());
-  if (jid >= 0) return jid;
-
-  // Fallback
-  auto info = getJailByName(name);
-  return info ? info->jid : -1;
-}
+// 0.8.32: getJidByName(name) deleted — see jail_query.h for rationale.
 
 }
 

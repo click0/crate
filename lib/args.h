@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdBackupPrune, CmdReplicate, CmdTemplate, CmdRetune, CmdThrottle, CmdDoctor};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdBackupPrune, CmdReplicate, CmdTemplate, CmdRetune, CmdThrottle, CmdDoctor, CmdVmWrap, CmdUpdate};
 
 class Args {
 public:
@@ -86,6 +86,7 @@ public:
   // stats parameters
   std::string statsTarget;      // jail name or JID
   bool statsJson = false;       // -j: output as JSON
+  bool statsRctlPressure = false; // 0.8.33: --rctl-pressure: append per-resource usage% column
 
   // logs parameters
   std::string logsTarget;       // jail name or JID
@@ -157,6 +158,7 @@ public:
 
   // doctor parameters
   bool doctorJson = false;             // -j/--json: machine-readable output
+  bool doctorRefreshCache = false;     // 0.8.35: --refresh-cache: drop NetDetect cache before running
 
   // throttle parameters (dummynet token-bucket network shaping)
   std::string throttleTarget;        // jail name or JID
@@ -167,6 +169,22 @@ public:
   std::string throttleQueue;         // --queue (slot count or "100KB")
   bool        throttleClear = false; // --clear: drop pipes + binds
   bool        throttleShow = false;  // --show: dump pipe state
+
+  // update parameters (0.8.41)
+  std::string updateTarget;          // positional: jail name or JID
+  bool        updatePkgOnly = false; // --pkg-only: pkg upgrade only (mandatory for now)
+  bool        updateDryRun  = false; // -n/--dry-run: show what would be upgraded
+  bool        updateAssumeYes = false; // -y/--yes: pkg upgrade -y (skip confirmation)
+
+  // vm-wrap parameters (bhyve jailer)
+  std::string vmWrapVmName;          // positional: bhyve VM name
+  std::string vmWrapJailName;        // --jail: enclosure jail name
+  std::string vmWrapDataset;         // --dataset: ZFS dataset to delegate (optional)
+  int         vmWrapTap = -1;        // --tap: tap index to expose (-1 = none)
+  int         vmWrapNmdm = -1;       // --nmdm: nmdm pair index to expose (-1 = none)
+  std::string vmWrapPath;            // --path: jail path (default "/")
+  unsigned    vmWrapRuleset = 0;     // --ruleset: devfs ruleset number (0 = derive)
+  std::string vmWrapOutputDir;       // --output-dir: write artefacts to DIR (default = stdout)
 
   void validate();
 };

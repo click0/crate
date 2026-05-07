@@ -247,7 +247,7 @@ ParsedRoute parseRoute(const std::string &method, const std::string &path) {
     return r;
   }
 
-  // 5-part paths: /v1/control/containers/:name/{stats,resources}
+  // 5-part paths: /v1/control/containers/:name/{stats,resources,start,stop,restart}
   if (parts.size() == 5) {
     if (!validContainerName(parts[3])) return r;
     r.container = parts[3];
@@ -255,6 +255,13 @@ ParsedRoute parseRoute(const std::string &method, const std::string &path) {
       r.action = Action::GetContainerStats;
     else if (parts[4] == "resources" && method == "PATCH")
       r.action = Action::PatchResources;
+    // 0.8.13: lifecycle endpoints. POST verbs only.
+    else if (parts[4] == "start" && method == "POST")
+      r.action = Action::PostStart;
+    else if (parts[4] == "stop" && method == "POST")
+      r.action = Action::PostStop;
+    else if (parts[4] == "restart" && method == "POST")
+      r.action = Action::PostRestart;
     return r;
   }
   return r;
@@ -270,14 +277,18 @@ Decision authorize(const AuthorizeInput &in) {
   if (in.peerGid < 0 || in.peerGid != in.socketExpectedGid)
     return Decision::DenyGidMismatch;
 
-  // PATCH actions require admin role.
-  if (in.action == Action::PatchResources && in.socketRole != "admin")
+  // 0.8.13: lifecycle (POST) actions require admin role too.
+  // PATCH and POST verbs are state-changing; viewer rejects them.
+  if (actionIsMutating(in.action) && in.socketRole != "admin")
     return Decision::DenyRoleMismatch;
 
   // Per-container actions: pool ACL.
   if (in.action == Action::GetContainer
       || in.action == Action::GetContainerStats
-      || in.action == Action::PatchResources) {
+      || in.action == Action::PatchResources
+      || in.action == Action::PostStart
+      || in.action == Action::PostStop
+      || in.action == Action::PostRestart) {
     auto pool = PoolPure::inferPool(in.container, in.poolSeparator);
     if (!poolVisibleOnSocket(pool, in.socketPools))
       return Decision::DenyPoolMismatch;
@@ -370,6 +381,9 @@ const char *actionLabel(Action a) {
   case Action::GetContainer:      return "get";
   case Action::GetContainerStats: return "stats";
   case Action::PatchResources:    return "patch";
+  case Action::PostStart:         return "start";
+  case Action::PostStop:          return "stop";
+  case Action::PostRestart:       return "restart";
   case Action::Unknown:           return "unknown";
   }
   return "unknown";
@@ -377,7 +391,10 @@ const char *actionLabel(Action a) {
 
 bool actionIsMutating(Action a) {
   switch (a) {
-  case Action::PatchResources:    return true;
+  case Action::PatchResources:
+  case Action::PostStart:
+  case Action::PostStop:
+  case Action::PostRestart:       return true;
   case Action::ListContainers:
   case Action::GetContainer:
   case Action::GetContainerStats:
@@ -413,6 +430,7 @@ const char *reasonForStatus(int status) {
   case 413: return "Payload Too Large";
   case 429: return "Too Many Requests";
   case 500: return "Internal Server Error";
+  case 501: return "Not Implemented";
   default:  return "Unknown";
   }
 }

@@ -65,6 +65,13 @@ tests/unit/rate_limit_pure_test
 tests/unit/ip_alloc_pure_test
 tests/unit/auto_fw_pure_test
 tests/unit/ipsec_runtime_pure_test
+tests/unit/net_detect_pure_test
+tests/unit/vmwrap_pure_test
+tests/unit/socket_perms_pure_test
+tests/unit/ip6_alloc_pure_test
+tests/unit/spec_registry_pure_test
+tests/unit/zfs_dataset_pure_test
+tests/unit/hub_scheduling_pure_test
 tests/unit/.test-objs/
 *.gcda
 *.gcno

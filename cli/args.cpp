@@ -66,6 +66,8 @@ static void usage() {
   std::cout << "  retune TARGET --rctl K=V...   live-tune jail RCTL limits without restart (--show, --clear)" << std::endl;
   std::cout << "  throttle TARGET --ingress R --egress R    dummynet token-bucket network shaping" << std::endl;
   std::cout << "  doctor [-j]                health check for crate host (kernel modules, commands, ZFS, jails, ...)" << std::endl;
+  std::cout << "  vm-wrap VM --jail NAME     bhyve jailer: render devfs ruleset + jail.conf for a vnet enclosure" << std::endl;
+  std::cout << "  update TARGET --pkg-only   in-place pkg upgrade in a running jail (-n dry-run, -y auto-yes)" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -202,7 +204,8 @@ static void usageClean() {
   std::cout << "usage: crate clean [-h|--help] [-n|--dry-run]" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Clean up orphaned resources from crashed or interrupted crate sessions." << std::endl;
-  std::cout << "Removes stale jail directories, interface records, and context entries." << std::endl;
+  std::cout << "Removes stale jail directories, interface records, context entries," << std::endl;
+  std::cout << "and (since 0.8.34) spec-registry entries pointing at deleted .crate files." << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Options:" << std::endl;
   std::cout << "  -n, --dry-run                      show what would be cleaned without making changes" << std::endl;
@@ -285,19 +288,24 @@ static void usageStack() {
 }
 
 static void usageStats() {
-  std::cout << "usage: crate stats [-h|--help] [-j|--json] <name|JID>" << std::endl;
+  std::cout << "usage: crate stats [-h|--help] [-j|--json] [--rctl-pressure] <name|JID>" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Show resource usage statistics for a running container." << std::endl;
   std::cout << "Displays CPU%, memory, PIDs, I/O, and network I/O." << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Options:" << std::endl;
   std::cout << "  -j, --json                         output as JSON" << std::endl;
+  std::cout << "      --rctl-pressure                append per-resource usage% column for RCTL deny" << std::endl;
+  std::cout << "                                     rules (yellow at >=70%, red at >=90%); shows" << std::endl;
+  std::cout << "                                     how close the jail is to its caps before" << std::endl;
+  std::cout << "                                     `crate retune` becomes necessary" << std::endl;
   std::cout << "  -h, --help                         show this help screen" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Examples:" << std::endl;
   std::cout << "  crate stats myapp                  show stats for 'myapp'" << std::endl;
   std::cout << "  crate stats 5                      show stats for jail with JID 5" << std::endl;
   std::cout << "  crate stats myapp --json           output stats as JSON" << std::endl;
+  std::cout << "  crate stats myapp --rctl-pressure  show RCTL usage% per resource" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -419,7 +427,7 @@ static void usageBackupPrune() {
 }
 
 static void usageDoctor() {
-  std::cout << "usage: crate doctor [-j|--json] [-h|--help]" << std::endl;
+  std::cout << "usage: crate doctor [-j|--json] [--refresh-cache] [-h|--help]" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Run a one-shot health check on the crate host: kernel modules," << std::endl;
   std::cout << "external commands, filesystem dirs + free space, ZFS pools," << std::endl;
@@ -428,6 +436,9 @@ static void usageDoctor() {
   std::cout << "Output format:" << std::endl;
   std::cout << "  default                   human-readable categorized table" << std::endl;
   std::cout << "  -j, --json                 machine-readable {checks: [...], summary}" << std::endl;
+  std::cout << "      --refresh-cache         drop NetDetect default-route cache before running" << std::endl;
+  std::cout << "                              (useful after upstream router restart; otherwise" << std::endl;
+  std::cout << "                              the process keeps the cached interface name)" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Exit codes:" << std::endl;
   std::cout << "  0   all checks PASS" << std::endl;
@@ -505,6 +516,66 @@ static void usageTemplate() {
   std::cout << "                     longer dependent on the source snapshot — useful" << std::endl;
   std::cout << "                     when the operator wants to delete old warm" << std::endl;
   std::cout << "                     snapshots without breaking the template." << std::endl;
+  std::cout << "" << std::endl;
+}
+
+static void usageVmWrap() {
+  std::cout << "usage: crate vm-wrap <vmname> --jail <name>" << std::endl;
+  std::cout << "                     [--dataset DS] [--tap N] [--nmdm N]" << std::endl;
+  std::cout << "                     [--path P] [--ruleset N]" << std::endl;
+  std::cout << "                     [--output-dir DIR]" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Bhyve jailer (FreeBSD-flavoured analogue of Firecracker's pattern)." << std::endl;
+  std::cout << "Wraps an existing bhyve VM in a vnet jail with allow.vmm and a" << std::endl;
+  std::cout << "tight devfs ruleset so a future bhyve user-space CVE lands the" << std::endl;
+  std::cout << "attacker in the cage instead of on the host. crate does NOT manage" << std::endl;
+  std::cout << "the VM lifecycle — you keep using vm-bhyve / hand-rolled bhyveload." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Default mode prints three labelled blocks to stdout:" << std::endl;
+  std::cout << "  1. devfs.rules block (paste into /etc/devfs.rules)" << std::endl;
+  std::cout << "  2. jail.conf fragment (use with `jail -c -f <path>`)" << std::endl;
+  std::cout << "  3. `jexec ... bhyve ...` invocation hint" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "With --output-dir DIR, each block is written to a file in DIR" << std::endl;
+  std::cout << "instead of stdout. vm-wrap never executes side-effects (no" << std::endl;
+  std::cout << "service devfs restart, no jail -c, no zfs jail) — it's a renderer." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Options:" << std::endl;
+  std::cout << "  --jail NAME         enclosure jail name (required)" << std::endl;
+  std::cout << "  --dataset DS        ZFS dataset to delegate via `zfs jail` (optional)" << std::endl;
+  std::cout << "  --tap N             tap index to expose: /dev/tap<N> (default: none)" << std::endl;
+  std::cout << "  --nmdm N            nmdm pair index to expose: /dev/nmdm<N>* (default: none)" << std::endl;
+  std::cout << "  --path P            jail path (default: '/'; vm-bhyve convention)" << std::endl;
+  std::cout << "  --ruleset N         devfs ruleset number 1..65535 (default: derived from jail name)" << std::endl;
+  std::cout << "  --output-dir DIR    write artefacts to files in DIR instead of stdout" << std::endl;
+  std::cout << "  -h, --help          show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "See docs/bhyve-jailer.md for the threat model and the manual recipe." << std::endl;
+  std::cout << "" << std::endl;
+}
+
+static void usageUpdate() {
+  std::cout << "usage: crate update <jail> --pkg-only [-n|--dry-run] [-y|--yes]" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "In-place pkg upgrade inside a running jail. The jail keeps" << std::endl;
+  std::cout << "running through the upgrade — operator avoids the" << std::endl;
+  std::cout << "`crate stop` + spec-edit + `crate run` cycle and the" << std::endl;
+  std::cout << "session-state / warm-cache loss it implies." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Options:" << std::endl;
+  std::cout << "  --pkg-only             pkg upgrade only (mandatory; full base-system" << std::endl;
+  std::cout << "                         update is tracked separately, this release" << std::endl;
+  std::cout << "                         commits to pkg-only so the contract is clear)" << std::endl;
+  std::cout << "  -n, --dry-run          pass `-n` to pkg upgrade — list pending" << std::endl;
+  std::cout << "                         upgrades without applying anything" << std::endl;
+  std::cout << "  -y, --yes              pass `-y` to pkg upgrade — skip the" << std::endl;
+  std::cout << "                         interactive confirmation prompt" << std::endl;
+  std::cout << "  -h, --help             show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Examples:" << std::endl;
+  std::cout << "  crate update myapp --pkg-only -n          # see what's pending" << std::endl;
+  std::cout << "  crate update myapp --pkg-only -y          # apply, skip prompt" << std::endl;
+  std::cout << "  crate update myapp --pkg-only             # apply, prompt inside jail" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -682,7 +753,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.8.5" << std::endl;
+        std::cout << "crate 0.8.41" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -693,7 +764,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.8.5" << std::endl;
+          std::cout << "crate 0.8.41" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -1152,6 +1223,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         } else if (auto argLong = isLong(argv[a])) {
           if (strEq(argLong, "help")) { usageStats(); exit(0); }
           else if (strEq(argLong, "json")) args.statsJson = true;
+          else if (strEq(argLong, "rctl-pressure")) args.statsRctlPressure = true;
           else err("unsupported long option '%s'", argv[a]);
         } else if (args.statsTarget.empty()) {
           args.statsTarget = argv[a];
@@ -1392,6 +1464,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         } else if (auto argLong = isLong(argv[a])) {
           if (strEq(argLong, "help"))      { usageDoctor(); exit(0); }
           else if (strEq(argLong, "json")) args.doctorJson = true;
+          else if (strEq(argLong, "refresh-cache")) args.doctorRefreshCache = true;
           else err("unsupported long option '%s'", argv[a]);
         } else {
           err("'doctor' command takes no positional arguments");
@@ -1415,6 +1488,46 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.throttleTarget = argv[a];
         } else {
           err("too many arguments for 'throttle' command");
+        }
+        break;
+      case CmdVmWrap:
+        if (auto argShort = isShort(argv[a])) {
+          if (argShort == 'h') { usageVmWrap(); exit(0); }
+          err("unsupported short option '%s'", argv[a]);
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help")) { usageVmWrap(); exit(0); }
+          else if (strEq(argLong, "jail"))        args.vmWrapJailName = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "dataset"))     args.vmWrapDataset = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "tap"))         args.vmWrapTap = (int)Util::toUInt(getArgParam(++a, argc, argv));
+          else if (strEq(argLong, "nmdm"))        args.vmWrapNmdm = (int)Util::toUInt(getArgParam(++a, argc, argv));
+          else if (strEq(argLong, "path"))        args.vmWrapPath = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "ruleset"))     args.vmWrapRuleset = Util::toUInt(getArgParam(++a, argc, argv));
+          else if (strEq(argLong, "output-dir"))  args.vmWrapOutputDir = getArgParam(++a, argc, argv);
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.vmWrapVmName.empty()) {
+          args.vmWrapVmName = argv[a];
+        } else {
+          err("too many arguments for 'vm-wrap' command");
+        }
+        break;
+      case CmdUpdate:
+        if (auto argShort = isShort(argv[a])) {
+          switch (argShort) {
+          case 'h': usageUpdate(); exit(0);
+          case 'n': args.updateDryRun = true; break;
+          case 'y': args.updateAssumeYes = true; break;
+          default: err("unsupported short option '%s'", argv[a]);
+          }
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help"))           { usageUpdate(); exit(0); }
+          else if (strEq(argLong, "pkg-only"))  args.updatePkgOnly = true;
+          else if (strEq(argLong, "dry-run"))   args.updateDryRun = true;
+          else if (strEq(argLong, "yes"))       args.updateAssumeYes = true;
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.updateTarget.empty()) {
+          args.updateTarget = argv[a];
+        } else {
+          err("too many arguments for 'update' command");
         }
         break;
       }

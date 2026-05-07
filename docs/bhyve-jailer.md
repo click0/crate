@@ -8,10 +8,13 @@ pattern.
 
 [fc-jailer]: https://github.com/firecracker-microvm/firecracker/blob/main/docs/jailer.md
 
-`crate` itself does **not** manage bhyve VMs today (see [TODO2](../TODO2)
-items A and B for the planned backend and the planned `crate vm-wrap`
-helper). Until those land, the recipe below is fully manual but works
-on stock FreeBSD 13+.
+`crate` itself does **not** manage bhyve VM lifecycles (see
+[TODO2](../TODO2) item A for the planned `backend: bhyve` work).
+Since 0.8.16, `crate vm-wrap` (TODO2 item B) automates rendering
+the devfs ruleset, jail.conf fragment, and `jexec ... bhyve`
+invocation hint described below — see the "Future" section at the
+bottom of this document. The manual recipe still works on stock
+FreeBSD 13+ for operators who prefer hand-rolling everything.
 
 ---
 
@@ -217,10 +220,27 @@ ifconfig tap42 destroy
   jail wrapper is the *fallback* if `-S` is somehow bypassed, not the
   primary defence.
 
-## Future: `crate vm-wrap`
+## `crate vm-wrap` (since 0.8.16)
 
-[TODO2 item B](../TODO2) tracks a future `crate vm-wrap <vmname>
---jail <name>` command that automates steps 2 + 3 + 4 above:
-generates the devfs ruleset, writes the jail.conf fragment, runs
-`zfs jail`, and prints the exact `jexec … bhyve` invocation to use.
-Until that ships, copy the templates here.
+[TODO2 item B](../TODO2) shipped in **0.8.16** as a renderer:
+
+```sh
+% crate vm-wrap myvm --jail myvm-cage \
+        --dataset zroot/vms/myvm \
+        --tap 42 --nmdm 0 \
+        --output-dir /tmp/myvm-cage
+vm-wrap: wrote 3 artefacts to /tmp/myvm-cage:
+  /tmp/myvm-cage/devfs.snippet           (paste into /etc/devfs.rules, then `service devfs restart`)
+  /tmp/myvm-cage/myvm-cage.jail.conf     (run `jail -c -f /tmp/myvm-cage/myvm-cage.jail.conf`)
+  /tmp/myvm-cage/myvm-cage.bhyve.sh      (edit, then run from inside the cage)
+```
+
+Without `--output-dir`, the same three blocks are printed to stdout
+labelled with shell-comment banners. vm-wrap is **render-only** —
+it does not run `service devfs restart`, `jail -c`, or `zfs jail`.
+The argv builders for those commands ship in `lib/vmwrap_pure.cpp`
+so a future `--apply` mode can drive them.
+
+The full bhyve backend (TODO2 item A: `backend: bhyve` in the
+spec, full VM lifecycle managed by crate) is still open and
+intentionally separate from vm-wrap.

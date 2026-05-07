@@ -62,7 +62,10 @@ GatewayInfo detectGateway() {
   return gw;
 }
 
-std::string epairNumToIp(unsigned epairNum, unsigned ipIdx) {
+// 0.8.32: file-static (was non-static in header pre-0.8.32, but had
+// no external callers). Keeps the function reachable from the two
+// in-file callers (createBridgeEpair) without exporting the symbol.
+static std::string epairNumToIp(unsigned epairNum, unsigned ipIdx) {
   // IP allocation (§19): uses 10.0.0.0/8 private address space for container networking.
   // Each container pair (host-side + jail-side) needs 2 IPs from a /31 subnet.
   // Starting offset 100 avoids .0 (network) and .1 (common gateway).

@@ -8,6 +8,23 @@ listen:
     tcp_port: 9800
     tcp_bind: 0.0.0.0
 
+    ## 0.8.19: filesystem-perm gate on the unix socket. Operators
+    ## who want to scope access to a custom group (instead of the
+    ## default umask-driven root:wheel 0660) set these. All three
+    ## are optional; empty owner/group leaves the bind-time state
+    ## intact, missing unix_mode keeps the 0660 default.
+    ##
+    ## NOTE: this is filesystem-perm enforcement, NOT cryptographic
+    ## peer-credential verification. cpp-httplib doesn't expose the
+    ## per-connection fd to handlers, so getpeereid(2) is tracked
+    ## as a separate refactor (see TODO low-priority security item).
+    ## On a multi-user host, treat this gate as "tight enough for
+    ## same-machine operators" rather than as a defence against
+    ## local privilege escalation.
+    # unix_owner: root
+    # unix_group: wheel
+    # unix_mode: "0660"
+
 ## TLS configuration (required for remote access)
 ## Generate certs: openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.pem -days 365
 # tls:

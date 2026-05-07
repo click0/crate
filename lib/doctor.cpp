@@ -10,14 +10,26 @@
 
 #include "args.h"
 #include "doctor_pure.h"
+#include "auto_fw_pure.h"
+#include "capsicum_ops.h"
 #include "commands.h"
+#include "config.h"
+#include "drm_session.h"
+#include "ifconfig_ops.h"
+#include "ipfw_ops.h"
 #include "jail_query.h"
+#include "net_detect.h"
+#include "nv_protocol.h"
+#include "pfctl_ops.h"
 #include "util.h"
+#include "zfs_ops.h"
 #include "err.h"
 
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
+
+#include <set>
 
 #include <fstream>
 #include <iostream>
@@ -316,9 +328,393 @@ void checkAuditLog(Report &r) {
   }
 }
 
+// --- check: ipfw rule-number conflicts (0.8.14) ---
+//
+// crate's auto-features each reserve a high rule-number range:
+//   throttle (0.7.7):       pipe 10000+jid*2,    rule 20000+jid*2
+//   auto-fw   (0.8.2/0.8.3): nat  30000+jid,     rule 40000+jid
+// Operator's manual ipfw rules SHOULD live at low numbers (<10000)
+// to avoid colliding. Doctor scans `ipfw list` for entries in the
+// reserved ranges that didn't come from crate (no matching jail) —
+// that's a sign of an operator typo or a stale rule from a
+// destroyed jail.
+
+void checkIpfwReservedRanges(Report &r) {
+  if (::access("/sbin/ipfw", X_OK) != 0) {
+    r.checks.push_back(passCheck("network", "ipfw",
+      "/sbin/ipfw not present — skipping reserved-range check"));
+    return;
+  }
+  std::string out;
+  try {
+    out = Util::execCommandGetOutput({"/sbin/ipfw", "-q", "list"},
+                                      "ipfw -q list");
+  } catch (const std::exception &e) {
+    r.checks.push_back(warnCheck("network", "ipfw",
+      std::string("ipfw list failed: ") + e.what()));
+    return;
+  }
+  // Look at first column (rule number) of each line. Flag rules
+  // in the reserved ranges that don't correspond to a running jail.
+  std::vector<JailQuery::JailInfo> jails;
+  try {
+    jails = JailQuery::getAllJails(/*crateOnly=*/true);
+  } catch (...) {}
+
+  std::set<unsigned> validNatRuleIds;
+  std::set<unsigned> validThrottleRuleIds;
+  for (const auto &j : jails) {
+    validNatRuleIds.insert(40000u + (unsigned)j.jid);  // auto-fw
+    validNatRuleIds.insert(41000u + (unsigned)j.jid);  // 0.8.39 host-loopback
+    validThrottleRuleIds.insert(20000u + (unsigned)j.jid * 2u);
+    validThrottleRuleIds.insert(20000u + (unsigned)j.jid * 2u + 1u);
+  }
+
+  std::istringstream is(out);
+  std::string line;
+  unsigned orphanCount = 0;
+  while (std::getline(is, line)) {
+    // First whitespace-separated token is the rule number.
+    std::size_t sp = line.find(' ');
+    if (sp == std::string::npos) continue;
+    auto ruleNumStr = line.substr(0, sp);
+    unsigned n = 0;
+    bool digits = !ruleNumStr.empty();
+    for (char c : ruleNumStr) {
+      if (c < '0' || c > '9') { digits = false; break; }
+      n = n * 10 + (unsigned)(c - '0');
+    }
+    if (!digits) continue;
+    if (n >= 20000 && n < 30000) {
+      // throttle range
+      if (!validThrottleRuleIds.count(n)) orphanCount++;
+    } else if (n >= 40000 && n < 50000) {
+      // auto-fw NAT-rule range
+      if (!validNatRuleIds.count(n)) orphanCount++;
+    }
+  }
+  if (orphanCount == 0) {
+    r.checks.push_back(passCheck("network", "ipfw",
+      "no orphan rules in crate-reserved ranges (20000+, 40000+)"));
+  } else {
+    std::ostringstream detail;
+    detail << orphanCount << " ipfw rule(s) in crate-reserved ranges "
+              "without a matching running jail — likely stale from "
+              "a destroyed jail; clean with `ipfw delete <N>` or wait "
+              "for next `crate clean` to surface them";
+    r.checks.push_back(warnCheck("network", "ipfw", detail.str()));
+  }
+}
+
+// --- check: per-jail RCTL drift (0.8.14) ---
+//
+// When a spec declares `limits: { memoryuse: 2G }`, crate run
+// loads an rctl rule. Operators sometimes hand-edit rules later
+// via `rctl -a/-r`, leaving the kernel state out of sync with
+// what `crate inspect` would report from the spec.
+//
+// Doctor surfaces "rules present" / "rules absent" — we can't
+// know the spec at doctor time without re-loading, so this is
+// information rather than an authoritative drift check.
+
+void checkRctlPresence(Report &r) {
+  if (::access("/sbin/rctl", X_OK) != 0) {
+    r.checks.push_back(passCheck("network", "rctl",
+      "/sbin/rctl not present — skipping RCTL presence check"));
+    return;
+  }
+  std::vector<JailQuery::JailInfo> jails;
+  try {
+    jails = JailQuery::getAllJails(/*crateOnly=*/true);
+  } catch (...) { return; }
+  for (const auto &j : jails) {
+    std::string out;
+    try {
+      out = Util::execCommandGetOutput(
+        {"/sbin/rctl", "-l", "jail:" + j.name},
+        "rctl -l jail");
+    } catch (...) {
+      r.checks.push_back(warnCheck("network", j.name,
+        "rctl -l failed — cannot verify RCTL rules"));
+      continue;
+    }
+    // Count non-empty lines as "rules present".
+    unsigned ruleCount = 0;
+    std::istringstream is(out);
+    std::string line;
+    while (std::getline(is, line)) if (!line.empty()) ruleCount++;
+    if (ruleCount > 0) {
+      r.checks.push_back(passCheck("network", j.name,
+        "rctl rules: " + std::to_string(ruleCount)
+        + " (verify with `crate inspect " + j.name + "`)"));
+    } else {
+      r.checks.push_back(warnCheck("network", j.name,
+        "no rctl rules — jail can OOM the host (FAIL if "
+        "spec declared limits:; check `crate inspect`)"));
+    }
+  }
+}
+
+// --- check: auto-fw rules loaded for each running jail (0.8.9) ---
+//
+// 0.8.0+ auto-loads SNAT/rdr rules into per-jail anchors (pf) or
+// nat instances (ipfw). If those rules go missing — pf flushed by
+// operator, ipfw rules deleted — outbound traffic from the jail
+// silently breaks. doctor now surfaces the mismatch.
+//
+// For pf: invoke `pfctl -a crate/<jailXname> -s nat` and check
+// for at least one rule. If the anchor is empty when the jail's
+// spec uses mode:auto + bridge, that's a FAIL.
+//
+// For ipfw: invoke `ipfw nat <natId> show` and check exit code.
+//
+// Caveat: we don't know the jail's spec at doctor time without
+// re-loading the .crate file. As a proxy, we check for ANY pf
+// anchor named crate/<jailXname>* with rules vs no anchor; the
+// presence/absence is informational rather than authoritative.
+// Operators who don't use mode:auto may legitimately have empty
+// anchors — those get a soft WARN, not FAIL.
+
+void checkAutoFwRules(Report &r) {
+  // Fast path: if pf isn't loaded at all, skip — auto-fw via ipfw
+  // path is checked separately, and if neither is loaded, the
+  // existing kernel-module check has already FAIL'd.
+  bool pfLoaded = false;
+  try {
+    pfLoaded = (Util::execCommandGetStatus(
+      {"/sbin/kldstat", "-n", "pf"}, "kldstat pf") == 0);
+  } catch (...) { pfLoaded = false; }
+
+  std::vector<JailQuery::JailInfo> jails;
+  try {
+    jails = JailQuery::getAllJails(/*crateOnly=*/true);
+  } catch (...) {
+    // checkJails already FAIL'd; nothing useful to add.
+    return;
+  }
+  if (jails.empty()) {
+    r.checks.push_back(passCheck("auto-fw", "(no jails)",
+      "no crate-managed jails running — nothing to check"));
+    return;
+  }
+
+  for (const auto &j : jails) {
+    // Synthesise the same jail-x-name run.cpp uses for the anchor.
+    auto jailXname = j.name + "_pid?";  // doctor doesn't know the
+                                         // run.cpp pid; query by
+                                         // anchor list instead.
+    if (pfLoaded) {
+      // List all pf anchors and look for one starting with crate/<j.name>_pid.
+      std::string out;
+      try {
+        out = Util::execCommandGetOutput(
+          {"/sbin/pfctl", "-a", "crate", "-s", "Anchors"},
+          "pfctl list anchors");
+      } catch (const std::exception &ex) {
+        r.checks.push_back(warnCheck("auto-fw", j.name,
+          std::string("pfctl -s Anchors failed: ") + ex.what()
+          + " — cannot verify auto-fw rule"));
+        continue;
+      }
+      // pfctl -s Anchors output: one anchor per line, prefixed by
+      // the parent. Look for a line containing "crate/<j.name>_pid".
+      std::string needle = "crate/" + j.name + "_pid";
+      bool found = false;
+      std::istringstream is(out);
+      std::string line;
+      while (std::getline(is, line)) {
+        if (line.find(needle) != std::string::npos) {
+          found = true;
+          break;
+        }
+      }
+      if (found) {
+        r.checks.push_back(passCheck("auto-fw", j.name,
+          "pf anchor present (auto-fw active)"));
+      } else {
+        // Could be intentional (jail uses NAT mode without auto-fw,
+        // or operator runs custom rules). Soft WARN.
+        r.checks.push_back(warnCheck("auto-fw", j.name,
+          "no crate/" + j.name + "_pid* pf anchor — auto-fw "
+          "inactive (OK for jails not using mode:auto; FAIL for "
+          "auto-mode jails — outbound traffic likely broken)"));
+      }
+    } else {
+      // ipfw path: presence of nat instance natIdForJail(jid).
+      // 0.8.2 conventions.
+      unsigned natId = AutoFwPure::natIdForJail(j.jid);
+      int st = -1;
+      try {
+        st = Util::execCommandGetStatus(
+          {"/sbin/ipfw", "nat", std::to_string(natId), "show"},
+          "ipfw nat show");
+      } catch (...) { st = -1; }
+      if (st == 0) {
+        r.checks.push_back(passCheck("auto-fw", j.name,
+          "ipfw NAT instance " + std::to_string(natId)
+          + " present (auto-fw active)"));
+      } else {
+        r.checks.push_back(warnCheck("auto-fw", j.name,
+          "no ipfw NAT instance " + std::to_string(natId)
+          + " — auto-fw inactive (OK for jails not using mode:auto; "
+          "FAIL for auto-mode jails — outbound traffic likely broken)"));
+      }
+    }
+  }
+}
+
+// 0.8.23: DRM session via libseat. Surfaces seatd setup issues
+// before they bite at jail start time. Three outcomes:
+//   - libseat not compiled in -> info-level pass (operator's
+//     build doesn't include the feature; not a fault)
+//   - /dev/dri/card0 absent on host -> info pass (no GPU)
+//   - libseat present + /dev/dri/card0 present + probe works -> pass
+//   - libseat present + /dev/dri/card0 present + probe fails -> warn
+//     (seatd not running, user not on seat0, etc.)
+void checkDrmSession(Report &r) {
+  if (!DrmSession::available()) {
+    r.checks.push_back(passCheck("gui", "drm-session-libseat",
+      "crate built without WITH_LIBSEAT — DRM device acquisition "
+      "uses direct open(O_RDWR). Fine for the setuid-root crate "
+      "today; matters once rootless containers ship."));
+    return;
+  }
+  struct stat st{};
+  if (::stat("/dev/dri/card0", &st) != 0) {
+    r.checks.push_back(passCheck("gui", "drm-session-libseat",
+      "no /dev/dri/card0 on host — skipping libseat probe."));
+    return;
+  }
+  if (DrmSession::probeDevice("/dev/dri/card0")) {
+    r.checks.push_back(passCheck("gui", "drm-session-libseat",
+      "libseat session opens and grabs /dev/dri/card0 — rootless "
+      "GPU jails will work once that path lands."));
+  } else {
+    r.checks.push_back(warnCheck("gui", "drm-session-libseat",
+      "libseat compiled in but probeDevice('/dev/dri/card0') "
+      "failed. seatd not running, or current user not on an active "
+      "seat. `service seatd onestart` and re-run `crate doctor`."));
+  }
+}
+
+// 0.8.24: Capsicum / casper sandbox readiness. Surfaces:
+//   - whether crate was built with HAVE_CAPSICUM at all
+//   - whether `audit_syslog: true` is wired (operator opt-in for
+//     dual-write of audit events to syslog via cap_syslog)
+// Doesn't actually open the cap_syslog channel here — that would
+// leave a dangling fd. The fact that the operator set
+// audit_syslog AND CapsicumOps is built in is the actionable
+// signal; runtime initialisation happens lazily in audit.cpp.
+// 0.8.26: native subsystem-API availability. Each of these
+// namespaces has a `bool available()` predicate compiled at build
+// time (true when the corresponding HAVE_* macro was defined +
+// the library linked). The runtime falls back to fork+exec'ing
+// the equivalent shell utility (zfs(8), ifconfig(8), pfctl(8),
+// ipfw(8)) when the native path isn't available.
+//
+// We surface the build matrix to operators via `crate doctor` so
+// they can see the perf characteristics of their build at a
+// glance. No runtime change — just visibility.
+//
+// All four checks emit pass severity (informational); fork+exec
+// is a fully-supported path, just slower per-call. Operators
+// who care about latency can rebuild with the appropriate
+// HAVE_LIB* macros and the runtime will pick up the native
+// path on next invocation.
+// 0.8.27: nvlist-protocol round-trip — verifies the
+// scaffolding for the future control-plane v2 still works.
+// Currently the only production caller of NvProtocol; surfacing
+// it here means the code path stays exercised so it doesn't
+// rot. Failure mode is informational on Linux dev builds (libnv
+// unavailable) and a warning on FreeBSD (libnv broken or
+// socketpair failure — exotic).
+void checkNvProtocol(Report &r) {
+  if (!NvProtocol::available()) {
+    r.checks.push_back(passCheck("native-api", "nvlist-protocol",
+      "libnv not built in (Linux dev build) — nvlist wire format "
+      "for the future control-plane v2 unavailable. Fine on "
+      "FreeBSD; on Linux the production crate uses HTTP+JSON "
+      "anyway."));
+    return;
+  }
+  if (NvProtocol::selfTest()) {
+    r.checks.push_back(passCheck("native-api", "nvlist-protocol",
+      "libnv round-trip works — scaffolding for the future "
+      "control-plane v2 (replaces hand-rolled HTTP parsing in "
+      "daemon/control_socket_pure.cpp) is ready."));
+  } else {
+    r.checks.push_back(warnCheck("native-api", "nvlist-protocol",
+      "libnv built in but socketpair round-trip failed — exotic. "
+      "Re-run `crate doctor` after a system update; if it persists, "
+      "file a bug with the FreeBSD version."));
+  }
+}
+
+void checkNativeApis(Report &r) {
+  r.checks.push_back(passCheck("native-api", "libzfs",
+    ZfsOps::available()
+      ? "linked — snapshot/clone/jail-attach skip fork+exec'ing zfs(8)"
+      : "not linked — falls back to /sbin/zfs (rebuild with HAVE_LIBZFS=1 to skip fork+exec)"));
+
+  r.checks.push_back(passCheck("native-api", "libifconfig",
+    IfconfigOps::available()
+      ? "linked — interface ops skip fork+exec'ing ifconfig(8)"
+      : "not linked — falls back to /sbin/ifconfig (rebuild with HAVE_LIBIFCONFIG=1)"));
+
+  r.checks.push_back(passCheck("native-api", "libpfctl",
+    PfctlOps::available()
+      ? "linked — pf anchor + rule ops skip fork+exec'ing pfctl(8)"
+      : "not linked — falls back to /sbin/pfctl (rebuild with HAVE_LIBPFCTL=1)"));
+
+  r.checks.push_back(passCheck("native-api", "ipfw-native",
+    IpfwOps::available()
+      ? "kernel ipfw socket reachable — rule ops skip fork+exec'ing ipfw(8)"
+      : "kernel ipfw not loaded or not reachable — rule ops fork+exec /sbin/ipfw"));
+}
+
+void checkCapsicumSandbox(Report &r) {
+  bool capsicum = CapsicumOps::available();
+  bool wantSyslog = Config::get().auditSyslog;
+
+  if (!capsicum && wantSyslog) {
+    r.checks.push_back(warnCheck("audit", "capsicum-casper",
+      "audit_syslog: true but crate built without HAVE_CAPSICUM — "
+      "falling back to plain syslog(3) (still works; loses "
+      "cap_enter resilience)."));
+    return;
+  }
+  if (!capsicum) {
+    r.checks.push_back(passCheck("audit", "capsicum-casper",
+      "crate built without HAVE_CAPSICUM — audit log writes to "
+      "file only. Set HAVE_CAPSICUM at build time + audit_syslog: "
+      "true in crate.yml to also ship audit events to syslog via "
+      "cap_syslog."));
+    return;
+  }
+  if (wantSyslog) {
+    r.checks.push_back(passCheck("audit", "capsicum-casper",
+      "casper available; audit_syslog: true — audit events are "
+      "dual-written to file + syslog via cap_syslog."));
+  } else {
+    r.checks.push_back(passCheck("audit", "capsicum-casper",
+      "casper available but audit_syslog: false (default). Set "
+      "audit_syslog: true in crate.yml to ship audit events to "
+      "syslog in addition to file."));
+  }
+}
+
 } // anon
 
 bool doctorCommand(const Args &args) {
+  // 0.8.35: --refresh-cache drops in-memory caches before running
+  // checks. NetDetect caches the default-route interface for the
+  // process lifetime; under crated (long-lived daemon) operators
+  // running `crate doctor --refresh-cache` after rebooting the
+  // upstream router get an immediate re-detect rather than waiting
+  // for crated to restart. Cheap — just clears a static string.
+  if (args.doctorRefreshCache)
+    NetDetect::clearCache();
+
   Report r;
   checkKernelModules(r);
   checkCommands(r);
@@ -327,6 +723,13 @@ bool doctorCommand(const Args &args) {
   checkCratedConf(r);
   checkJails(r);
   checkAuditLog(r);
+  checkAutoFwRules(r);             // 0.8.9
+  checkIpfwReservedRanges(r);      // 0.8.14
+  checkRctlPresence(r);            // 0.8.14
+  checkDrmSession(r);              // 0.8.23
+  checkCapsicumSandbox(r);         // 0.8.24
+  checkNativeApis(r);              // 0.8.26
+  checkNvProtocol(r);              // 0.8.27
 
   if (args.doctorJson) {
     std::cout << DoctorPure::renderJson(r) << std::endl;

@@ -26,6 +26,15 @@ struct Settings {
   std::string cache;              // default: /var/cache/crate
   std::string logs;               // default: /var/log/crate
 
+  // 0.8.24: dual-write audit events to syslog in addition to the
+  // file at $logs/audit.log. When HAVE_CAPSICUM is built in, the
+  // syslog path goes through the casper cap_syslog channel, which
+  // keeps working even after a future cap_enter() of crated.
+  // Default false — operators opt in via `audit_syslog: true` in
+  // crate.yml (or per-user crate.yml). The on-disk audit.log
+  // continues to be written either way.
+  bool        auditSyslog = false;
+
   // ZFS
   bool zfsEnable;                 // default: false
   std::string zfsZpool;           // default: ""
@@ -41,6 +50,22 @@ struct Settings {
   // `network_pool: 10.66.0.0/24` in /usr/local/etc/crate.yml or
   // ~/.config/crate/crate.yml.
   std::string networkPool;
+  // 0.8.15: IPv6 ULA prefix for `network: auto` jails (Phase 1
+  // hook). Currently parsed + validated but not wired into runtime
+  // — full IPv6 NPTv6 / NAT66 + per-jail allocation is a future
+  // release. Operators can set this today to declare intent;
+  // doctor (0.8.x) will flag the gap when full implementation
+  // lands. Format: ULA /64 prefix, e.g. "fd00:0:0:0::/64".
+  std::string networkPool6;
+  // 0.8.7: explicit firewall backend choice for auto-fw. Accepted
+  // values:
+  //   ""     — auto-detect via kldstat (pf preferred, then ipfw)
+  //            [pre-0.8.7 behaviour]
+  //   "pf"   — force pf path even if ipfw is also loaded
+  //   "ipfw" — force ipfw path even if pf is also loaded
+  //   "none" — never auto-load fw rules; operator owns pf/ipfw
+  // Default empty — back-compat with 0.8.0..0.8.6.
+  std::string firewallBackend;
 
   // Base system
   std::string bootstrapMethod;    // default: "base_txz"

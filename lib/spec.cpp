@@ -491,6 +491,38 @@ static Spec parseSpecFromNode(YAML::Node top) {
           }
         }
       }
+    } else if (isKey(k, "network")) {
+      // 0.8.17: top-level `network: auto` shorthand. Equivalent to
+      // setting options.net.mode = auto (which 0.7.18 already
+      // expands into bridge + auto_create_bridge + ip-mode auto).
+      // Letting operators write a single line at spec root keeps
+      // simple desktop-app jails out of the verbose options block.
+      if (!k.second.IsScalar())
+        ERR("top-level 'network' must be a scalar string (currently 'auto')")
+      auto v = AsString(k.second);
+      if (auto e = SpecPure::validateTopLevelNetwork(v); !e.empty())
+        ERR(e)
+
+      // Materialise options.net if absent; otherwise fold into the
+      // existing block. Conflict detection below.
+      auto &netOpt = spec.options["net"];
+      if (!netOpt) {
+        netOpt = std::make_shared<Spec::NetOptDetails>();
+      }
+      auto *details = static_cast<Spec::NetOptDetails*>(netOpt.get());
+      if (v == "auto") {
+        // If the operator explicitly set a non-default mode under
+        // options.net.mode, refuse to silently override — they
+        // chose two different things.
+        if (details->mode != Spec::NetOptDetails::Mode::Nat
+            && details->mode != Spec::NetOptDetails::Mode::Auto)
+          ERR("top-level 'network: auto' conflicts with options.net.mode = '"
+              << (details->mode == Spec::NetOptDetails::Mode::Bridge ? "bridge" :
+                  details->mode == Spec::NetOptDetails::Mode::Passthrough ? "passthrough" :
+                  details->mode == Spec::NetOptDetails::Mode::Netgraph ? "netgraph" : "?")
+              << "' — pick one")
+        details->mode = Spec::NetOptDetails::Mode::Auto;
+      }
     } else if (isKey(k, "options")) {
       if (listOrScalar(k.second, spec.options, "options")) {
         // options are a list (simplified format): set details to options that support them
@@ -717,12 +749,16 @@ static Spec parseSpecFromNode(YAML::Node top) {
               // 0.8.4: strongSwan conn name. Operator pre-loads the
               // conn into ipsec.conf (or an include); runtime brings
               // it up at jail start and tears it down on teardown.
+              // 0.8.10: optional `conf:` field — path to a conn
+              // snippet on host; auto-installed into strongswan.d/.
               optVal = std::make_shared<Spec::IpsecOptDetails>();
               if (soptVal.IsMap()) {
                 auto ip = static_cast<Spec::IpsecOptDetails*>(optVal.get());
                 for (auto ipOpt : soptVal) {
                   if (AsString(ipOpt.first) == "conn")
                     ip->connName = AsString(ipOpt.second);
+                  else if (AsString(ipOpt.first) == "conf")
+                    ip->confPath = AsString(ipOpt.second);
                   else
                     ERR("the invalid value options/ipsec/" << ipOpt.first << " supplied")
                 }
@@ -1136,6 +1172,15 @@ static Spec parseSpecFromNode(YAML::Node top) {
         } else if (isKey(b, "vnc")) {
           if (!YAML::convert<bool>::decode(b.second, spec.guiOptions->vnc))
             ERR("gui/vnc must be a boolean")
+        } else if (isKey(b, "vnc_native") || isKey(b, "vnc-native")) {
+          // 0.8.22: prefer the embedded libvncserver-based VNC over
+          // fork+exec'ing x11vnc. Drops the x11vnc package
+          // dependency from the host. Requires WITH_LIBVNCSERVER
+          // (and ideally WITH_X11) at build time; if the binary
+          // wasn't built with libvncserver the runtime falls back
+          // to x11vnc with an operator-visible warning.
+          if (!YAML::convert<bool>::decode(b.second, spec.guiOptions->vncNative))
+            ERR("gui/vnc_native must be a boolean")
         } else if (isKey(b, "vnc_port") || isKey(b, "vnc-port")) {
           spec.guiOptions->vncPort = Util::toUInt(AsString(b.second));
         } else if (isKey(b, "novnc")) {

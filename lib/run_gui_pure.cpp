@@ -119,6 +119,36 @@ std::string generateGpuXorgConf(unsigned displayNum,
   return conf.str();
 }
 
+std::string resolveAutoMode(bool displaySet, bool waylandSet, bool hasGpu) {
+  // Either compositor reachable from the host -> shared path. The
+  // setupX11 shared block already binds /tmp/.X11-unix; the new
+  // 0.8.18 logic also copies $XAUTHORITY and (if waylandSet) binds
+  // the Wayland socket.
+  if (displaySet || waylandSet) return "shared";
+  if (hasGpu) return "gpu";
+  return "headless";
+}
+
+std::string parseWaylandDisplay(const std::string &waylandDisplayEnv) {
+  if (waylandDisplayEnv.empty()) return "";
+  // Reject anything that looks like a path — only basename form
+  // (the wayland-cli convention) is supported.
+  if (waylandDisplayEnv.find('/') != std::string::npos) return "";
+  // Reject path traversal sentinels.
+  if (waylandDisplayEnv == "." || waylandDisplayEnv == "..") return "";
+  // Reject absurdly long inputs (Unix socket paths are bounded
+  // anyway by sockaddr_un.sun_path which is ~108 bytes).
+  if (waylandDisplayEnv.size() > 64) return "";
+  // Reject control chars / shell metas; allow [A-Za-z0-9._-] which
+  // covers wayland-0, wayland-1, etc.
+  for (char c : waylandDisplayEnv) {
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.') continue;
+    return "";
+  }
+  return waylandDisplayEnv;
+}
+
 bool parseResolution(const std::string &spec, unsigned &w, unsigned &h) {
   // Reject leading whitespace explicitly — std::stoul would otherwise
   // silently skip it, accepting " 1920x1080" as valid.

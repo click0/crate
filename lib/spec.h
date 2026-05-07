@@ -115,6 +115,12 @@ public:
     IpsecOptDetails();
     static std::shared_ptr<IpsecOptDetails> createDefault();
     std::string connName;
+    // 0.8.10: optional path to a strongSwan conn snippet on host.
+    // When set, crate copies it to /usr/local/etc/strongswan.d/
+    // crate-<jail>.conf at jail start (then `ipsec reread`) and
+    // removes it on teardown. Operator no longer needs to pre-load
+    // the conn into ipsec.conf manually.
+    std::string confPath;
   };
   std::vector<std::string>                           baseKeep;
   std::vector<std::string>                           baseKeepWildcard;
@@ -251,7 +257,8 @@ public:
   struct GuiOptions {
     std::string mode = "nested";           // "nested" (Xephyr), "headless" (Xvfb), "gpu" (Xorg+GPU), "auto"
     std::string resolution = "1280x720";   // display resolution
-    bool vnc = false;                      // start x11vnc for headless/gpu mode
+    bool vnc = false;                      // start a VNC server for headless/gpu mode
+    bool vncNative = false;                // 0.8.22: use embedded libvncserver instead of fork+exec x11vnc
     unsigned vncPort = 0;                  // VNC port (0=auto-assign from 5900+displayNum)
     bool novnc = false;                    // start websockify+noVNC
     std::string vncPassword;               // optional VNC password

@@ -82,6 +82,10 @@ int categoryRank(const std::string &c) {
   if (c == "config")     return 4;
   if (c == "jails")      return 5;
   if (c == "audit")      return 6;
+  if (c == "auto-fw")    return 7;  // 0.8.9
+  if (c == "network")    return 8;  // 0.8.14
+  if (c == "gui")        return 9;  // 0.8.23
+  if (c == "native-api") return 10; // 0.8.26
   return 100;  // unknown -> after known
 }
 

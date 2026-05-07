@@ -16,7 +16,12 @@
 #include "config.h"
 #include "ip_alloc_pure.h"
 #include "network_lease.h"
+#include "ip6_alloc_pure.h"
+#include "network_lease6.h"
+#include "ipfw_ops.h"
+#include "spec_registry.h"
 #include "auto_fw_pure.h"
+#include "net_detect.h"
 #include "ifconfig_ops.h"
 #include "scripts.h"
 #include "ctx.h"
@@ -397,9 +402,41 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // and `--down/--delete` on teardown. Operator preconfigures the
   // strongSwan conn (via ipsec.conf or include); we only toggle it
   // around the jail's lifetime.
+  //
+  // 0.8.10: optional `conf:` field auto-installs the conn snippet
+  // into /usr/local/etc/strongswan.d/crate-<jail>.conf at jail
+  // start (then `ipsec reread`) and removes it on teardown.
   RunAtEnd ipsecDownAtEnd;
+  RunAtEnd ipsecConfCleanup;
   if (auto *ip = spec.optionIpsec()) {
     if (IpsecRuntimePure::isEnabled(ip->connName)) {
+      // 0.8.10: install conf snippet first if provided.
+      std::string installedPath;
+      if (!ip->confPath.empty()) {
+        if (!Util::Fs::fileExists(ip->confPath))
+          ERR("options/ipsec/conf: file not found: " << ip->confPath)
+        installedPath = "/usr/local/etc/strongswan.d/crate-"
+                      + nameComponent + ".conf";
+        Util::Fs::copyFile(ip->confPath, installedPath);
+        LOG("ipsec: installed conn snippet at " << installedPath)
+        try {
+          Util::execCommand({"/usr/local/sbin/ipsec", "reread"},
+                            "ipsec reread");
+        } catch (const std::exception &ex) {
+          std::cerr << rang::fg::yellow
+                    << "ipsec: reread failed: " << ex.what()
+                    << " — strongSwan may not pick up the new conn"
+                    << rang::style::reset << std::endl;
+        }
+        ipsecConfCleanup.reset([installedPath]() {
+          try { Util::Fs::unlink(installedPath); } catch (...) {}
+          try {
+            Util::execCommand({"/usr/local/sbin/ipsec", "reread"},
+                              "ipsec reread (cleanup)");
+          } catch (...) {}
+        });
+      }
+
       LOG("ipsec: adding + bringing up conn '" << ip->connName << "'")
       Util::execCommand(IpsecRuntimePure::buildAddArgv(ip->connName),
                         "ipsec auto --add");
@@ -576,6 +613,14 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   }
 
   // MAC bsdextended rules (§8)
+  // 0.8.31: cleanup handler now actually REMOVES the rules at
+  // teardown (pre-0.8.31 it just listed them — the rules
+  // accumulated across runs in /dev/ugidfw, eventually filling
+  // the kernel's rule table). The handler captures a shared
+  // jid pointer because the jid isn't known until later in this
+  // function (RunJail::createJail). Pre-init value -1 means
+  // "no jail created yet, nothing scoped to remove".
+  auto macJidShared = std::make_shared<int>(-1);
   RunAtEnd removeMacRules;
   if (spec.securityAdvanced) {
     if (!spec.securityAdvanced->macRules.empty()) {
@@ -585,17 +630,55 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         LOG("adding MAC rule: " << rule)
         MacOps::addUgidfwRuleRaw(rule);
       }
-      removeMacRules.reset([&args]() {
-        LOG("removing MAC bsdextended rules")
-        std::vector<std::string> rules;
-        MacOps::listUgidfwRules(rules);
+      removeMacRules.reset([macJidShared, &args]() {
+        if (*macJidShared <= 0) {
+          // Jail never came up; rules were added without a jailid
+          // scope so we can't selectively remove them. Operator
+          // sees a warning. (mac_bsdextended rules without jailid
+          // apply host-wide — a separate pre-existing bug.)
+          LOG("MAC bsdextended cleanup: jail never created; rules "
+              "left in place — run `ugidfw list` and clean by hand")
+          return;
+        }
+        LOG("removing MAC bsdextended rules for jid " << *macJidShared)
+        try {
+          MacOps::removeUgidfwRules(*macJidShared);
+        } catch (const std::exception &ex) {
+          std::cerr << rang::fg::yellow
+                    << "MAC bsdextended cleanup failed: " << ex.what()
+                    << " — leftover rules may persist; run "
+                    << "`ugidfw list` and clean by hand"
+                    << rang::style::reset << std::endl;
+        }
       });
     }
     if (!spec.securityAdvanced->macAllowPorts.empty()) {
       LOG("loading MAC portacl rules")
       Util::ensureKernelModuleIsLoaded("mac_portacl");
-      for (auto port : spec.securityAdvanced->macAllowPorts)
+      // 0.8.31: actually install the portacl rules. Pre-0.8.31
+      // this loop only LOG'd each port and called
+      // ensureKernelModuleIsLoaded but never reached
+      // MacOps::setPortaclRules — the operator's allow-list was
+      // silently dropped. Bug found by 0.8.30 audit follow-up.
+      // Build the rule list with uid=0 (rules apply to anyone
+      // running inside the jail by default) for tcp+udp on each
+      // configured port; setPortaclRules writes the
+      // security.mac.portacl.rules sysctl atomically.
+      std::vector<MacOps::PortaclRule> portaclRules;
+      for (auto port : spec.securityAdvanced->macAllowPorts) {
         LOG("MAC portacl: allowing port " << port)
+        portaclRules.push_back({0, "tcp", (int)port});
+        portaclRules.push_back({0, "udp", (int)port});
+      }
+      try {
+        MacOps::setPortaclRules(portaclRules);
+      } catch (const std::exception &ex) {
+        std::cerr << rang::fg::yellow
+                  << "MAC portacl: setPortaclRules failed: " << ex.what()
+                  << " — port restrictions NOT applied; check that "
+                  << "mac_portacl is loaded and crate has root."
+                  << rang::style::reset << std::endl;
+      }
     }
   }
 
@@ -621,6 +704,54 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     }
     if (!spec.terminalOptions->allowRawTty) {
       LOG("terminal: raw TTY access denied (default devfs restrictions apply)")
+    }
+  }
+
+  // 0.8.11: when GUI mode wants GPU access, auto-unhide /dev/dri/*
+  // entries from the jail's devfs view. Saves the operator from
+  // writing a custom devfs ruleset for the common case "I want
+  // hardware-accelerated firefox in this jail."
+  //
+  // Triggered when:
+  //   - spec.guiOptions->mode == "gpu" (explicit), OR
+  //   - spec.guiOptions->mode == "auto" AND host has /dev/dri/card0
+  //     (gpu mode would resolve to "gpu" at GUI start anyway)
+  // Skipped when guiOptions absent OR mode == "headless"/"nested"
+  // (no GPU needed) OR /dev/dri/card0 doesn't exist on host
+  // (nothing to expose).
+  if (spec.guiOptions
+      && (spec.guiOptions->mode == "gpu" || spec.guiOptions->mode == "auto")) {
+    struct stat st{};
+    if (::stat("/dev/dri/card0", &st) == 0) {
+      // Use devfs(8) per-jail rules: add `path 'dri/*' unhide` then
+      // applyset. Operates on the jail's devfs mount, leaves host
+      // devfs untouched.
+      try {
+        Util::execCommand(
+          {CRATE_PATH_DEVFS, "-m", J("/dev"), "rule", "add",
+           "path", "dri", "unhide"},
+          "auto-gui: unhide /dev/dri");
+        Util::execCommand(
+          {CRATE_PATH_DEVFS, "-m", J("/dev"), "rule", "add",
+           "path", "dri/*", "unhide"},
+          "auto-gui: unhide /dev/dri/*");
+        Util::execCommand(
+          {CRATE_PATH_DEVFS, "-m", J("/dev"), "rule", "applyset"},
+          "auto-gui: applyset for dri unhide");
+        LOG("auto-gui: /dev/dri/* unhidden in jail's devfs view "
+            "(GPU mode '" << spec.guiOptions->mode << "')")
+      } catch (const std::exception &ex) {
+        std::cerr << rang::fg::yellow
+                  << "auto-gui: devfs unhide /dev/dri failed: "
+                  << ex.what()
+                  << " — GPU rendering inside the jail will not work; "
+                     "add a custom devfs_ruleset manually if needed"
+                  << rang::style::reset << std::endl;
+      }
+    } else {
+      LOG("auto-gui: GPU mode requested but /dev/dri/card0 absent "
+          "on host — skipping devfs unhide (jail will fall back to "
+          "software rendering)")
     }
   }
 
@@ -658,6 +789,29 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   auto jailInfo = RunJail::createJail(spec, jailPath, args.logProgress);
   int jid = jailInfo.jid;
+
+  // 0.8.31: publish jid to the MAC bsdextended cleanup handler so
+  // it can scope removeUgidfwRules() to this jail. See the
+  // RunAtEnd removeMacRules block earlier in this function for
+  // the rationale (cleanup needed jid which wasn't yet available
+  // when the handler was wired).
+  *macJidShared = jid;
+
+  // 0.8.21: register the {jail-name -> .crate path} pair so the
+  // daemon's control-plane PostStart can find the spec on a later
+  // `start <name>` request. Skipped for warm-base runs (no .crate
+  // file path to register). Best-effort: a registry write failure
+  // logs but doesn't abort the jail start.
+  if (!warmBase && !args.runCrateFile.empty()) {
+    try {
+      auto absPath = std::filesystem::absolute(args.runCrateFile).string();
+      SpecRegistry::upsert(nameComponent, absPath);
+    } catch (const std::exception &ex) {
+      WARN("spec-registry: failed to register " << nameComponent
+           << " -> " << args.runCrateFile << ": " << ex.what())
+    }
+  }
+
   // securelevel: -1 means inherit host default, 0-3 are explicit values
   // bastille defaults to securelevel=2 for all jails
   auto securelevelStr = spec.securelevel >= 0 ? std::to_string(spec.securelevel) : std::string();
@@ -694,8 +848,11 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   }
 
   // Apply CPU set restrictions via cpuset(1) (§8)
-  // Pins jail processes to specific CPUs (e.g., "0-3", "0,2,4")
-  RunAtEnd releaseCpuset;
+  // Pins jail processes to specific CPUs (e.g., "0-3", "0,2,4").
+  // No RunAtEnd needed — cpuset is jail-scoped, the kernel drops
+  // the binding when the jail dies (which destroyJail handles
+  // unconditionally above). Pre-0.8.22 this declared a stray
+  // RunAtEnd that was never reset; harmless but misleading.
   if (!spec.cpuset.empty()) {
     auto jidS = std::to_string(jid);
     Util::execCommand({CRATE_PATH_CPUSET, "-l", spec.cpuset, "-j", jidS},
@@ -705,6 +862,14 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // apply RCTL resource limits (§5)
   RunAtEnd removeRctlRules = RunJail::applyRctlLimits(spec, jid, args.logProgress);
+
+  // 0.8.31: apply ZFS refquota from spec.diskQuota. Pre-0.8.31 the
+  // YAML key parsed and validated cleanly (lib/spec.cpp:805) but
+  // applyDiskQuota was never invoked — operator's quota was
+  // silently dropped. Bug found by 0.8.30 audit follow-up. Set
+  // before attachZfsDatasets so a delegated dataset inherits the
+  // quota at attach time.
+  RunJail::applyDiskQuota(spec, jailPath, args.logProgress);
 
   // attach ZFS datasets to jail
   RunAtEnd detachZfsDatasets = RunJail::attachZfsDatasets(spec, jid, args.logProgress);
@@ -728,6 +893,8 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // allocated one. Declared at function scope so it's reachable
   // from inside the bridge-mode IP-config block below.
   RunAtEnd releaseLeaseAtEnd;
+  // 0.8.20: same pattern for the IPv6 pool lease (network_pool6).
+  RunAtEnd releaseLease6AtEnd;
   // 0.8.2: ipfw NAT rule + instance cleanup. Only used on hosts
   // running ipfw (not pf). Declared next to the other auto-fw
   // teardown so the destruction ordering matches.
@@ -838,6 +1005,32 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
           try { NetworkLease::releaseFor(leaseName); } catch (...) {}
         });
 
+        // 0.8.20: IPv6 pool allocation. If network_pool6 is
+        // configured in crate.yml, allocate a v6 from it and
+        // configure as a static address alongside the v4. Same
+        // lease-store pattern as v4 but in a separate file
+        // (/var/run/crate/network-leases6.txt) so v4-only tooling
+        // doesn't choke on v6 lines.
+        //
+        // No SNAT/NAT66/NPTv6 yet: this release just gets the
+        // address onto the jail interface so operators can verify
+        // ULA reachability from the jail. Egress translation is
+        // tracked for a future release.
+        if (!cfg.networkPool6.empty()) {
+          Ip6AllocPure::Network6 pool6;
+          if (auto e = Ip6AllocPure::parseCidr6(cfg.networkPool6, pool6); !e.empty())
+            ERR("network_pool6 '" << cfg.networkPool6 << "': " << e)
+          auto addr6 = NetworkLease6::allocateFor(leaseName, pool6);
+          auto ip6Bare = Ip6AllocPure::formatIp6(addr6);
+          auto ip6 = ip6Bare + "/" + std::to_string(pool6.prefixLen);
+          RunNet::configureStaticIp6(bridgeInfo.ifaceB, ip6, jid, execInJail);
+          LOG("bridge mode: auto-allocated IPv6 " << ip6
+              << " on " << bridgeInfo.ifaceB)
+          releaseLease6AtEnd.reset([leaseName]() {
+            try { NetworkLease6::releaseFor(leaseName); } catch (...) {}
+          });
+        }
+
         // 0.8.0: SNAT auto-rule. Without this, packets from the jail
         // leave the host with a 10.66.0.x source addr that never
         // gets translated and replies can't be routed back.
@@ -845,12 +1038,26 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         // the jail's existing pf anchor crate/<jailXname>; the
         // anchor is flushed at teardown by the existing destroyPfAnchor
         // RunAtEnd, so cleanup is automatic.
-        if (!cfg.networkInterface.empty()) {
-          if (auto e = AutoFwPure::validateExternalIface(cfg.networkInterface); !e.empty())
-            ERR("network_interface '" << cfg.networkInterface << "': " << e)
+        //
+        // 0.8.6: if network_interface is unset in crate.yml, fall
+        // back to NetDetect::defaultIfaceCached() which parses
+        // `route -4 get default`. Only auto-detect once per daemon
+        // lifetime (cached). Operator can still override by
+        // setting network_interface explicitly.
+        std::string externalIface = cfg.networkInterface;
+        if (externalIface.empty()) {
+          externalIface = NetDetect::defaultIfaceCached();
+          if (!externalIface.empty()) {
+            LOG("auto-fw: network_interface not set in crate.yml; "
+                "auto-detected default route via " << externalIface);
+          }
+        }
+        if (!externalIface.empty()) {
+          if (auto e = AutoFwPure::validateExternalIface(externalIface); !e.empty())
+            ERR("network_interface '" << externalIface << "': " << e)
           if (auto e = AutoFwPure::validateRuleAddress(ipBare); !e.empty())
             ERR("auto-fw: jail IP failed validation: " << e)
-          auto rule = AutoFwPure::formatSnatAnchorLine(cfg.networkInterface, ipBare);
+          auto rule = AutoFwPure::formatSnatAnchorLine(externalIface, ipBare);
 
           // 0.8.1: also emit per-port rdr rules from the spec's
           // inbound: declarations. Same anchor as SNAT — both
@@ -861,7 +1068,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
                 && AutoFwPure::validatePort(jail.first).empty()
                 && AutoFwPure::validatePort(jail.second).empty()) {
               rule += AutoFwPure::formatRdrAnchorLine(
-                cfg.networkInterface, "tcp",
+                externalIface, "tcp",
                 host.first, host.second,
                 ipBare,
                 jail.first, jail.second);
@@ -873,7 +1080,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
                 && AutoFwPure::validatePort(jail.first).empty()
                 && AutoFwPure::validatePort(jail.second).empty()) {
               rule += AutoFwPure::formatRdrAnchorLine(
-                cfg.networkInterface, "udp",
+                externalIface, "udp",
                 host.first, host.second,
                 ipBare,
                 jail.first, jail.second);
@@ -883,20 +1090,37 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
           // 0.8.2: detect firewall backend. pf preferred (matches
           // 0.8.0/0.8.1 behaviour). If only ipfw loaded, use the
           // ipfw NAT path. If neither, warn and skip.
+          //
+          // 0.8.7: operator can override via firewall_backend in
+          // crate.yml — "pf"/"ipfw" forces that path, "none" skips
+          // auto-fw entirely (operator owns pf/ipfw rules), ""
+          // keeps the kldstat-based auto-detect.
           int pfStatus = 1, ipfwStatus = 1;
-          try {
-            pfStatus   = Util::execCommandGetStatus({"/sbin/kldstat", "-n", "pf"},   "kldstat pf");
-          } catch (...) { pfStatus = 1; }
-          try {
-            ipfwStatus = Util::execCommandGetStatus({"/sbin/kldstat", "-n", "ipfw"}, "kldstat ipfw");
-          } catch (...) { ipfwStatus = 1; }
+          if (cfg.firewallBackend == "pf") {
+            pfStatus = 0;  // force pf path
+          } else if (cfg.firewallBackend == "ipfw") {
+            ipfwStatus = 0;  // force ipfw path
+          } else if (cfg.firewallBackend == "none") {
+            // Skip both branches; the existing else clause warns.
+          } else {
+            // "" or unset — auto-detect via kldstat.
+            try {
+              pfStatus   = Util::execCommandGetStatus({"/sbin/kldstat", "-n", "pf"},   "kldstat pf");
+            } catch (...) { pfStatus = 1; }
+            try {
+              ipfwStatus = Util::execCommandGetStatus({"/sbin/kldstat", "-n", "ipfw"}, "kldstat ipfw");
+            } catch (...) { ipfwStatus = 1; }
+          }
 
-          if (pfStatus == 0) {
+          if (cfg.firewallBackend == "none") {
+            LOG("auto-fw: firewall_backend=none in crate.yml; "
+                "skipping SNAT/rdr auto-rules per operator request")
+          } else if (pfStatus == 0) {
             auto anchor = std::string("crate/") + jailXname;
             try {
               PfctlOps::addRules(anchor, rule);
               LOG("auto-fw[pf]: rules added to anchor " << anchor
-                  << " (" << ipBare << " -> " << cfg.networkInterface << ")")
+                  << " (" << ipBare << " -> " << externalIface << ")")
             } catch (const std::exception &ex) {
               std::cerr << rang::fg::yellow
                         << "auto-fw[pf]: SNAT/rdr load failed: " << ex.what()
@@ -931,26 +1155,74 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
               }
             }
             try {
+              // 0.8.30: route NAT config through IpfwOps::configureNat
+              // instead of inline Util::execCommand so the (currently
+              // shell-only) implementation has a single replacement
+              // point when the native IP_FW3 path lands. configureNat
+              // also warns if the natInstance is already in use,
+              // catching cross-tool ID collisions early. The argv
+              // builder still produces the canonical "ipfw nat <id>
+              // config <…>" tokenization; we strip the
+              // ["/sbin/ipfw", "nat", "<id>", "config"] prefix and
+              // pass the rest as a single config string.
+              auto natArgv = AutoFwPure::buildIpfwNatConfigWithRedirsArgv(
+                natId, externalIface, redirs);
+              std::string natConfig;
+              for (size_t i = 4; i < natArgv.size(); i++) {
+                if (!natConfig.empty()) natConfig += ' ';
+                natConfig += natArgv[i];
+              }
+              IpfwOps::configureNat(natId, natConfig);
               Util::execCommand(
-                AutoFwPure::buildIpfwNatConfigWithRedirsArgv(natId, cfg.networkInterface, redirs),
-                "ipfw nat config");
-              Util::execCommand(
-                AutoFwPure::buildIpfwNatRuleArgv(ruleId, natId, ipBare, cfg.networkInterface),
+                AutoFwPure::buildIpfwNatRuleArgv(ruleId, natId, ipBare, externalIface),
                 "ipfw add nat rule");
+              // 0.8.39 (bug#239590): hairpin rule so connections
+              // from the host itself to its own LAN address reach
+              // the jail. Best-effort — soft-warn if it fails;
+              // the SNAT/redir for external clients still works.
+              unsigned loopbackId = AutoFwPure::loopbackRuleIdForJail(jid);
+              bool loopbackInstalled = false;
+              try {
+                Util::execCommand(
+                  AutoFwPure::buildIpfwHostLoopbackNatArgv(loopbackId, natId),
+                  "ipfw add host-loopback nat rule");
+                loopbackInstalled = true;
+              } catch (const std::exception &ex) {
+                std::cerr << rang::fg::yellow
+                          << "auto-fw[ipfw]: host-loopback rule install failed: "
+                          << ex.what()
+                          << " — `nc <host-LAN-IP> <port>` from the host "
+                             "itself may be rejected; external LAN clients "
+                             "still work"
+                          << rang::style::reset << std::endl;
+              }
               LOG("auto-fw[ipfw]: NAT instance " << natId << " + rule " << ruleId
-                  << " (" << ipBare << " -> " << cfg.networkInterface << ", "
+                  << (loopbackInstalled ? " + loopback " + std::to_string(loopbackId) : "")
+                  << " (" << ipBare << " -> " << externalIface << ", "
                   << redirs.size() << " redir_port clauses)")
-              // Cleanup: delete rule first, then NAT instance.
-              ipfwAutoFwCleanup.reset([natId, ruleId, &args]() {
+              // Cleanup: delete loopback rule, main rule, NAT instance.
+              ipfwAutoFwCleanup.reset([natId, ruleId, loopbackId,
+                                       loopbackInstalled, &args]() {
                 LOG("auto-fw[ipfw]: cleanup rule " << ruleId
+                    << (loopbackInstalled ? " + loopback " + std::to_string(loopbackId) : "")
                     << " + nat " << natId)
+                if (loopbackInstalled) {
+                  try {
+                    Util::execCommand(AutoFwPure::buildIpfwRuleDeleteArgv(loopbackId),
+                                      "ipfw delete host-loopback rule");
+                  } catch (...) {}
+                }
                 try {
                   Util::execCommand(AutoFwPure::buildIpfwRuleDeleteArgv(ruleId),
                                     "ipfw delete rule");
                 } catch (...) {}
+                // 0.8.30: ditto for the cleanup path. deleteNat
+                // already swallows its own exceptions and warns,
+                // so the outer try/catch is now redundant — kept
+                // for safety in case a future implementation
+                // changes behaviour.
                 try {
-                  Util::execCommand(AutoFwPure::buildIpfwNatDeleteArgv(natId),
-                                    "ipfw nat delete");
+                  IpfwOps::deleteNat(natId);
                 } catch (...) {}
               });
             } catch (const std::exception &ex) {
@@ -968,8 +1240,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
           }
         } else {
           std::cerr << rang::fg::yellow
-                    << "auto-fw: network_interface unset in crate.yml; "
-                       "skipping SNAT auto-rule — outbound traffic from "
+                    << "auto-fw: network_interface unset in crate.yml AND "
+                       "default-route auto-detection failed (no `route -4 get "
+                       "default` interface line); skipping SNAT auto-rule — "
+                       "outbound traffic from "
                     << ipBare << " will require operator-written pf/ipfw rules"
                     << rang::style::reset << std::endl;
         }
@@ -1408,7 +1682,16 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
                         << " " << Util::shellQuote(spec.runCmdExecutable) << spec.runCmdArgs << argsToString(argc, argv));
     int status = JailExec::execInJail(jid, {"/bin/sh", "-c", innerCmd}, user, "run command in jail");
     returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
-    LOG("command has finished in jail: returnCode=" << returnCode)
+    // 0.8.28: surface OOM / RCTL / signal context to the operator
+    // log so they don't have to correlate exit codes with rctl(8)
+    // by hand. diagnoseExitReason returns "exited normally" for
+    // clean exits — only log when something interesting happened.
+    if (returnCode != 0 || !WIFEXITED(status)) {
+      auto reason = RunJail::diagnoseExitReason(jid, status);
+      LOG("command has finished in jail: returnCode=" << returnCode << " (" << reason << ")")
+    } else {
+      LOG("command has finished in jail: returnCode=" << returnCode)
+    }
   } else {
     LOG("this is a service-only crate, install and run the command that exits on Ctrl-C")
     auto cmdFile = "/run.sh";
@@ -1442,6 +1725,16 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     {
       int status = JailExec::execInJail(jid, {cmdFile}, user, "run service command in jail");
       returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+      // 0.8.28: same OOM / RCTL diagnosis hook as the
+      // executable-mode path above. Service-only crates are MORE
+      // likely to hit RCTL (memoryuse caps trip after weeks of
+      // accumulating cache); the diagnosis line saves operators
+      // a syslog dive.
+      if (returnCode != 0 || !WIFEXITED(status)) {
+        auto reason = RunJail::diagnoseExitReason(jid, status);
+        LOG("service command has finished in jail: returnCode=" << returnCode
+            << " (" << reason << ")")
+      }
     }
     // Stop healthcheck monitor
     if (hcThread.joinable()) {

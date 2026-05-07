@@ -5,6 +5,7 @@
 #include "datacenter_pure.h"
 #include "ha_pure.h"
 #include "poller.h"
+#include "scheduling_pure.h"
 #include "store.h"
 
 #include <httplib.h>
@@ -167,6 +168,43 @@ void registerApiRoutes(httplib::Server &srv, Store &store, Poller &poller,
     auto orders = HaPure::evaluateFailoverOrders(haSpecs, views,
                                                  haThresholdSeconds);
     auto json = HaPure::renderOrdersJson(orders);
+    res.set_content("{\"status\":\"ok\",\"data\":" + json + "}",
+                    "application/json");
+  });
+
+  // GET /api/v1/scheduling/least-loaded — recommendation for which
+  // node to place the next jail on. Reuses the same poller-cached
+  // node statuses as /api/v1/aggregate; the heavy lifting lives in
+  // SchedulingPure::pickLeastLoaded.
+  //
+  // Query params:
+  //   ?current=<name>  — anti-flap hint. If the operator already
+  //                      has the container on this node and its
+  //                      count is within 10% of the least-loaded
+  //                      node, recommend keeping it there
+  //                      (avoids ping-pong migrations).
+  //
+  // Operator workflow:
+  //   target=$(curl -s http://hub:9001/api/v1/scheduling/least-loaded \
+  //              | jq -r .data.host)
+  //   crate migrate myjail --to "$target" ...
+  srv.Get("/api/v1/scheduling/least-loaded",
+          [&poller](const httplib::Request &req, httplib::Response &res) {
+    auto statuses = poller.getNodeStatuses();
+    std::vector<SchedulingPure::NodeView> views;
+    views.reserve(statuses.size());
+    for (auto &s : statuses) {
+      SchedulingPure::NodeView v;
+      v.name           = s.name;
+      v.host           = s.host;
+      v.reachable      = s.reachable;
+      v.containerCount = AggregatorPure::countTopLevelObjects(s.containers);
+      views.push_back(std::move(v));
+    }
+    auto current = req.has_param("current") ? req.get_param_value("current")
+                                            : std::string();
+    auto rec = SchedulingPure::pickLeastLoaded(views, current);
+    auto json = SchedulingPure::renderRecommendationJson(rec);
     res.set_content("{\"status\":\"ok\",\"data\":" + json + "}",
                     "application/json");
   });

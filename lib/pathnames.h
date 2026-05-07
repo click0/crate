@@ -147,3 +147,6 @@
 #ifndef CRATE_PATH_UNBOUND
 #define CRATE_PATH_UNBOUND    "/usr/local/sbin/unbound"
 #endif
+#ifndef CRATE_PATH_CRATE
+#define CRATE_PATH_CRATE      "/usr/local/bin/crate"
+#endif

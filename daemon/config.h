@@ -37,6 +37,16 @@ struct Config {
   unsigned tcpPort = 9800;
   std::string tcpBind = "0.0.0.0";
 
+  // 0.8.19: filesystem-perm gate on the unix socket. Empty owner/
+  // group leaves the post-bind state at whatever the OS umask
+  // produced (typically root:wheel). Operators tighten access by
+  // setting `listen.unix_owner` / `listen.unix_group` /
+  // `listen.unix_mode` in crated.conf. See SocketPermsPure for
+  // validation; resolution of name -> uid/gid happens at startup.
+  std::string unixSocketOwner;
+  std::string unixSocketGroup;
+  unsigned    unixSocketMode = 0660;
+
   // TLS (for TCP listener)
   std::string tlsCert;
   std::string tlsKey;

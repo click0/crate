@@ -79,6 +79,13 @@ enum class Action {
   GetContainer,          // GET  /v1/control/containers/:name
   GetContainerStats,     // GET  /v1/control/containers/:name/stats
   PatchResources,        // PATCH /v1/control/containers/:name/resources
+  // 0.8.13: lifecycle endpoints on control sockets. admin role
+  // required (same gate as PatchResources). Each one runs through
+  // the existing lifecycle.cpp / commands.h functions but reachable
+  // via filesystem perms instead of the bearer-token main API.
+  PostStart,             // POST /v1/control/containers/:name/start
+  PostStop,              // POST /v1/control/containers/:name/stop
+  PostRestart,           // POST /v1/control/containers/:name/restart
 };
 
 struct ParsedRoute {

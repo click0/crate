@@ -3,14 +3,17 @@
 #include "audit.h"
 #include "audit_pure.h"
 #include "args.h"
+#include "capsicum_ops.h"
 #include "config.h"
 #include "util.h"
 #include "err.h"
 
 #include <fcntl.h>
 #include <pwd.h>
+#include <syslog.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cstring>
 #include <ctime>
 #include <iostream>
@@ -79,6 +82,8 @@ static AuditPure::Event makeEvent(int argc, char **argv, const Args &args,
   case CmdRetune:   ev.cmd = "retune";    break;
   case CmdThrottle: ev.cmd = "throttle";  break;
   case CmdDoctor:   ev.cmd = "doctor";    break;
+  case CmdVmWrap:   ev.cmd = "vm-wrap";   break;
+  case CmdUpdate:   ev.cmd = "update";    break;
   default:          ev.cmd = "?";
   }
 
@@ -107,10 +112,21 @@ static bool isReadOnly(Command c) {
   }
 }
 
+// 0.8.24: lazily initialise the casper syslog channel so the first
+// audit-logged command pays for it once. Subsequent calls are
+// branch-free. CapsicumOps::logSyslog falls back to plain syslog(3)
+// if HAVE_CAPSICUM isn't built in, so this initialisation is a
+// no-op there but harmless. We hold a flag rather than checking
+// initCapSyslog's idempotency contract.
+static std::atomic<bool> g_capSyslogInited{false};
+
 static void writeRecord(const AuditPure::Event &ev) {
   auto &cfg = Config::get();
   if (cfg.logs.empty())
     return;
+  auto line = AuditPure::renderJson(ev) + "\n";
+
+  // Path A: file write to $logs/audit.log.
   auto path = cfg.logs + "/audit.log";
 
   // Best-effort: ensure logs dir exists. Failure here -> drop the
@@ -120,14 +136,28 @@ static void writeRecord(const AuditPure::Event &ev) {
   int fd = ::open(path.c_str(),
                   O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
                   0640);
-  if (fd < 0)
-    return;
+  if (fd >= 0) {
+    // Single write() is atomic per POSIX for size <= PIPE_BUF (4096).
+    // A single audit JSON line stays well under that.
+    (void)::write(fd, line.data(), line.size());
+    ::close(fd);
+  }
 
-  auto line = AuditPure::renderJson(ev) + "\n";
-  // Single write() is atomic per POSIX for size <= PIPE_BUF (4096).
-  // A single audit JSON line stays well under that.
-  (void)::write(fd, line.data(), line.size());
-  ::close(fd);
+  // Path B: 0.8.24 — dual-write to syslog when the operator opted
+  // in via audit_syslog: true. Routes through cap_syslog when
+  // available so the path stays usable after a future cap_enter().
+  // Failures here are silent — the file write is the system of
+  // record; syslog is a convenience fan-out for ops dashboards.
+  if (cfg.auditSyslog) {
+    if (!g_capSyslogInited.exchange(true)) {
+      if (CapsicumOps::available())
+        CapsicumOps::initCapSyslog();
+    }
+    // Strip trailing newline — syslog adds its own framing.
+    auto msg = line;
+    if (!msg.empty() && msg.back() == '\n') msg.pop_back();
+    CapsicumOps::logSyslog(LOG_AUTH | LOG_NOTICE, msg);
+  }
 }
 
 void logStart(int argc, char **argv, const Args &args) {
