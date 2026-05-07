@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdBackupPrune, CmdReplicate, CmdTemplate, CmdRetune, CmdThrottle, CmdDoctor, CmdVmWrap};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdBackupPrune, CmdReplicate, CmdTemplate, CmdRetune, CmdThrottle, CmdDoctor, CmdVmWrap, CmdUpdate};
 
 class Args {
 public:
@@ -169,6 +169,12 @@ public:
   std::string throttleQueue;         // --queue (slot count or "100KB")
   bool        throttleClear = false; // --clear: drop pipes + binds
   bool        throttleShow = false;  // --show: dump pipe state
+
+  // update parameters (0.8.41)
+  std::string updateTarget;          // positional: jail name or JID
+  bool        updatePkgOnly = false; // --pkg-only: pkg upgrade only (mandatory for now)
+  bool        updateDryRun  = false; // -n/--dry-run: show what would be upgraded
+  bool        updateAssumeYes = false; // -y/--yes: pkg upgrade -y (skip confirmation)
 
   // vm-wrap parameters (bhyve jailer)
   std::string vmWrapVmName;          // positional: bhyve VM name

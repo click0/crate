@@ -23,6 +23,7 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/create.cpp lib/run.cpp \
            lib/ip6_alloc_pure.cpp lib/network_lease6.cpp \
            lib/spec_registry_pure.cpp lib/spec_registry.cpp \
            lib/zfs_dataset_pure.cpp lib/zfs_dataset.cpp \
+           lib/update.cpp \
            lib/auto_fw_pure.cpp \
            lib/net_detect_pure.cpp lib/net_detect.cpp \
            lib/share_pure.cpp \

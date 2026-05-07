@@ -19,7 +19,7 @@ if [ -n "$BASH_VERSION" ]; then
                     snapshot export import gui stack stats logs \
                     stop restart top inter-dns vpn inspect migrate \
                     backup restore backup-prune replicate template \
-                    retune throttle doctor vm-wrap"
+                    retune throttle doctor vm-wrap update"
     local global_opts="-h --help -V --version --no-color -p --log-progress"
 
     case "$prev" in
@@ -143,6 +143,10 @@ if [ -n "$BASH_VERSION" ]; then
         COMPREPLY=( $(compgen -W "--jail --dataset --tap --nmdm --path --ruleset --output-dir -h --help" -- "$cur") )
         return
         ;;
+      update)
+        COMPREPLY=( $(compgen -W "--pkg-only -n --dry-run -y --yes -h --help" -- "$cur") )
+        return
+        ;;
       -s|--spec)
         COMPREPLY=( $(compgen -f -X '!*.yml' -- "$cur") )
         return
@@ -208,6 +212,7 @@ if [ -n "$ZSH_VERSION" ]; then
       'throttle:dummynet token-bucket network shaping'
       'doctor:health check for crate host'
       'vm-wrap:bhyve jailer; render devfs ruleset + jail.conf'
+      'update:in-place pkg upgrade in a running jail'
     )
 
     _arguments -C \
@@ -416,6 +421,14 @@ if [ -n "$ZSH_VERSION" ]; then
               '--output-dir[write artefacts to DIR]:dir:_files -/' \
               '(-h --help)'{-h,--help}'[show help]' \
               '1:vmname:'
+            ;;
+          update)
+            _arguments \
+              '--pkg-only[mandatory; pkg upgrade only]' \
+              '(-n --dry-run)'{-n,--dry-run}'[dry-run via pkg upgrade -n]' \
+              '(-y --yes)'{-y,--yes}'[skip pkg confirmation]' \
+              '(-h --help)'{-h,--help}'[show help]' \
+              '1:jail:'
             ;;
           vpn)
             _arguments \

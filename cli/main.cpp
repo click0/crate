@@ -304,6 +304,9 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdVmWrap: {
     succ = vmWrapCommand(args);
     break;
+  } case CmdUpdate: {
+    succ = updateCommand(args);
+    break;
   } case CmdNone: {
     break; // impossible
   }}

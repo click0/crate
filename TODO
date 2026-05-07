@@ -12,15 +12,13 @@ operational quality.)
 
 === Medium priority — operational quality ===
 
-* (feature) `crate update TARGET --pkg-only` — in-place pkg upgrade
-  inside a running jail without full recreate. Today operators
-  re-run `crate create` + `crate run` to pick up new package
-  versions, which loses session state and warm caches. The
-  `--pkg-only` variant runs `pkg upgrade` inside the jail via
-  jexec, then restarts the foreground command if needed.
-  Full base-system update is a separate larger item (it touches
-  /usr/lib, /usr/sbin, etc. while the jail is using them — needs
-  the snapshot-and-rollback dance).
+* (feature, partial) `crate update TARGET --pkg-only` — in-place
+  pkg upgrade inside a running jail. *Shipped in 0.8.41.* Runs
+  `pkg upgrade [-n] [-y]` via jexec(8); jail keeps running.
+  Full base-system update remains open: it would need a
+  snapshot-and-rollback dance because /usr/lib, /usr/sbin, /lib
+  are in use by the jail's running processes. Tracked as a
+  separate larger item.
 
 * (feature, partial) Hub scheduling — automatic container placement
   on the least-loaded host. *Endpoint shipped in 0.8.40* —

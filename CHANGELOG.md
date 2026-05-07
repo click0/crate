@@ -6,6 +6,101 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.41] — 2026-05-07
+
+`crate update TARGET --pkg-only` — in-place pkg upgrade inside a
+running jail. Closes the medium-priority TODO item (the full
+base-system update remains open, see "What this release does NOT
+do" below).
+
+### Operator pain pre-0.8.41
+
+To pick up new package versions, operators had to:
+
+1. `crate stop myapp`
+2. Edit the spec / use a fresh tag
+3. `crate create -s myapp.yml -o myapp.crate`
+4. `crate run -f myapp.crate`
+
+…losing the jail's in-memory state, warm caches, open tabs / DB
+connections, and any RAM-backed data. For a long-running web app
+or postgres, that's a non-trivial outage every time you want a
+security patch.
+
+### What 0.8.41 ships
+
+```sh
+% sudo crate update myapp --pkg-only -n     # see what's pending
+update: pkg upgrade in jail 'myapp' (jid 5) (dry-run)
+The following 3 package(s) will be upgraded:
+  curl: 8.5.0 -> 8.7.1
+  nginx: 1.24.0_1 -> 1.26.0
+  ...
+update: dry-run complete; nothing applied
+
+% sudo crate update myapp --pkg-only -y     # apply, skip confirm
+update: pkg upgrade in jail 'myapp' (jid 5)
+[5/5] Fetching ... done
+[5/5] Installing ... done
+update: pkg upgrade succeeded in 'myapp'
+```
+
+The jail keeps running through the upgrade. `pkg upgrade`'s
+existing post-install scripts handle service restarts where
+appropriate (rc.d scripts, package-shipped service definitions);
+for app-level reload, the operator's existing healthcheck /
+service-monitor hooks fire as usual.
+
+### Why `--pkg-only` is mandatory
+
+Full base-system update touches `/usr/lib`, `/usr/sbin`, `/lib`
+while the jail is using them — needs a snapshot+rollback dance
+plus a managed restart. That's a much bigger surface (file-by-
+file replacement strategy, library symbol-version checks, jail
+restart timing, recovery on partial failure). 0.8.41 commits to
+pkg-only so the contract is clear; a future release tackles the
+base-system path with the design pass it deserves.
+
+If the operator omits `--pkg-only`, validation rejects the
+command with a clear message:
+
+```
+error: `crate update` currently requires --pkg-only
+       (full base-system update tracked separately)
+```
+
+### Implementation
+
+- New `enum Command` value `CmdUpdate`, `Args.updateTarget /
+  updatePkgOnly / updateDryRun / updateAssumeYes` fields.
+- `lib/update.cpp::updateCommand` resolves the jail (name or
+  JID), validates `--pkg-only` is set, dispatches
+  `JailExec::execInJail(jid, [pkg, upgrade, [-n], [-y]])`.
+- Audit-log entry added (`ev.cmd = "update"`) — same shape as
+  other mutating commands so cron/eyeball auditors pick it up.
+- Bash + zsh completions updated.
+
+### What this release does NOT do
+
+- **Base-system update** — file-by-file replacement of
+  `/usr/lib/...` while the jail's processes hold those files
+  open is non-trivial. Tracked as a separate item; needs the
+  snapshot-and-rollback design pass.
+- **Auto-restart of foreground command** — pkg's post-install
+  scripts handle rc.d services; for the spec's `start: <cmd>`
+  foreground process, the operator runs `crate restart` if the
+  upgrade replaced the binary they're serving from. Adding
+  auto-restart is a behavioural choice with operator-config
+  implications (mid-upgrade outage vs. stale-binary risk);
+  defer.
+- **Rollback on failure** — pkg's atomic install model handles
+  partial failures within itself. Rollback to a pre-upgrade
+  snapshot needs the snapshot-and-rollback work above.
+
+1093/1093 unit tests pass locally.
+
+---
+
 ## [0.8.40] — 2026-05-07
 
 Hub scheduling — `GET /api/v1/scheduling/least-loaded` returns a

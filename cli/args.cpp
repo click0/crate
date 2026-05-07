@@ -67,6 +67,7 @@ static void usage() {
   std::cout << "  throttle TARGET --ingress R --egress R    dummynet token-bucket network shaping" << std::endl;
   std::cout << "  doctor [-j]                health check for crate host (kernel modules, commands, ZFS, jails, ...)" << std::endl;
   std::cout << "  vm-wrap VM --jail NAME     bhyve jailer: render devfs ruleset + jail.conf for a vnet enclosure" << std::endl;
+  std::cout << "  update TARGET --pkg-only   in-place pkg upgrade in a running jail (-n dry-run, -y auto-yes)" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -553,6 +554,31 @@ static void usageVmWrap() {
   std::cout << "" << std::endl;
 }
 
+static void usageUpdate() {
+  std::cout << "usage: crate update <jail> --pkg-only [-n|--dry-run] [-y|--yes]" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "In-place pkg upgrade inside a running jail. The jail keeps" << std::endl;
+  std::cout << "running through the upgrade — operator avoids the" << std::endl;
+  std::cout << "`crate stop` + spec-edit + `crate run` cycle and the" << std::endl;
+  std::cout << "session-state / warm-cache loss it implies." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Options:" << std::endl;
+  std::cout << "  --pkg-only             pkg upgrade only (mandatory; full base-system" << std::endl;
+  std::cout << "                         update is tracked separately, this release" << std::endl;
+  std::cout << "                         commits to pkg-only so the contract is clear)" << std::endl;
+  std::cout << "  -n, --dry-run          pass `-n` to pkg upgrade — list pending" << std::endl;
+  std::cout << "                         upgrades without applying anything" << std::endl;
+  std::cout << "  -y, --yes              pass `-y` to pkg upgrade — skip the" << std::endl;
+  std::cout << "                         interactive confirmation prompt" << std::endl;
+  std::cout << "  -h, --help             show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Examples:" << std::endl;
+  std::cout << "  crate update myapp --pkg-only -n          # see what's pending" << std::endl;
+  std::cout << "  crate update myapp --pkg-only -y          # apply, skip prompt" << std::endl;
+  std::cout << "  crate update myapp --pkg-only             # apply, prompt inside jail" << std::endl;
+  std::cout << "" << std::endl;
+}
+
 static void usageReplicate() {
   std::cout << "usage: crate replicate <jail> --to <[user@]host>" << std::endl;
   std::cout << "                       --dest-dataset <pool/jails/name>" << std::endl;
@@ -727,7 +753,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.8.40" << std::endl;
+        std::cout << "crate 0.8.41" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -738,7 +764,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.8.40" << std::endl;
+          std::cout << "crate 0.8.41" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -1482,6 +1508,26 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.vmWrapVmName = argv[a];
         } else {
           err("too many arguments for 'vm-wrap' command");
+        }
+        break;
+      case CmdUpdate:
+        if (auto argShort = isShort(argv[a])) {
+          switch (argShort) {
+          case 'h': usageUpdate(); exit(0);
+          case 'n': args.updateDryRun = true; break;
+          case 'y': args.updateAssumeYes = true; break;
+          default: err("unsupported short option '%s'", argv[a]);
+          }
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help"))           { usageUpdate(); exit(0); }
+          else if (strEq(argLong, "pkg-only"))  args.updatePkgOnly = true;
+          else if (strEq(argLong, "dry-run"))   args.updateDryRun = true;
+          else if (strEq(argLong, "yes"))       args.updateAssumeYes = true;
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.updateTarget.empty()) {
+          args.updateTarget = argv[a];
+        } else {
+          err("too many arguments for 'update' command");
         }
         break;
       }
