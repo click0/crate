@@ -26,6 +26,15 @@ struct Settings {
   std::string cache;              // default: /var/cache/crate
   std::string logs;               // default: /var/log/crate
 
+  // 0.8.24: dual-write audit events to syslog in addition to the
+  // file at $logs/audit.log. When HAVE_CAPSICUM is built in, the
+  // syslog path goes through the casper cap_syslog channel, which
+  // keeps working even after a future cap_enter() of crated.
+  // Default false — operators opt in via `audit_syslog: true` in
+  // crate.yml (or per-user crate.yml). The on-disk audit.log
+  // continues to be written either way.
+  bool        auditSyslog = false;
+
   // ZFS
   bool zfsEnable;                 // default: false
   std::string zfsZpool;           // default: ""

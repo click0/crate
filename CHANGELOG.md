@@ -6,6 +6,101 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.24] — 2026-05-07
+
+Wires `lib/capsicum_ops.cpp` (~136 LOC) — third and last of the
+orphaned units flagged by the 0.8.21 audit. Pre-0.8.24 the file
+built but production code never called any `CapsicumOps::*`
+function; operators with `HAVE_CAPSICUM` linked libcasper +
+cap_dns + cap_syslog and got nothing for it.
+
+### What this release adds
+
+**Audit-event dual-write to syslog via `cap_syslog`**, opt-in
+via a new `crate.yml` knob:
+
+```yaml
+# crate.yml
+audit_syslog: true
+```
+
+When set, `lib/audit.cpp` writes each audit event to the existing
+`$logs/audit.log` file *and* ships it to syslog at
+`LOG_AUTH | LOG_NOTICE` via `CapsicumOps::logSyslog`. The casper
+channel is initialised lazily (atomic flag — first audit-logged
+command pays for it once, subsequent ones are branch-free).
+
+When `HAVE_CAPSICUM` isn't built in, `logSyslog` falls back to
+plain `syslog(3)` — the operator still gets the dual-write,
+just without cap_enter resilience.
+
+The on-disk `audit.log` continues to be the system of record;
+syslog is a convenience fan-out for ops dashboards
+(rsyslog forwards, journald, syslog-ng filters, etc.).
+
+**`crate doctor` capsicum-casper check** under the existing
+`audit` category. Four outcomes:
+
+| `HAVE_CAPSICUM` | `audit_syslog` | Severity | Message |
+|---|---|---|---|
+| no  | no  | pass | "build doesn't include casper; audit log is file-only" |
+| no  | yes | warn | "fallback to plain syslog(3); loses cap_enter resilience" |
+| yes | no  | pass | "casper available; opt in with audit_syslog: true" |
+| yes | yes | pass | "casper available; audit dual-written to file + syslog" |
+
+### Why this wiring (and not the others)
+
+Looking at all four `CapsicumOps::` entry points:
+
+- `enterCapabilityMode()` — would freeze new fd opens; crated
+  spawns subprocess utilities (rctl, jail, jexec, ipfw) that
+  need `execve` to open more fds. Calling cap_enter on crated
+  itself would break those. Tracked as a "privsep daemon
+  refactor" follow-up.
+- `initCapDns / resolveDns` — DNS isn't on crate's hot path
+  (it's a jail manager, not a network client). No natural
+  caller.
+- `initCapSyslog / logSyslog` — **this** is the natural fit:
+  audit log is already a "ship event somewhere" surface; adding
+  a casper-resilient destination is direct value.
+- `limitFdRights` — already used directly by daemon/sandbox.cpp
+  since 0.7.14 (it didn't go through CapsicumOps because that
+  module wasn't wired yet; deduplication is a future cleanup).
+
+So `audit_syslog` is the one case where wiring CapsicumOps gives
+operators something they didn't have before, on existing code
+paths.
+
+### What this release does NOT do
+
+- **`cap_enter` on crated** — needs the privsep refactor
+  mentioned above. Tracked separately as low-priority.
+- **Replace `daemon/sandbox.cpp::applyListenerRights` with
+  `CapsicumOps::limitFdRights`** — both call the same
+  underlying `cap_rights_limit(2)`. Deduplication is a pure
+  refactor; deferred.
+- **Use `CapsicumOps::resolveDns` anywhere** — no caller in
+  crate's design space. The function stays as a building block
+  for any future code path that does need cap_dns DNS.
+
+1061/1061 unit tests pass locally.
+
+### Closes the 0.8.21 dead-code audit follow-up
+
+| Release | Orphaned unit wired |
+|---|---|
+| 0.8.22 | `lib/vnc_server.cpp` via `gui.vnc_native: true` + `releaseCpuset` cleanup |
+| 0.8.23 | `lib/drm_session.cpp` via `crate doctor` probe + future rootless prep |
+| 0.8.24 | `lib/capsicum_ops.cpp` via `audit_syslog: true` (this) |
+
+Three "lost-functionality" units now have at least one production
+caller. The audit's other findings (`NvProtocol`, native
+`ZfsOps`/`IfconfigOps`/`IpfwOps`/`PfctlOps` wrappers,
+`datasetForJail` duplication) remain open and can land in a
+future cleanup sprint.
+
+---
+
 ## [0.8.23] — 2026-05-07
 
 Wires `lib/drm_session.cpp` (~80 LOC) — second of three orphaned

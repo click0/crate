@@ -88,6 +88,11 @@ static void applyYaml(Settings &s, const YAML::Node &cfg) {
 
   if (cfg["compress_xz_options"]) s.compressXzOptions = cfg["compress_xz_options"].as<std::string>();
 
+  // 0.8.24: dual-write audit events to syslog when set. Routes
+  // through cap_syslog (CapsicumOps::logSyslog) when HAVE_CAPSICUM
+  // is built in, plain syslog(3) otherwise.
+  if (cfg["audit_syslog"])     s.auditSyslog = cfg["audit_syslog"].as<bool>();
+
   // Named networks: map of name -> network definition
   if (cfg["networks"] && cfg["networks"].IsMap()) {
     for (auto net : cfg["networks"]) {

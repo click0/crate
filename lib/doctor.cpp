@@ -11,7 +11,9 @@
 #include "args.h"
 #include "doctor_pure.h"
 #include "auto_fw_pure.h"
+#include "capsicum_ops.h"
 #include "commands.h"
+#include "config.h"
 #include "drm_session.h"
 #include "jail_query.h"
 #include "util.h"
@@ -563,34 +565,67 @@ void checkAutoFwRules(Report &r) {
 //   - libseat present + /dev/dri/card0 present + probe fails -> warn
 //     (seatd not running, user not on seat0, etc.)
 void checkDrmSession(Report &r) {
-  Check c;
-  c.category = "gui";
-  c.name = "drm-session-libseat";
-
   if (!DrmSession::available()) {
-    c.message = "crate built without WITH_LIBSEAT — DRM device "
-                "acquisition uses direct open(O_RDWR). Fine for "
-                "the setuid-root crate today; matters once "
-                "rootless containers ship.";
-    passCheck(r, c);
+    r.checks.push_back(passCheck("gui", "drm-session-libseat",
+      "crate built without WITH_LIBSEAT — DRM device acquisition "
+      "uses direct open(O_RDWR). Fine for the setuid-root crate "
+      "today; matters once rootless containers ship."));
     return;
   }
   struct stat st{};
   if (::stat("/dev/dri/card0", &st) != 0) {
-    c.message = "no /dev/dri/card0 on host — skipping libseat probe.";
-    passCheck(r, c);
+    r.checks.push_back(passCheck("gui", "drm-session-libseat",
+      "no /dev/dri/card0 on host — skipping libseat probe."));
     return;
   }
   if (DrmSession::probeDevice("/dev/dri/card0")) {
-    c.message = "libseat session opens and grabs /dev/dri/card0 — "
-                "rootless GPU jails will work once that path lands.";
-    passCheck(r, c);
+    r.checks.push_back(passCheck("gui", "drm-session-libseat",
+      "libseat session opens and grabs /dev/dri/card0 — rootless "
+      "GPU jails will work once that path lands."));
   } else {
-    c.message = "libseat compiled in but probeDevice('/dev/dri/card0') "
-                "failed. seatd not running, or current user not on "
-                "an active seat. `service seatd onestart` and re-run "
-                "`crate doctor`.";
-    warnCheck(r, c);
+    r.checks.push_back(warnCheck("gui", "drm-session-libseat",
+      "libseat compiled in but probeDevice('/dev/dri/card0') "
+      "failed. seatd not running, or current user not on an active "
+      "seat. `service seatd onestart` and re-run `crate doctor`."));
+  }
+}
+
+// 0.8.24: Capsicum / casper sandbox readiness. Surfaces:
+//   - whether crate was built with HAVE_CAPSICUM at all
+//   - whether `audit_syslog: true` is wired (operator opt-in for
+//     dual-write of audit events to syslog via cap_syslog)
+// Doesn't actually open the cap_syslog channel here — that would
+// leave a dangling fd. The fact that the operator set
+// audit_syslog AND CapsicumOps is built in is the actionable
+// signal; runtime initialisation happens lazily in audit.cpp.
+void checkCapsicumSandbox(Report &r) {
+  bool capsicum = CapsicumOps::available();
+  bool wantSyslog = Config::get().auditSyslog;
+
+  if (!capsicum && wantSyslog) {
+    r.checks.push_back(warnCheck("audit", "capsicum-casper",
+      "audit_syslog: true but crate built without HAVE_CAPSICUM — "
+      "falling back to plain syslog(3) (still works; loses "
+      "cap_enter resilience)."));
+    return;
+  }
+  if (!capsicum) {
+    r.checks.push_back(passCheck("audit", "capsicum-casper",
+      "crate built without HAVE_CAPSICUM — audit log writes to "
+      "file only. Set HAVE_CAPSICUM at build time + audit_syslog: "
+      "true in crate.yml to also ship audit events to syslog via "
+      "cap_syslog."));
+    return;
+  }
+  if (wantSyslog) {
+    r.checks.push_back(passCheck("audit", "capsicum-casper",
+      "casper available; audit_syslog: true — audit events are "
+      "dual-written to file + syslog via cap_syslog."));
+  } else {
+    r.checks.push_back(passCheck("audit", "capsicum-casper",
+      "casper available but audit_syslog: false (default). Set "
+      "audit_syslog: true in crate.yml to ship audit events to "
+      "syslog in addition to file."));
   }
 }
 
@@ -609,6 +644,7 @@ bool doctorCommand(const Args &args) {
   checkIpfwReservedRanges(r);      // 0.8.14
   checkRctlPresence(r);            // 0.8.14
   checkDrmSession(r);              // 0.8.23
+  checkCapsicumSandbox(r);         // 0.8.24
 
   if (args.doctorJson) {
     std::cout << DoctorPure::renderJson(r) << std::endl;
