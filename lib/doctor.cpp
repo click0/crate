@@ -15,8 +15,12 @@
 #include "commands.h"
 #include "config.h"
 #include "drm_session.h"
+#include "ifconfig_ops.h"
+#include "ipfw_ops.h"
 #include "jail_query.h"
+#include "pfctl_ops.h"
 #include "util.h"
+#include "zfs_ops.h"
 #include "err.h"
 
 #include <sys/stat.h>
@@ -598,6 +602,44 @@ void checkDrmSession(Report &r) {
 // leave a dangling fd. The fact that the operator set
 // audit_syslog AND CapsicumOps is built in is the actionable
 // signal; runtime initialisation happens lazily in audit.cpp.
+// 0.8.26: native subsystem-API availability. Each of these
+// namespaces has a `bool available()` predicate compiled at build
+// time (true when the corresponding HAVE_* macro was defined +
+// the library linked). The runtime falls back to fork+exec'ing
+// the equivalent shell utility (zfs(8), ifconfig(8), pfctl(8),
+// ipfw(8)) when the native path isn't available.
+//
+// We surface the build matrix to operators via `crate doctor` so
+// they can see the perf characteristics of their build at a
+// glance. No runtime change — just visibility.
+//
+// All four checks emit pass severity (informational); fork+exec
+// is a fully-supported path, just slower per-call. Operators
+// who care about latency can rebuild with the appropriate
+// HAVE_LIB* macros and the runtime will pick up the native
+// path on next invocation.
+void checkNativeApis(Report &r) {
+  r.checks.push_back(passCheck("native-api", "libzfs",
+    ZfsOps::available()
+      ? "linked — snapshot/clone/jail-attach skip fork+exec'ing zfs(8)"
+      : "not linked — falls back to /sbin/zfs (rebuild with HAVE_LIBZFS=1 to skip fork+exec)"));
+
+  r.checks.push_back(passCheck("native-api", "libifconfig",
+    IfconfigOps::available()
+      ? "linked — interface ops skip fork+exec'ing ifconfig(8)"
+      : "not linked — falls back to /sbin/ifconfig (rebuild with HAVE_LIBIFCONFIG=1)"));
+
+  r.checks.push_back(passCheck("native-api", "libpfctl",
+    PfctlOps::available()
+      ? "linked — pf anchor + rule ops skip fork+exec'ing pfctl(8)"
+      : "not linked — falls back to /sbin/pfctl (rebuild with HAVE_LIBPFCTL=1)"));
+
+  r.checks.push_back(passCheck("native-api", "ipfw-native",
+    IpfwOps::available()
+      ? "kernel ipfw socket reachable — rule ops skip fork+exec'ing ipfw(8)"
+      : "kernel ipfw not loaded or not reachable — rule ops fork+exec /sbin/ipfw"));
+}
+
 void checkCapsicumSandbox(Report &r) {
   bool capsicum = CapsicumOps::available();
   bool wantSyslog = Config::get().auditSyslog;
@@ -645,6 +687,7 @@ bool doctorCommand(const Args &args) {
   checkRctlPresence(r);            // 0.8.14
   checkDrmSession(r);              // 0.8.23
   checkCapsicumSandbox(r);         // 0.8.24
+  checkNativeApis(r);              // 0.8.26
 
   if (args.doctorJson) {
     std::cout << DoctorPure::renderJson(r) << std::endl;

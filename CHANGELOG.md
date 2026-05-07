@@ -6,6 +6,87 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.26] — 2026-05-07
+
+Surfaces native-API build matrix via `crate doctor`. The 0.8.21
+audit found that `ZfsOps::available`, `IfconfigOps::available`,
+`PfctlOps::available`, `IpfwOps::available` were declared but
+never queried. They sit on top of substantial wrappers
+(libzfs / libifconfig / libpfctl / native ipfw socket) that the
+runtime does call into for the production code paths — when
+those libs are linked at build time. When they're not, the
+runtime fork+exec's the equivalent shell utility.
+
+Pre-0.8.26 the only way to know which path your build was on
+was to read `kldstat` + `pkg info -l crate | grep .so` and
+piece it together. Now `crate doctor` says it directly.
+
+### What this release adds
+
+A new `native-api` category in the doctor report with four
+checks:
+
+| Check | Reports |
+|---|---|
+| `libzfs` | linked → snapshot/clone/jail-attach skip fork+exec'ing zfs(8); else falls back to `/sbin/zfs` |
+| `libifconfig` | linked → interface ops skip fork+exec'ing ifconfig(8) |
+| `libpfctl` | linked → pf anchor + rule ops skip fork+exec'ing pfctl(8) |
+| `ipfw-native` | kernel ipfw socket reachable → rule ops skip fork+exec'ing ipfw(8) |
+
+All four emit `pass` severity (informational); fork+exec is a
+fully-supported path, just slower per-call. Operators who care
+about latency can rebuild with the appropriate `HAVE_LIB*`
+macros and the runtime picks up the native path on next
+invocation — no config change needed.
+
+`category` rank set to 10 in `lib/doctor_pure.cpp`'s sort table
+(after the existing `gui` rank from 0.8.23) so the four checks
+land in a contiguous block at the bottom of the report.
+
+### Why not "wire native APIs as opt-in via config"
+
+The audit's terse summary made it sound like the native APIs
+were entirely unwired ("`ZfsOps::*` declared but never called").
+Closer reading: only specific *functions* are unused
+(`ZfsOps::send / recv / mount / available`,
+`IfconfigOps::setInet6Addr / disableLroTso / setDown / setDescription /
+createVlan`, etc.). The high-traffic operations (`snapshot`,
+`clone`, `getMountpoint`, `jailDataset`, etc.) are already on
+the production runtime path through `lib/run.cpp`,
+`lib/snapshot.cpp`, `lib/run_jail.cpp`, `lib/run_net.cpp`.
+
+So there's no "lost runtime" to recover here — what's missing is
+**operator visibility** into which path their build is on. That's
+what the doctor check delivers.
+
+### What this release does NOT do
+
+- **Wire `ZfsOps::send / recv` into backup/replicate** — the
+  shell `zfs send | ssh ... 'zfs recv'` pipeline today is
+  battle-tested and handles errors consistently. Replacing it
+  with native fd-passing is a perf optimisation (avoids one
+  fork+exec per backup), not a "lost-functionality" fix.
+  Tracked separately if anyone needs the perf.
+- **Wire `JailQuery::execInJailChecked`** — the audit flagged
+  it as dead, but the production code uses a local `execInJail`
+  lambda in `lib/run.cpp` that captures `jid` + log progress
+  flag implicitly. Replacing with the namespace-scoped helper
+  would lose that capture; not worth it.
+- **Wire `RunJail::diagnoseExitReason / isOomKill /
+  wasKilledByRctl / getRctlUsagePercent`** — these are
+  diagnostic helpers for "why did this jail exit". Useful but
+  needs a hookpoint (e.g. `crate logs --diagnose`). Tracked
+  separately.
+- **Remove the per-function dead code** — keeping the unused
+  helpers in headers as scaffolding for the future use cases
+  above. Audit closure is achieved via documentation
+  (this CHANGELOG + per-namespace header comments shipped in
+  the previous releases).
+
+1070/1070 unit tests pass locally.
+
+---
+
 ## [0.8.25] — 2026-05-07
 
 Dedup of `datasetForJail` + `findLatestBackupSuffix` flagged by
