@@ -6,6 +6,61 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.32] — 2026-05-07
+
+Two small dead-code removals + one audit-finding correction.
+
+### Removed: `JailQuery::getJidByName`
+
+Declared in `lib/jail_query.h:39` and defined in
+`lib/jail_query.cpp:246`. Zero callers anywhere in the tree —
+verified by 6-pass grep against:
+
+1. namespace-prefixed callers (`JailQuery::getJidByName`)
+2. `using` declarations
+3. bare-name calls (would-be ADL pickups)
+4. test files (`tests/`)
+5. namespace-qualified `::getJidByName`
+6. final exhaustive `grep -rn 'getJidByName'`
+
+All six checks returned only the declaration + definition lines.
+Production paths use `JailQuery::getJailByName(name)->jid` which
+returns the full info struct in a single call. The deleted
+function was a thin one-liner over `::jail_getid(3)`; if a future
+caller needs it without the surrounding info, re-add then.
+
+### Moved: `RunNet::epairNumToIp` into file-static
+
+Declared in `lib/run_net.h:46` but only called from inside
+`lib/run_net.cpp` (lines 92, 93). Header export was redundant.
+Now `static` in the .cpp; symbol no longer leaks into other
+translation units.
+
+### Audit-finding correction: `JailQuery::execInJail*` does NOT exist
+
+The 0.8.21 dead-code audit flagged
+`JailQuery::execInJail / execInJailGetOutput / execInJailChecked`
+as orphaned. **That namespace doesn't have those functions** —
+the audit subagent confused a header line range
+(`lib/jail_query.h:49-59`) which is in the `JailExec` namespace,
+not `JailQuery`. All three `JailExec::execInJail*` are heavily
+used in production:
+
+| Function | Production callers |
+|---|---|
+| `JailExec::execInJail` | `lib/run.cpp:1654`, `lib/run.cpp:1697`, `lib/stack.cpp:1008` |
+| `JailExec::execInJailGetOutput` | `lib/info.cpp:115`, `lib/info.cpp:148`, `lib/lifecycle.cpp:119` |
+| `JailExec::execInJailChecked` | `lib/run.cpp:880` |
+
+So the only real dead-code from that audit flag was
+`getJidByName` (deleted in this release). Lesson: trust audits
+but verify with grep before deletion. Sprint protocol now
+enforces a 6-pass verification before any code removal.
+
+1070/1070 unit tests pass locally.
+
+---
+
 ## [0.8.31] — 2026-05-07
 
 **Bug-fix release.** Three operator-facing YAML keys were parsed

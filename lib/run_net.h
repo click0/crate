@@ -42,8 +42,9 @@ EpairInfo createEpair(int jid, const std::string &jidStr,
 // Destroy an epair interface (host side — jail side is auto-destroyed with jail)
 void destroyEpair(const std::string &ifaceA);
 
-// Convert epair number to 10.0.0.0/8 IP address
-std::string epairNumToIp(unsigned epairNum, unsigned ipIdx);
+// 0.8.32: epairNumToIp moved into anon namespace in run_net.cpp —
+// only called from within the file; no external callers in lib/,
+// daemon/, tests/, or hub/. Header declaration was redundant.
 
 // Set up ipfw NAT + filter rules for a container, returns cleanup callback.
 // fwSlot is allocated from Ctx::FwSlots.

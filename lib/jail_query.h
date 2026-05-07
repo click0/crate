@@ -35,8 +35,12 @@ std::optional<JailInfo> getJailByJid(int jid);
 // Returns empty string on failure.
 std::string getJailParam(int jid, const std::string &paramName);
 
-// Get jail JID by name; returns -1 if not found.
-int getJidByName(const std::string &name);
+// 0.8.32: getJidByName(name) deleted — was declared and defined
+// since 0.2.5 but had zero callers (production paths use
+// getJailByName(name)->jid instead, which gives the operator
+// the full info struct in the same call). Audit confirmed nothing
+// referenced it. The native ::jail_getid(3) call it wrapped is a
+// one-liner anyway; if a future caller needs it, re-add then.
 
 }
 
