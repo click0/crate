@@ -1572,7 +1572,16 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
                         << " " << Util::shellQuote(spec.runCmdExecutable) << spec.runCmdArgs << argsToString(argc, argv));
     int status = JailExec::execInJail(jid, {"/bin/sh", "-c", innerCmd}, user, "run command in jail");
     returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
-    LOG("command has finished in jail: returnCode=" << returnCode)
+    // 0.8.28: surface OOM / RCTL / signal context to the operator
+    // log so they don't have to correlate exit codes with rctl(8)
+    // by hand. diagnoseExitReason returns "exited normally" for
+    // clean exits — only log when something interesting happened.
+    if (returnCode != 0 || !WIFEXITED(status)) {
+      auto reason = RunJail::diagnoseExitReason(jid, status);
+      LOG("command has finished in jail: returnCode=" << returnCode << " (" << reason << ")")
+    } else {
+      LOG("command has finished in jail: returnCode=" << returnCode)
+    }
   } else {
     LOG("this is a service-only crate, install and run the command that exits on Ctrl-C")
     auto cmdFile = "/run.sh";
@@ -1606,6 +1615,16 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     {
       int status = JailExec::execInJail(jid, {cmdFile}, user, "run service command in jail");
       returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+      // 0.8.28: same OOM / RCTL diagnosis hook as the
+      // executable-mode path above. Service-only crates are MORE
+      // likely to hit RCTL (memoryuse caps trip after weeks of
+      // accumulating cache); the diagnosis line saves operators
+      // a syslog dive.
+      if (returnCode != 0 || !WIFEXITED(status)) {
+        auto reason = RunJail::diagnoseExitReason(jid, status);
+        LOG("service command has finished in jail: returnCode=" << returnCode
+            << " (" << reason << ")")
+      }
     }
     // Stop healthcheck monitor
     if (hcThread.joinable()) {

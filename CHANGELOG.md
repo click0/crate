@@ -6,6 +6,60 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.28] — 2026-05-07
+
+`RunJail::diagnoseExitReason` wired into `lib/run.cpp` post-exit
+logging — flagged as scaffolding by the 0.8.21 audit (the four
+diagnostic helpers `diagnoseExitReason`, `isOomKill`,
+`wasKilledByRctl`, `getRctlUsagePercent` were declared and tested
+but never called from production code).
+
+Pre-0.8.28, when a jail's command exited non-zero, the operator
+saw:
+
+```
+... command has finished in jail: returnCode=137
+```
+
+…and had to run `dmesg | grep -i kill`, `rctl -u jail:N`, and
+correlate timestamps to figure out whether the jail was OOM'd
+by RCTL, killed by an external signal, or just exited badly.
+
+Now the same path emits:
+
+```
+... command has finished in jail: returnCode=137 (OOM: killed by RCTL (memoryuse=536870912))
+```
+
+The diagnosis runs only on non-zero / signal-killed exits — clean
+exits keep the original one-liner. Both the executable-mode
+(`runCmdExecutable: ...`) and service-mode (`services: ...`)
+paths get the diagnosis.
+
+### What this release does NOT do
+
+- **Plumb the diagnosis into the audit log** — `audit.cpp::logEnd`
+  receives `errMsg` from `cli/main.cpp`'s exception catch, which
+  doesn't see the inner exit status. Surfacing diagnosis there
+  needs a `runCrate(...)` signature change to return raw status
+  alongside `returnCode`. Tracked separately.
+- **Wire `isOomKill` into the restart policy** — `cli/main.cpp`'s
+  on-failure restart only sees `returnCode`, not raw status.
+  Calling `isOomKill` from there would let the operator say
+  "restart only on OOM, not on clean failure" — useful but needs
+  the same plumbing as above.
+- **`crate stats --rctl-pressure`** — `getRctlUsagePercent` is
+  the foundation for a memory-pressure view in `crate stats`.
+  Tracked as a UX improvement.
+
+The four helpers stay as scaffolding for those follow-ups; this
+release just gives `diagnoseExitReason` its first production
+caller so it's no longer silent dead code.
+
+1070/1070 unit tests pass locally.
+
+---
+
 ## [0.8.27] — 2026-05-07
 
 Wires `lib/nv_protocol.cpp` (~116 LOC) — last orphaned unit
