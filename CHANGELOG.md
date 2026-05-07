@@ -6,6 +6,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.38] — 2026-05-07
+
+**Documentation-only release.** Cleanup of TODO/TODO2 to reflect
+the audit-closure sprint (0.8.22-0.8.37) and the broader "easy +
+medium" sprint before it.
+
+### What changed
+
+- **TODO:** moved `network: auto` and `gui: auto` from
+  "Medium priority" to "Done (removed)" — both shipped, the
+  `*Shipped*` annotations had become noise. Added concise
+  one-liners under "Done" pointing at the assembling releases.
+- **TODO:** added two new Medium-priority items that match the
+  state of the codebase:
+  - `crate update TARGET --pkg-only` — tractable single-release
+    in-place pkg upgrade; full base-system update remains big.
+  - Hub scheduling — `/api/v1/scheduling/least-loaded` endpoint
+    + CLI helper. Anti-flap notes included.
+- **TODO:** Low-priority items reframed as "future enhancements
+  (architectural)" with the explicit note that each is multi-week
+  / multi-release work, not suitable for one-shot sprints.
+- **TODO:** Unix-socket peer credentials item updated to reflect
+  0.8.19's filesystem-perm partial mitigation; clarifies what's
+  open (true getpeereid via cpp-httplib refactor).
+- **TODO:** known bug `bug#239590` (host-LAN inbound rejected by
+  ipfw) gets a concrete reproducer + likely fix outline. Tractable
+  in a single release; tracked for 0.8.39.
+- **TODO2:** `crate vm-wrap` (item B) marked as **SHIPPED in
+  0.8.16**. Item A (full bhyve backend) still open with the
+  original 2-3 week estimate.
+
+No code changes. Just clarity for future readers / contributors.
+
+---
+
 ## [0.8.37] — 2026-05-07
 
 `crate clean` now sweeps orphan ipfw rules and NAT instances in
