@@ -92,9 +92,14 @@ LIBS     += -lvirt
 endif
 ifdef WITH_LIBVNCSERVER
 CXXFLAGS += -DHAVE_LIBVNCSERVER
-LIB_SRCS += lib/vnc_server.cpp
 LIBS     += -lvncserver
 endif
+# 0.8.22: vnc_server.cpp is always compiled. Internal #ifdef
+# HAVE_LIBVNCSERVER stubs out the libvncserver-specific code so
+# VncServer::available() returns false on builds without libvncserver
+# and lib/run_gui.cpp's `gui.vnc_native: true` path falls back to
+# fork+exec'ing x11vnc with an operator-visible warning.
+LIB_SRCS += lib/vnc_server.cpp
 ifdef WITH_X11
 CXXFLAGS += -DHAVE_X11
 LIB_SRCS += lib/x11_ops.cpp

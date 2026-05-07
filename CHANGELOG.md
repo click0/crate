@@ -6,6 +6,85 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.22] — 2026-05-07
+
+Wires up two pieces of long-orphaned functionality flagged by the
+0.8.21 dead-code audit, plus a small `releaseCpuset` cleanup.
+Pre-0.8.22 these compilation units (`lib/vnc_server.cpp`,
+~109 LOC) were built when `WITH_LIBVNCSERVER=1` was set but
+never called from any production code path — the operator linked
+the library and got nothing for it.
+
+### `gui.vnc_native: true` — embedded libvncserver
+
+Operator opt-in to drop the `x11vnc` package dependency from the
+host. When set on a `gui:` block, `setupVncAndRegister` now
+calls `VncServer::start()` instead of fork+exec'ing `x11vnc`.
+
+```yaml
+gui:
+  mode: gpu
+  vnc: true
+  vnc_native: true     # 0.8.22: use embedded libvncserver
+  vnc_port: 5901
+  vnc_password: secret
+```
+
+The embedded server polls the X11 root window of the spawned
+display via `XGetImage` at ~25 FPS and copies the frame into
+the libvncserver framebuffer. Resolution is auto-detected via
+`XGetGeometry` at server-start time — no need to pre-supply
+width/height. Password handling, port allocation, and the
+RunAtEnd teardown contract match the existing x11vnc path so
+`gui list` / `gui url` keep working unchanged.
+
+Build matrix:
+
+| WITH_LIBVNCSERVER | WITH_X11 | Behaviour |
+|---|---|---|
+| set | set | full embedded VNC, X11 grab loop active |
+| set | unset | embedded VNC runs, framebuffer stays blank (warning logged); fall back is automatic |
+| unset | * | `VncServer::available()` returns false; runtime auto-falls back to `x11vnc` with warning |
+
+The Makefile change moves `lib/vnc_server.cpp` out of the
+`WITH_LIBVNCSERVER` conditional — the .cpp's internal
+`#ifdef HAVE_LIBVNCSERVER` guards already stub out the
+libvncserver-specific code, so the symbol always links.
+Without that, builds without libvncserver would fail to link
+because `lib/run_gui.cpp` references `VncServer::available()`
+unconditionally now.
+
+### `releaseCpuset` cleanup
+
+`lib/run.cpp:798` declared a `RunAtEnd releaseCpuset` that was
+never `.reset()`'d, so the named teardown was always a no-op.
+The variable predates 0.7.x. Replaced with an explicit comment
+noting that cpuset is jail-scoped and the kernel drops the
+binding when the jail dies (which `destroyJail` handles
+unconditionally). No behaviour change — just removes the
+misleading declaration so future readers don't mistake it for
+a wired teardown.
+
+### What this release does NOT do
+
+- **Mouse / keyboard input on the embedded VNC** — libvncserver
+  receives input events but we don't forward them to the X11
+  display via `XTest`. Operators get a view-only screen; for
+  interactive use, fall back to `gui.vnc_native: false`
+  (default). Tracked for 0.8.23 follow-up.
+- **Visual auto-detection** — the X11 grab assumes the host's
+  default visual matches the framebuffer layout (BGRA,
+  same bytes-per-line). Exotic visuals show colour-swapped
+  frames. Operator can fall back to x11vnc.
+- **`DrmSession` (libseat) wiring** — the other dead-code
+  finding from the 0.8.21 audit. Tracked for 0.8.23.
+- **`CapsicumOps` (cap_dns / cap_syslog) wiring** — third dead
+  finding. Tracked for 0.8.24.
+
+1061/1061 unit tests pass locally.
+
+---
+
 ## [0.8.21] — 2026-05-06
 
 Spec registry + control-plane PostStart. Closes the 0.8.13

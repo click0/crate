@@ -8,6 +8,7 @@
 #include "pathnames.h"
 #include "util.h"
 #include "x11_ops.h"
+#include "vnc_server.h"
 #include "err.h"
 
 #include <rang.hpp>
@@ -129,6 +130,43 @@ static inline std::string generateGpuXorgConf(unsigned displayNum,
 // Start x11vnc for a given display, return cleanup callback and set vncPort
 static RunAtEnd startVnc(unsigned displayNum, unsigned &vncPort,
                          const Spec &spec, bool logProgress) {
+  // 0.8.22: opt-in embedded VNC via libvncserver — drops the
+  // x11vnc package dependency. Falls back to x11vnc with a
+  // warning if the binary wasn't built with WITH_LIBVNCSERVER.
+  bool wantNative = spec.guiOptions && spec.guiOptions->vncNative;
+  if (wantNative && !VncServer::available()) {
+    std::cerr << rang::fg::yellow
+              << "gui.vnc_native: true but crate was built without "
+                 "WITH_LIBVNCSERVER — falling back to fork+exec x11vnc"
+              << rang::style::reset << std::endl;
+    wantNative = false;
+  }
+  if (wantNative) {
+    unsigned port = 5900 + displayNum;
+    if (spec.guiOptions && spec.guiOptions->vncPort != 0)
+      port = spec.guiOptions->vncPort;
+    port = findAvailablePort(port);
+    auto password = (spec.guiOptions ? spec.guiOptions->vncPassword : std::string());
+    unsigned actual = VncServer::start(displayNum, port, password);
+    if (actual == 0) {
+      std::cerr << rang::fg::yellow
+                << "gui.vnc_native: VncServer::start() returned 0 — "
+                   "falling back to fork+exec x11vnc"
+                << rang::style::reset << std::endl;
+    } else {
+      vncPort = actual;
+      if (logProgress)
+        std::cerr << rang::fg::gray << "started embedded VNC on display :"
+                  << displayNum << " port " << actual << rang::style::reset << std::endl;
+      return RunAtEnd([logProgress]() {
+        if (logProgress)
+          std::cerr << rang::fg::gray << "stopping embedded VNC server"
+                    << rang::style::reset << std::endl;
+        VncServer::stop();
+      });
+    }
+  }
+
   requireTool(CRATE_PATH_X11VNC, "x11vnc");
 
   unsigned port = 5900 + displayNum;

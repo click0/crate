@@ -1172,6 +1172,15 @@ static Spec parseSpecFromNode(YAML::Node top) {
         } else if (isKey(b, "vnc")) {
           if (!YAML::convert<bool>::decode(b.second, spec.guiOptions->vnc))
             ERR("gui/vnc must be a boolean")
+        } else if (isKey(b, "vnc_native") || isKey(b, "vnc-native")) {
+          // 0.8.22: prefer the embedded libvncserver-based VNC over
+          // fork+exec'ing x11vnc. Drops the x11vnc package
+          // dependency from the host. Requires WITH_LIBVNCSERVER
+          // (and ideally WITH_X11) at build time; if the binary
+          // wasn't built with libvncserver the runtime falls back
+          // to x11vnc with an operator-visible warning.
+          if (!YAML::convert<bool>::decode(b.second, spec.guiOptions->vncNative))
+            ERR("gui/vnc_native must be a boolean")
         } else if (isKey(b, "vnc_port") || isKey(b, "vnc-port")) {
           spec.guiOptions->vncPort = Util::toUInt(AsString(b.second));
         } else if (isKey(b, "novnc")) {

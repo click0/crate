@@ -794,8 +794,11 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   }
 
   // Apply CPU set restrictions via cpuset(1) (§8)
-  // Pins jail processes to specific CPUs (e.g., "0-3", "0,2,4")
-  RunAtEnd releaseCpuset;
+  // Pins jail processes to specific CPUs (e.g., "0-3", "0,2,4").
+  // No RunAtEnd needed — cpuset is jail-scoped, the kernel drops
+  // the binding when the jail dies (which destroyJail handles
+  // unconditionally above). Pre-0.8.22 this declared a stray
+  // RunAtEnd that was never reset; harmless but misleading.
   if (!spec.cpuset.empty()) {
     auto jidS = std::to_string(jid);
     Util::execCommand({CRATE_PATH_CPUSET, "-l", spec.cpuset, "-j", jidS},
