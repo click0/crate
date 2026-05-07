@@ -426,7 +426,7 @@ static void usageBackupPrune() {
 }
 
 static void usageDoctor() {
-  std::cout << "usage: crate doctor [-j|--json] [-h|--help]" << std::endl;
+  std::cout << "usage: crate doctor [-j|--json] [--refresh-cache] [-h|--help]" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Run a one-shot health check on the crate host: kernel modules," << std::endl;
   std::cout << "external commands, filesystem dirs + free space, ZFS pools," << std::endl;
@@ -435,6 +435,9 @@ static void usageDoctor() {
   std::cout << "Output format:" << std::endl;
   std::cout << "  default                   human-readable categorized table" << std::endl;
   std::cout << "  -j, --json                 machine-readable {checks: [...], summary}" << std::endl;
+  std::cout << "      --refresh-cache         drop NetDetect default-route cache before running" << std::endl;
+  std::cout << "                              (useful after upstream router restart; otherwise" << std::endl;
+  std::cout << "                              the process keeps the cached interface name)" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Exit codes:" << std::endl;
   std::cout << "  0   all checks PASS" << std::endl;
@@ -724,7 +727,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 0.8.34" << std::endl;
+        std::cout << "crate 0.8.35" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -735,7 +738,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 0.8.34" << std::endl;
+          std::cout << "crate 0.8.35" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
@@ -1435,6 +1438,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         } else if (auto argLong = isLong(argv[a])) {
           if (strEq(argLong, "help"))      { usageDoctor(); exit(0); }
           else if (strEq(argLong, "json")) args.doctorJson = true;
+          else if (strEq(argLong, "refresh-cache")) args.doctorRefreshCache = true;
           else err("unsupported long option '%s'", argv[a]);
         } else {
           err("'doctor' command takes no positional arguments");

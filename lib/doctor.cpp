@@ -18,6 +18,7 @@
 #include "ifconfig_ops.h"
 #include "ipfw_ops.h"
 #include "jail_query.h"
+#include "net_detect.h"
 #include "nv_protocol.h"
 #include "pfctl_ops.h"
 #include "util.h"
@@ -704,6 +705,15 @@ void checkCapsicumSandbox(Report &r) {
 } // anon
 
 bool doctorCommand(const Args &args) {
+  // 0.8.35: --refresh-cache drops in-memory caches before running
+  // checks. NetDetect caches the default-route interface for the
+  // process lifetime; under crated (long-lived daemon) operators
+  // running `crate doctor --refresh-cache` after rebooting the
+  // upstream router get an immediate re-detect rather than waiting
+  // for crated to restart. Cheap — just clears a static string.
+  if (args.doctorRefreshCache)
+    NetDetect::clearCache();
+
   Report r;
   checkKernelModules(r);
   checkCommands(r);

@@ -158,6 +158,7 @@ public:
 
   // doctor parameters
   bool doctorJson = false;             // -j/--json: machine-readable output
+  bool doctorRefreshCache = false;     // 0.8.35: --refresh-cache: drop NetDetect cache before running
 
   // throttle parameters (dummynet token-bucket network shaping)
   std::string throttleTarget;        // jail name or JID

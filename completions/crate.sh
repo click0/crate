@@ -136,7 +136,7 @@ if [ -n "$BASH_VERSION" ]; then
         return
         ;;
       doctor)
-        COMPREPLY=( $(compgen -W "-j --json -h --help" -- "$cur") )
+        COMPREPLY=( $(compgen -W "-j --json --refresh-cache -h --help" -- "$cur") )
         return
         ;;
       vm-wrap)

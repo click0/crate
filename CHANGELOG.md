@@ -6,6 +6,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.35] — 2026-05-07
+
+`crate doctor --refresh-cache` — drops the in-memory NetDetect
+default-route cache before running checks. Wires
+`NetDetect::clearCache` which was declared in 0.8.6 but had no
+caller until now.
+
+### Why operators want this
+
+`NetDetect::defaultIfaceCached` (0.8.6) parses
+`route -4 get default` once per process and caches the result.
+That's correct for `crate run` (one-shot) but inconvenient for
+**crated** which is a long-lived daemon — when the upstream
+router gets restarted and the host's default route shifts to a
+different interface, crated keeps using the cached old name
+until restart.
+
+```
+% sudo crate doctor --refresh-cache
+... (runs checks with fresh route -4 get default lookup) ...
+```
+
+The cache clear is cheap (one static-string assignment) and
+survives the doctor run, so subsequent `crate run` calls
+within the same process pick up the fresh value.
+
+### What this release does NOT do
+
+- **Hot-reload signal for crated** — refreshing the cache via
+  `crate doctor` is per-process. crated has its own NetDetect
+  cache that's separate. A SIGHUP handler that calls
+  `clearCache` on the daemon side is the natural follow-up;
+  not in scope here.
+- **Refresh-on-route-change** — kqueue + RTM_NEWADDR/RTM_DELADDR
+  notifications could auto-clear the cache. Significant
+  surface; deferred.
+- **Clear OTHER caches** — auto-fw kldstat probe, RCTL probe,
+  etc. Scope creep; one cache per release.
+
+1070/1070 unit tests pass locally.
+
+---
+
 ## [0.8.34] — 2026-05-07
 
 `crate clean` now sweeps spec-registry orphans — entries
