@@ -6,6 +6,67 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.6] — 2026-05-08
+
+**Rootless track, VNET interface configuration.** Seventh 0.9.x
+release — `configure_iface` / `teardown_iface` paired.
+
+- `Crated::handleConfigureIface` — assumes the iface (typically
+  `epair Nb`) already exists on host (operator created the epair
+  pair). Handler:
+  1. moves `ifname` into the jail's vnet
+     (`IfconfigOps::moveToVnet`)
+  2. inside the jail (jexec), sets ipv4 / ipv6 / MAC for fields
+     that are non-empty
+  3. inside the jail, brings the iface up
+  4. on the host side, attaches the pair-A half (computed from
+     `ifname` when it follows the `epair Nb` pattern) to the
+     requested bridge
+  - Bridge attach with non-epair `ifname` → 400 `non_epair_with_bridge`
+- `Crated::handleTeardownIface` — `IfconfigOps::destroyInterface`
+  on the host side. Iface still inside a jail → destroy fails;
+  operator should `ifconfig <iface> -vnet <jail>` first or rely
+  on jail teardown.
+- Pure response builders:
+  - `formatConfigureIfaceSuccess(jid, ifname, bridge, ipv4, ipv6, mac)` —
+    echoes back every field including empty optionals so operator
+    scripts can grep deterministically
+  - `formatTeardownIfaceSuccess(ifname)` →
+    `{"destroyed":true,"ifname":...}`
+
+Wire example:
+
+```http
+POST /api/v1/privops/configure_iface
+{"jid":5,"ifname":"epair0b","bridge":"bridge0",
+ "ipv4_cidr":"10.0.0.5/24","ipv6_cidr":"fd00::5/64",
+ "mac_addr":"02:00:11:22:33:44"}
+
+HTTP/1.1 200 OK
+{"configured":true,"jid":5,"ifname":"epair0b",
+ "bridge":"bridge0","ipv4_cidr":"10.0.0.5/24",
+ "ipv6_cidr":"fd00::5/64","mac_addr":"02:00:11:22:33:44"}
+
+POST /api/v1/privops/teardown_iface
+{"ifname":"epair0a"}
+
+HTTP/1.1 200 OK
+{"destroyed":true,"ifname":"epair0a"}
+```
+
+Failure modes: 400 parse / 400 validate / 400 non_epair_with_bridge /
+404 jail_not_found / 500 exec_failed (configure) / 500
+destroy_failed (teardown).
+
+Tests: 3 new ATF tests for response builders. Suite: 1195 →
+**1198**, all passing.
+
+Series progress: 9/12 verbs handled. Next: `add_pf_rule` /
+`remove_pf_rule` / `add_ipfw_rule` / `remove_ipfw_rule` +
+`create_jail` / `destroy_jail` in 0.9.7.
+
+---
+
 ## [0.9.5] — 2026-05-08
 
 **Rootless track, nullfs mount/unmount.** Sixth 0.9.x release —

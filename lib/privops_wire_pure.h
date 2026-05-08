@@ -229,4 +229,17 @@ std::string formatMountNullfsSuccess(const std::string &source,
                                      bool readOnly);
 std::string formatUnmountNullfsSuccess(const std::string &target);
 
+// 200 OK body for `configure_iface`. Echoes back the request so
+// operator scripting can verify exactly which fields were applied
+// (e.g. checking `ipv4_cidr` empty when only ipv6 was requested).
+std::string formatConfigureIfaceSuccess(long jid,
+                                        const std::string &ifname,
+                                        const std::string &bridge,
+                                        const std::string &ipv4Cidr,
+                                        const std::string &ipv6Cidr,
+                                        const std::string &macAddr);
+
+// 200 OK body for `teardown_iface`.
+std::string formatTeardownIfaceSuccess(const std::string &ifname);
+
 } // namespace PrivOpsWirePure

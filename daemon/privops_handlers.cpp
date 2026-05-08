@@ -2,6 +2,7 @@
 
 #include "privops_handlers.h"
 
+#include "ifconfig_ops.h"
 #include "jail_query.h"
 #include "pathnames.h"
 #include "retune_pure.h"
@@ -161,6 +162,90 @@ DispatchResult handleUnmountNullfs(const PrivOpsPure::UnmountNullfsReq &r) {
 #endif
 }
 
+// --- handleConfigureIface / handleTeardownIface ---
+
+namespace {
+
+// Compute the host-side epair half from an in-jail epair half name.
+// "epair0b" -> "epair0a"; "epair17a" -> "epair17b". Returns empty
+// string if the input doesn't look like an epair half name.
+std::string computeEpairPair(const std::string &ifname) {
+  // Pattern: "epair" + digits + 'a'|'b'
+  if (ifname.size() < 7) return "";
+  if (ifname.compare(0, 5, "epair") != 0) return "";
+  char last = ifname.back();
+  if (last != 'a' && last != 'b') return "";
+  for (size_t i = 5; i < ifname.size() - 1; i++)
+    if (ifname[i] < '0' || ifname[i] > '9') return "";
+  std::string out = ifname;
+  out.back() = (last == 'a') ? 'b' : 'a';
+  return out;
+}
+
+} // anon
+
+DispatchResult handleConfigureIface(const PrivOpsPure::ConfigureIfaceReq &r) {
+  auto jail = JailQuery::getJailByJid((int)r.jid);
+  if (!jail) {
+    return {404, PrivOpsWirePure::formatHandlerError(
+                  "jail_not_found",
+                  "no running jail with jid " + std::to_string(r.jid))};
+  }
+
+  try {
+    // 1. Move iface into the jail's vnet.
+    IfconfigOps::moveToVnet(r.ifname, (int)r.jid);
+
+    // 2. Inside the jail, set ipv4/ipv6/MAC and bring up.
+    auto jidStr = std::to_string(r.jid);
+    if (!r.ipv4Cidr.empty()) {
+      Util::execCommand({CRATE_PATH_JEXEC, jidStr, CRATE_PATH_IFCONFIG,
+                         r.ifname, "inet", r.ipv4Cidr},
+                        "set ipv4 in jail");
+    }
+    if (!r.ipv6Cidr.empty()) {
+      Util::execCommand({CRATE_PATH_JEXEC, jidStr, CRATE_PATH_IFCONFIG,
+                         r.ifname, "inet6", r.ipv6Cidr},
+                        "set ipv6 in jail");
+    }
+    if (!r.macAddr.empty()) {
+      Util::execCommand({CRATE_PATH_JEXEC, jidStr, CRATE_PATH_IFCONFIG,
+                         r.ifname, "ether", r.macAddr},
+                        "set MAC in jail");
+    }
+    Util::execCommand({CRATE_PATH_JEXEC, jidStr, CRATE_PATH_IFCONFIG,
+                       r.ifname, "up"},
+                      "bring iface up in jail");
+
+    // 3. Host-side: attach the pair-A half to the bridge.
+    if (!r.bridge.empty()) {
+      auto hostHalf = computeEpairPair(r.ifname);
+      if (hostHalf.empty()) {
+        return {400, PrivOpsWirePure::formatHandlerError(
+                      "non_epair_with_bridge",
+                      "bridge attach requires an epair-shaped ifname (got '"
+                      + r.ifname + "')")};
+      }
+      IfconfigOps::bridgeAddMember(r.bridge, hostHalf);
+    }
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("exec_failed", e.what())};
+  }
+
+  return {200, PrivOpsWirePure::formatConfigureIfaceSuccess(
+                  r.jid, r.ifname, r.bridge, r.ipv4Cidr, r.ipv6Cidr, r.macAddr)};
+}
+
+DispatchResult handleTeardownIface(const PrivOpsPure::TeardownIfaceReq &r) {
+  try {
+    IfconfigOps::destroyInterface(r.ifname);
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("destroy_failed",
+                                                     e.what())};
+  }
+  return {200, PrivOpsWirePure::formatTeardownIfaceSuccess(r.ifname)};
+}
+
 // --- Top-level dispatcher ---
 
 DispatchResult dispatchPrivOp(Verb v, const std::string &body) {
@@ -212,6 +297,22 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body) {
       if (auto e = PrivOpsPure::validateUnmountNullfs(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleUnmountNullfs(r);
+    }
+    case Verb::ConfigureIface: {
+      PrivOpsPure::ConfigureIfaceReq r;
+      if (auto e = PrivOpsWirePure::parseConfigureIface(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateConfigureIface(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleConfigureIface(r);
+    }
+    case Verb::TeardownIface: {
+      PrivOpsPure::TeardownIfaceReq r;
+      if (auto e = PrivOpsWirePure::parseTeardownIface(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateTeardownIface(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleTeardownIface(r);
     }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
