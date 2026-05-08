@@ -1,0 +1,38 @@
+##
+## Full LXQt 2.4 desktop environment in a container.
+## Provides a complete Qt-based desktop session via VNC/noVNC.
+## Lighter than XFCE/KDE Plasma — typical session ≈ 250-350 MB RSS.
+## Useful for remote development workstations and per-task desktops.
+##
+## Use: crate create -s lxqt-desktop.yml
+## After running: crate gui list ; crate gui url lxqt-desktop
+##
+
+---
+
+pkg:
+    install:
+        - lxqt
+        - qterminal
+        - dbus
+        - xdg-desktop-portal-lxqt
+
+run:
+    command: /usr/local/bin/startlxqt
+
+options:
+    - net
+    - x11
+    - gl
+    - video
+
+gui:
+    mode: auto
+    resolution: 1920x1080
+    vnc: true
+    novnc: true
+
+limits:
+    memoryuse: 1G
+    pcpu: 100
+    maxproc: 256
