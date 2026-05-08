@@ -300,6 +300,31 @@ ATF_TEST_CASE_BODY(parseWayland_rejects_paths_and_garbage)
 	ATF_REQUIRE_EQ(RunGuiPure::parseWaylandDisplay(toolong), std::string());
 }
 
+// --- 0.8.44: PipeWire socket list ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(pipewireSocketNames_lists_two_canonical);
+ATF_TEST_CASE_BODY(pipewireSocketNames_lists_two_canonical)
+{
+	auto names = RunGuiPure::pipewireSocketNames();
+	ATF_REQUIRE_EQ(names.size(), (size_t)2);
+	// Order matters: client API socket before manager.
+	ATF_REQUIRE_EQ(names[0], std::string("pipewire-0"));
+	ATF_REQUIRE_EQ(names[1], std::string("pipewire-0-manager"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(pipewireSocketNames_excludes_pulse_compat);
+ATF_TEST_CASE_BODY(pipewireSocketNames_excludes_pulse_compat)
+{
+	// pulse/native lives under a subdir of XDG_RUNTIME_DIR which
+	// the flat-bind strategy doesn't support yet. Belt-and-braces
+	// against an accidental future addition that breaks the binder.
+	auto names = RunGuiPure::pipewireSocketNames();
+	for (const auto &n : names) {
+		ATF_REQUIRE(n.find('/') == std::string::npos);
+		ATF_REQUIRE(n != "pulse");
+	}
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
 	// 0.8.18: gui: auto
@@ -329,4 +354,6 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, parseRes_zero_rejected);
 	ATF_ADD_TEST_CASE(tcs, parseRes_garbage);
 	ATF_ADD_TEST_CASE(tcs, parseRes_extra_chars);
+	ATF_ADD_TEST_CASE(tcs, pipewireSocketNames_lists_two_canonical);
+	ATF_ADD_TEST_CASE(tcs, pipewireSocketNames_excludes_pulse_compat);
 }

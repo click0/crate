@@ -129,6 +129,15 @@ std::string resolveAutoMode(bool displaySet, bool waylandSet, bool hasGpu) {
   return "headless";
 }
 
+std::vector<std::string> pipewireSocketNames() {
+  // pipewire-0:           main client API socket
+  // pipewire-0-manager:   admin/discovery socket (some clients
+  //                       open both; mute/level changes use it)
+  // PulseAudio compat (pulse/native) is intentionally omitted —
+  // see header comment.
+  return { "pipewire-0", "pipewire-0-manager" };
+}
+
 std::string parseWaylandDisplay(const std::string &waylandDisplayEnv) {
   if (waylandDisplayEnv.empty()) return "";
   // Reject anything that looks like a path — only basename form

@@ -6,6 +6,97 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.44] — 2026-05-08
+
+PipeWire socket bind for `gui: auto` — closes the silent
+audio-broken case for Wayland (and X11 + PipeWire) desktop
+jails.
+
+### The problem
+
+Pre-0.8.44, an operator who wrote `gui: auto` and ran firefox
+inside the jail saw video work (Wayland socket bound by 0.8.18,
+DRM unhid by 0.8.11) but **no sound** — WebRTC mute, Discord
+silent, video calls one-way. PipeWire's sockets weren't bound.
+This was a silent-broken-feature: the operator got no warning,
+just dead audio.
+
+### What this release adds
+
+`gui: auto` now also binds PipeWire sockets from the host's
+`$XDG_RUNTIME_DIR` into the jail's `/tmp/wayland/`:
+
+```
+host                                                 jail (in-mount)
+$XDG_RUNTIME_DIR/pipewire-0           <--nullfs-->   /tmp/wayland/pipewire-0
+$XDG_RUNTIME_DIR/pipewire-0-manager   <--nullfs-->   /tmp/wayland/pipewire-0-manager
+```
+
+Plus sets in-jail `XDG_RUNTIME_DIR=/tmp/wayland` (idempotent
+with the Wayland branch) so PipeWire's auto-discovery finds the
+sockets.
+
+Independent of Wayland: an X11 + PipeWire setup (legacy X
+session with modern audio stack) is also a valid configuration
+and the bind fires there too. Gated only on `gui: auto`.
+
+Best-effort: any individual socket missing on the host is
+skipped silently — operators on PulseAudio-only systems (no
+PipeWire) see no error or noise, just no audio bind. Hard
+failures (mount errors) log a yellow warning but don't abort
+the jail start.
+
+### Implementation
+
+Pure helper in `lib/run_gui_pure.{h,cpp}`:
+
+- `pipewireSocketNames()` — returns the fixed list
+  `["pipewire-0", "pipewire-0-manager"]`. Order matters
+  (libpipewire opens client API socket before manager).
+  Pure, testable; future audit can confirm the list against
+  `pkg info -l pipewire | grep .sock`.
+
+Runtime in `lib/run_gui.cpp` (parallel block to the existing
+Wayland binding from 0.8.18):
+
+- Iterate `pipewireSocketNames()`, skip any socket missing on
+  the host
+- Touch a placeholder file at the jail-side target (FreeBSD
+  nullfs needs an existing target)
+- `mount("nullfs", target, hostSock, MNT_IGNORE)`
+- Set `XDG_RUNTIME_DIR=/tmp/wayland` if any socket was bound
+
+2 new ATF unit cases:
+
+- `pipewireSocketNames_lists_two_canonical` — pin the order +
+  count
+- `pipewireSocketNames_excludes_pulse_compat` — defensive guard
+  against an accidental future `pulse/native` addition that
+  would break the flat-bind strategy (the path contains a slash;
+  belongs in a separate subdir bind)
+
+### What this release does NOT do
+
+- **PulseAudio compat socket (`pulse/native`)** — lives under
+  `$XDG_RUNTIME_DIR/pulse/`, requires a sub-directory bind. Most
+  modern apps use PipeWire native; PulseAudio compat tracked as
+  a follow-up if a real ask comes in.
+- **Operator opt-out** — there's no `gui.audio: false` flag.
+  Operators who want audio-isolated jails today must avoid
+  `gui: auto` and configure manually. Tracked.
+- **Doctor check** — `crate doctor` doesn't yet verify PipeWire
+  socket presence. Tracked for 0.8.45 (Wayland readiness check
+  will surface this together).
+- **PipeWire client perms** — same caveat as Wayland: sockets
+  are typically mode 0700 owned by the operator's UID. Jails
+  running as root (default without `user:` field) bypass perms
+  and work; jails with `user:` may hit permission-denied.
+  Documented in the 0.8.18 Wayland section; same applies here.
+
+1105/1105 unit tests pass locally.
+
+---
+
 ## [0.8.43] — 2026-05-08
 
 `crate-hub schedule <jail-name>` CLI helper — closes the
