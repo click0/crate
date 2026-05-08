@@ -8,8 +8,18 @@
 #include "util.h"
 #include "zfs_ops.h"
 
+#ifdef __FreeBSD__
+#include <sys/param.h>
+#include <sys/mount.h>
+#include <sys/uio.h>
+#endif
+#include <cstdlib>
+#include <cstring>
+#include <errno.h>
+
 #include <exception>
 #include <string>
+#include <vector>
 
 namespace Crated {
 
@@ -100,6 +110,57 @@ DispatchResult handleDetachZfs(const PrivOpsPure::DetachZfsReq &r) {
   return {200, PrivOpsWirePure::formatDetachZfsSuccess(r.jid, r.dataset)};
 }
 
+// --- handleMountNullfs / handleUnmountNullfs ---
+
+DispatchResult handleMountNullfs(const PrivOpsPure::MountNullfsReq &r) {
+#ifndef __FreeBSD__
+  return {500, PrivOpsWirePure::formatHandlerError(
+                "platform_unsupported",
+                "nullfs mount only supported on FreeBSD")};
+#else
+  // Mirror lib/mount.cpp's nmount(2) iov pattern. Names get
+  // strdup'd so we can free them after the call (nmount documents
+  // the iov is consumed but doesn't promise pointer ownership).
+  std::vector<iovec> iov;
+  auto add = [&iov](const char *name, void *value, size_t valLen) {
+    iov.push_back({::strdup(name), ::strlen(name) + 1});
+    iov.push_back({value, valLen});
+  };
+  char errmsg[256] = {0};
+  add("fstype", (void*)"nullfs", 7);
+  add("fspath", (void*)r.target.c_str(), r.target.size() + 1);
+  add("target", (void*)r.source.c_str(), r.source.size() + 1);
+  add("errmsg", errmsg, sizeof(errmsg));
+  int flags = r.readOnly ? MNT_RDONLY : 0;
+  int res = ::nmount(iov.data(), iov.size(), flags);
+  int savedErrno = errno;
+  for (size_t i = 0; i < iov.size(); i += 2)
+    ::free(iov[i].iov_base);
+  if (res != 0) {
+    std::string msg = ::strerror(savedErrno);
+    if (errmsg[0]) { msg += " ("; msg += errmsg; msg += ")"; }
+    return {500, PrivOpsWirePure::formatHandlerError("nmount_failed", msg)};
+  }
+  return {200, PrivOpsWirePure::formatMountNullfsSuccess(r.source, r.target, r.readOnly)};
+#endif
+}
+
+DispatchResult handleUnmountNullfs(const PrivOpsPure::UnmountNullfsReq &r) {
+#ifndef __FreeBSD__
+  return {500, PrivOpsWirePure::formatHandlerError(
+                "platform_unsupported",
+                "nullfs unmount only supported on FreeBSD")};
+#else
+  int flags = r.force ? MNT_FORCE : 0;
+  int res = ::unmount(r.target.c_str(), flags);
+  if (res == -1) {
+    return {500, PrivOpsWirePure::formatHandlerError("unmount_failed",
+                                                     ::strerror(errno))};
+  }
+  return {200, PrivOpsWirePure::formatUnmountNullfsSuccess(r.target)};
+#endif
+}
+
 // --- Top-level dispatcher ---
 
 DispatchResult dispatchPrivOp(Verb v, const std::string &body) {
@@ -135,6 +196,22 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body) {
       if (auto e = PrivOpsPure::validateDetachZfs(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleDetachZfs(r);
+    }
+    case Verb::MountNullfs: {
+      PrivOpsPure::MountNullfsReq r;
+      if (auto e = PrivOpsWirePure::parseMountNullfs(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateMountNullfs(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleMountNullfs(r);
+    }
+    case Verb::UnmountNullfs: {
+      PrivOpsPure::UnmountNullfsReq r;
+      if (auto e = PrivOpsWirePure::parseUnmountNullfs(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateUnmountNullfs(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleUnmountNullfs(r);
     }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
