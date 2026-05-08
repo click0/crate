@@ -498,7 +498,7 @@ The `templates/` directory provides ready-made base configurations:
 The `examples/` directory contains ready-to-use specifications:
 
 **Desktop applications:**
-firefox, chromium, gimp, thunderbird, meld, mpv, vlc, qbittorrent, qtox, telegram-desktop, xfce-desktop
+firefox, chromium, gimp, thunderbird, meld, mpv, vlc, qbittorrent, qtox, telegram-desktop, xfce-desktop, lxqt-desktop, lxqt-desktop-nested, lxqt-minimal, lxqt-wayland
 
 **Headless/GPU modes:**
 firefox-headless, firefox-gpu, chromium-headless, chromium-gpu, gimp-headless, blender-gpu, glxgears-gpu

@@ -6,6 +6,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.47] — 2026-05-08
+
+LXQt 2.4 desktop examples.
+
+Following the upstream LXQt 2.4.0 release (2026-04-20, which
+split X11 and Wayland session settings and refreshed the panel /
+session / runner components), four new specs land in
+`examples/` covering the multi-instance crate use case:
+
+- **`lxqt-desktop.yml`** — full session, `gui: auto` + VNC/noVNC
+  (workstation analogue of `xfce-desktop.yml`). Typical RSS
+  ≈ 250-350 MB; `limits.memoryuse=1G`.
+- **`lxqt-desktop-nested.yml`** — Xephyr (`gui: nested`) variant
+  for local "desktop walls" arranged via `crate gui tile`
+  (which only handles nested sessions).
+- **`lxqt-minimal.yml`** — slim stub: `lxqt-session` + panel +
+  runner + openbox. Aimed at stacking many instances; RSS
+  budget ≈ 512 MB per jail.
+- **`lxqt-wayland.yml`** — experimental placeholder for
+  `gui.mode: wayland` (added in 0.8.46). Marked as a stub
+  pending FreeBSD port maturity for `lxqt-wayland-session` and
+  a Wayland compositor (labwc / kwin / wayfire).
+
+No code changes — examples only. The existing GUI infrastructure
+(GuiRegistry display allocation, per-jail D-Bus isolation,
+PipeWire socket bind from 0.8.44, Wayland readiness check from
+0.8.45) already covers everything LXQt needs.
+
+README desktop-applications list updated in both EN and UK.
+
+---
+
 ## [0.8.46] — 2026-05-08
 
 Two small Wayland-track items:

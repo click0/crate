@@ -500,7 +500,7 @@ options:
 Каталог `examples/` містить готові специфікації:
 
 **Десктопні застосунки:**
-firefox, chromium, gimp, thunderbird, meld, mpv, vlc, qbittorrent, qtox, telegram-desktop, xfce-desktop
+firefox, chromium, gimp, thunderbird, meld, mpv, vlc, qbittorrent, qtox, telegram-desktop, xfce-desktop, lxqt-desktop, lxqt-desktop-nested, lxqt-minimal, lxqt-wayland
 
 **Headless/GPU режими:**
 firefox-headless, firefox-gpu, chromium-headless, chromium-gpu, gimp-headless, blender-gpu, glxgears-gpu
