@@ -718,6 +718,48 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
     }
   }
 
+  // 0.8.44: PipeWire socket bind for `gui: auto`. Independent of
+  // Wayland — X11 + PipeWire is also a valid setup (firefox+audio
+  // on a legacy X session). PipeWire reads from $XDG_RUNTIME_DIR
+  // by default, so we mount its sockets into the same /tmp/wayland
+  // directory that the Wayland branch above uses (and set
+  // XDG_RUNTIME_DIR=/tmp/wayland in the jail). Best-effort: any
+  // individual socket missing on the host is skipped silently
+  // (operator may not run PipeWire — PulseAudio-only systems have
+  // none of these files). The mkdir is idempotent (the Wayland
+  // branch may have already created it).
+  if (isAutoFlow && xdgRuntimeDir != nullptr) {
+    bool anyBound = false;
+    for (const auto &sockName : RunGuiPure::pipewireSocketNames()) {
+      auto hostSock = std::string(xdgRuntimeDir) + "/" + sockName;
+      if (!Util::Fs::fileExists(hostSock)) continue;
+      try {
+        Util::Fs::mkdirIfNotExists(J("/tmp/wayland"), 0700);
+        auto jailSockTarget = J("/tmp/wayland/") + sockName;
+        if (!Util::Fs::fileExists(jailSockTarget)) {
+          std::ofstream touch(jailSockTarget);   // empty mount target
+        }
+        mount(new Mount("nullfs", jailSockTarget, hostSock, MNT_IGNORE));
+        anyBound = true;
+        if (logProgress)
+          std::cerr << rang::fg::gray << "gui: auto: bound PipeWire socket "
+                    << hostSock << " -> " << jailSockTarget
+                    << rang::style::reset << std::endl;
+      } catch (const std::exception &ex) {
+        std::cerr << rang::fg::yellow
+                  << "gui: auto: failed to bind PipeWire socket "
+                  << hostSock << " (" << ex.what() << ")"
+                  << rang::style::reset << std::endl;
+      }
+    }
+    if (anyBound) {
+      // PipeWire reads XDG_RUNTIME_DIR; only set it here when the
+      // Wayland branch above didn't already (Wayland branch sets
+      // it to /tmp/wayland too — same value, idempotent).
+      setJailEnv("XDG_RUNTIME_DIR", "/tmp/wayland");
+    }
+  }
+
   // Register shared mode in GUI registry (for tracking)
   {
     auto regW = Ctx::GuiRegistry::lock();

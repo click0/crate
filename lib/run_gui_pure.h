@@ -8,6 +8,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 class Spec;
 
@@ -63,5 +64,24 @@ std::string resolveAutoMode(bool displaySet,
 //                          and need a different mount strategy)
 //   "../etc/passwd" -> "" (path traversal rejected)
 std::string parseWaylandDisplay(const std::string &waylandDisplayEnv);
+
+// 0.8.44: list of PipeWire socket files crate looks for under
+// $XDG_RUNTIME_DIR when wiring `gui: auto`. Files that don't
+// exist on a particular host are skipped silently — operators
+// running PulseAudio (no PipeWire) or systems without audio see
+// no error; the helper is best-effort.
+//
+// Order matters for two reasons:
+//   1. pipewire-0 must be bound before pipewire-0-manager;
+//      libpipewire opens them in this order.
+//   2. The list defines what `crate doctor` should report as
+//      "missing" vs "expected absent".
+//
+// Returned list is fixed and convention-based — PipeWire's socket
+// names aren't operator-configurable in the spec. PulseAudio
+// compat (pulse/native) is intentionally NOT in the list — it
+// lives under a subdir of $XDG_RUNTIME_DIR which our flat bind
+// strategy doesn't support yet; tracked for a follow-up.
+std::vector<std::string> pipewireSocketNames();
 
 }
