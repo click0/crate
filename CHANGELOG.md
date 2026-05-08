@@ -6,7 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [0.8.47] — 2026-05-08
+## [0.8.49] — 2026-05-08
 
 LXQt 2.4 desktop examples.
 
@@ -31,10 +31,156 @@ session / runner components), four new specs land in
 
 No code changes — examples only. The existing GUI infrastructure
 (GuiRegistry display allocation, per-jail D-Bus isolation,
-PipeWire socket bind from 0.8.44, Wayland readiness check from
-0.8.45) already covers everything LXQt needs.
+PipeWire socket bind from 0.8.44, PulseAudio compat from 0.8.47,
+env-sanitize XDG_RUNTIME_DIR fix from 0.8.48, Wayland readiness
+check from 0.8.45) already covers everything LXQt needs.
 
 README desktop-applications list updated in both EN and UK.
+
+---
+
+## [0.8.48] — 2026-05-08
+
+**Critical fix.** Env-sanitize at startup (`cli/main.cpp:42-69`)
+was wiping `XDG_RUNTIME_DIR` from the operator's shell. That
+broke the entire Wayland subsystem in setuid-prod since 0.8.18:
+the Wayland-bind / PipeWire-bind / PulseAudio-bind blocks all
+read `getenv("XDG_RUNTIME_DIR")` AFTER the wipe and got
+`nullptr`, so they silently no-op'd.
+
+Plus a small win on top of the fix: compositor-ID hint surfaced
+in the `wayland-readiness` doctor check.
+
+### The bug
+
+Pre-0.8.48 the env-sanitize block at line 42-69 wiped `environ`
+and rebuilt with a tight safelist:
+
+```cpp
+const char* term    = ::getenv("TERM");
+const char* display = ::getenv("DISPLAY");
+const char* wayland = ::getenv("WAYLAND_DISPLAY");
+const char* lang    = ::getenv("LANG");
+const char* xauth   = ::getenv("XAUTHORITY");
+const char* nocolor = ::getenv("NO_COLOR");
+// XDG_RUNTIME_DIR NOT preserved -> ::getenv() in setupX11
+//                                   returns nullptr in setuid-prod
+```
+
+`XDG_RUNTIME_DIR` was missed when the env-sanitize landed; later
+Wayland releases (0.8.18 / 0.8.44 / 0.8.45 / 0.8.47) all
+predicated their bind blocks on this env var being non-null.
+Result: the entire Wayland audio + video binding chain was a
+silent no-op for any setuid invocation. Operators reproducing
+locally without the setuid wrapper saw it work; under
+production install (setuid 04755) it didn't.
+
+This is exactly the class of bug we hunted in 0.8.31 — operator
+config (in this case `gui: auto`) parsed and validated cleanly,
+but the runtime silently dropped the binding.
+
+### Fix
+
+Add `XDG_RUNTIME_DIR` and `XDG_CURRENT_DESKTOP` to the env-
+sanitize preserve list:
+
+```cpp
+const char* xdgRun  = ::getenv("XDG_RUNTIME_DIR");
+const char* xdgCur  = ::getenv("XDG_CURRENT_DESKTOP");
+// ... wipe environ + safelist re-set ...
+if (xdgRun)  ::setenv("XDG_RUNTIME_DIR", xdgRun, 1);
+if (xdgCur)  ::setenv("XDG_CURRENT_DESKTOP", xdgCur, 1);
+```
+
+After this, all the Wayland releases since 0.8.18 actually do
+what their CHANGELOG entries claimed.
+
+### Compositor-ID hint (small win)
+
+`crate doctor wayland-readiness` now appends compositor identity
+from `XDG_CURRENT_DESKTOP` to the pass message:
+
+```
+gui   wayland-readiness   PASS    ready for `gui: auto` — Wayland
+                                  socket /var/run/user/1000/wayland-0 +
+                                  PipeWire core/manager present at
+                                  /var/run/user/1000 [compositor: sway]
+```
+
+Helps operators confirm doctor sees the right session — without
+the hint it's not obvious which compositor exposed the socket
+(Sway / Hyprland / KDE Plasma / GNOME / labwc).
+
+Hint added to two paths: the audio-silent-but-otherwise-ready
+pass and the fully-ready pass. Empty hint when env unset (SSH
+session, init script without DE bootstrap, etc.) — falls
+through silently.
+
+### What this release does NOT do
+
+- **Audit other env-sanitize gaps** — XDG_RUNTIME_DIR was the
+  obviously-broken one because it gated multiple bind blocks;
+  there could be others (e.g. `PIPEWIRE_RUNTIME_DIR` is
+  technically supported by libpipewire as an override but
+  defaulted from XDG_RUNTIME_DIR which we now preserve, so
+  fine in practice). A systematic audit is tracked.
+- **Tests for env preservation** — would need integration test
+  that exec's the setuid binary with a known env and checks
+  what made it through. Not in unit-test scope.
+- **Compositor-ID hint in failure paths** — only added to the
+  two pass paths where operator most cares about confirmation.
+
+1107/1107 unit tests pass locally.
+
+---
+
+## [0.8.47] — 2026-05-08
+
+PulseAudio compat socket bind for `gui: auto` / `gui: wayland`.
+Closes the gap left by 0.8.44 (PipeWire-only); apps still on
+PulseAudio (Discord, OBS Studio's PulseAudio backend, some
+legacy Qt apps) now get sound in the jail too.
+
+### What this release adds
+
+```
+host                                            jail
+$XDG_RUNTIME_DIR/pulse/native     <--nullfs-->  /tmp/wayland/pulse/native
+```
+
+The bind needs a sub-directory (`pulse/`) on the jail side
+because PulseAudio convention puts the socket inside that
+subdir; flat bind from 0.8.44 doesn't apply. crate creates
+`/tmp/wayland/pulse/` on demand at jail-start time, then
+nullfs-binds the socket file.
+
+`XDG_RUNTIME_DIR=/tmp/wayland` env in the jail (set by 0.8.18 /
+0.8.44 already) makes `libpulse` look in the right place
+without operator config.
+
+### Implementation
+
+- New pure helper `RunGuiPure::pulseSocketRelpath()` returns
+  `"pulse/native"` (single string — only one PulseAudio socket
+  per session). Distinct from `pipewireSocketNames()` which
+  returns flat names.
+- New runtime block in `lib/run_gui.cpp` after the PipeWire
+  block: detects sub-dir form via `find('/')`, creates the
+  parent (`/tmp/wayland/pulse/`) before touching the bind
+  target, then nullfs-binds.
+- 2 new ATF cases (canonical relpath, sub-dir-shape sanity).
+
+### What this release does NOT do
+
+- **`pulse/cli` inspector socket** — useful for `pactl
+  list-sinks` from inside the jail. Operators using
+  PulseAudio-native typically don't need pactl in-jail; we'd
+  add it as a list extension if a real ask comes in.
+- **Direct device access** (`/dev/dsp`, `/dev/sndstat`) —
+  some legacy apps want raw OSS. crate doesn't unhide audio
+  devfs entries today; tracked separately.
+
+1107/1107 unit tests pass locally.
 
 ---
 

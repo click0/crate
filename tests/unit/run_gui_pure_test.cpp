@@ -325,6 +325,32 @@ ATF_TEST_CASE_BODY(pipewireSocketNames_excludes_pulse_compat)
 	}
 }
 
+// --- 0.8.47: PulseAudio compat socket ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(pulseSocketRelpath_canonical);
+ATF_TEST_CASE_BODY(pulseSocketRelpath_canonical)
+{
+	// Pinning the relpath stops a future "let's switch to
+	// pulseaudio.sock" rename from sneaking past CI without
+	// updating ops docs.
+	ATF_REQUIRE_EQ(RunGuiPure::pulseSocketRelpath(),
+	               std::string("pulse/native"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(pulseSocketRelpath_has_subdir);
+ATF_TEST_CASE_BODY(pulseSocketRelpath_has_subdir)
+{
+	// Defensive: the runtime detects sub-dir form via the
+	// presence of '/' and creates the parent. If pulse/native
+	// ever loses its subdir (operator-supplied override?),
+	// the runtime fast-path would silently regress.
+	auto p = RunGuiPure::pulseSocketRelpath();
+	ATF_REQUIRE(p.find('/') != std::string::npos);
+	auto slash = p.find('/');
+	ATF_REQUIRE(slash > 0);                    // non-empty parent
+	ATF_REQUIRE(slash < p.size() - 1);         // non-empty basename
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
 	// 0.8.18: gui: auto
@@ -356,4 +382,6 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, parseRes_extra_chars);
 	ATF_ADD_TEST_CASE(tcs, pipewireSocketNames_lists_two_canonical);
 	ATF_ADD_TEST_CASE(tcs, pipewireSocketNames_excludes_pulse_compat);
+	ATF_ADD_TEST_CASE(tcs, pulseSocketRelpath_canonical);
+	ATF_ADD_TEST_CASE(tcs, pulseSocketRelpath_has_subdir);
 }

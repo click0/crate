@@ -84,4 +84,21 @@ std::string parseWaylandDisplay(const std::string &waylandDisplayEnv);
 // strategy doesn't support yet; tracked for a follow-up.
 std::vector<std::string> pipewireSocketNames();
 
+// 0.8.47: PulseAudio compatibility socket subpath under
+// $XDG_RUNTIME_DIR. Returned as a relative path with a slash
+// because PulseAudio convention puts its socket inside a
+// `pulse/` sub-directory:
+//   $XDG_RUNTIME_DIR/pulse/native
+// crate creates the in-jail `pulse/` sub-dir on demand and
+// nullfs-binds the socket file. Apps still using PulseAudio
+// rather than PipeWire native (Discord, OBS Studio's PulseAudio
+// backend, some legacy Qt apps) need this; modern firefox /
+// chromium prefer PipeWire and don't.
+//
+// Returned as a single string rather than a list because there's
+// only one PulseAudio socket per session (unlike PipeWire which
+// has core + manager). If a future need arises (pulse/cli for
+// inspector tools), promote to a list.
+std::string pulseSocketRelpath();
+
 }
