@@ -6,6 +6,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.42] — 2026-05-07
+
+**Documentation-only release.** Expanded the `Rootless containers`
+TODO entry with an honest assessment of the current setuid root
+hardening state, foundations already laid, and the actual scope
+of the refactor.
+
+### What changed
+
+The pre-0.8.42 TODO entry was a 7-line summary that read like
+"setuid root is bad, rootless is good". That framing
+mischaracterised the codebase — the current setuid model has the
+expected hardening for a 2026 setuid binary:
+
+- env-sanitization at startup (CWE-426 + CWE-250 explicitly cited)
+- absolute paths via `CRATE_PATH_*` for every external binary
+- all execs via `execv` with explicit argv (no shell, no
+  `system()`/`popen()` calls anywhere in the tree)
+- pure-module validators on every operator-supplied string
+- audit logging of every mutating command
+
+The new TODO entry:
+
+1. Names the current hardening explicitly so future readers
+   don't think rootless is "fixing security holes"
+2. Lists the three real reasons rootless still matters
+   (blast-radius reduction on hypothetical 3rd-party CVE,
+   multi-tenant safety, compliance "no setuid root" policies)
+3. Catalogs foundations already in the tree (0.6.4, 0.7.11,
+   0.7.14, 0.8.19, 0.8.21, 0.8.23, 0.8.24)
+4. Itemises the work needed (privileged-daemon protocol,
+   `lib/run.cpp` split, per-user resource namespacing, setuid
+   bit removal, docs, security-boundary tests)
+5. Estimates 4-6 weeks / ~10 point releases (0.9.0 → 1.0.0)
+6. Names the trigger conditions that would move it from
+   "tracked" to "current priority"
+
+No code changes. Just clarity for future readers / contributors
+considering picking the work up.
+
+---
+
 ## [0.8.41] — 2026-05-07
 
 `crate update TARGET --pkg-only` — in-place pkg upgrade inside a

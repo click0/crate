@@ -50,13 +50,82 @@ operational quality.)
 These items each represent multi-week / multi-release work. Not
 suitable for one-shot sprints; need their own design pass.
 
-* (feature) Rootless containers — crate is setuid root (04755).
-  Explore rootless jail via jail(8) with allow.nfds. Foundation
-  laid in 0.8.23 (`DrmSession::probeDevice` + `crate doctor`
-  libseat check) so operators can pre-validate seatd setup.
-  The actual rootless refactor touches: setuid bit removal,
-  capability re-acquisition path for jail_set/jail_remove,
-  uid-mapped ZFS dataset ownership, libseat-mediated DRM.
+* (feature) Rootless containers — multi-week refactor to remove
+  the setuid root bit from `crate(1)` and delegate privileged
+  operations to a daemon (`crated`).
+
+  Note on framing: the current setuid root model is NOT "leaky".
+  It has the expected hardening for a 2026 setuid binary —
+  env-sanitization at startup (CWE-426 + CWE-250 explicitly
+  cited in cli/main.cpp:42-69), absolute paths via CRATE_PATH_*
+  for every external binary, all execs go through execv with
+  explicit argv (no shell expansion, no system()/popen()
+  anywhere), pure-module validators on every operator-supplied
+  string (paths, iface names, datasets, ports, RCTL keys), and
+  audit logging of every mutating command. Single-tenant
+  homelab + single-tenant prod use cases are well-served.
+
+  Why rootless still matters:
+    - blast-radius reduction on hypothetical 3rd-party CVE
+      (yaml-cpp, libssl, tar) — exploit gets caller UID, not root
+    - multi-tenant safety — Alice can't `crate run` Bob's jail
+      (today the binary trusts whoever invokes it; filesystem
+      perms on /var/run/crate/ don't scope per-user)
+    - compliance "no setuid root binaries on host" policies
+
+  Foundations already in tree:
+    0.6.4   WebSocket console — separate listener (pattern for
+            replacing cpp-httplib with a hand-rolled accept loop)
+    0.7.11  Control sockets with getpeereid + per-group access
+            (per-operator unix sockets exist; multi-tenant gate
+            for control plane works today)
+    0.7.14  Capsicum sandbox (per-fd cap_rights_limit)
+    0.8.19  Filesystem-perm gate on main socket
+            (listen.unix_owner / unix_group / unix_mode)
+    0.8.21  Spec registry {name -> abs-path} so daemon knows
+            what to start without operator re-supplying -f
+    0.8.23  DrmSession::probeDevice via libseat — rootless DRM
+            access foundation
+    0.8.24  cap_syslog dual-write — audit resilient to a future
+            cap_enter() of crated
+
+  What the refactor needs:
+    - Privileged daemon protocol: extend control sockets for
+      the full operation set (create_jail, mount, set_rctl,
+      attach_zfs, configure_iface, add_pf_rule, add_ipfw_rule).
+      Per-verb argv validation on the daemon side — never trust
+      caller input. ~3-5 days.
+    - lib/run.cpp split (~1700 LOC currently) into "needs root"
+      → IPC to crated, and "doesn't" → inline. Big refactor;
+      ~1 week.
+    - Per-user resource namespacing:
+        * jail name prefix: <user>-<jailname>
+        * ZFS dataset prefix: per-user via crated.conf ACL
+        * Network pool sub-CIDR per user
+          (alice: 10.66.1.0/24, bob: 10.66.2.0/24, …)
+        * RCTL accounting groups per UID
+        * /var/run/crate/<uid>/ for per-user lease + log files
+      ~1 week.
+    - Setuid bit removal in Makefile install target
+      (-m 0755 instead of 04755). Migration path for legacy
+      setuid deployments — operator runs crated and switches
+      gradually.
+    - Documentation: docs/rootless-migration.md, crated.8 update,
+      multi-tenant operator config example. ~3-5 days.
+    - Tests for security boundaries (alice can't see bob's jails;
+      ZFS dataset escape attempts; pool-exhaustion DoS;
+      per-user audit filtering). ~1 week.
+
+  Estimated total: 4-6 weeks of focused work, splittable into
+  ~10 point releases (0.9.0 through 0.9.9, 1.0.0 to remove the
+  setuid bit by default). NOT a one-shot sprint.
+
+  Trigger: tracked. Not a current priority. Becomes urgent when
+  one of:
+    - a real multi-tenant operator request lands
+    - a compliance audit requires "no setuid root binaries"
+    - a high-severity CVE in a linked library makes the
+      blast-radius story acute
 
 * (feature) Layered images — ZFS-based layering through clones
   instead of monolithic .crate archives. Touches `crate create`,
