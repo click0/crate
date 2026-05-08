@@ -195,4 +195,23 @@ struct DispatchResult {
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body);
 
+// --- Per-verb success/error response builders ---
+//
+// Real handlers (landing 0.9.2..0.9.7) build their response bodies
+// through these. Keeping the JSON shape pure means the wire format
+// is locked down by tests, not by accident in handler code.
+
+// Generic 500 / 404 wrapper. Used by handlers when an upstream call
+// fails (rctl(8) returns non-zero, jail-not-found, etc.). The
+// `kind` token classifies the failure for operator-side log
+// triage (e.g. "exec_failed", "jail_not_found").
+std::string formatHandlerError(const std::string &kind,
+                               const std::string &reason);
+
+// 200 OK body for `set_rctl`. Operator gets confirmation of what
+// was applied — useful for `curl -X POST | jq` workflows.
+std::string formatSetRctlSuccess(long jid,
+                                 const std::string &key,
+                                 const std::string &rawValue);
+
 } // namespace PrivOpsWirePure

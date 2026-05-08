@@ -422,6 +422,27 @@ DispatchResult runVerb(const std::string &body,
 
 } // anon
 
+// --- Per-verb success/error builders ---
+
+std::string formatHandlerError(const std::string &kind,
+                               const std::string &reason) {
+  std::ostringstream o;
+  o << "{\"error\":\"" << escape(kind) << ": " << escape(reason) << "\"}";
+  return o.str();
+}
+
+std::string formatSetRctlSuccess(long jid,
+                                 const std::string &key,
+                                 const std::string &rawValue) {
+  std::ostringstream o;
+  o << "{\"set\":true"
+    << ",\"jid\":" << jid
+    << ",\"key\":\"" << escape(key) << "\""
+    << ",\"value\":\"" << escape(rawValue) << "\""
+    << "}";
+  return o.str();
+}
+
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body) {
   using namespace PrivOpsPure;
