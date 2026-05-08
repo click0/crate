@@ -1,0 +1,66 @@
+##
+## LXQt 2.4 Wayland session — EXPERIMENTAL STUB.
+##
+## LXQt 2.4.0 split X11 and Wayland session settings; the Wayland path
+## is still optional (lxqt-wayland-session) and depends on a separate
+## compositor (labwc / kwin_wayland / wayfire). On FreeBSD the Wayland
+## port surface for LXQt is not fully shaken out yet — treat this
+## example as a placeholder until the upstream port matures.
+##
+## Requires on the HOST:
+##   - WAYLAND_DISPLAY set (crate.mode=wayland refuses to start otherwise)
+##   - XDG_RUNTIME_DIR pointing at the user runtime dir
+##   - run `crate doctor` first; it will warn about missing pieces
+##
+## Inside the jail:
+##   - lxqt-wayland-session must be available (check pkg search)
+##   - a Wayland compositor must be installed and started before lxqt
+##
+## Use: crate create -s lxqt-wayland.yml
+##
+
+---
+
+pkg:
+    install:
+        - lxqt
+        - lxqt-wayland-session    # may not exist on FreeBSD yet — check pkg search
+        - labwc                    # alt: kwin, wayfire, sway
+        - qterminal
+        - dbus
+
+run:
+    ## STUB: real launcher script that starts the compositor first,
+    ## then exec's the LXQt Wayland session inside it.
+    command: /usr/local/bin/start-lxqt-wayland.sh
+
+scripts:
+    run:before-execute:
+        - |
+          cat > /usr/local/bin/start-lxqt-wayland.sh <<'SH'
+          #!/bin/sh
+          export XDG_SESSION_TYPE=wayland
+          export QT_QPA_PLATFORM=wayland
+          # labwc execs its child after the compositor is up
+          exec labwc -s "lxqt-session"
+          SH
+        - "chmod +x /usr/local/bin/start-lxqt-wayland.sh"
+
+options:
+    - net
+    - x11      # kept as fallback for Xwayland clients
+    - gl
+    - video
+
+gui:
+    mode: wayland
+    resolution: 1920x1080
+    ## VNC over Wayland needs a wayvnc-style bridge; left off until
+    ## the FreeBSD port story stabilises.
+    vnc: false
+    novnc: false
+
+limits:
+    memoryuse: 1G
+    pcpu: 100
+    maxproc: 256

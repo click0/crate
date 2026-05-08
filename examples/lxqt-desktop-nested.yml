@@ -1,0 +1,40 @@
+##
+## LXQt 2.4 desktop in a nested X server (Xephyr).
+## Each instance opens its own Xephyr window on the host's $DISPLAY.
+## Spawn several copies to build a local "wall" of isolated desktops,
+## then arrange them with `crate gui tile` (which only handles nested
+## sessions — VNC/noVNC sessions are not tiled).
+##
+## Workflow:
+##   for i in 1 2 3 4; do crate run -f lxqt-desktop-nested.crate & done
+##   crate gui tile
+##
+## Use: crate create -s lxqt-desktop-nested.yml
+##
+
+---
+
+pkg:
+    install:
+        - lxqt
+        - qterminal
+        - dbus
+        - xdg-desktop-portal-lxqt
+
+run:
+    command: /usr/local/bin/startlxqt
+
+options:
+    - net
+    - x11
+    - gl
+    - video
+
+gui:
+    mode: nested
+    resolution: 1280x800
+
+limits:
+    memoryuse: 1G
+    pcpu: 100
+    maxproc: 256

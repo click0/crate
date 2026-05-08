@@ -1,0 +1,45 @@
+##
+## Minimal LXQt session — just panel + session + a window manager.
+## Skips pcmanfm-qt desktop layer, lxqt-themes-extra, file-search etc.
+## Typical RSS ≈ 150-200 MB; designed for stacking many instances on
+## a single host (e.g. desktop-as-a-service farm).
+##
+## STUB: tune the package list to taste. Some operators swap openbox
+## for a tiling WM (i3, herbstluftwm) or use kwin_x11 for snappier
+## window decorations.
+##
+## Use: crate create -s lxqt-minimal.yml
+## After running: crate gui list ; crate gui url lxqt-minimal
+##
+
+---
+
+pkg:
+    install:
+        - lxqt-session
+        - lxqt-panel
+        - lxqt-runner
+        - qterminal
+        - openbox
+        - dbus
+
+run:
+    ## startlxqt brings the full session; for a slimmer boot launch
+    ## the components manually under a session bus. Uncomment one:
+    command: /usr/local/bin/startlxqt
+    # command: /usr/local/bin/dbus-launch --exit-with-session /usr/local/bin/lxqt-session
+
+options:
+    - net
+    - x11
+
+gui:
+    mode: headless
+    resolution: 1600x900
+    vnc: true
+    novnc: true
+
+limits:
+    memoryuse: 512M
+    pcpu: 75
+    maxproc: 128
