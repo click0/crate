@@ -3,11 +3,15 @@
 #include "privops_handlers.h"
 
 #include "ifconfig_ops.h"
+#include "ipfw_ops.h"
 #include "jail_query.h"
 #include "pathnames.h"
+#include "pfctl_ops.h"
 #include "retune_pure.h"
 #include "util.h"
 #include "zfs_ops.h"
+
+#include <sstream>
 
 #ifdef __FreeBSD__
 #include <sys/param.h>
@@ -246,6 +250,111 @@ DispatchResult handleTeardownIface(const PrivOpsPure::TeardownIfaceReq &r) {
   return {200, PrivOpsWirePure::formatTeardownIfaceSuccess(r.ifname)};
 }
 
+// --- handleAddPfRule / handleRemovePfRule ---
+
+DispatchResult handleAddPfRule(const PrivOpsPure::AddPfRuleReq &r) {
+  try {
+    PfctlOps::addRules(r.anchor, r.ruleText);
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("pfctl_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatAddPfRuleSuccess(r.anchor, r.ruleText)};
+}
+
+DispatchResult handleRemovePfRule(const PrivOpsPure::RemovePfRuleReq &r) {
+  // pfctl has no per-rule removal primitive; flush the anchor.
+  // The request's ruleText field is currently ignored — kept in
+  // the wire format for forward compat with a future per-rule
+  // verb.
+  try {
+    PfctlOps::flushRules(r.anchor);
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("pfctl_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatRemovePfRuleSuccess(r.anchor)};
+}
+
+// --- handleAddIpfwRule / handleRemoveIpfwRule ---
+
+DispatchResult handleAddIpfwRule(const PrivOpsPure::AddIpfwRuleReq &r) {
+  // Build `ipfw add <number> set <set> <action> <body>` argv
+  // directly so we honour the `set` field (IpfwOps::addRule
+  // doesn't take a set parameter — extending it would touch more
+  // of the codebase than this verb justifies).
+  try {
+    std::vector<std::string> argv = {
+      CRATE_PATH_IPFW, "add", std::to_string(r.number),
+      "set", std::to_string(r.set),
+      r.action,
+    };
+    std::istringstream iss(r.body);
+    std::string token;
+    while (iss >> token) argv.push_back(token);
+    Util::execCommand(argv, "privops add_ipfw_rule");
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("ipfw_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatAddIpfwRuleSuccess(
+                  r.set, r.number, r.action, r.body)};
+}
+
+DispatchResult handleRemoveIpfwRule(const PrivOpsPure::RemoveIpfwRuleReq &r) {
+  // ipfw delete is set-agnostic (rule numbers are unique
+  // across the table). The set field is logged but doesn't
+  // affect the kernel call.
+  try {
+    IpfwOps::deleteRule(r.number);
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("ipfw_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatRemoveIpfwRuleSuccess(r.set, r.number)};
+}
+
+// --- handleCreateJail / handleDestroyJail ---
+
+DispatchResult handleCreateJail(const PrivOpsPure::CreateJailReq &r) {
+  // `jail -c name=X path=Y host.hostname=H [vnet] [params...] persist`
+  // The privops layer creates only the jail registration. ZFS
+  // attach, mount, iface config are operator-driven via the other
+  // verbs.
+  std::vector<std::string> argv = {CRATE_PATH_JAIL, "-c"};
+  argv.push_back("name=" + r.name);
+  argv.push_back("path=" + r.path);
+  if (!r.hostname.empty())
+    argv.push_back("host.hostname=" + r.hostname);
+  if (r.vnet)
+    argv.push_back("vnet");
+  // parameters: split on whitespace into separate argv entries.
+  // Validator already restricts to a single line and forbids shell
+  // metas so this split is safe.
+  if (!r.parameters.empty()) {
+    std::istringstream iss(r.parameters);
+    std::string token;
+    while (iss >> token) argv.push_back(token);
+  }
+  argv.push_back("persist");
+
+  try {
+    Util::execCommand(argv, "privops create_jail");
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("jail_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatCreateJailSuccess(r.name, r.path)};
+}
+
+DispatchResult handleDestroyJail(const PrivOpsPure::DestroyJailReq &r) {
+  // `jail -r NAME` is graceful; `jail -R NAME` is force-kill.
+  std::vector<std::string> argv = {
+    CRATE_PATH_JAIL, r.force ? "-R" : "-r", r.name,
+  };
+  try {
+    Util::execCommand(argv, "privops destroy_jail");
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("jail_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatDestroyJailSuccess(r.name)};
+}
+
 // --- Top-level dispatcher ---
 
 DispatchResult dispatchPrivOp(Verb v, const std::string &body) {
@@ -313,6 +422,54 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body) {
       if (auto e = PrivOpsPure::validateTeardownIface(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleTeardownIface(r);
+    }
+    case Verb::AddPfRule: {
+      PrivOpsPure::AddPfRuleReq r;
+      if (auto e = PrivOpsWirePure::parseAddPfRule(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateAddPfRule(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleAddPfRule(r);
+    }
+    case Verb::RemovePfRule: {
+      PrivOpsPure::RemovePfRuleReq r;
+      if (auto e = PrivOpsWirePure::parseRemovePfRule(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateRemovePfRule(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleRemovePfRule(r);
+    }
+    case Verb::AddIpfwRule: {
+      PrivOpsPure::AddIpfwRuleReq r;
+      if (auto e = PrivOpsWirePure::parseAddIpfwRule(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateAddIpfwRule(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleAddIpfwRule(r);
+    }
+    case Verb::RemoveIpfwRule: {
+      PrivOpsPure::RemoveIpfwRuleReq r;
+      if (auto e = PrivOpsWirePure::parseRemoveIpfwRule(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateRemoveIpfwRule(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleRemoveIpfwRule(r);
+    }
+    case Verb::CreateJail: {
+      PrivOpsPure::CreateJailReq r;
+      if (auto e = PrivOpsWirePure::parseCreateJail(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateCreateJail(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleCreateJail(r);
+    }
+    case Verb::DestroyJail: {
+      PrivOpsPure::DestroyJailReq r;
+      if (auto e = PrivOpsWirePure::parseDestroyJail(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateDestroyJail(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleDestroyJail(r);
     }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);

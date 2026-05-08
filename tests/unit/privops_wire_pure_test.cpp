@@ -466,6 +466,57 @@ ATF_TEST_CASE_BODY(format_teardown_iface_success) {
   ATF_REQUIRE(body.find("\"configured\":") == std::string::npos);
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(format_add_pf_rule_success);
+ATF_TEST_CASE_BODY(format_add_pf_rule_success) {
+  std::string body = formatAddPfRuleSuccess("crate", "pass on em0");
+  ATF_REQUIRE(body.find("\"loaded\":true") != std::string::npos);
+  ATF_REQUIRE(body.find("\"anchor\":\"crate\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"rule\":\"pass on em0\"") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(format_remove_pf_rule_success);
+ATF_TEST_CASE_BODY(format_remove_pf_rule_success) {
+  std::string body = formatRemovePfRuleSuccess("crate");
+  ATF_REQUIRE(body.find("\"flushed_anchor\":true") != std::string::npos);
+  ATF_REQUIRE(body.find("\"anchor\":\"crate\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"loaded\":") == std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(format_add_ipfw_rule_success);
+ATF_TEST_CASE_BODY(format_add_ipfw_rule_success) {
+  std::string body = formatAddIpfwRuleSuccess(0, 100, "allow",
+                                              "ip from any to any");
+  ATF_REQUIRE(body.find("\"added\":true") != std::string::npos);
+  ATF_REQUIRE(body.find("\"set\":0") != std::string::npos);
+  ATF_REQUIRE(body.find("\"number\":100") != std::string::npos);
+  ATF_REQUIRE(body.find("\"action\":\"allow\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"body\":\"ip from any to any\"") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(format_remove_ipfw_rule_success);
+ATF_TEST_CASE_BODY(format_remove_ipfw_rule_success) {
+  std::string body = formatRemoveIpfwRuleSuccess(0, 100);
+  ATF_REQUIRE(body.find("\"removed\":true") != std::string::npos);
+  ATF_REQUIRE(body.find("\"number\":100") != std::string::npos);
+  ATF_REQUIRE(body.find("\"added\":") == std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(format_create_jail_success);
+ATF_TEST_CASE_BODY(format_create_jail_success) {
+  std::string body = formatCreateJailSuccess("alpine", "/zroot/jails/alpine");
+  ATF_REQUIRE(body.find("\"created\":true") != std::string::npos);
+  ATF_REQUIRE(body.find("\"name\":\"alpine\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"path\":\"/zroot/jails/alpine\"") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(format_destroy_jail_success);
+ATF_TEST_CASE_BODY(format_destroy_jail_success) {
+  std::string body = formatDestroyJailSuccess("alpine");
+  ATF_REQUIRE(body.find("\"destroyed\":true") != std::string::npos);
+  ATF_REQUIRE(body.find("\"name\":\"alpine\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"created\":") == std::string::npos);
+}
+
 // --- parseValidateAndDispatch ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(dispatch_unknown_returns_404);
@@ -568,6 +619,12 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, format_configure_iface_success);
   ATF_ADD_TEST_CASE(tcs, format_configure_iface_empty_optional);
   ATF_ADD_TEST_CASE(tcs, format_teardown_iface_success);
+  ATF_ADD_TEST_CASE(tcs, format_add_pf_rule_success);
+  ATF_ADD_TEST_CASE(tcs, format_remove_pf_rule_success);
+  ATF_ADD_TEST_CASE(tcs, format_add_ipfw_rule_success);
+  ATF_ADD_TEST_CASE(tcs, format_remove_ipfw_rule_success);
+  ATF_ADD_TEST_CASE(tcs, format_create_jail_success);
+  ATF_ADD_TEST_CASE(tcs, format_destroy_jail_success);
 
   ATF_ADD_TEST_CASE(tcs, dispatch_unknown_returns_404);
   ATF_ADD_TEST_CASE(tcs, dispatch_parse_error_returns_400);

@@ -83,4 +83,35 @@ PrivOpsWirePure::DispatchResult handleUnmountNullfs(const PrivOpsPure::UnmountNu
 PrivOpsWirePure::DispatchResult handleConfigureIface(const PrivOpsPure::ConfigureIfaceReq &r);
 PrivOpsWirePure::DispatchResult handleTeardownIface(const PrivOpsPure::TeardownIfaceReq &r);
 
+// 0.9.7 — pf / ipfw firewall rules + jail lifecycle.
+//
+// add_pf_rule: load `ruleText` into the named anchor via
+// PfctlOps::addRules (atomically replaces the anchor's existing
+// rules). For now ruleText is single-line per the validator;
+// multi-rule anchors land via either repeated calls (using a
+// future per-rule append verb) or future relaxation of the
+// validator.
+// remove_pf_rule: flushes the anchor entirely (pfctl has no
+// per-rule removal primitive). The `ruleText` field is ignored
+// but kept in the request for forward compat.
+//
+// add_ipfw_rule: `ipfw add <number> set <set> <action> <body>`.
+// `set` is mandatory in the wire format; default 0 if the operator
+// doesn't care about ipfw sets.
+// remove_ipfw_rule: `ipfw delete <number>`. The `set` field is
+// ignored at this layer (ipfw delete is set-agnostic by rule
+// number).
+//
+// create_jail: `jail -c name=X path=Y host.hostname=H [vnet]
+// [params...] persist`. Builds the jail; everything else
+// (mount, ZFS attach, iface config) is the operator's
+// responsibility via the other privops verbs.
+// destroy_jail: `jail -r NAME` (or `jail -R NAME` if force=true).
+PrivOpsWirePure::DispatchResult handleAddPfRule(const PrivOpsPure::AddPfRuleReq &r);
+PrivOpsWirePure::DispatchResult handleRemovePfRule(const PrivOpsPure::RemovePfRuleReq &r);
+PrivOpsWirePure::DispatchResult handleAddIpfwRule(const PrivOpsPure::AddIpfwRuleReq &r);
+PrivOpsWirePure::DispatchResult handleRemoveIpfwRule(const PrivOpsPure::RemoveIpfwRuleReq &r);
+PrivOpsWirePure::DispatchResult handleCreateJail(const PrivOpsPure::CreateJailReq &r);
+PrivOpsWirePure::DispatchResult handleDestroyJail(const PrivOpsPure::DestroyJailReq &r);
+
 } // namespace Crated
