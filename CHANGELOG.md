@@ -6,6 +6,124 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.1] — 2026-05-08
+
+**Rootless track, JSON wire format.** Second 0.9.x release —
+the verb taxonomy from 0.9.0 gets a concrete HTTP/JSON surface
+on `crated`. **Still no handlers** — daemon returns
+`501 Not Implemented` for every verb. This release nails down
+the wire shape so the verb-handler PRs in 0.9.2..0.9.7 can
+focus on the privileged work, not on parsing.
+
+### What lands
+
+- **`lib/privops_wire_pure.{h,cpp}`** — JSON parsers for all 14
+  privops verbs from 0.9.0. Each parser fills the matching
+  request struct from a JSON object and returns `"" | reason`
+  for wire-format errors (missing required field, wrong type,
+  malformed JSON). Hand-rolled — same approach as
+  `daemon/routes_pure.cpp::extractStringField`. Bodies are
+  tiny; no JSON library dependency added.
+- **Generic field extractors** (`extractStringField`,
+  `extractLongField`, `extractUnsignedField`,
+  `extractBoolField`) with a `kPresent` sentinel return so
+  callers can distinguish absent-vs-malformed cleanly.
+- **`requireXxxField` wrappers** that report `missing field
+  'foo'` for absent required fields.
+- **`parseVerbFromPath`** — extracts the verb segment from
+  `/api/v1/privops/<verb>` URL paths, returning
+  `Verb::Unknown` for non-matching paths.
+- **Response-body builders**:
+  - `formatNotImplemented(verb)` — `{"error":"verb 'X' not yet
+    implemented"}` for the 501 branch.
+  - `formatParseError(reason)` — `{"error":"parse: ..."}` for
+    HTTP 400 wire errors.
+  - `formatValidateError(reason)` — `{"error":"validate: ..."}`
+    for HTTP 400 semantic errors.
+  - Distinct prefixes (`parse:` vs `validate:`) so operators
+    immediately know whether the problem is in their HTTP
+    client or in the requested operation.
+- **`parseValidateAndDispatch(verb, body)`** — the pure
+  dispatcher the daemon route delegates to. Three-step
+  pipeline:
+    1. parse → 400 with `parse:` prefix on error
+    2. validate → 400 with `validate:` prefix on error
+    3. dispatch → 501 (no handlers in 0.9.1)
+  Returns a `DispatchResult{status, body}` struct. The 501
+  branch will be replaced verb-by-verb with actual handler
+  calls in 0.9.2..0.9.7; this dispatcher dissolves at that
+  point.
+
+### Daemon side
+
+- **`POST /api/v1/privops/:verb`** — generic handler in
+  `daemon/routes.cpp`. Admin-only auth (privops touch host-wide
+  state, so per-container scope from F2 doesn't apply).
+  `kMutating` rate-limit bucket. Body delegated to
+  `parseValidateAndDispatch`. Status + body taken straight from
+  the pure result.
+
+### Tests
+
+- **`tests/unit/privops_wire_pure_test.cpp`** — 33 ATF tests:
+  - field extractors (string/long/unsigned/bool) covering
+    present, absent, wrong-type, escape-decoding, and
+    unterminated cases
+  - required-field wrappers report `missing` clearly
+  - `parseVerbFromPath` accepts known verbs, rejects garbage
+    (empty, trailing slash, sub-path, unknown verb,
+    non-privops path)
+  - per-verb parsers happy-path + missing-required-field
+    (covers all 14 verbs)
+  - response builders escape quotes, distinguish `parse:` vs
+    `validate:` prefixes, include the verb name in the 501
+    body
+  - dispatcher: 404 on Unknown verb, 400 with `parse:` on
+    wire errors, 400 with `validate:` on semantic errors,
+    501 with verb name on success; "covers every verb" loop
+    confirms switch handles all 14 cases
+- Suite count: 1186 (was 1153) — all passing.
+
+### Wire format reference
+
+```http
+POST /api/v1/privops/create_jail HTTP/1.1
+Host: crated.local
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+
+{"name":"alpine","path":"/zroot/jails/alpine","hostname":"alpine.local","vnet":true}
+```
+
+```http
+POST /api/v1/privops/set_rctl HTTP/1.1
+{"jid":7,"key":"pcpu","value":"20"}
+```
+
+```http
+POST /api/v1/privops/configure_iface HTTP/1.1
+{"jid":5,"ifname":"epair0b","bridge":"bridge0","ipv4_cidr":"10.0.0.5/24","mac_addr":"02:00:11:22:33:44"}
+```
+
+Field names are snake_case to match the existing `/api/v1`
+convention. Field shapes mirror the request structs from
+`lib/privops_pure.h`: required scalars are required JSON
+fields; optional scalars (`hostname`, `vnet`, `force`,
+`ipv4_cidr`, `bridge`, etc.) use the request struct's default
+when absent.
+
+### Files
+
+- `lib/privops_wire_pure.{h,cpp}` (new)
+- `tests/unit/privops_wire_pure_test.cpp` (new)
+- `daemon/routes.cpp` — `handlePrivOp` static handler +
+  `srv.Post("/api/v1/privops/:verb", ...)` registration;
+  `#include "privops_wire_pure.h"` added.
+- `Makefile`, `tests/unit/Kyuafile`, `.gitignore` — wired up.
+- `cli/args.cpp` — version bumped to `crate 0.9.1`.
+
+---
+
 ## [0.9.0] — 2026-05-08
 
 **Rootless track opens.** First release on the `0.9.x` series

@@ -57,6 +57,8 @@ tests/unit/pool_pure_test
 tests/unit/warm_pure_test
 tests/unit/retune_pure_test
 tests/unit/throttle_pure_test
+tests/unit/privops_pure_test
+tests/unit/privops_wire_pure_test
 tests/unit/backup_prune_pure_test
 tests/unit/control_socket_pure_test
 tests/unit/doctor_pure_test
