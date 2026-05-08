@@ -6,6 +6,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.3] — 2026-05-08
+
+**Rootless track, `clear_rctl` handler.** Fourth 0.9.x
+release — `clear_rctl` lands using the same template as
+`set_rctl` from 0.9.2.
+
+- `Crated::handleClearRctl(ClearRctlReq)` — looks up jail by jid,
+  builds `rctl -r jail:<jid>:<key>:deny` via existing
+  `RetunePure::buildClearArgv`, executes via `Util::execCommand`.
+  `404 jail_not_found` if the jail is gone, `500 exec_failed` if
+  rctl(8) returns non-zero.
+- `dispatchPrivOp` switch grew a `ClearRctl` case routing to
+  the real handler.
+- `lib/privops_wire_pure.{h,cpp}` — `formatClearRctlSuccess(jid,
+  key)` returns `{"cleared":true,"jid":N,"key":"..."}`.
+
+Wire example:
+
+```http
+POST /api/v1/privops/clear_rctl
+{"jid":7,"key":"pcpu"}
+```
+
+```http
+HTTP/1.1 200 OK
+{"cleared":true,"jid":7,"key":"pcpu"}
+```
+
+Note: clears in `crate retune --clear` are soft-fail (the rule may
+not exist yet). The IPC surface returns the operator's exec error
+verbatim — strict-vs-idempotent semantics will be configurable
+via a future query flag if needed.
+
+Tests: 1 new ATF test for `formatClearRctlSuccess` shape (asserts
+distinct from `set_rctl` body — no `set` / `value` fields).
+Suite: 1189 → **1190**, all passing.
+
+Series progress: 3/12 verbs handled (set_rctl, clear_rctl).
+Next: attach_zfs / detach_zfs in 0.9.4.
+
+---
+
 ## [0.9.2] — 2026-05-08
 
 **Rootless track, first real handler.** Third 0.9.x release —

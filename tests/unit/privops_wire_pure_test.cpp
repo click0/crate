@@ -381,6 +381,17 @@ ATF_TEST_CASE_BODY(format_set_rctl_escapes_value) {
   ATF_REQUIRE(body.find("20\\\\bad") != std::string::npos);
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(format_clear_rctl_success);
+ATF_TEST_CASE_BODY(format_clear_rctl_success) {
+  std::string body = formatClearRctlSuccess(7, "pcpu");
+  ATF_REQUIRE(body.find("\"cleared\":true") != std::string::npos);
+  ATF_REQUIRE(body.find("\"jid\":7") != std::string::npos);
+  ATF_REQUIRE(body.find("\"key\":\"pcpu\"") != std::string::npos);
+  // Distinct from set: no "value" / "set" fields.
+  ATF_REQUIRE(body.find("\"set\":") == std::string::npos);
+  ATF_REQUIRE(body.find("\"value\":") == std::string::npos);
+}
+
 // --- parseValidateAndDispatch ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(dispatch_unknown_returns_404);
@@ -474,6 +485,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, format_handler_error_includes_kind);
   ATF_ADD_TEST_CASE(tcs, format_set_rctl_success);
   ATF_ADD_TEST_CASE(tcs, format_set_rctl_escapes_value);
+  ATF_ADD_TEST_CASE(tcs, format_clear_rctl_success);
 
   ATF_ADD_TEST_CASE(tcs, dispatch_unknown_returns_404);
   ATF_ADD_TEST_CASE(tcs, dispatch_parse_error_returns_400);

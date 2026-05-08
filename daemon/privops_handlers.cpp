@@ -41,20 +41,55 @@ DispatchResult handleSetRctl(const PrivOpsPure::SetRctlReq &r) {
   return {200, PrivOpsWirePure::formatSetRctlSuccess(r.jid, r.key, r.rawValue)};
 }
 
+// --- handleClearRctl ---
+
+DispatchResult handleClearRctl(const PrivOpsPure::ClearRctlReq &r) {
+  auto jail = JailQuery::getJailByJid((int)r.jid);
+  if (!jail) {
+    return {404, PrivOpsWirePure::formatHandlerError(
+                  "jail_not_found",
+                  "no running jail with jid " + std::to_string(r.jid))};
+  }
+
+  auto argv = RetunePure::buildClearArgv((int)r.jid, r.key);
+
+  // Soft-fail clears are common in `crate retune` (the rule may
+  // simply not exist yet). For the IPC surface we return the
+  // operator's exec error verbatim so they can decide; the
+  // dual semantics (idempotent vs. strict) can be added later
+  // via a `?strict` flag if needed.
+  try {
+    Util::execCommand(argv, "privops clear_rctl");
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("exec_failed", e.what())};
+  }
+
+  return {200, PrivOpsWirePure::formatClearRctlSuccess(r.jid, r.key)};
+}
+
 // --- Top-level dispatcher ---
 
 DispatchResult dispatchPrivOp(Verb v, const std::string &body) {
-  // 0.9.2 routes set_rctl to its real handler. All other verbs go
-  // through the pure parse/validate pipeline and end at 501.
-  if (v == Verb::SetRctl) {
-    PrivOpsPure::SetRctlReq r;
-    if (auto e = PrivOpsWirePure::parseSetRctl(body, r); !e.empty())
-      return {400, PrivOpsWirePure::formatParseError(e)};
-    if (auto e = PrivOpsPure::validateSetRctl(r); !e.empty())
-      return {400, PrivOpsWirePure::formatValidateError(e)};
-    return handleSetRctl(r);
+  switch (v) {
+    case Verb::SetRctl: {
+      PrivOpsPure::SetRctlReq r;
+      if (auto e = PrivOpsWirePure::parseSetRctl(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateSetRctl(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleSetRctl(r);
+    }
+    case Verb::ClearRctl: {
+      PrivOpsPure::ClearRctlReq r;
+      if (auto e = PrivOpsWirePure::parseClearRctl(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateClearRctl(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleClearRctl(r);
+    }
+    default:
+      return PrivOpsWirePure::parseValidateAndDispatch(v, body);
   }
-  return PrivOpsWirePure::parseValidateAndDispatch(v, body);
 }
 
 } // namespace Crated

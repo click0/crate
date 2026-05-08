@@ -43,4 +43,9 @@ PrivOpsWirePure::DispatchResult dispatchPrivOp(PrivOpsPure::Verb v,
 // approved) — the handler passes both to rctl(8) via execv.
 PrivOpsWirePure::DispatchResult handleSetRctl(const PrivOpsPure::SetRctlReq &r);
 
+// 0.9.3 — clear an RCTL rule on a running jail.
+// `rctl -r jail:<jid>:<key>:deny`. Equivalent to
+// `crate retune --clear KEY`.
+PrivOpsWirePure::DispatchResult handleClearRctl(const PrivOpsPure::ClearRctlReq &r);
+
 } // namespace Crated

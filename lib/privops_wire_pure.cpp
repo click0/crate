@@ -443,6 +443,15 @@ std::string formatSetRctlSuccess(long jid,
   return o.str();
 }
 
+std::string formatClearRctlSuccess(long jid, const std::string &key) {
+  std::ostringstream o;
+  o << "{\"cleared\":true"
+    << ",\"jid\":" << jid
+    << ",\"key\":\"" << escape(key) << "\""
+    << "}";
+  return o.str();
+}
+
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body) {
   using namespace PrivOpsPure;

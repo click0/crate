@@ -214,4 +214,7 @@ std::string formatSetRctlSuccess(long jid,
                                  const std::string &key,
                                  const std::string &rawValue);
 
+// 200 OK body for `clear_rctl`.
+std::string formatClearRctlSuccess(long jid, const std::string &key);
+
 } // namespace PrivOpsWirePure
