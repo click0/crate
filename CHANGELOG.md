@@ -6,6 +6,107 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.0] — 2026-05-08
+
+**Rootless track opens.** First release on the `0.9.x` series
+branch. Goal of the series: remove the setuid root bit from
+`crate(1)` and delegate privileged operations to `crated`. The
+setuid bit will flip off by default in 0.9.9 and be removed in
+1.0.0. Today's setuid model is well-hardened (env-sanitize,
+absolute paths, no shell, audit logging) — see TODO for the full
+"why rootless still matters" framing — but blast-radius
+reduction, multi-tenant safety, and "no setuid root binaries"
+compliance are real wins worth the multi-week refactor.
+
+This release is **contract only — no behaviour change.**
+`crate(1)` still does its work setuid-style. What lands:
+
+- `lib/privops_pure.{h,cpp}` — the privileged-operations verb
+  taxonomy that crated will eventually accept over the existing
+  control-socket plane (`daemon/control_socket_pure.h`):
+    - `create_jail` / `destroy_jail`
+    - `mount_nullfs` / `unmount_nullfs`
+    - `set_rctl` / `clear_rctl`
+    - `attach_zfs` / `detach_zfs`
+    - `configure_iface` / `teardown_iface`
+    - `add_pf_rule` / `remove_pf_rule`
+    - `add_ipfw_rule` / `remove_ipfw_rule`
+- Per-verb request structs (concrete fields, no shell-strings).
+- Per-verb validators returning `"" | reason` — same code runs
+  on caller (pre-flight) and daemon (post-receive) for defence
+  in depth.
+- Field-level validators exposed for reuse:
+  jail name / hostname (RFC 1123) / absolute path (no `..`,
+  no shell metas) / ZFS dataset / iface name (IFNAMSIZ) /
+  MAC (rejects multicast bit) / IPv4 + IPv6 CIDR / pf+ipfw
+  rule text / ipfw action (closed set).
+- `tests/unit/privops_pure_test.cpp` — 46 ATF tests covering
+  the verb name<->token round-trip, every field validator
+  edge case, and per-verb request validation. Suite goes from
+  1107 to 1153 tests, all passing.
+
+### What comes next
+
+Each subsequent 0.9.x release picks one verb (or one piece of
+plumbing) and ships it end-to-end:
+
+- **0.9.1** — JSON wire format on the control socket: parsers
+  building request structs from `POST /v1/privops/<verb>`
+  payloads, re-running `validate*()` on the daemon side. Still
+  no handlers — the daemon returns 501 Not Implemented for
+  every verb. This release nails down the wire shape so future
+  releases can focus on handlers.
+- **0.9.2 → 0.9.7** — one verb-handler per release, simplest
+  first (`set_rctl` reuses the existing rctl(8) integration
+  from `crate retune`), broadest last (`create_jail`).
+- **0.9.8** — per-user namespacing: jail name prefix
+  (`<user>-<jailname>`), per-user `/var/run/crate/<uid>/`,
+  network sub-CIDR per user, RCTL accounting groups.
+  Documentation: `docs/rootless-migration.md`.
+- **0.9.9** — opt-out flag flip. The `crate.conf` knob
+  `rootless: false` becomes the legacy escape hatch; default
+  becomes "delegate to crated". Setuid bit still installed for
+  backwards compat with operators who haven't migrated.
+- **1.0.0** — setuid bit removed from the install target.
+  Operators upgrading from <0.9.x see a one-line `pkg upgrade`
+  warning pointing at the migration doc.
+
+Foundations the rootless track stands on (already in tree,
+shipped over earlier releases):
+
+- 0.6.4 — WebSocket console listener (pattern for replacing
+  cpp-httplib with a hand-rolled accept loop)
+- 0.7.11 — control sockets with getpeereid + per-group access
+- 0.7.14 — Capsicum sandbox (per-fd cap_rights_limit)
+- 0.8.19 — filesystem-perm gate on the main socket
+- 0.8.21 — spec registry `{name -> abs-path}`
+- 0.8.23 — DrmSession via libseat (rootless DRM access)
+- 0.8.24 — cap_syslog dual-write for audit resilience
+
+### Why a pure-types module first
+
+The verb set frozen up-front means wire format, daemon
+handlers, and `crate(1)` callers can be developed against a
+stable contract instead of a moving target. Validators
+hard-link-tested at the pure-module level keep the security
+boundary covered as crated grows. Subsequent PRs are
+incremental: add wire parser → add handler → add caller →
+release. No big-bang refactor.
+
+### Files
+
+- `lib/privops_pure.h` (new)
+- `lib/privops_pure.cpp` (new)
+- `tests/unit/privops_pure_test.cpp` (new)
+- `Makefile` — `lib/privops_pure.cpp` added to `LIB_SRCS`,
+  `TEST_LINK_SRCS`; `privops_pure_test` added to `UNIT_TESTS`.
+- `tests/unit/Kyuafile` — `privops_pure_test` registered.
+- `cli/args.cpp` — version string bumped to `crate 0.9.0`.
+- `TODO` — Rootless containers entry annotated with the
+  `0.9.0` foundation landing.
+
+---
+
 ## [0.8.49] — 2026-05-08
 
 LXQt 2.4 desktop examples.
