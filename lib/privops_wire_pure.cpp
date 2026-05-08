@@ -516,6 +516,64 @@ std::string formatTeardownIfaceSuccess(const std::string &ifname) {
   return o.str();
 }
 
+std::string formatAddPfRuleSuccess(const std::string &anchor,
+                                   const std::string &ruleText) {
+  std::ostringstream o;
+  o << "{\"loaded\":true"
+    << ",\"anchor\":\"" << escape(anchor) << "\""
+    << ",\"rule\":\"" << escape(ruleText) << "\""
+    << "}";
+  return o.str();
+}
+
+std::string formatRemovePfRuleSuccess(const std::string &anchor) {
+  std::ostringstream o;
+  o << "{\"flushed_anchor\":true"
+    << ",\"anchor\":\"" << escape(anchor) << "\""
+    << "}";
+  return o.str();
+}
+
+std::string formatAddIpfwRuleSuccess(unsigned set, unsigned number,
+                                     const std::string &action,
+                                     const std::string &body) {
+  std::ostringstream o;
+  o << "{\"added\":true"
+    << ",\"set\":" << set
+    << ",\"number\":" << number
+    << ",\"action\":\"" << escape(action) << "\""
+    << ",\"body\":\"" << escape(body) << "\""
+    << "}";
+  return o.str();
+}
+
+std::string formatRemoveIpfwRuleSuccess(unsigned set, unsigned number) {
+  std::ostringstream o;
+  o << "{\"removed\":true"
+    << ",\"set\":" << set
+    << ",\"number\":" << number
+    << "}";
+  return o.str();
+}
+
+std::string formatCreateJailSuccess(const std::string &name,
+                                    const std::string &path) {
+  std::ostringstream o;
+  o << "{\"created\":true"
+    << ",\"name\":\"" << escape(name) << "\""
+    << ",\"path\":\"" << escape(path) << "\""
+    << "}";
+  return o.str();
+}
+
+std::string formatDestroyJailSuccess(const std::string &name) {
+  std::ostringstream o;
+  o << "{\"destroyed\":true"
+    << ",\"name\":\"" << escape(name) << "\""
+    << "}";
+  return o.str();
+}
+
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body) {
   using namespace PrivOpsPure;

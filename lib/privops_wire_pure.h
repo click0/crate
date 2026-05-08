@@ -242,4 +242,23 @@ std::string formatConfigureIfaceSuccess(long jid,
 // 200 OK body for `teardown_iface`.
 std::string formatTeardownIfaceSuccess(const std::string &ifname);
 
+// 200 OK body for `add_pf_rule` / `remove_pf_rule`.
+// Note: remove_pf_rule flushes the entire anchor (pfctl doesn't
+// support exact-match per-rule removal); the response reflects
+// that with `flushed_anchor: true`.
+std::string formatAddPfRuleSuccess(const std::string &anchor,
+                                   const std::string &ruleText);
+std::string formatRemovePfRuleSuccess(const std::string &anchor);
+
+// 200 OK body for `add_ipfw_rule` / `remove_ipfw_rule`.
+std::string formatAddIpfwRuleSuccess(unsigned set, unsigned number,
+                                     const std::string &action,
+                                     const std::string &body);
+std::string formatRemoveIpfwRuleSuccess(unsigned set, unsigned number);
+
+// 200 OK body for `create_jail` / `destroy_jail`.
+std::string formatCreateJailSuccess(const std::string &name,
+                                    const std::string &path);
+std::string formatDestroyJailSuccess(const std::string &name);
+
 } // namespace PrivOpsWirePure

@@ -6,6 +6,102 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.7] — 2026-05-08
+
+**Rootless track, last 6 verbs.** Eighth 0.9.x release —
+firewall + jail-lifecycle handlers land. **All 14 verbs from
+0.9.0 now have real handlers; the 501 fallback path remains
+only as a safety net for the `Verb::Unknown` case.**
+
+### What lands
+
+- **`add_pf_rule` / `remove_pf_rule`** — `PfctlOps::addRules`
+  loads `ruleText` into the named anchor (atomic replace);
+  `flushRules` clears the anchor entirely. Per-rule removal
+  isn't a pfctl primitive, so `remove_pf_rule` flushes; the
+  `ruleText` field stays in the wire format for forward
+  compat with a future per-rule verb.
+- **`add_ipfw_rule` / `remove_ipfw_rule`** — `add` builds
+  `ipfw add <number> set <set> <action> <body>` argv directly
+  (honouring the `set` field, which `IpfwOps::addRule` doesn't
+  take); `remove` delegates to `IpfwOps::deleteRule(number)` —
+  ipfw rule numbers are unique across sets, so the `set` field
+  is informational on remove.
+- **`create_jail` / `destroy_jail`** — `create_jail` runs
+  `jail -c name=X path=Y [host.hostname=H] [vnet] [params]
+  persist`. The privops layer creates only the jail
+  registration; ZFS attach, mount, iface config are operator-
+  driven via the other verbs (proper composition surface for
+  rootless `crate run`). `destroy_jail` runs
+  `jail -r NAME` (or `-R NAME` if `force=true`).
+
+### Pure response builders (test-locked)
+
+- `formatAddPfRuleSuccess(anchor, rule)` →
+  `{"loaded":true,"anchor":...,"rule":...}`
+- `formatRemovePfRuleSuccess(anchor)` →
+  `{"flushed_anchor":true,"anchor":...}`
+- `formatAddIpfwRuleSuccess(set, number, action, body)` →
+  `{"added":true,...}`
+- `formatRemoveIpfwRuleSuccess(set, number)` →
+  `{"removed":true,...}`
+- `formatCreateJailSuccess(name, path)` →
+  `{"created":true,...}`
+- `formatDestroyJailSuccess(name)` →
+  `{"destroyed":true,...}`
+
+### Wire examples
+
+```http
+POST /api/v1/privops/add_pf_rule
+{"anchor":"crate","rule":"pass on em0 from 10.0.0.0/24"}
+
+POST /api/v1/privops/remove_pf_rule
+{"anchor":"crate","rule":""}     # rule field ignored, anchor flushed
+
+POST /api/v1/privops/add_ipfw_rule
+{"set":0,"number":100,"action":"allow","body":"ip from any to any"}
+
+POST /api/v1/privops/remove_ipfw_rule
+{"set":0,"number":100}
+
+POST /api/v1/privops/create_jail
+{"name":"alpine","path":"/zroot/jails/alpine","hostname":"alpine.local","vnet":true,"parameters":"allow.raw_sockets=1"}
+
+POST /api/v1/privops/destroy_jail
+{"name":"alpine","force":false}
+```
+
+Failure modes follow the same shape: 400 parse / 400 validate /
+500 `pfctl_failed` / 500 `ipfw_failed` / 500 `jail_failed`.
+
+### Tests
+
+- 7 new ATF tests for response builders
+  (`format_add_pf_rule_success`, `format_remove_pf_rule_success`,
+  `format_add_ipfw_rule_success`, `format_remove_ipfw_rule_success`,
+  `format_create_jail_success`, `format_destroy_jail_success`,
+  plus existing taxonomy/dispatcher/parser tests).
+- Suite: 1198 → **1204**, all passing.
+- `daemon/privops_handlers.o` builds cleanly.
+
+### Series state
+
+| Verb | Status |
+|------|--------|
+| set_rctl | shipped 0.9.2 |
+| clear_rctl | shipped 0.9.3 |
+| attach_zfs / detach_zfs | shipped 0.9.4 |
+| mount_nullfs / unmount_nullfs | shipped 0.9.5 |
+| configure_iface / teardown_iface | shipped 0.9.6 |
+| **add/remove pf, add/remove ipfw, create/destroy jail** | **shipped 0.9.7** |
+
+**14/14 verbs handled.** Next: per-user namespacing in 0.9.8
+(jail name prefix, `/var/run/crate/<uid>/`, network sub-CIDR,
+RCTL accounting groups, migration doc).
+
+---
+
 ## [0.9.6] — 2026-05-08
 
 **Rootless track, VNET interface configuration.** Seventh 0.9.x
