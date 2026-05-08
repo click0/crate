@@ -16,7 +16,7 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/create.cpp lib/run.cpp \
            lib/sign_pure.cpp lib/audit.cpp lib/audit_pure.cpp \
            lib/pool_pure.cpp lib/warm_pure.cpp lib/warm.cpp \
            lib/retune_pure.cpp lib/retune.cpp \
-           lib/privops_pure.cpp \
+           lib/privops_pure.cpp lib/privops_wire_pure.cpp \
            lib/throttle_pure.cpp lib/throttle.cpp \
            lib/doctor_pure.cpp lib/doctor.cpp \
            lib/vmwrap_pure.cpp lib/vmwrap.cpp \
@@ -214,7 +214,8 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              wireguard_runtime_pure_test migrate_pure_test \
              datacenter_pure_test backup_pure_test replicate_pure_test \
              ha_pure_test pool_pure_test warm_pure_test \
-             retune_pure_test throttle_pure_test privops_pure_test \
+             retune_pure_test throttle_pure_test \
+             privops_pure_test privops_wire_pure_test \
              backup_prune_pure_test control_socket_pure_test \
              doctor_pure_test sandbox_pure_test rate_limit_pure_test \
              ip_alloc_pure_test auto_fw_pure_test \
@@ -255,7 +256,7 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  lib/snapshot_pure.cpp lib/crypto_pure.cpp lib/log_pure.cpp \
                  lib/sign_pure.cpp lib/audit_pure.cpp lib/pool_pure.cpp \
                  lib/warm_pure.cpp lib/retune_pure.cpp \
-                 lib/privops_pure.cpp \
+                 lib/privops_pure.cpp lib/privops_wire_pure.cpp \
                  lib/throttle_pure.cpp lib/doctor_pure.cpp \
                  lib/vmwrap_pure.cpp \
                  lib/ip_alloc_pure.cpp lib/ip6_alloc_pure.cpp \

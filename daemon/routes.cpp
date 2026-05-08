@@ -5,6 +5,7 @@
 #include "routes.h"
 #include "auth.h"
 #include "metrics.h"
+#include "privops_wire_pure.h"
 #include "rate_limit.h"
 #include "routes_pure.h"
 #include "transfer_pure.h"
@@ -985,6 +986,34 @@ static void handleContainerImport(const httplib::Request &req, httplib::Response
   jsonOk(res, TransferPure::formatImportResponse(filename, (uint64_t)req.body.size(), digest));
 }
 
+// --- F2: POST /api/v1/privops/:verb (rootless track, 0.9.1) ---
+//
+// Generic handler for the privileged-operations IPC. Pure-side does
+// the work: parses the body into a request struct, runs the per-verb
+// validator, returns 501 for every verb (no handlers wired in 0.9.1
+// — those land verb-by-verb in 0.9.2..0.9.7).
+//
+// Auth: admin-only. Privops touch host-wide state (jail lifecycle,
+// firewall rules, ZFS attach), so per-container scope from the F2
+// surface doesn't apply. Rate-limited under the kMutating bucket.
+
+static void handlePrivOp(const httplib::Request &req, httplib::Response &res,
+                         const Config &config) {
+  if (!checkRateLimit(getClientId(req), "/api/v1/privops", RateLimit::kMutating)) {
+    jsonError(res, 429, "rate limit exceeded");
+    return;
+  }
+  if (!isAuthorized(req, config, "admin")) {
+    jsonError(res, 403, "unauthorized");
+    return;
+  }
+  auto verbName = req.path_params.at("verb");
+  PrivOpsPure::Verb v = PrivOpsPure::parseVerb(verbName);
+  auto result = PrivOpsWirePure::parseValidateAndDispatch(v, req.body);
+  res.status = result.status;
+  res.set_content(result.body, "application/json");
+}
+
 // --- Route registration ---
 
 void registerRoutes(httplib::Server &srv, const Config &config) {
@@ -1133,6 +1162,14 @@ void registerRoutes(httplib::Server &srv, const Config &config) {
         return;
       }
       handleContainerImport(req, res, config);
+    });
+
+  // 0.9.1 — privops IPC. Generic dispatcher; admin-only, mutating
+  // rate limit. Returns 501 for every verb until the matching
+  // handler lands in 0.9.2..0.9.7.
+  srv.Post("/api/v1/privops/:verb",
+    [&config](const httplib::Request &req, httplib::Response &res) {
+      handlePrivOp(req, res, config);
     });
 }
 
