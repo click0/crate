@@ -48,4 +48,11 @@ PrivOpsWirePure::DispatchResult handleSetRctl(const PrivOpsPure::SetRctlReq &r);
 // `crate retune --clear KEY`.
 PrivOpsWirePure::DispatchResult handleClearRctl(const PrivOpsPure::ClearRctlReq &r);
 
+// 0.9.4 — attach / detach a ZFS dataset to a running jail.
+// `zfs jail <jid> <dataset>` / `zfs unjail <jid> <dataset>`.
+// Reuses the existing ZfsOps::jailDataset / unjailDataset which
+// pick libzfs when available and fall back to zfs(8) otherwise.
+PrivOpsWirePure::DispatchResult handleAttachZfs(const PrivOpsPure::AttachZfsReq &r);
+PrivOpsWirePure::DispatchResult handleDetachZfs(const PrivOpsPure::DetachZfsReq &r);
+
 } // namespace Crated

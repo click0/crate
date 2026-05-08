@@ -6,6 +6,7 @@
 #include "pathnames.h"
 #include "retune_pure.h"
 #include "util.h"
+#include "zfs_ops.h"
 
 #include <exception>
 #include <string>
@@ -67,6 +68,38 @@ DispatchResult handleClearRctl(const PrivOpsPure::ClearRctlReq &r) {
   return {200, PrivOpsWirePure::formatClearRctlSuccess(r.jid, r.key)};
 }
 
+// --- handleAttachZfs / handleDetachZfs ---
+
+DispatchResult handleAttachZfs(const PrivOpsPure::AttachZfsReq &r) {
+  auto jail = JailQuery::getJailByJid((int)r.jid);
+  if (!jail) {
+    return {404, PrivOpsWirePure::formatHandlerError(
+                  "jail_not_found",
+                  "no running jail with jid " + std::to_string(r.jid))};
+  }
+  try {
+    ZfsOps::jailDataset((int)r.jid, r.dataset);
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("exec_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatAttachZfsSuccess(r.jid, r.dataset)};
+}
+
+DispatchResult handleDetachZfs(const PrivOpsPure::DetachZfsReq &r) {
+  auto jail = JailQuery::getJailByJid((int)r.jid);
+  if (!jail) {
+    return {404, PrivOpsWirePure::formatHandlerError(
+                  "jail_not_found",
+                  "no running jail with jid " + std::to_string(r.jid))};
+  }
+  try {
+    ZfsOps::unjailDataset((int)r.jid, r.dataset);
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("exec_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatDetachZfsSuccess(r.jid, r.dataset)};
+}
+
 // --- Top-level dispatcher ---
 
 DispatchResult dispatchPrivOp(Verb v, const std::string &body) {
@@ -86,6 +119,22 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body) {
       if (auto e = PrivOpsPure::validateClearRctl(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleClearRctl(r);
+    }
+    case Verb::AttachZfs: {
+      PrivOpsPure::AttachZfsReq r;
+      if (auto e = PrivOpsWirePure::parseAttachZfs(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateAttachZfs(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleAttachZfs(r);
+    }
+    case Verb::DetachZfs: {
+      PrivOpsPure::DetachZfsReq r;
+      if (auto e = PrivOpsWirePure::parseDetachZfs(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateDetachZfs(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleDetachZfs(r);
     }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);

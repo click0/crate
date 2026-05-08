@@ -452,6 +452,24 @@ std::string formatClearRctlSuccess(long jid, const std::string &key) {
   return o.str();
 }
 
+std::string formatAttachZfsSuccess(long jid, const std::string &dataset) {
+  std::ostringstream o;
+  o << "{\"attached\":true"
+    << ",\"jid\":" << jid
+    << ",\"dataset\":\"" << escape(dataset) << "\""
+    << "}";
+  return o.str();
+}
+
+std::string formatDetachZfsSuccess(long jid, const std::string &dataset) {
+  std::ostringstream o;
+  o << "{\"detached\":true"
+    << ",\"jid\":" << jid
+    << ",\"dataset\":\"" << escape(dataset) << "\""
+    << "}";
+  return o.str();
+}
+
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body) {
   using namespace PrivOpsPure;
