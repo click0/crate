@@ -6,6 +6,89 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.8] — 2026-05-08
+
+**Rootless track, per-user runtime path scheme.** Ninth 0.9.x
+release. First mini-PR of the namespacing sub-track (0.9.8 →
+0.9.12).
+
+This release introduces the path scheme **without wiring any
+existing call sites to it.** Same shape as 0.9.0: contract
+first, behaviour change later. That keeps the existing
+setuid-prod flow byte-identical while giving 0.9.10
+(`/var/run/crate/<uid>/leases/`) and 0.9.12
+(`/var/run/crate/<uid>/exports/imports/audit.log`) a stable
+contract to migrate one subsystem at a time.
+
+### What lands
+
+- **`lib/runtime_paths_pure.{h,cpp}`** — pure path helpers:
+  - `legacyRoot()` → `/var/run/crate` (the pre-0.9.x compat
+    root)
+  - `perUserRoot(uid)` → `/var/run/crate/<uid>` (per-user
+    parent — caller mkdirs with `0700 root:<user-group>`)
+  - `perUserLeasesDir(uid)`, `perUserLeaseFile(uid, jail)` —
+    moved here in 0.9.10
+  - `perUserExportsDir(uid)`, `perUserImportsDir(uid)` —
+    moved here in 0.9.12
+  - `perUserAuditLog(uid)` — operator-readable audit tail per
+    user (canonical record stays in cap_syslog dual-write)
+  - `validateUid(int64_t)` — bounds 0..INT32_MAX (catches
+    integer-handling bugs upstream)
+
+### Design choices
+
+- **uid 0 (root) does NOT alias the legacy root.** Root
+  running rootless gets its own `/var/run/crate/0/` subtree
+  just like any other operator. The legacy root remains as
+  the explicit pre-0.9.x compat surface, accessed via
+  `legacyRoot()`.
+- **uid as path segment, not username.** Operators may
+  deploy with NIS / LDAP where uid→name maps are mutable;
+  uid is the stable key.
+- **No `..` or doubled slashes** in any helper output.
+  Defence-in-depth assertion in the test suite.
+
+### Why mini-PR
+
+The full per-user namespacing scope (jail name prefix,
+ZFS dataset prefix, network sub-CIDR, RCTL accounting groups,
+runtime paths, migration doc) is ~1500 LOC across the
+codebase. Splitting into 5 mini-PRs (0.9.8 paths, 0.9.9 ZFS,
+0.9.10 network, 0.9.11 RCTL+leases migration, 0.9.12 final
+wiring + migration doc) keeps the same per-PR risk profile
+as the verb-handler sub-track.
+
+### Tests
+
+- 10 new ATF tests in `tests/unit/runtime_paths_pure_test.cpp`:
+  - `legacy_root_is_var_run_crate` — locks down the legacy
+    path (a refactor moving to `/run/crate/` would fail this)
+  - `per_user_root_format` — `/var/run/crate/<uid>` shape
+  - `per_user_root_root_uid_does_not_alias_legacy` — explicit
+    test for the uid-0 design choice
+  - `per_user_subdirs` — leases/exports/imports/audit.log
+  - `per_user_lease_file_isolation` — alice (uid 1000) and
+    bob (uid 1001) get disjoint lease paths even for the
+    same jail name; neither path is a prefix of the other
+  - validators (positive, negative, too-big)
+  - `per_user_paths_no_traversal_segments` — defence in depth
+- Suite: 1204 → **1214**, all passing.
+
+### Series state
+
+- Verb handlers: 14/14 (0.9.2-0.9.7)
+- Per-user namespacing mini-track:
+  - **0.9.8** — runtime path scheme **← this release**
+  - 0.9.9 — per-user ZFS dataset prefix
+  - 0.9.10 — per-user network sub-CIDR + lease migration
+  - 0.9.11 — per-user RCTL accounting groups
+  - 0.9.12 — migration doc + final wiring
+- 0.9.13 — default flip
+- 1.0.0 — setuid bit removed
+
+---
+
 ## [0.9.7] — 2026-05-08
 
 **Rootless track, last 6 verbs.** Eighth 0.9.x release —
