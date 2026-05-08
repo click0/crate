@@ -618,8 +618,20 @@ void checkDrmSession(Report &r) {
 // running PulseAudio-only OR no audio at all see an info note,
 // not a warning.
 void checkWaylandReadiness(Report &r) {
-  const char *waylandDisplay = ::getenv("WAYLAND_DISPLAY");
-  const char *xdgRuntimeDir  = ::getenv("XDG_RUNTIME_DIR");
+  const char *waylandDisplay     = ::getenv("WAYLAND_DISPLAY");
+  const char *xdgRuntimeDir      = ::getenv("XDG_RUNTIME_DIR");
+  const char *xdgCurrentDesktop  = ::getenv("XDG_CURRENT_DESKTOP");
+
+  // 0.8.48: append compositor identity from XDG_CURRENT_DESKTOP
+  // (set by sway / Hyprland / KDE Plasma / GNOME / labwc) to
+  // pass messages so operators can confirm doctor sees the right
+  // session. Empty hint when env unset (operator running in
+  // SSH session, init script without DE bootstrap, etc.).
+  auto compositorHint = [&]() -> std::string {
+    if (xdgCurrentDesktop && xdgCurrentDesktop[0] != '\0')
+      return std::string(" [compositor: ") + xdgCurrentDesktop + "]";
+    return "";
+  };
 
   if (waylandDisplay == nullptr || waylandDisplay[0] == '\0') {
     r.checks.push_back(passCheck("gui", "wayland-readiness",
@@ -670,11 +682,11 @@ void checkWaylandReadiness(Report &r) {
   }
   if (!anyPipewire) {
     r.checks.push_back(passCheck("gui", "wayland-readiness",
-      std::string("Wayland socket ") + sockPath + " reachable. "
-      "PipeWire NOT detected at " + xdgRuntimeDir + " — `gui: auto` "
-      "video will work but in-jail audio will be silent. Install "
-      "/ start pipewire if you need audio (firefox WebRTC, "
-      "video calls, etc.)."));
+      std::string("Wayland socket ") + sockPath + " reachable" +
+      compositorHint() + ". PipeWire NOT detected at " + xdgRuntimeDir +
+      " — `gui: auto` video will work but in-jail audio will be "
+      "silent. Install / start pipewire if you need audio (firefox "
+      "WebRTC, video calls, etc.)."));
     return;
   }
   if (!missingPw.empty()) {
@@ -691,7 +703,8 @@ void checkWaylandReadiness(Report &r) {
   }
   r.checks.push_back(passCheck("gui", "wayland-readiness",
     std::string("ready for `gui: auto` — Wayland socket ") + sockPath +
-    " + PipeWire core/manager present at " + xdgRuntimeDir + "."));
+    " + PipeWire core/manager present at " + xdgRuntimeDir +
+    compositorHint() + "."));
 }
 
 // 0.8.24: Capsicum / casper sandbox readiness. Surfaces:

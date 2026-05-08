@@ -51,6 +51,14 @@ static int mainGuarded(int argc, char** argv) {
     const char* lang    = ::getenv("LANG");
     const char* xauth   = ::getenv("XAUTHORITY");
     const char* nocolor = ::getenv("NO_COLOR");
+    // 0.8.48: preserve XDG_RUNTIME_DIR (needed by 0.8.18 Wayland +
+    // 0.8.44 PipeWire + 0.8.47 PulseAudio bind blocks) and
+    // XDG_CURRENT_DESKTOP (compositor-ID hint surfaced by
+    // `crate doctor wayland-readiness`). Without this, all four
+    // Wayland releases were silent no-ops in the setuid-prod path
+    // — sanitize wiped environ before those getenv() calls fired.
+    const char* xdgRun  = ::getenv("XDG_RUNTIME_DIR");
+    const char* xdgCur  = ::getenv("XDG_CURRENT_DESKTOP");
     envNoColor = (nocolor != nullptr);
 
     extern char **environ;
@@ -66,6 +74,8 @@ static int mainGuarded(int argc, char** argv) {
     if (lang)    ::setenv("LANG", lang, 1);
     if (xauth)   ::setenv("XAUTHORITY", xauth, 1);
     if (envNoColor) ::setenv("NO_COLOR", "", 1);
+    if (xdgRun)  ::setenv("XDG_RUNTIME_DIR", xdgRun, 1);
+    if (xdgCur)  ::setenv("XDG_CURRENT_DESKTOP", xdgCur, 1);
   }
 
   //
