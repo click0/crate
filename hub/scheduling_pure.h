@@ -87,4 +87,46 @@ Recommendation pickLeastLoaded(
 //   }
 std::string renderRecommendationJson(const Recommendation &rec);
 
+// 0.8.43: CLI helper plumbing. The `crate-hub schedule <jail>`
+// subcommand wraps the curl + JSON-extract + `crate migrate`
+// dance. Pure helpers below are the testable bits.
+
+// Compose the least-loaded URL given a hub base URL and an
+// optional currentNodeHint:
+//   buildLeastLoadedUrl("http://hub:9810", "")     -> ".../least-loaded"
+//   buildLeastLoadedUrl("http://hub:9810", "foo")  -> ".../least-loaded?current=foo"
+// Trailing slash on hubUrl is tolerated. currentNodeHint is
+// percent-encoded for the small subset of chars we expect in
+// jail names ([A-Za-z0-9_-] passes through; anything else
+// gets %HH).
+std::string buildLeastLoadedUrl(const std::string &hubUrl,
+                                const std::string &currentNodeHint);
+
+// Pull `target` field from the endpoint's JSON body. Returns
+// empty string when the field is null or absent. Handles both
+//   "target":"alpha"
+//   "target": "alpha"
+//   "target":null
+// without dragging in a full JSON parser (operator-controlled
+// hub returns the format we render in renderRecommendationJson —
+// stable, no need for general parsing).
+std::string extractTargetField(const std::string &jsonBody);
+
+// Pull `host` field — same pattern as extractTargetField.
+std::string extractHostField(const std::string &jsonBody);
+
+// Build the `crate migrate` argv to hand off to execv. Operator-
+// supplied paths are NOT validated here — that's `crate migrate`'s
+// job. We just compose the argv shape; this is the unit-test seam.
+//   ["/usr/local/bin/crate", "migrate", "<jail>",
+//    "--from", "<fromHost>", "--to", "<toHost>",
+//    "--from-token-file", "<fromTok>", "--to-token-file", "<toTok>"]
+// fromHost / toHost should already be in `host:port` form.
+std::vector<std::string> buildMigrateArgv(const std::string &cratePath,
+                                          const std::string &jail,
+                                          const std::string &fromHost,
+                                          const std::string &toHost,
+                                          const std::string &fromTokenFile,
+                                          const std::string &toTokenFile);
+
 } // namespace SchedulingPure
