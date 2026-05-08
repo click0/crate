@@ -6,6 +6,101 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.48] — 2026-05-08
+
+**Critical fix.** Env-sanitize at startup (`cli/main.cpp:42-69`)
+was wiping `XDG_RUNTIME_DIR` from the operator's shell. That
+broke the entire Wayland subsystem in setuid-prod since 0.8.18:
+the Wayland-bind / PipeWire-bind / PulseAudio-bind blocks all
+read `getenv("XDG_RUNTIME_DIR")` AFTER the wipe and got
+`nullptr`, so they silently no-op'd.
+
+Plus a small win on top of the fix: compositor-ID hint surfaced
+in the `wayland-readiness` doctor check.
+
+### The bug
+
+Pre-0.8.48 the env-sanitize block at line 42-69 wiped `environ`
+and rebuilt with a tight safelist:
+
+```cpp
+const char* term    = ::getenv("TERM");
+const char* display = ::getenv("DISPLAY");
+const char* wayland = ::getenv("WAYLAND_DISPLAY");
+const char* lang    = ::getenv("LANG");
+const char* xauth   = ::getenv("XAUTHORITY");
+const char* nocolor = ::getenv("NO_COLOR");
+// XDG_RUNTIME_DIR NOT preserved -> ::getenv() in setupX11
+//                                   returns nullptr in setuid-prod
+```
+
+`XDG_RUNTIME_DIR` was missed when the env-sanitize landed; later
+Wayland releases (0.8.18 / 0.8.44 / 0.8.45 / 0.8.47) all
+predicated their bind blocks on this env var being non-null.
+Result: the entire Wayland audio + video binding chain was a
+silent no-op for any setuid invocation. Operators reproducing
+locally without the setuid wrapper saw it work; under
+production install (setuid 04755) it didn't.
+
+This is exactly the class of bug we hunted in 0.8.31 — operator
+config (in this case `gui: auto`) parsed and validated cleanly,
+but the runtime silently dropped the binding.
+
+### Fix
+
+Add `XDG_RUNTIME_DIR` and `XDG_CURRENT_DESKTOP` to the env-
+sanitize preserve list:
+
+```cpp
+const char* xdgRun  = ::getenv("XDG_RUNTIME_DIR");
+const char* xdgCur  = ::getenv("XDG_CURRENT_DESKTOP");
+// ... wipe environ + safelist re-set ...
+if (xdgRun)  ::setenv("XDG_RUNTIME_DIR", xdgRun, 1);
+if (xdgCur)  ::setenv("XDG_CURRENT_DESKTOP", xdgCur, 1);
+```
+
+After this, all the Wayland releases since 0.8.18 actually do
+what their CHANGELOG entries claimed.
+
+### Compositor-ID hint (small win)
+
+`crate doctor wayland-readiness` now appends compositor identity
+from `XDG_CURRENT_DESKTOP` to the pass message:
+
+```
+gui   wayland-readiness   PASS    ready for `gui: auto` — Wayland
+                                  socket /var/run/user/1000/wayland-0 +
+                                  PipeWire core/manager present at
+                                  /var/run/user/1000 [compositor: sway]
+```
+
+Helps operators confirm doctor sees the right session — without
+the hint it's not obvious which compositor exposed the socket
+(Sway / Hyprland / KDE Plasma / GNOME / labwc).
+
+Hint added to two paths: the audio-silent-but-otherwise-ready
+pass and the fully-ready pass. Empty hint when env unset (SSH
+session, init script without DE bootstrap, etc.) — falls
+through silently.
+
+### What this release does NOT do
+
+- **Audit other env-sanitize gaps** — XDG_RUNTIME_DIR was the
+  obviously-broken one because it gated multiple bind blocks;
+  there could be others (e.g. `PIPEWIRE_RUNTIME_DIR` is
+  technically supported by libpipewire as an override but
+  defaulted from XDG_RUNTIME_DIR which we now preserve, so
+  fine in practice). A systematic audit is tracked.
+- **Tests for env preservation** — would need integration test
+  that exec's the setuid binary with a known env and checks
+  what made it through. Not in unit-test scope.
+- **Compositor-ID hint in failure paths** — only added to the
+  two pass paths where operator most cares about confirmation.
+
+1107/1107 unit tests pass locally.
+
+---
+
 ## [0.8.47] — 2026-05-08
 
 PulseAudio compat socket bind for `gui: auto` / `gui: wayland`.
