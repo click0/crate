@@ -21,6 +21,7 @@
 #include "net_detect.h"
 #include "nv_protocol.h"
 #include "pfctl_ops.h"
+#include "run_gui_pure.h"
 #include "util.h"
 #include "zfs_ops.h"
 #include "err.h"
@@ -597,6 +598,102 @@ void checkDrmSession(Report &r) {
   }
 }
 
+// 0.8.45: Wayland readiness check for `gui: auto` jails. Inspects
+// the operator's environment + filesystem to predict whether
+// `gui: auto` will succeed at binding the host's compositor and
+// audio sockets. Doesn't fail the run — just surfaces config
+// issues that would otherwise produce silent-broken jails (the
+// kind of bug we hunted in 0.8.31).
+//
+// Outcomes:
+//   - WAYLAND_DISPLAY unset                  -> info pass (X11-only or headless)
+//   - WAYLAND_DISPLAY set, XDG_RUNTIME_DIR
+//     unset                                  -> warn (mount will be skipped)
+//   - WAYLAND_DISPLAY set, socket missing    -> warn (compositor unreachable)
+//   - WAYLAND_DISPLAY set + socket present
+//     + PipeWire missing                     -> pass with audio note
+//   - all four present                       -> pass "ready for gui: auto"
+//
+// Audio (PipeWire) presence is checked separately — operators
+// running PulseAudio-only OR no audio at all see an info note,
+// not a warning.
+void checkWaylandReadiness(Report &r) {
+  const char *waylandDisplay = ::getenv("WAYLAND_DISPLAY");
+  const char *xdgRuntimeDir  = ::getenv("XDG_RUNTIME_DIR");
+
+  if (waylandDisplay == nullptr || waylandDisplay[0] == '\0') {
+    r.checks.push_back(passCheck("gui", "wayland-readiness",
+      "WAYLAND_DISPLAY not set in this shell — `gui: auto` will "
+      "fall back to X11 / headless. Fine for X11-only desktops "
+      "or SSH sessions; if you expected Wayland, ensure your "
+      "compositor exports WAYLAND_DISPLAY before running "
+      "`crate run`."));
+    return;
+  }
+  if (xdgRuntimeDir == nullptr || xdgRuntimeDir[0] == '\0') {
+    r.checks.push_back(warnCheck("gui", "wayland-readiness",
+      std::string("WAYLAND_DISPLAY=") + waylandDisplay +
+      " but XDG_RUNTIME_DIR is unset — `gui: auto` won't be able "
+      "to find the socket and will skip Wayland mount. Most "
+      "session managers set this; check your login script."));
+    return;
+  }
+  // Validate the socket name through the same parser that
+  // run_gui.cpp uses, so doctor flags exactly what the runtime
+  // will reject (path traversal, shell metas, etc.).
+  auto sockBasename = RunGuiPure::parseWaylandDisplay(waylandDisplay);
+  if (sockBasename.empty()) {
+    r.checks.push_back(warnCheck("gui", "wayland-readiness",
+      std::string("WAYLAND_DISPLAY='") + waylandDisplay +
+      "' is not a usable basename (path/special-char rejected "
+      "by parseWaylandDisplay). `gui: auto` will skip Wayland "
+      "mount with the same diagnostic at jail-start time."));
+    return;
+  }
+  std::string sockPath = std::string(xdgRuntimeDir) + "/" + sockBasename;
+  struct stat st{};
+  if (::stat(sockPath.c_str(), &st) != 0) {
+    r.checks.push_back(warnCheck("gui", "wayland-readiness",
+      "WAYLAND_DISPLAY=" + std::string(waylandDisplay) +
+      " but socket " + sockPath + " is missing. Compositor may "
+      "have crashed; `gui: auto` will skip Wayland mount."));
+    return;
+  }
+  // Wayland reachable. Now check PipeWire (informational —
+  // PulseAudio-only / no-audio hosts are fine).
+  bool anyPipewire = false;
+  std::vector<std::string> missingPw;
+  for (const auto &n : RunGuiPure::pipewireSocketNames()) {
+    auto p = std::string(xdgRuntimeDir) + "/" + n;
+    if (::stat(p.c_str(), &st) == 0) anyPipewire = true;
+    else missingPw.push_back(n);
+  }
+  if (!anyPipewire) {
+    r.checks.push_back(passCheck("gui", "wayland-readiness",
+      std::string("Wayland socket ") + sockPath + " reachable. "
+      "PipeWire NOT detected at " + xdgRuntimeDir + " — `gui: auto` "
+      "video will work but in-jail audio will be silent. Install "
+      "/ start pipewire if you need audio (firefox WebRTC, "
+      "video calls, etc.)."));
+    return;
+  }
+  if (!missingPw.empty()) {
+    std::string msg = "Wayland socket reachable; PipeWire partially "
+                      "present (missing: ";
+    for (size_t i = 0; i < missingPw.size(); i++) {
+      if (i > 0) msg += ", ";
+      msg += missingPw[i];
+    }
+    msg += "). Audio may be flaky — typical when pipewire-manager "
+           "hasn't started yet. Re-run after `service pipewire onestart`.";
+    r.checks.push_back(warnCheck("gui", "wayland-readiness", msg));
+    return;
+  }
+  r.checks.push_back(passCheck("gui", "wayland-readiness",
+    std::string("ready for `gui: auto` — Wayland socket ") + sockPath +
+    " + PipeWire core/manager present at " + xdgRuntimeDir + "."));
+}
+
 // 0.8.24: Capsicum / casper sandbox readiness. Surfaces:
 //   - whether crate was built with HAVE_CAPSICUM at all
 //   - whether `audit_syslog: true` is wired (operator opt-in for
@@ -727,6 +824,7 @@ bool doctorCommand(const Args &args) {
   checkIpfwReservedRanges(r);      // 0.8.14
   checkRctlPresence(r);            // 0.8.14
   checkDrmSession(r);              // 0.8.23
+  checkWaylandReadiness(r);        // 0.8.45
   checkCapsicumSandbox(r);         // 0.8.24
   checkNativeApis(r);              // 0.8.26
   checkNvProtocol(r);              // 0.8.27

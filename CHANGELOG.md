@@ -6,6 +6,63 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.45] — 2026-05-08
+
+`crate doctor wayland-readiness` check — predicts whether
+`gui: auto` will succeed at binding the host's compositor and
+audio sockets, so operators catch silent-broken-jail cases at
+diagnostic time instead of after starting firefox and noticing
+no audio / blank window.
+
+### Outcomes
+
+| Operator state | Severity | Message hint |
+|---|---|---|
+| `WAYLAND_DISPLAY` unset | info pass | "X11-only or headless; if you expected Wayland, check compositor exports it" |
+| `WAYLAND_DISPLAY` set, `XDG_RUNTIME_DIR` unset | warn | "mount will be skipped; check login script" |
+| `WAYLAND_DISPLAY` not a valid basename | warn | "same diagnostic that runtime would emit at jail-start time" |
+| Socket file missing | warn | "compositor may have crashed" |
+| Socket OK, PipeWire missing | pass | "video will work; in-jail audio will be silent — install/start pipewire" |
+| Socket OK, PipeWire partial | warn | "pipewire-manager hasn't started; service pipewire onestart" |
+| All sockets present | pass | "ready for `gui: auto`" |
+
+### Implementation
+
+`checkWaylandReadiness` in `lib/doctor.cpp`, runs after
+`checkDrmSession` (both fall under the `gui` category from 0.8.23):
+
+- Reads `$WAYLAND_DISPLAY` + `$XDG_RUNTIME_DIR` from the env
+  (preserved through `cli/main.cpp` setuid env-sanitize for
+  exactly this reason)
+- Validates basename via the same `RunGuiPure::parseWaylandDisplay`
+  parser the runtime uses — ensures doctor flags exactly what
+  `gui: auto` would reject
+- Stat's the resolved socket path (`$XDG_RUNTIME_DIR/<basename>`)
+- Stat's each PipeWire socket from `RunGuiPure::pipewireSocketNames()`
+  (0.8.44) — same source-of-truth list as the runtime
+
+No new pure helpers — the analysis is all dispatching env-var
+strings + filesystem stat into pre-existing parsers. Tests would
+require mocking `getenv` + `stat`; deferred. The pre-existing
+parser tests (0.8.18 + 0.8.44) cover the validator inputs the
+check hands off.
+
+### What this release does NOT do
+
+- **Stat-mock unit tests** — environment + filesystem probes
+  aren't easily ATF'd. The pre-existing parser tests cover the
+  string-handling part; the boolean dispatch is straight-through.
+- **Wayland VNC readiness (`wayvnc`)** — separate concern;
+  tracked when Wayland VNC ships.
+- **Compositor identity detection** (Sway / labwc / Hyprland /
+  KDE Plasma / GNOME) — pure ID is informational. Can land
+  later as a doctor sub-check ("WAYLAND_DISPLAY=wayland-0,
+  compositor=sway/1.10").
+
+1105/1105 unit tests pass locally.
+
+---
+
 ## [0.8.44] — 2026-05-08
 
 PipeWire socket bind for `gui: auto` — closes the silent
