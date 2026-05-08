@@ -1151,8 +1151,9 @@ static Spec parseSpecFromNode(YAML::Node top) {
       if (k.second.IsScalar()) {
         std::string mode = AsString(k.second);
         if (mode != "nested" && mode != "headless"
-            && mode != "gpu" && mode != "auto")
-          ERR("gui scalar shorthand must be 'nested', 'headless', 'gpu', or 'auto' (got '"
+            && mode != "gpu" && mode != "auto"
+            && mode != "wayland")
+          ERR("gui scalar shorthand must be 'nested', 'headless', 'gpu', 'auto', or 'wayland' (got '"
               << mode << "')")
         spec.guiOptions = std::make_unique<Spec::GuiOptions>();
         spec.guiOptions->mode = mode;
@@ -1165,8 +1166,9 @@ static Spec parseSpecFromNode(YAML::Node top) {
         if (isKey(b, "mode")) {
           scalar(b.second, spec.guiOptions->mode, "gui/mode");
           if (spec.guiOptions->mode != "nested" && spec.guiOptions->mode != "headless"
-              && spec.guiOptions->mode != "gpu" && spec.guiOptions->mode != "auto")
-            ERR("gui/mode must be 'nested', 'headless', 'gpu', or 'auto'")
+              && spec.guiOptions->mode != "gpu" && spec.guiOptions->mode != "auto"
+              && spec.guiOptions->mode != "wayland")
+            ERR("gui/mode must be 'nested', 'headless', 'gpu', 'auto', or 'wayland'")
         } else if (isKey(b, "resolution")) {
           scalar(b.second, spec.guiOptions->resolution, "gui/resolution");
         } else if (isKey(b, "vnc")) {

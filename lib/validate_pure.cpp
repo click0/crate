@@ -97,6 +97,21 @@ std::vector<std::string> gatherWarnings(const Spec &spec) {
       w.push_back("clipboard/mode=isolated only provides full isolation with x11/mode=nested");
   }
 
+  // 0.8.46: gui/resolution is ignored when the resolved mode is
+  // shared/wayland — the host compositor decides resolution per
+  // wl_output, the operator's spec value has no effect. Warn so
+  // operators don't think they're configuring the jail's display.
+  if (spec.guiOptions
+      && spec.guiOptions->resolution != "1280x720"   // default
+      && (spec.guiOptions->mode == "wayland"
+          || spec.guiOptions->mode == "auto"
+          || spec.guiOptions->mode == "shared")) {
+    w.push_back("gui/resolution is ignored when gui/mode resolves to shared "
+                "or wayland (the host compositor decides resolution via "
+                "wl_output / X11 root window size); only honoured for "
+                "mode=nested (Xephyr) and mode=headless (Xvfb)");
+  }
+
   if (spec.dbusOptions) {
     if (spec.dbusOptions->sessionBus)
       w.push_back("dbus/session=true requires dbus-daemon to be installed in the container");
