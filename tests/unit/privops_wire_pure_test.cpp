@@ -348,6 +348,39 @@ ATF_TEST_CASE_BODY(format_validate_error_distinct_prefix) {
   ATF_REQUIRE(body.find("parse:") == std::string::npos);
 }
 
+// --- Per-verb success/error builders (0.9.2) ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(format_handler_error_includes_kind);
+ATF_TEST_CASE_BODY(format_handler_error_includes_kind) {
+  std::string body = formatHandlerError("exec_failed", "rctl(8) exited 1");
+  ATF_REQUIRE(body.find("exec_failed") != std::string::npos);
+  ATF_REQUIRE(body.find("rctl(8) exited 1") != std::string::npos);
+  ATF_REQUIRE(body.find("\"error\"") != std::string::npos);
+
+  // Newlines / tabs in the reason get escaped, not raw-emitted.
+  std::string b2 = formatHandlerError("k", "line1\nline2");
+  ATF_REQUIRE(b2.find("\\n") != std::string::npos);
+  ATF_REQUIRE(b2.find("\nline2") == std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(format_set_rctl_success);
+ATF_TEST_CASE_BODY(format_set_rctl_success) {
+  std::string body = formatSetRctlSuccess(7, "pcpu", "20");
+  ATF_REQUIRE(body.find("\"set\":true") != std::string::npos);
+  ATF_REQUIRE(body.find("\"jid\":7") != std::string::npos);
+  ATF_REQUIRE(body.find("\"key\":\"pcpu\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"value\":\"20\"") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(format_set_rctl_escapes_value);
+ATF_TEST_CASE_BODY(format_set_rctl_escapes_value) {
+  // Value won't realistically contain a backslash post-validate,
+  // but defence in depth catches a future regression.
+  std::string body = formatSetRctlSuccess(1, "pcpu", "20\\bad");
+  // Escaped: 20\\bad
+  ATF_REQUIRE(body.find("20\\\\bad") != std::string::npos);
+}
+
 // --- parseValidateAndDispatch ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(dispatch_unknown_returns_404);
@@ -438,6 +471,9 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, format_not_implemented_includes_verb);
   ATF_ADD_TEST_CASE(tcs, format_parse_error_escapes_quotes);
   ATF_ADD_TEST_CASE(tcs, format_validate_error_distinct_prefix);
+  ATF_ADD_TEST_CASE(tcs, format_handler_error_includes_kind);
+  ATF_ADD_TEST_CASE(tcs, format_set_rctl_success);
+  ATF_ADD_TEST_CASE(tcs, format_set_rctl_escapes_value);
 
   ATF_ADD_TEST_CASE(tcs, dispatch_unknown_returns_404);
   ATF_ADD_TEST_CASE(tcs, dispatch_parse_error_returns_400);

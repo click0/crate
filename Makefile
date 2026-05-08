@@ -54,7 +54,8 @@ DAEMON_SRCS = daemon/main.cpp daemon/config.cpp daemon/server.cpp \
               daemon/control_socket_pure.cpp daemon/control_socket.cpp \
               daemon/sandbox_pure.cpp daemon/sandbox.cpp \
               daemon/rate_limit_pure.cpp daemon/rate_limit.cpp \
-              daemon/socket_perms_pure.cpp
+              daemon/socket_perms_pure.cpp \
+              daemon/privops_handlers.cpp
 
 SNMPD_SRCS = snmpd/main.cpp snmpd/collector.cpp \
              snmpd/mib.cpp snmpd/mib_pure.cpp

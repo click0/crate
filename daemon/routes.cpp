@@ -5,6 +5,7 @@
 #include "routes.h"
 #include "auth.h"
 #include "metrics.h"
+#include "privops_handlers.h"
 #include "privops_wire_pure.h"
 #include "rate_limit.h"
 #include "routes_pure.h"
@@ -1009,7 +1010,7 @@ static void handlePrivOp(const httplib::Request &req, httplib::Response &res,
   }
   auto verbName = req.path_params.at("verb");
   PrivOpsPure::Verb v = PrivOpsPure::parseVerb(verbName);
-  auto result = PrivOpsWirePure::parseValidateAndDispatch(v, req.body);
+  auto result = Crated::dispatchPrivOp(v, req.body);
   res.status = result.status;
   res.set_content(result.body, "application/json");
 }

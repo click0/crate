@@ -6,6 +6,106 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.2] — 2026-05-08
+
+**Rootless track, first real handler.** Third 0.9.x release —
+`set_rctl` ships its actual privileged-operation handler. Verbs
+2-13 still return 501; they land verb-by-verb in 0.9.3..0.9.7.
+
+### Why `set_rctl` first
+
+Smallest blast radius: the operation already exists end-to-end
+in `crate retune`, so the handler is essentially a wrapper
+around `RetunePure::buildSetArgv` + `rctl(8)` exec. No new
+syscalls, no new file paths, no new state to reason about.
+A clean precedent for the 12 verbs to follow.
+
+### What lands
+
+- **`daemon/privops_handlers.{h,cpp}`** (new) — privileged-
+  operations dispatcher. Each verb that has a real handler gets
+  its own case in `Crated::dispatchPrivOp`; the rest fall back
+  to `PrivOpsWirePure::parseValidateAndDispatch` (501).
+  - `Crated::handleSetRctl(SetRctlReq)` — looks up the jail by
+    jid (rejects with `404 jail_not_found` if it's gone), builds
+    `rctl -a jail:<jid>:<key>:deny=<value>` via the existing
+    `RetunePure::buildSetArgv`, executes via `Util::execCommand`.
+    Exec failures bubble up as `500 exec_failed` with the
+    rctl(8) stderr text in the body.
+- **`daemon/routes.cpp`** — `handlePrivOp` now delegates to
+  `Crated::dispatchPrivOp` instead of the pure dispatcher.
+- **`lib/privops_wire_pure.{h,cpp}`** — added pure response
+  builders so the wire shape stays test-locked:
+  - `formatHandlerError(kind, reason)` — generic 4xx/5xx body.
+    `kind` tokens land in the operator log as
+    `exec_failed` / `jail_not_found` / etc. for triage.
+  - `formatSetRctlSuccess(jid, key, value)` — 200 OK body
+    confirming what was applied.
+
+### Wire example
+
+```http
+POST /api/v1/privops/set_rctl
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+
+{"jid":7,"key":"pcpu","value":"20"}
+```
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{"set":true,"jid":7,"key":"pcpu","value":"20"}
+```
+
+Failure modes:
+
+- `400 parse:` — wire-format error (missing `jid`/`key`/`value`,
+  wrong type).
+- `400 validate:` — semantic error (key not in RCTL whitelist,
+  value out of range for the key).
+- `404 jail_not_found` — `jid` doesn't match any running jail.
+- `500 exec_failed` — `rctl(8)` returned non-zero.
+
+### Tests
+
+- 3 new ATF tests in `tests/unit/privops_wire_pure_test.cpp`:
+  `format_handler_error_includes_kind`,
+  `format_set_rctl_success`,
+  `format_set_rctl_escapes_value` (multi-line / metachar
+  escaping defence-in-depth).
+- Suite count: 1186 → **1189**, all passing.
+- `daemon/privops_handlers.o` builds cleanly.
+
+### Series progress
+
+| Release | Verb | Status |
+|---------|------|--------|
+| 0.9.0 | (taxonomy) | shipped |
+| 0.9.1 | (wire format) | shipped |
+| **0.9.2** | **set_rctl** | **shipped** |
+| 0.9.3 | clear_rctl | next |
+| 0.9.4 | attach_zfs / detach_zfs | |
+| 0.9.5 | mount_nullfs / unmount_nullfs | |
+| 0.9.6 | configure_iface / teardown_iface | |
+| 0.9.7 | pf+ipfw rules + create_jail / destroy_jail | |
+| 0.9.8 | per-user namespacing + migration doc | |
+| 0.9.9 | default flip | |
+| 1.0.0 | setuid bit removed | |
+
+### Files
+
+- `daemon/privops_handlers.{h,cpp}` (new)
+- `daemon/routes.cpp` — dispatcher swap
+- `lib/privops_wire_pure.{h,cpp}` — response builders
+- `tests/unit/privops_wire_pure_test.cpp` — 3 new tests
+- `Makefile` — `daemon/privops_handlers.cpp` added to `DAEMON_SRCS`
+- `cli/args.cpp` — `crate 0.9.2`
+- `CHANGELOG.md` — entry
+
+---
+
 ## [0.9.1] — 2026-05-08
 
 **Rootless track, JSON wire format.** Second 0.9.x release —
