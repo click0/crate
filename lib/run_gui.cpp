@@ -786,6 +786,49 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
     }
   }
 
+  // 0.8.47: PulseAudio compat socket bind. Lives under a
+  // `pulse/` sub-directory of $XDG_RUNTIME_DIR (per Pulse
+  // convention), so a flat bind doesn't work — we need to
+  // create the subdir in the jail before nullfs-binding the
+  // socket file. Apps still on PulseAudio (Discord, OBS Pulse
+  // backend, some legacy Qt) need this; modern firefox /
+  // chromium prefer PipeWire native and don't.
+  // Best-effort: missing source skipped silently
+  // (PipeWire-only systems don't need PulseAudio compat).
+  if ((isAutoFlow || isWaylandFlow) && xdgRuntimeDir != nullptr) {
+    auto pulseRel = RunGuiPure::pulseSocketRelpath();   // "pulse/native"
+    auto hostPulse = std::string(xdgRuntimeDir) + "/" + pulseRel;
+    if (Util::Fs::fileExists(hostPulse)) {
+      try {
+        Util::Fs::mkdirIfNotExists(J("/tmp/wayland"), 0700);
+        // Compute parent dir of jailSockTarget (e.g. "/tmp/wayland/pulse").
+        auto jailSockTarget = J("/tmp/wayland/") + pulseRel;
+        auto slashAt = jailSockTarget.rfind('/');
+        if (slashAt != std::string::npos) {
+          auto parentDir = jailSockTarget.substr(0, slashAt);
+          Util::Fs::mkdirIfNotExists(parentDir, 0700);
+        }
+        if (!Util::Fs::fileExists(jailSockTarget)) {
+          std::ofstream touch(jailSockTarget);   // empty mount target
+        }
+        mount(new Mount("nullfs", jailSockTarget, hostPulse, MNT_IGNORE));
+        // PulseAudio reads XDG_RUNTIME_DIR (same as PipeWire) —
+        // already set above when PipeWire bound; setting again
+        // is idempotent.
+        setJailEnv("XDG_RUNTIME_DIR", "/tmp/wayland");
+        if (logProgress)
+          std::cerr << rang::fg::gray << "gui: auto: bound PulseAudio socket "
+                    << hostPulse << " -> " << jailSockTarget
+                    << rang::style::reset << std::endl;
+      } catch (const std::exception &ex) {
+        std::cerr << rang::fg::yellow
+                  << "gui: auto: failed to bind PulseAudio socket "
+                  << hostPulse << " (" << ex.what() << ")"
+                  << rang::style::reset << std::endl;
+      }
+    }
+  }
+
   // Register shared mode in GUI registry (for tracking)
   {
     auto regW = Ctx::GuiRegistry::lock();

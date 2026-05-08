@@ -138,6 +138,13 @@ std::vector<std::string> pipewireSocketNames() {
   return { "pipewire-0", "pipewire-0-manager" };
 }
 
+std::string pulseSocketRelpath() {
+  // Single string — there's only one PulseAudio socket per
+  // session ($XDG_RUNTIME_DIR/pulse/native). The runtime
+  // creates the `pulse/` sub-dir in the jail before binding.
+  return "pulse/native";
+}
+
 std::string parseWaylandDisplay(const std::string &waylandDisplayEnv) {
   if (waylandDisplayEnv.empty()) return "";
   // Reject anything that looks like a path — only basename form

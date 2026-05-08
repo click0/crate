@@ -6,6 +6,56 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.47] — 2026-05-08
+
+PulseAudio compat socket bind for `gui: auto` / `gui: wayland`.
+Closes the gap left by 0.8.44 (PipeWire-only); apps still on
+PulseAudio (Discord, OBS Studio's PulseAudio backend, some
+legacy Qt apps) now get sound in the jail too.
+
+### What this release adds
+
+```
+host                                            jail
+$XDG_RUNTIME_DIR/pulse/native     <--nullfs-->  /tmp/wayland/pulse/native
+```
+
+The bind needs a sub-directory (`pulse/`) on the jail side
+because PulseAudio convention puts the socket inside that
+subdir; flat bind from 0.8.44 doesn't apply. crate creates
+`/tmp/wayland/pulse/` on demand at jail-start time, then
+nullfs-binds the socket file.
+
+`XDG_RUNTIME_DIR=/tmp/wayland` env in the jail (set by 0.8.18 /
+0.8.44 already) makes `libpulse` look in the right place
+without operator config.
+
+### Implementation
+
+- New pure helper `RunGuiPure::pulseSocketRelpath()` returns
+  `"pulse/native"` (single string — only one PulseAudio socket
+  per session). Distinct from `pipewireSocketNames()` which
+  returns flat names.
+- New runtime block in `lib/run_gui.cpp` after the PipeWire
+  block: detects sub-dir form via `find('/')`, creates the
+  parent (`/tmp/wayland/pulse/`) before touching the bind
+  target, then nullfs-binds.
+- 2 new ATF cases (canonical relpath, sub-dir-shape sanity).
+
+### What this release does NOT do
+
+- **`pulse/cli` inspector socket** — useful for `pactl
+  list-sinks` from inside the jail. Operators using
+  PulseAudio-native typically don't need pactl in-jail; we'd
+  add it as a list extension if a real ask comes in.
+- **Direct device access** (`/dev/dsp`, `/dev/sndstat`) —
+  some legacy apps want raw OSS. crate doesn't unhide audio
+  devfs entries today; tracked separately.
+
+1107/1107 unit tests pass locally.
+
+---
+
 ## [0.8.46] — 2026-05-08
 
 Two small Wayland-track items:
