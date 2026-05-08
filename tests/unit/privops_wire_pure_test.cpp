@@ -410,6 +410,29 @@ ATF_TEST_CASE_BODY(format_detach_zfs_success) {
   ATF_REQUIRE(body.find("\"attached\":") == std::string::npos);
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(format_mount_nullfs_success_ro);
+ATF_TEST_CASE_BODY(format_mount_nullfs_success_ro) {
+  std::string body = formatMountNullfsSuccess("/host/data", "/jail/data", true);
+  ATF_REQUIRE(body.find("\"mounted\":true") != std::string::npos);
+  ATF_REQUIRE(body.find("\"source\":\"/host/data\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"target\":\"/jail/data\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"read_only\":true") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(format_mount_nullfs_success_rw);
+ATF_TEST_CASE_BODY(format_mount_nullfs_success_rw) {
+  std::string body = formatMountNullfsSuccess("/host", "/jail", false);
+  ATF_REQUIRE(body.find("\"read_only\":false") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(format_unmount_nullfs_success);
+ATF_TEST_CASE_BODY(format_unmount_nullfs_success) {
+  std::string body = formatUnmountNullfsSuccess("/jail/data");
+  ATF_REQUIRE(body.find("\"unmounted\":true") != std::string::npos);
+  ATF_REQUIRE(body.find("\"target\":\"/jail/data\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"mounted\":") == std::string::npos);
+}
+
 // --- parseValidateAndDispatch ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(dispatch_unknown_returns_404);
@@ -506,6 +529,9 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, format_clear_rctl_success);
   ATF_ADD_TEST_CASE(tcs, format_attach_zfs_success);
   ATF_ADD_TEST_CASE(tcs, format_detach_zfs_success);
+  ATF_ADD_TEST_CASE(tcs, format_mount_nullfs_success_ro);
+  ATF_ADD_TEST_CASE(tcs, format_mount_nullfs_success_rw);
+  ATF_ADD_TEST_CASE(tcs, format_unmount_nullfs_success);
 
   ATF_ADD_TEST_CASE(tcs, dispatch_unknown_returns_404);
   ATF_ADD_TEST_CASE(tcs, dispatch_parse_error_returns_400);

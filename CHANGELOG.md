@@ -6,6 +6,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.5] — 2026-05-08
+
+**Rootless track, nullfs mount/unmount.** Sixth 0.9.x release —
+`mount_nullfs` / `unmount_nullfs` paired (lifecycle pair).
+
+- `Crated::handleMountNullfs` / `handleUnmountNullfs` — calls
+  `nmount(2)` / `unmount(2)` syscalls directly, mirroring the
+  `iov` pattern from `lib/mount.cpp::Mount::mount` but without
+  the RAII unmount-on-destruct. Privops mounts persist across
+  handler returns; lifetime owned by the operator via paired
+  `unmount_nullfs` calls.
+  - `read_only` defaults to true (matching the parser default;
+    explicit RW requires `"read_only":false` in the body)
+  - `force` on unmount maps to `MNT_FORCE`
+  - Non-FreeBSD daemon builds return 500 `platform_unsupported`
+    (defence in depth — daemon production builds are FreeBSD-only,
+    but the platform guard keeps non-FreeBSD CI builds clean)
+- `formatMountNullfsSuccess(source, target, readOnly)` →
+  `{"mounted":true,"source":...,"target":...,"read_only":...}`.
+- `formatUnmountNullfsSuccess(target)` → `{"unmounted":true,"target":...}`.
+
+Wire example:
+
+```http
+POST /api/v1/privops/mount_nullfs
+{"source":"/host/data","target":"/jail/data","read_only":true}
+
+HTTP/1.1 200 OK
+{"mounted":true,"source":"/host/data","target":"/jail/data","read_only":true}
+
+POST /api/v1/privops/unmount_nullfs
+{"target":"/jail/data","force":false}
+
+HTTP/1.1 200 OK
+{"unmounted":true,"target":"/jail/data"}
+```
+
+Failure modes: 400 parse / 400 validate / 500 nmount_failed (with
+nmount(2) errno + kernel `errmsg` if any) / 500 unmount_failed.
+No 404 jail-lookup since the operation targets paths, not jids —
+the daemon trusts the operator's chosen path (validators already
+forbid `..` segments and shell metacharacters).
+
+Tests: 3 new ATF tests (`format_mount_nullfs_success_ro`,
+`format_mount_nullfs_success_rw`, `format_unmount_nullfs_success`).
+Suite: 1192 → **1195**, all passing.
+
+Series progress: 7/12 verbs handled (set_rctl, clear_rctl,
+attach_zfs, detach_zfs, mount_nullfs, unmount_nullfs).
+Next: `configure_iface` / `teardown_iface` in 0.9.6.
+
+---
+
 ## [0.9.4] — 2026-05-08
 
 **Rootless track, ZFS jail attach/detach.** Fifth 0.9.x

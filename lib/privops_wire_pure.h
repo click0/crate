@@ -223,4 +223,10 @@ std::string formatClearRctlSuccess(long jid, const std::string &key);
 std::string formatAttachZfsSuccess(long jid, const std::string &dataset);
 std::string formatDetachZfsSuccess(long jid, const std::string &dataset);
 
+// 200 OK body for `mount_nullfs` / `unmount_nullfs`.
+std::string formatMountNullfsSuccess(const std::string &source,
+                                     const std::string &target,
+                                     bool readOnly);
+std::string formatUnmountNullfsSuccess(const std::string &target);
+
 } // namespace PrivOpsWirePure

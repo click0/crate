@@ -470,6 +470,26 @@ std::string formatDetachZfsSuccess(long jid, const std::string &dataset) {
   return o.str();
 }
 
+std::string formatMountNullfsSuccess(const std::string &source,
+                                     const std::string &target,
+                                     bool readOnly) {
+  std::ostringstream o;
+  o << "{\"mounted\":true"
+    << ",\"source\":\"" << escape(source) << "\""
+    << ",\"target\":\"" << escape(target) << "\""
+    << ",\"read_only\":" << (readOnly ? "true" : "false")
+    << "}";
+  return o.str();
+}
+
+std::string formatUnmountNullfsSuccess(const std::string &target) {
+  std::ostringstream o;
+  o << "{\"unmounted\":true"
+    << ",\"target\":\"" << escape(target) << "\""
+    << "}";
+  return o.str();
+}
+
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body) {
   using namespace PrivOpsPure;

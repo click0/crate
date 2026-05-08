@@ -55,4 +55,12 @@ PrivOpsWirePure::DispatchResult handleClearRctl(const PrivOpsPure::ClearRctlReq 
 PrivOpsWirePure::DispatchResult handleAttachZfs(const PrivOpsPure::AttachZfsReq &r);
 PrivOpsWirePure::DispatchResult handleDetachZfs(const PrivOpsPure::DetachZfsReq &r);
 
+// 0.9.5 — nullfs mount / unmount. mount(2)/unmount(2) syscalls
+// directly (mirroring lib/mount.cpp's nmount(2) iov pattern, but
+// without the RAII unmount-on-destruct from the Mount class —
+// privops mounts persist across handler returns, lifetime owned
+// by the operator via paired unmount_nullfs calls).
+PrivOpsWirePure::DispatchResult handleMountNullfs(const PrivOpsPure::MountNullfsReq &r);
+PrivOpsWirePure::DispatchResult handleUnmountNullfs(const PrivOpsPure::UnmountNullfsReq &r);
+
 } // namespace Crated
