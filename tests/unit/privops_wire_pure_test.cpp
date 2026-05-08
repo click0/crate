@@ -433,6 +433,39 @@ ATF_TEST_CASE_BODY(format_unmount_nullfs_success) {
   ATF_REQUIRE(body.find("\"mounted\":") == std::string::npos);
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(format_configure_iface_success);
+ATF_TEST_CASE_BODY(format_configure_iface_success) {
+  std::string body = formatConfigureIfaceSuccess(
+      5, "epair0b", "bridge0", "10.0.0.5/24", "fd00::5/64",
+      "02:00:11:22:33:44");
+  ATF_REQUIRE(body.find("\"configured\":true") != std::string::npos);
+  ATF_REQUIRE(body.find("\"jid\":5") != std::string::npos);
+  ATF_REQUIRE(body.find("\"ifname\":\"epair0b\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"bridge\":\"bridge0\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"ipv4_cidr\":\"10.0.0.5/24\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"ipv6_cidr\":\"fd00::5/64\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"mac_addr\":\"02:00:11:22:33:44\"") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(format_configure_iface_empty_optional);
+ATF_TEST_CASE_BODY(format_configure_iface_empty_optional) {
+  // Empty optional fields are echoed as empty strings (not omitted)
+  // so operator scripts can grep for them deterministically.
+  std::string body = formatConfigureIfaceSuccess(
+      5, "epair0b", "", "10.0.0.5/24", "", "");
+  ATF_REQUIRE(body.find("\"bridge\":\"\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"ipv6_cidr\":\"\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"mac_addr\":\"\"") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(format_teardown_iface_success);
+ATF_TEST_CASE_BODY(format_teardown_iface_success) {
+  std::string body = formatTeardownIfaceSuccess("epair0a");
+  ATF_REQUIRE(body.find("\"destroyed\":true") != std::string::npos);
+  ATF_REQUIRE(body.find("\"ifname\":\"epair0a\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"configured\":") == std::string::npos);
+}
+
 // --- parseValidateAndDispatch ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(dispatch_unknown_returns_404);
@@ -532,6 +565,9 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, format_mount_nullfs_success_ro);
   ATF_ADD_TEST_CASE(tcs, format_mount_nullfs_success_rw);
   ATF_ADD_TEST_CASE(tcs, format_unmount_nullfs_success);
+  ATF_ADD_TEST_CASE(tcs, format_configure_iface_success);
+  ATF_ADD_TEST_CASE(tcs, format_configure_iface_empty_optional);
+  ATF_ADD_TEST_CASE(tcs, format_teardown_iface_success);
 
   ATF_ADD_TEST_CASE(tcs, dispatch_unknown_returns_404);
   ATF_ADD_TEST_CASE(tcs, dispatch_parse_error_returns_400);

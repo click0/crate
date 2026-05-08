@@ -490,6 +490,32 @@ std::string formatUnmountNullfsSuccess(const std::string &target) {
   return o.str();
 }
 
+std::string formatConfigureIfaceSuccess(long jid,
+                                        const std::string &ifname,
+                                        const std::string &bridge,
+                                        const std::string &ipv4Cidr,
+                                        const std::string &ipv6Cidr,
+                                        const std::string &macAddr) {
+  std::ostringstream o;
+  o << "{\"configured\":true"
+    << ",\"jid\":" << jid
+    << ",\"ifname\":\"" << escape(ifname) << "\""
+    << ",\"bridge\":\"" << escape(bridge) << "\""
+    << ",\"ipv4_cidr\":\"" << escape(ipv4Cidr) << "\""
+    << ",\"ipv6_cidr\":\"" << escape(ipv6Cidr) << "\""
+    << ",\"mac_addr\":\"" << escape(macAddr) << "\""
+    << "}";
+  return o.str();
+}
+
+std::string formatTeardownIfaceSuccess(const std::string &ifname) {
+  std::ostringstream o;
+  o << "{\"destroyed\":true"
+    << ",\"ifname\":\"" << escape(ifname) << "\""
+    << "}";
+  return o.str();
+}
+
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body) {
   using namespace PrivOpsPure;

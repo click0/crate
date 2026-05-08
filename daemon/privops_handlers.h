@@ -63,4 +63,24 @@ PrivOpsWirePure::DispatchResult handleDetachZfs(const PrivOpsPure::DetachZfsReq 
 PrivOpsWirePure::DispatchResult handleMountNullfs(const PrivOpsPure::MountNullfsReq &r);
 PrivOpsWirePure::DispatchResult handleUnmountNullfs(const PrivOpsPure::UnmountNullfsReq &r);
 
+// 0.9.6 — VNET interface configuration / teardown.
+//
+// configure_iface assumes the iface (typically epair Nb) already
+// exists on the host (operator created the epair pair via a
+// separate ifconfig call). The handler:
+//   1. moves ifname into the jail's vnet
+//   2. inside the jail, sets ipv4/ipv6/mac (those that are non-empty)
+//   3. inside the jail, brings the iface up
+//   4. on the host side, attaches the pair-A half (computed from
+//      the in-jail name when it follows the epair Nb pattern) to
+//      the requested bridge
+//
+// teardown_iface destroys a host-side interface via
+// IfconfigOps::destroyInterface. If the interface is still inside
+// a jail, the destroy will fail; the operator should issue
+// `ifconfig <iface> -vnet <jail>` first or rely on jail teardown
+// to release the interface.
+PrivOpsWirePure::DispatchResult handleConfigureIface(const PrivOpsPure::ConfigureIfaceReq &r);
+PrivOpsWirePure::DispatchResult handleTeardownIface(const PrivOpsPure::TeardownIfaceReq &r);
+
 } // namespace Crated
