@@ -248,9 +248,13 @@ or
 .Ss GUI
 .Bl -tag -width "vnc_password"
 .It Sy gui/mode
-.Cm nested , headless , gpu ,
+.Cm nested , headless , gpu , auto ,
 or
-.Cm auto .
+.Cm wayland .
+.Cm wayland
+is the strict-Wayland counterpart to
+.Cm auto :
+no X11 fallback, refuses to start if WAYLAND_DISPLAY is unset.
 .It Sy gui/resolution
 Display resolution
 .Pq e.g., \(dq1920x1080\(dq .

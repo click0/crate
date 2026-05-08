@@ -100,6 +100,14 @@ static std::string resolveGuiMode(const Spec &spec) {
       bool waylandSet  = (::getenv("WAYLAND_DISPLAY") != nullptr);
       return RunGuiPure::resolveAutoMode(displaySet, waylandSet, hasGpu);
     }
+    // 0.8.46: explicit `gui.mode: wayland` routes through the
+    // shared block (which already does Wayland + PipeWire
+    // binding), with the X11 binding step skipped via the
+    // isWaylandFlow flag below. Returning "shared" here is the
+    // signal; isWaylandFlow inside setupX11 differentiates
+    // between auto-with-Wayland vs. wayland-only.
+    if (spec.guiOptions->mode == "wayland")
+      return "shared";
     return spec.guiOptions->mode;
   }
   if (spec.x11Options)
@@ -617,14 +625,31 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
          "for security-sensitive workloads. Set CRATE_X11_SHARED_ACK=1 to suppress this warning.")
   }
 
-  bool isAutoFlow = (spec.guiOptions && spec.guiOptions->mode == "auto");
+  bool isAutoFlow    = (spec.guiOptions && spec.guiOptions->mode == "auto");
+  bool isWaylandFlow = (spec.guiOptions && spec.guiOptions->mode == "wayland");
   auto *display = ::getenv("DISPLAY");
   auto *waylandDisplay = ::getenv("WAYLAND_DISPLAY");
   auto *xdgRuntimeDir = ::getenv("XDG_RUNTIME_DIR");
 
+  // 0.8.46: `gui.mode: wayland` is strict — operator opted out of
+  // X11 fallback. Refuse to start without WAYLAND_DISPLAY rather
+  // than silently downgrading to a no-display jail.
+  if (isWaylandFlow && (waylandDisplay == nullptr || waylandDisplay[0] == '\0'))
+    ERR("gui.mode=wayland requires WAYLAND_DISPLAY to be set; "
+        "host has no Wayland compositor reachable. "
+        "Use gui.mode=auto if you want X11 fallback, or start "
+        "your compositor first.")
+
   // X11 socket bind + DISPLAY env. DISPLAY is required for traditional
   // shared mode but optional for `gui: auto` (Wayland-only host).
-  if (display != nullptr) {
+  // 0.8.46: `gui.mode: wayland` skips the X11 bind entirely — no
+  // /tmp/.X11-unix mount, no DISPLAY env in jail.
+  if (isWaylandFlow) {
+    if (logProgress)
+      std::cerr << rang::fg::gray
+                << "gui.mode=wayland: skipping X11 socket bind (Wayland-only)"
+                << rang::style::reset << std::endl;
+  } else if (display != nullptr) {
     if (logProgress)
       std::cerr << rang::fg::gray << "x11 option (mode=shared): mount the X11 socket in jail" << rang::style::reset << std::endl;
     Util::Fs::mkdir(J("/tmp/.X11-unix"), 01777);
@@ -679,7 +704,8 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
   // at /tmp/wayland/<name> + set WAYLAND_DISPLAY=<name> +
   // XDG_RUNTIME_DIR=/tmp/wayland inside the jail. /tmp/wayland is a
   // safe target because its parent is mode 01777 already.
-  if (isAutoFlow && waylandDisplay != nullptr && xdgRuntimeDir != nullptr) {
+  // 0.8.46: also bind for explicit `gui.mode: wayland`.
+  if ((isAutoFlow || isWaylandFlow) && waylandDisplay != nullptr && xdgRuntimeDir != nullptr) {
     auto sockBasename = RunGuiPure::parseWaylandDisplay(waylandDisplay);
     if (sockBasename.empty()) {
       std::cerr << rang::fg::yellow
@@ -728,7 +754,7 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
   // (operator may not run PipeWire — PulseAudio-only systems have
   // none of these files). The mkdir is idempotent (the Wayland
   // branch may have already created it).
-  if (isAutoFlow && xdgRuntimeDir != nullptr) {
+  if ((isAutoFlow || isWaylandFlow) && xdgRuntimeDir != nullptr) {
     bool anyBound = false;
     for (const auto &sockName : RunGuiPure::pipewireSocketNames()) {
       auto hostSock = std::string(xdgRuntimeDir) + "/" + sockName;

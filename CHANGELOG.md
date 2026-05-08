@@ -6,6 +6,97 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.46] — 2026-05-08
+
+Two small Wayland-track items:
+
+1. **`gui.mode: wayland`** — explicit Wayland-only spec mode.
+   Strict counterpart to `gui: auto` for operators who don't
+   want X11 fallback (security-conscious — the X11 socket bind
+   is a real attack-surface widening).
+2. **`gui/resolution` ignored warning** — surfaces at `crate
+   validate` time when operator sets `resolution: 1920x1080`
+   together with a mode where the host compositor decides the
+   resolution.
+
+### `gui.mode: wayland`
+
+Pre-0.8.46 the operator could only get Wayland binding via
+`gui: auto`, which falls back to shared X11 (with cookie copy)
+when both `$DISPLAY` and `$WAYLAND_DISPLAY` are set. For
+operators who explicitly don't want the X11 socket bind:
+
+```yaml
+gui:
+  mode: wayland     # 0.8.46: Wayland-required, no X11 fallback
+```
+
+Behaviour:
+
+- **`WAYLAND_DISPLAY` unset** → ERR at jail start (refuse to
+  silently downgrade to no-display jail)
+- **`WAYLAND_DISPLAY` set, `XDG_RUNTIME_DIR` set, socket exists**
+  → bind Wayland socket + PipeWire sockets (same as `gui: auto`
+  Wayland branch)
+- **`/tmp/.X11-unix` is NOT bound** — the in-jail process can't
+  open the host's X server even if it tries
+- **`DISPLAY` env is NOT set in the jail**
+- **`XAUTHORITY` is NOT copied**
+
+Strict semantic — operator opted out of X11 fallback. If the
+user's compositor crashes mid-session, the jail won't silently
+slide onto X11 next time.
+
+### `gui/resolution` ignored warning
+
+`crate validate` now surfaces:
+
+```
+warning: gui/resolution is ignored when gui/mode resolves to
+shared or wayland (the host compositor decides resolution via
+wl_output / X11 root window size); only honoured for
+mode=nested (Xephyr) and mode=headless (Xvfb)
+```
+
+Triggers when `gui.resolution` differs from the default
+`"1280x720"` AND mode is `wayland` / `auto` / `shared`. Avoids
+the "I set resolution: 1920x1080 but my Wayland jail is still
+showing 4K" confusion.
+
+### Implementation
+
+- `lib/spec.cpp` accepts `wayland` in both the scalar shorthand
+  and the `gui.mode` map field (rejected at parse time
+  pre-0.8.46)
+- `lib/run_gui.cpp::resolveGuiMode` routes `mode=wayland` to
+  the existing shared block via `return "shared"`. New
+  `isWaylandFlow` flag inside `setupX11` differentiates from
+  `isAutoFlow`:
+  - X11 socket bind / DISPLAY env / XAUTHORITY copy gated on
+    `!isWaylandFlow`
+  - Wayland + PipeWire bind gated on `isAutoFlow ||
+    isWaylandFlow`
+  - `WAYLAND_DISPLAY` unset → ERR (no fallback)
+- `lib/validate_pure.cpp` adds the resolution-ignored warning
+  to the existing warn-collection block
+
+No new pure helpers; the change is dispatch flag + spec
+validation strings.
+
+### What this release does NOT do
+
+- **Test for the `wayland` mode parsing** — would need YAML-load
+  spec test infrastructure that doesn't exist; the existing
+  scalar-shorthand and map-mode validators cover the strings
+  via inline checks
+- **Nested Wayland (cage / labwc)** — separate architectural
+  item; tracked
+- **Wayland VNC (`wayvnc`)** — separate; tracked
+
+1105/1105 unit tests pass locally.
+
+---
+
 ## [0.8.45] — 2026-05-08
 
 `crate doctor wayland-readiness` check — predicts whether
