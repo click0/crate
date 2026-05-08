@@ -392,6 +392,24 @@ ATF_TEST_CASE_BODY(format_clear_rctl_success) {
   ATF_REQUIRE(body.find("\"value\":") == std::string::npos);
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(format_attach_zfs_success);
+ATF_TEST_CASE_BODY(format_attach_zfs_success) {
+  std::string body = formatAttachZfsSuccess(3, "zroot/jails/alpine/data");
+  ATF_REQUIRE(body.find("\"attached\":true") != std::string::npos);
+  ATF_REQUIRE(body.find("\"jid\":3") != std::string::npos);
+  ATF_REQUIRE(body.find("\"dataset\":\"zroot/jails/alpine/data\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"detached\":") == std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(format_detach_zfs_success);
+ATF_TEST_CASE_BODY(format_detach_zfs_success) {
+  std::string body = formatDetachZfsSuccess(3, "zroot/jails/alpine/data");
+  ATF_REQUIRE(body.find("\"detached\":true") != std::string::npos);
+  ATF_REQUIRE(body.find("\"jid\":3") != std::string::npos);
+  ATF_REQUIRE(body.find("\"dataset\":\"zroot/jails/alpine/data\"") != std::string::npos);
+  ATF_REQUIRE(body.find("\"attached\":") == std::string::npos);
+}
+
 // --- parseValidateAndDispatch ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(dispatch_unknown_returns_404);
@@ -486,6 +504,8 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, format_set_rctl_success);
   ATF_ADD_TEST_CASE(tcs, format_set_rctl_escapes_value);
   ATF_ADD_TEST_CASE(tcs, format_clear_rctl_success);
+  ATF_ADD_TEST_CASE(tcs, format_attach_zfs_success);
+  ATF_ADD_TEST_CASE(tcs, format_detach_zfs_success);
 
   ATF_ADD_TEST_CASE(tcs, dispatch_unknown_returns_404);
   ATF_ADD_TEST_CASE(tcs, dispatch_parse_error_returns_400);

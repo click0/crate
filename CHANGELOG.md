@@ -6,6 +6,57 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.4] — 2026-05-08
+
+**Rootless track, ZFS jail attach/detach.** Fifth 0.9.x
+release — `attach_zfs` / `detach_zfs` ship paired since they're
+a natural lifecycle pair and use the same `ZfsOps` underlying
+function.
+
+- `Crated::handleAttachZfs(AttachZfsReq)` / `handleDetachZfs(DetachZfsReq)`
+  — jail lookup, then `ZfsOps::jailDataset(jid, dataset)` /
+  `unjailDataset(jid, dataset)`. The existing `ZfsOps` functions
+  (used by `crate run` / `crate stop`) prefer `libzfs` when
+  available and fall back to `zfs(8)` otherwise — privops gets
+  both for free.
+- `dispatchPrivOp` switch grew `AttachZfs` and `DetachZfs` cases.
+- `lib/privops_wire_pure.{h,cpp}` — `formatAttachZfsSuccess(jid,
+  dataset)` returns `{"attached":true,"jid":N,"dataset":"..."}`;
+  `formatDetachZfsSuccess` returns the same shape with `detached`.
+  Body distinction asserted in tests so a future regression
+  swapping the two doesn't slip through.
+
+Wire example:
+
+```http
+POST /api/v1/privops/attach_zfs
+{"jid":3,"dataset":"zroot/jails/alpine/data"}
+
+HTTP/1.1 200 OK
+{"attached":true,"jid":3,"dataset":"zroot/jails/alpine/data"}
+```
+
+```http
+POST /api/v1/privops/detach_zfs
+{"jid":3,"dataset":"zroot/jails/alpine/data"}
+
+HTTP/1.1 200 OK
+{"detached":true,"jid":3,"dataset":"zroot/jails/alpine/data"}
+```
+
+Failure modes match the rest of the rootless track:
+400 parse / 400 validate / 404 jail_not_found / 500 exec_failed.
+
+Tests: 2 new ATF tests (`format_attach_zfs_success`,
+`format_detach_zfs_success`). Suite: 1190 → **1192**, all
+passing.
+
+Series progress: 5/12 verbs handled (set_rctl, clear_rctl,
+attach_zfs, detach_zfs). Next: `mount_nullfs` /
+`unmount_nullfs` in 0.9.5.
+
+---
+
 ## [0.9.3] — 2026-05-08
 
 **Rootless track, `clear_rctl` handler.** Fourth 0.9.x

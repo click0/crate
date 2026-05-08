@@ -217,4 +217,10 @@ std::string formatSetRctlSuccess(long jid,
 // 200 OK body for `clear_rctl`.
 std::string formatClearRctlSuccess(long jid, const std::string &key);
 
+// 200 OK body for `attach_zfs` / `detach_zfs`. The verb shape is
+// the same; the field name (`attached` vs `detached`) tells the
+// operator which way the operation went.
+std::string formatAttachZfsSuccess(long jid, const std::string &dataset);
+std::string formatDetachZfsSuccess(long jid, const std::string &dataset);
+
 } // namespace PrivOpsWirePure
