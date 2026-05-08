@@ -205,6 +205,99 @@ ATF_TEST_CASE_BODY(json_quotes_special_chars) {
   ATF_REQUIRE(json.find("\\\"with\\\"") != std::string::npos);
 }
 
+// --- 0.8.43: CLI helper plumbing ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(url_no_hint);
+ATF_TEST_CASE_BODY(url_no_hint) {
+  ATF_REQUIRE_EQ(SchedulingPure::buildLeastLoadedUrl("http://hub:9810", ""),
+                 std::string("http://hub:9810/api/v1/scheduling/least-loaded"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(url_with_hint);
+ATF_TEST_CASE_BODY(url_with_hint) {
+  ATF_REQUIRE_EQ(SchedulingPure::buildLeastLoadedUrl("http://hub:9810", "alpha"),
+                 std::string("http://hub:9810/api/v1/scheduling/least-loaded?current=alpha"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(url_strips_trailing_slash);
+ATF_TEST_CASE_BODY(url_strips_trailing_slash) {
+  ATF_REQUIRE_EQ(SchedulingPure::buildLeastLoadedUrl("http://hub:9810/", "foo"),
+                 std::string("http://hub:9810/api/v1/scheduling/least-loaded?current=foo"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(url_empty_base_returns_path_only);
+ATF_TEST_CASE_BODY(url_empty_base_returns_path_only) {
+  // Used by the CLI helper when cpp-httplib's Client already
+  // owns the host+port; passing the whole URL back through
+  // Get() would double up.
+  ATF_REQUIRE_EQ(SchedulingPure::buildLeastLoadedUrl("", "alpha"),
+                 std::string("/api/v1/scheduling/least-loaded?current=alpha"));
+  ATF_REQUIRE_EQ(SchedulingPure::buildLeastLoadedUrl("", ""),
+                 std::string("/api/v1/scheduling/least-loaded"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(url_encodes_special_chars);
+ATF_TEST_CASE_BODY(url_encodes_special_chars) {
+  // Defensive — jail names go through validators upstream that
+  // reject these characters, but defence-in-depth.
+  auto out = SchedulingPure::buildLeastLoadedUrl("http://h", "a b");
+  ATF_REQUIRE(out.find("?current=a%20b") != std::string::npos);
+  out = SchedulingPure::buildLeastLoadedUrl("http://h", "a&b");
+  ATF_REQUIRE(out.find("%26") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(extract_target_quoted_string);
+ATF_TEST_CASE_BODY(extract_target_quoted_string) {
+  std::string body =
+    "{\"status\":\"ok\",\"data\":{\"target\":\"alpha\","
+    "\"host\":\"alpha:9800\",\"container_count\":3}}";
+  ATF_REQUIRE_EQ(SchedulingPure::extractTargetField(body), std::string("alpha"));
+  ATF_REQUIRE_EQ(SchedulingPure::extractHostField(body), std::string("alpha:9800"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(extract_target_null_returns_empty);
+ATF_TEST_CASE_BODY(extract_target_null_returns_empty) {
+  std::string body =
+    "{\"status\":\"ok\",\"data\":{\"target\":null,"
+    "\"rationale\":\"no reachable nodes\"}}";
+  ATF_REQUIRE_EQ(SchedulingPure::extractTargetField(body), std::string());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(extract_target_tolerates_whitespace);
+ATF_TEST_CASE_BODY(extract_target_tolerates_whitespace) {
+  // jq-printed bodies have whitespace after the colon; our own
+  // renderRecommendationJson doesn't. Match either.
+  std::string body = "{ \"target\" : \"beta\" , \"host\" : \"beta:9800\" }";
+  ATF_REQUIRE_EQ(SchedulingPure::extractTargetField(body), std::string("beta"));
+  ATF_REQUIRE_EQ(SchedulingPure::extractHostField(body), std::string("beta:9800"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(extract_target_missing_returns_empty);
+ATF_TEST_CASE_BODY(extract_target_missing_returns_empty) {
+  std::string body = "{\"status\":\"error\",\"error\":\"oops\"}";
+  ATF_REQUIRE_EQ(SchedulingPure::extractTargetField(body), std::string());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(migrate_argv_shape);
+ATF_TEST_CASE_BODY(migrate_argv_shape) {
+  auto argv = SchedulingPure::buildMigrateArgv(
+    "/usr/local/bin/crate", "myjail",
+    "alpha:9800", "beta:9800",
+    "/etc/.src-token", "/etc/.dst-token");
+  ATF_REQUIRE_EQ(argv.size(), (size_t)11);
+  ATF_REQUIRE_EQ(argv[0], std::string("/usr/local/bin/crate"));
+  ATF_REQUIRE_EQ(argv[1], std::string("migrate"));
+  ATF_REQUIRE_EQ(argv[2], std::string("myjail"));
+  ATF_REQUIRE_EQ(argv[3], std::string("--from"));
+  ATF_REQUIRE_EQ(argv[4], std::string("alpha:9800"));
+  ATF_REQUIRE_EQ(argv[5], std::string("--to"));
+  ATF_REQUIRE_EQ(argv[6], std::string("beta:9800"));
+  ATF_REQUIRE_EQ(argv[7], std::string("--from-token-file"));
+  ATF_REQUIRE_EQ(argv[8], std::string("/etc/.src-token"));
+  ATF_REQUIRE_EQ(argv[9], std::string("--to-token-file"));
+  ATF_REQUIRE_EQ(argv[10], std::string("/etc/.dst-token"));
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, empty_input);
   ATF_ADD_TEST_CASE(tcs, all_unreachable);
@@ -220,4 +313,14 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, json_no_candidate_emits_null_target);
   ATF_ADD_TEST_CASE(tcs, json_full_recommendation_shape);
   ATF_ADD_TEST_CASE(tcs, json_quotes_special_chars);
+  ATF_ADD_TEST_CASE(tcs, url_no_hint);
+  ATF_ADD_TEST_CASE(tcs, url_with_hint);
+  ATF_ADD_TEST_CASE(tcs, url_strips_trailing_slash);
+  ATF_ADD_TEST_CASE(tcs, url_empty_base_returns_path_only);
+  ATF_ADD_TEST_CASE(tcs, url_encodes_special_chars);
+  ATF_ADD_TEST_CASE(tcs, extract_target_quoted_string);
+  ATF_ADD_TEST_CASE(tcs, extract_target_null_returns_empty);
+  ATF_ADD_TEST_CASE(tcs, extract_target_tolerates_whitespace);
+  ATF_ADD_TEST_CASE(tcs, extract_target_missing_returns_empty);
+  ATF_ADD_TEST_CASE(tcs, migrate_argv_shape);
 }

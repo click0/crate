@@ -3,6 +3,8 @@
 #include "scheduling_pure.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <regex>
 #include <sstream>
 
 namespace SchedulingPure {
@@ -138,6 +140,71 @@ std::string renderRecommendationJson(const Recommendation &rec) {
   }
   os << "}";
   return os.str();
+}
+
+namespace {
+
+// Percent-encode anything outside [A-Za-z0-9._~-]. We use this on
+// the currentNodeHint going into a query string. Conservative
+// ruleset — operator-supplied jail names go through stricter
+// validators upstream, but defence-in-depth never hurt.
+std::string urlEncode(const std::string &s) {
+  std::ostringstream os;
+  for (unsigned char c : s) {
+    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+        || (c >= '0' && c <= '9')
+        || c == '.' || c == '_' || c == '~' || c == '-') {
+      os << static_cast<char>(c);
+    } else {
+      char buf[4];
+      std::snprintf(buf, sizeof(buf), "%%%02X", c);
+      os << buf;
+    }
+  }
+  return os.str();
+}
+
+} // anon
+
+std::string buildLeastLoadedUrl(const std::string &hubUrl,
+                                const std::string &currentNodeHint) {
+  std::string base = hubUrl;
+  // Strip a single trailing '/' so we don't double up.
+  if (!base.empty() && base.back() == '/') base.pop_back();
+  std::string out = base + "/api/v1/scheduling/least-loaded";
+  if (!currentNodeHint.empty())
+    out += "?current=" + urlEncode(currentNodeHint);
+  return out;
+}
+
+std::string extractTargetField(const std::string &jsonBody) {
+  // Match either "target":"<value>" or "target":null. Allow
+  // optional whitespace after the colon (jq-printed bodies have
+  // it; renderRecommendationJson doesn't).
+  std::regex reStr(R"#("target"\s*:\s*"([^"]*)")#");
+  std::smatch m;
+  if (std::regex_search(jsonBody, m, reStr)) return m[1].str();
+  return "";  // missing or null
+}
+
+std::string extractHostField(const std::string &jsonBody) {
+  std::regex reStr(R"#("host"\s*:\s*"([^"]*)")#");
+  std::smatch m;
+  if (std::regex_search(jsonBody, m, reStr)) return m[1].str();
+  return "";
+}
+
+std::vector<std::string> buildMigrateArgv(const std::string &cratePath,
+                                          const std::string &jail,
+                                          const std::string &fromHost,
+                                          const std::string &toHost,
+                                          const std::string &fromTokenFile,
+                                          const std::string &toTokenFile) {
+  return {cratePath, "migrate", jail,
+          "--from", fromHost,
+          "--to", toHost,
+          "--from-token-file", fromTokenFile,
+          "--to-token-file", toTokenFile};
 }
 
 } // namespace SchedulingPure

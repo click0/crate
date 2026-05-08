@@ -20,16 +20,14 @@ operational quality.)
   are in use by the jail's running processes. Tracked as a
   separate larger item.
 
-* (feature, partial) Hub scheduling — automatic container placement
-  on the least-loaded host. *Endpoint shipped in 0.8.40* —
-  `GET /api/v1/scheduling/least-loaded[?current=<name>]` returns
-  the best target node + 0..100 confidence score, with anti-flap
-  (within 10% of best -> keep current). Operator workflow:
-    target=$(curl ... | jq -r .data.host)
-    crate migrate myjail --to "$target" ...
-  Still open: a `crate-hub schedule <crate-file>` CLI helper that
-  wraps the curl + migrate dance. Operators on the curl path
-  today; CLI sugar tracked separately.
+* (feature) Hub scheduling — automatic container placement on the
+  least-loaded host. *Shipped end-to-end* — endpoint in 0.8.40
+  (`GET /api/v1/scheduling/least-loaded[?current=<name>]`),
+  CLI helper in 0.8.43 (`crate-hub schedule <jail> --from
+  <host:port> --from-token-file <p> --to-token-file <p>
+  [--current <name>] [--hub-url <url>] [--dry-run]`). Anti-flap
+  (within 10% of best -> keep current) on both the endpoint and
+  the CLI exit-early path.
 
 === Out of scope (separate repository) ===
 

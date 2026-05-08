@@ -6,6 +6,96 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.43] — 2026-05-08
+
+`crate-hub schedule <jail-name>` CLI helper — closes the
+hub-scheduling loop. 0.8.40 shipped the
+`/api/v1/scheduling/least-loaded` endpoint and pointed operators
+at a manual `curl + jq + crate migrate` pipeline. This release
+ships the helper that does it in one invocation.
+
+### Operator UX
+
+```sh
+% crate-hub schedule myapp \
+    --from alpha:9800 \
+    --from-token-file /etc/crate/.alpha-admin \
+    --to-token-file /etc/crate/.beta-admin \
+    --current alpha
+crate-hub schedule: target='beta' host='beta:9800', invoking `crate migrate`...
+migrate: ...
+```
+
+When anti-flap kicks in (current node already least-loaded
+within 10% tolerance), the helper exits 0 without invoking
+`crate migrate`:
+
+```
+crate-hub schedule: 'myapp' stays on 'alpha' (already on
+least-loaded; no migration needed)
+```
+
+`--dry-run` prints the resolved target + the `crate migrate`
+argv that would be exec'd, without exec'ing — useful in
+shell wrappers / cron jobs that want to log the decision
+before acting.
+
+### Implementation
+
+The helper lives in the existing `crate-hub` binary as a
+subcommand (no new package, no new install target). When
+invoked as `crate-hub schedule <…>`, dispatch in
+`hub/main.cpp` runs the one-shot CLI path and exits without
+starting the daemon.
+
+Pure helpers in `hub/scheduling_pure.{h,cpp}` (extending the
+0.8.40 module):
+
+- `buildLeastLoadedUrl(hubUrl, currentNodeHint)` — composes
+  the endpoint URL; tolerates a trailing `/` on the base;
+  percent-encodes the hint for the `?current=` param;
+  returns just the path when called with empty base (so the
+  CLI can pass it to `httplib::Client::Get(path)` without
+  doubling up scheme+host)
+- `extractTargetField(jsonBody)` — regex-based field pull;
+  handles `"target":"alpha"` AND `"target":null`; tolerates
+  jq-style whitespace around the colon. Mirrors the existing
+  `lib/migrate.cpp::extractFileField` pattern (no JSON
+  library dragged in — the format is daemon-controlled and
+  stable)
+- `extractHostField(jsonBody)` — same shape for the host
+- `buildMigrateArgv(crate, jail, fromHost, toHost,
+  fromTokenFile, toTokenFile)` — canonical `crate migrate`
+  argv as a single source of truth
+
+Runtime in `hub/main.cpp::scheduleSubcommand` does the HTTP
+GET via cpp-httplib's `Client`, decodes the response, prints
+the rationale, and `execv`'s `/usr/local/bin/crate migrate`
+(replaces the helper process — operator's exit code is
+`crate migrate`'s exit code).
+
+10 new ATF unit cases on the pure helpers (URL composition
+across base/trailing-slash/empty-base/hint-encoding variants,
+target/host extraction across quoted/null/whitespace/missing
+input, migrate argv shape).
+
+### What this release does NOT do
+
+- **Auto-detect `--from <host>`** — the helper requires the
+  operator to pass the source `host:port`. Could be derived
+  from `/api/v1/nodes` lookup-by-name, but that adds a second
+  HTTP request and complicates error handling.
+- **Resource-aware confidence threshold** — `--min-confidence
+  N` flag for cron jobs to skip low-confidence recommendations
+  is straightforward but out of scope here.
+- **Auto-token-discovery** — `crate migrate`'s token-file
+  contract is operator-managed (chmod 600 paths). The helper
+  passes them through verbatim.
+
+1103/1103 unit tests pass locally.
+
+---
+
 ## [0.8.42] — 2026-05-07
 
 **Documentation-only release.** Expanded the `Rootless containers`
