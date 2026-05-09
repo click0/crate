@@ -123,6 +123,10 @@ std::string parseSetIfaceUp(const FieldMap &m,
                             PrivOpsPure::SetIfaceUpReq &out);
 std::string parseDisableIfaceOffload(const FieldMap &m,
                                      PrivOpsPure::DisableIfaceOffloadReq &out);
+std::string parseBridgeAddMember(const FieldMap &m,
+                                 PrivOpsPure::BridgeAddMemberReq &out);
+std::string parseBridgeDelMember(const FieldMap &m,
+                                 PrivOpsPure::BridgeDelMemberReq &out);
 
 // --- Verb routing ---
 

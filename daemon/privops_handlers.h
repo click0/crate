@@ -152,4 +152,9 @@ PrivOpsWirePure::DispatchResult handleDestroyJail(const PrivOpsPure::DestroyJail
 PrivOpsWirePure::DispatchResult handleSetIfaceUp(const PrivOpsPure::SetIfaceUpReq &r);
 PrivOpsWirePure::DispatchResult handleDisableIfaceOffload(const PrivOpsPure::DisableIfaceOffloadReq &r);
 
+// 0.9.24: bridge membership ops. Wraps
+// IfconfigOps::bridgeAddMember / bridgeDelMember.
+PrivOpsWirePure::DispatchResult handleBridgeAddMember(const PrivOpsPure::BridgeAddMemberReq &r);
+PrivOpsWirePure::DispatchResult handleBridgeDelMember(const PrivOpsPure::BridgeDelMemberReq &r);
+
 } // namespace Crated

@@ -87,6 +87,8 @@ const char *verbName(Verb v) {
     case Verb::RemoveIpfwRule:  return "remove_ipfw_rule";
     case Verb::SetIfaceUp:           return "set_iface_up";
     case Verb::DisableIfaceOffload:  return "disable_iface_offload";
+    case Verb::BridgeAddMember:      return "bridge_add_member";
+    case Verb::BridgeDelMember:      return "bridge_del_member";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -109,6 +111,8 @@ Verb parseVerb(const std::string &name) {
   if (name == "remove_ipfw_rule")  return Verb::RemoveIpfwRule;
   if (name == "set_iface_up")           return Verb::SetIfaceUp;
   if (name == "disable_iface_offload")  return Verb::DisableIfaceOffload;
+  if (name == "bridge_add_member")      return Verb::BridgeAddMember;
+  if (name == "bridge_del_member")      return Verb::BridgeDelMember;
   return Verb::Unknown;
 }
 
@@ -475,6 +479,18 @@ std::string validateSetIfaceUp(const SetIfaceUpReq &r) {
 
 std::string validateDisableIfaceOffload(const DisableIfaceOffloadReq &r) {
   return validateIfaceName(r.ifname);
+}
+
+std::string validateBridgeAddMember(const BridgeAddMemberReq &r) {
+  if (auto e = validateIfaceName(r.bridge); !e.empty()) return "bridge: " + e;
+  if (auto e = validateIfaceName(r.member); !e.empty()) return "member: " + e;
+  return "";
+}
+
+std::string validateBridgeDelMember(const BridgeDelMemberReq &r) {
+  if (auto e = validateIfaceName(r.bridge); !e.empty()) return "bridge: " + e;
+  if (auto e = validateIfaceName(r.member); !e.empty()) return "member: " + e;
+  return "";
 }
 
 } // namespace PrivOpsPure

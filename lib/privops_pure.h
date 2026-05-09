@@ -107,6 +107,17 @@ enum class Verb {
   // and `IfconfigOps::disableOffload` call sites in lib/run_net.cpp.
   SetIfaceUp,
   DisableIfaceOffload,
+
+  // 0.9.24: bridge membership ops. Symmetric pair around
+  // IfconfigOps::bridgeAddMember / bridgeDelMember. The 0.9.6
+  // composite ConfigureIface verb embeds bridgeAddMember when
+  // its `bridge` field is non-empty, but only for the
+  // computed-pair-A pattern (epair host-side). These atomic
+  // verbs target run_net.cpp's setupBridgeEpair (add) and
+  // destroyBridgeEpair (del) where the iface to attach is
+  // operator-supplied directly.
+  BridgeAddMember,
+  BridgeDelMember,
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -211,6 +222,18 @@ struct DisableIfaceOffloadReq {
   std::string ifname;
 };
 
+// 0.9.24: bridge membership ops. Both validate via existing
+// validateIfaceName for both `bridge` and `member` fields.
+struct BridgeAddMemberReq {
+  std::string bridge;   // bridge interface name (e.g. "bridge0")
+  std::string member;   // member interface name (e.g. "epair0a")
+};
+
+struct BridgeDelMemberReq {
+  std::string bridge;
+  std::string member;
+};
+
 // --- Per-verb validators ---
 //
 // Each `validate*(req)` returns "" on success, otherwise a one-line
@@ -235,6 +258,8 @@ std::string validateAddIpfwRule(const AddIpfwRuleReq &r);
 std::string validateRemoveIpfwRule(const RemoveIpfwRuleReq &r);
 std::string validateSetIfaceUp(const SetIfaceUpReq &r);
 std::string validateDisableIfaceOffload(const DisableIfaceOffloadReq &r);
+std::string validateBridgeAddMember(const BridgeAddMemberReq &r);
+std::string validateBridgeDelMember(const BridgeDelMemberReq &r);
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //

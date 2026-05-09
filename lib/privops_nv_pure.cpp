@@ -212,6 +212,20 @@ std::string parseDisableIfaceOffload(const FieldMap &m,
   return "";
 }
 
+std::string parseBridgeAddMember(const FieldMap &m,
+                                 PrivOpsPure::BridgeAddMemberReq &out) {
+  if (auto e = requireString(m, "bridge", out.bridge); !e.empty()) return e;
+  if (auto e = requireString(m, "member", out.member); !e.empty()) return e;
+  return "";
+}
+
+std::string parseBridgeDelMember(const FieldMap &m,
+                                 PrivOpsPure::BridgeDelMemberReq &out) {
+  if (auto e = requireString(m, "bridge", out.bridge); !e.empty()) return e;
+  if (auto e = requireString(m, "member", out.member); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing ---
 
 PrivOpsPure::Verb extractVerb(const FieldMap &m) {

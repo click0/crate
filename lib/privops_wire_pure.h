@@ -162,6 +162,12 @@ std::string parseSetIfaceUp(const std::string &body,
 std::string parseDisableIfaceOffload(const std::string &body,
                                      PrivOpsPure::DisableIfaceOffloadReq &out);
 
+std::string parseBridgeAddMember(const std::string &body,
+                                 PrivOpsPure::BridgeAddMemberReq &out);
+
+std::string parseBridgeDelMember(const std::string &body,
+                                 PrivOpsPure::BridgeDelMemberReq &out);
+
 // --- Verb routing helper ---
 //
 // Parse the URL path's verb segment. The route pattern is
@@ -270,5 +276,11 @@ std::string formatDestroyJailSuccess(const std::string &name);
 // 0.9.23: 200 OK bodies for atomic single-iface ops.
 std::string formatSetIfaceUpSuccess(const std::string &ifname);
 std::string formatDisableIfaceOffloadSuccess(const std::string &ifname);
+
+// 0.9.24: 200 OK bodies for bridge membership ops.
+std::string formatBridgeAddMemberSuccess(const std::string &bridge,
+                                         const std::string &member);
+std::string formatBridgeDelMemberSuccess(const std::string &bridge,
+                                         const std::string &member);
 
 } // namespace PrivOpsWirePure

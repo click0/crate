@@ -348,6 +348,20 @@ std::string parseDisableIfaceOffload(const std::string &body,
   return "";
 }
 
+std::string parseBridgeAddMember(const std::string &body,
+                                 PrivOpsPure::BridgeAddMemberReq &out) {
+  if (auto e = requireStringField(body, "bridge", out.bridge); !e.empty()) return e;
+  if (auto e = requireStringField(body, "member", out.member); !e.empty()) return e;
+  return "";
+}
+
+std::string parseBridgeDelMember(const std::string &body,
+                                 PrivOpsPure::BridgeDelMemberReq &out) {
+  if (auto e = requireStringField(body, "bridge", out.bridge); !e.empty()) return e;
+  if (auto e = requireStringField(body, "member", out.member); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing helper ---
 
 PrivOpsPure::Verb parseVerbFromPath(const std::string &path) {
@@ -602,6 +616,26 @@ std::string formatDisableIfaceOffloadSuccess(const std::string &ifname) {
   return o.str();
 }
 
+std::string formatBridgeAddMemberSuccess(const std::string &bridge,
+                                         const std::string &member) {
+  std::ostringstream o;
+  o << "{\"added\":true"
+    << ",\"bridge\":\"" << escape(bridge) << "\""
+    << ",\"member\":\"" << escape(member) << "\""
+    << "}";
+  return o.str();
+}
+
+std::string formatBridgeDelMemberSuccess(const std::string &bridge,
+                                         const std::string &member) {
+  std::ostringstream o;
+  o << "{\"removed\":true"
+    << ",\"bridge\":\"" << escape(bridge) << "\""
+    << ",\"member\":\"" << escape(member) << "\""
+    << "}";
+  return o.str();
+}
+
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body) {
   using namespace PrivOpsPure;
@@ -638,6 +672,10 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       return runVerb<SetIfaceUpReq>(body, v, parseSetIfaceUp, validateSetIfaceUp);
     case Verb::DisableIfaceOffload:
       return runVerb<DisableIfaceOffloadReq>(body, v, parseDisableIfaceOffload, validateDisableIfaceOffload);
+    case Verb::BridgeAddMember:
+      return runVerb<BridgeAddMemberReq>(body, v, parseBridgeAddMember, validateBridgeAddMember);
+    case Verb::BridgeDelMember:
+      return runVerb<BridgeDelMemberReq>(body, v, parseBridgeDelMember, validateBridgeDelMember);
     case Verb::Unknown:
       break;
   }

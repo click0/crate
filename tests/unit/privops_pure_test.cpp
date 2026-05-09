@@ -24,6 +24,7 @@ ATF_TEST_CASE_BODY(verb_token_roundtrips_for_every_verb) {
     Verb::AddPfRule, Verb::RemovePfRule,
     Verb::AddIpfwRule, Verb::RemoveIpfwRule,
     Verb::SetIfaceUp, Verb::DisableIfaceOffload,
+    Verb::BridgeAddMember, Verb::BridgeDelMember,
   };
   for (Verb v : verbs) {
     std::string token = verbName(v);
@@ -509,6 +510,35 @@ ATF_TEST_CASE_BODY(disable_iface_offload_minimal) {
   ATF_REQUIRE(!validateDisableIfaceOffload(r).empty());
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(bridge_add_member_minimal);
+ATF_TEST_CASE_BODY(bridge_add_member_minimal) {
+  BridgeAddMemberReq r;
+  r.bridge = "bridge0";
+  r.member = "epair0a";
+  ATF_REQUIRE_EQ(validateBridgeAddMember(r), std::string());
+  // Empty member -> error
+  r.member = "";
+  std::string e = validateBridgeAddMember(r);
+  ATF_REQUIRE(!e.empty());
+  ATF_REQUIRE(e.find("member") != std::string::npos);
+  // Empty bridge -> error
+  r.bridge = "";
+  r.member = "epair0a";
+  e = validateBridgeAddMember(r);
+  ATF_REQUIRE(!e.empty());
+  ATF_REQUIRE(e.find("bridge") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(bridge_del_member_minimal);
+ATF_TEST_CASE_BODY(bridge_del_member_minimal) {
+  BridgeDelMemberReq r;
+  r.bridge = "bridge0";
+  r.member = "epair0a";
+  ATF_REQUIRE_EQ(validateBridgeDelMember(r), std::string());
+  r.bridge = "name with space";
+  ATF_REQUIRE(!validateBridgeDelMember(r).empty());
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, verb_token_roundtrips_for_every_verb);
   ATF_ADD_TEST_CASE(tcs, verb_unknown_token_returns_unknown);
@@ -568,4 +598,6 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, teardown_iface_minimal);
   ATF_ADD_TEST_CASE(tcs, set_iface_up_minimal);
   ATF_ADD_TEST_CASE(tcs, disable_iface_offload_minimal);
+  ATF_ADD_TEST_CASE(tcs, bridge_add_member_minimal);
+  ATF_ADD_TEST_CASE(tcs, bridge_del_member_minimal);
 }
