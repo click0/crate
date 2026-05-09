@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+#include <cstdint>
+
 namespace ZfsDatasetPure {
 
 // Walk the multi-line output of `zfs list -H -t snapshot -o name -r
@@ -34,5 +36,38 @@ std::string pickLatestBackupSuffix(const std::string &zfsListOutput);
 // no leading slash, no `..` segments, length 1..255.
 // Returns "" on success, error message otherwise.
 std::string validateDatasetName(const std::string &ds);
+
+// --- Per-user dataset composition (0.9.9, rootless track) ---
+//
+// Single-tenant deployments stuff every jail under one shared
+// prefix (`zroot/jails/<jail>`). For multi-tenant, alice and bob
+// must not see each other's jail datasets — `zfs allow` gates
+// per-prefix, so giving each operator their own subtree under
+// the master prefix gets us the isolation.
+//
+// composePerUserPrefix("zroot/jails", 1000) -> "zroot/jails/1000"
+// composePerUserDataset("zroot/jails", 1000, "web")
+//   -> "zroot/jails/1000/web"
+//
+// Same uid-as-segment choice as runtime_paths_pure (0.9.8): uid
+// is the stable key, not the username. Operators wanting
+// username-shaped paths can do `zfs rename` after creation.
+//
+// `masterPrefix` is operator-supplied (`crated.conf
+// zfs_master_prefix:`), so it goes through validateDatasetName
+// before composition. `jailName` likewise validated upstream
+// (PrivOpsPure::validateJailName). composeXxx assume both are
+// already valid; the result is the deterministic concatenation.
+//
+// Returns a possibly-invalid dataset name if either input is
+// invalid; callers should validate the result before passing
+// to ZFS API. Tests cover the validate-result-also-valid case.
+
+std::string composePerUserPrefix(const std::string &masterPrefix,
+                                 uint32_t uid);
+
+std::string composePerUserDataset(const std::string &masterPrefix,
+                                  uint32_t uid,
+                                  const std::string &jailName);
 
 } // namespace ZfsDatasetPure

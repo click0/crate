@@ -104,6 +104,65 @@ ATF_TEST_CASE_BODY(rejects_traversal_and_garbage) {
   ATF_REQUIRE(!validateDatasetName("a;reboot").empty());
 }
 
+// --- Per-user composition (0.9.9) ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(per_user_prefix_typical);
+ATF_TEST_CASE_BODY(per_user_prefix_typical) {
+  ATF_REQUIRE_EQ(ZfsDatasetPure::composePerUserPrefix("zroot/jails", 1000),
+                 std::string("zroot/jails/1000"));
+  ATF_REQUIRE_EQ(ZfsDatasetPure::composePerUserPrefix("zroot/jails", 0),
+                 std::string("zroot/jails/0"));
+  ATF_REQUIRE_EQ(ZfsDatasetPure::composePerUserPrefix("tank", 65534),
+                 std::string("tank/65534"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(per_user_prefix_strips_trailing_slash);
+ATF_TEST_CASE_BODY(per_user_prefix_strips_trailing_slash) {
+  // Operators sometimes write the master prefix with a trailing /
+  // in their config. Compose should be tolerant.
+  ATF_REQUIRE_EQ(ZfsDatasetPure::composePerUserPrefix("zroot/jails/", 1000),
+                 std::string("zroot/jails/1000"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(per_user_dataset_typical);
+ATF_TEST_CASE_BODY(per_user_dataset_typical) {
+  ATF_REQUIRE_EQ(ZfsDatasetPure::composePerUserDataset(
+                    "zroot/jails", 1000, "web"),
+                 std::string("zroot/jails/1000/web"));
+  ATF_REQUIRE_EQ(ZfsDatasetPure::composePerUserDataset(
+                    "tank", 0, "alpine.local"),
+                 std::string("tank/0/alpine.local"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(per_user_dataset_isolation);
+ATF_TEST_CASE_BODY(per_user_dataset_isolation) {
+  // alice (1000) and bob (1001) get disjoint dataset paths even
+  // for the same jail name. Same isolation invariant as the
+  // runtime_paths_pure test from 0.9.8 — neither path a prefix
+  // of the other.
+  std::string alice = ZfsDatasetPure::composePerUserDataset(
+                          "zroot/jails", 1000, "web");
+  std::string bob   = ZfsDatasetPure::composePerUserDataset(
+                          "zroot/jails", 1001, "web");
+  ATF_REQUIRE(alice != bob);
+  ATF_REQUIRE(alice.find(bob) == std::string::npos);
+  ATF_REQUIRE(bob.find(alice) == std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(per_user_dataset_passes_validate);
+ATF_TEST_CASE_BODY(per_user_dataset_passes_validate) {
+  // Composed dataset must round-trip through validateDatasetName.
+  // If a future refactor introduced a // or trailing /, this
+  // test catches it.
+  std::string ds = ZfsDatasetPure::composePerUserDataset(
+                       "zroot/jails", 1000, "alpine");
+  ATF_REQUIRE_EQ(ZfsDatasetPure::validateDatasetName(ds), std::string());
+  // And with a tolerated trailing slash on master:
+  ds = ZfsDatasetPure::composePerUserDataset(
+           "zroot/jails/", 1000, "alpine");
+  ATF_REQUIRE_EQ(ZfsDatasetPure::validateDatasetName(ds), std::string());
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, empty_input_returns_empty);
   ATF_ADD_TEST_CASE(tcs, no_backup_snapshots_returns_empty);
@@ -114,4 +173,9 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, handles_recursive_descendants);
   ATF_ADD_TEST_CASE(tcs, typical_datasets_accepted);
   ATF_ADD_TEST_CASE(tcs, rejects_traversal_and_garbage);
+  ATF_ADD_TEST_CASE(tcs, per_user_prefix_typical);
+  ATF_ADD_TEST_CASE(tcs, per_user_prefix_strips_trailing_slash);
+  ATF_ADD_TEST_CASE(tcs, per_user_dataset_typical);
+  ATF_ADD_TEST_CASE(tcs, per_user_dataset_isolation);
+  ATF_ADD_TEST_CASE(tcs, per_user_dataset_passes_validate);
 }

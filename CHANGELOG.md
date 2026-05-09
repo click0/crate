@@ -6,6 +6,75 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.9] — 2026-05-09
+
+**Rootless track, per-user ZFS dataset prefix.** Tenth 0.9.x
+release. Second mini-PR of the namespacing sub-track. Pure
+composition helpers; existing call sites continue using the
+single-tenant `zroot/jails/<jail>` shape.
+
+### What lands
+
+`lib/zfs_dataset_pure.{h,cpp}` extends with:
+
+- `composePerUserPrefix(masterPrefix, uid)` —
+  `zroot/jails` + 1000 → `zroot/jails/1000`. Tolerates a
+  trailing `/` on the master prefix (operators write it both
+  ways in their config).
+- `composePerUserDataset(masterPrefix, uid, jailName)` —
+  full path: `zroot/jails/1000/web`.
+
+Same uid-as-segment design as `runtime_paths_pure` (0.9.8):
+uid is the stable key, not the username. Operators wanting
+username-shaped paths can `zfs rename` after creation.
+
+### Why the master prefix is operator-supplied
+
+The `zfs_master_prefix:` config knob (landing alongside this
+in a future `crated.conf` schema bump) lets multi-tenant
+operators pick:
+
+- `zroot/jails` — production single-pool layout
+- `tank/crate-tenants` — separate pool for crate isolation
+- `zroot/users/${user}/crate` — username-shaped (operator
+  trades the uid-stability win for nicer paths)
+
+The compose functions accept any operator-supplied prefix
+that passes `validateDatasetName`; result also passes
+validation by construction (test asserts this).
+
+### Tests
+
+5 new ATF tests in `zfs_dataset_pure_test.cpp`:
+
+- `per_user_prefix_typical` — base + uid composition
+- `per_user_prefix_strips_trailing_slash` — operator-config
+  tolerance
+- `per_user_dataset_typical` — full dataset shape
+- `per_user_dataset_isolation` — alice (1000) vs bob (1001)
+  get disjoint paths even for same jail name; neither path
+  a prefix of the other (same security invariant as 0.9.8's
+  lease isolation)
+- `per_user_dataset_passes_validate` — composed result
+  round-trips through `validateDatasetName` (catches a
+  future regression introducing `//` or trailing `/`)
+
+Suite: 1214 → **1219**, all passing.
+
+### Series state
+
+- Verb handlers: 14/14 ✅
+- Per-user mini-track:
+  - 0.9.8 — runtime path scheme ✅
+  - **0.9.9 — ZFS dataset prefix ← this release**
+  - 0.9.10 — network sub-CIDR + lease migration
+  - 0.9.11 — RCTL accounting groups
+  - 0.9.12 — migration doc + final wiring
+- 0.9.13 — default flip
+- 1.0.0 — setuid removed
+
+---
+
 ## [0.9.8] — 2026-05-08
 
 **Rootless track, per-user runtime path scheme.** Ninth 0.9.x
