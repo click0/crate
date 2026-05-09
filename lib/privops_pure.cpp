@@ -85,6 +85,8 @@ const char *verbName(Verb v) {
     case Verb::RemovePfRule:    return "remove_pf_rule";
     case Verb::AddIpfwRule:     return "add_ipfw_rule";
     case Verb::RemoveIpfwRule:  return "remove_ipfw_rule";
+    case Verb::SetIfaceUp:           return "set_iface_up";
+    case Verb::DisableIfaceOffload:  return "disable_iface_offload";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -105,6 +107,8 @@ Verb parseVerb(const std::string &name) {
   if (name == "remove_pf_rule")    return Verb::RemovePfRule;
   if (name == "add_ipfw_rule")     return Verb::AddIpfwRule;
   if (name == "remove_ipfw_rule")  return Verb::RemoveIpfwRule;
+  if (name == "set_iface_up")           return Verb::SetIfaceUp;
+  if (name == "disable_iface_offload")  return Verb::DisableIfaceOffload;
   return Verb::Unknown;
 }
 
@@ -463,6 +467,14 @@ std::string validateRemoveIpfwRule(const RemoveIpfwRuleReq &r) {
   if (r.set > 31) return "ipfw set out of range (0..31)";
   if (r.number < 1 || r.number > 65534) return "ipfw rule number out of range (1..65534)";
   return "";
+}
+
+std::string validateSetIfaceUp(const SetIfaceUpReq &r) {
+  return validateIfaceName(r.ifname);
+}
+
+std::string validateDisableIfaceOffload(const DisableIfaceOffloadReq &r) {
+  return validateIfaceName(r.ifname);
 }
 
 } // namespace PrivOpsPure

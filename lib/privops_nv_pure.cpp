@@ -200,6 +200,18 @@ std::string parseRemoveIpfwRule(const FieldMap &m,
   return "";
 }
 
+std::string parseSetIfaceUp(const FieldMap &m,
+                            PrivOpsPure::SetIfaceUpReq &out) {
+  if (auto e = requireString(m, "ifname", out.ifname); !e.empty()) return e;
+  return "";
+}
+
+std::string parseDisableIfaceOffload(const FieldMap &m,
+                                     PrivOpsPure::DisableIfaceOffloadReq &out) {
+  if (auto e = requireString(m, "ifname", out.ifname); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing ---
 
 PrivOpsPure::Verb extractVerb(const FieldMap &m) {

@@ -64,6 +64,40 @@ static void moveToVnetPrivopsOrLocal(const std::string &iface, int jid) {
   IfconfigOps::moveToVnet(iface, jid);
 }
 
+// 0.9.23: privops-aware wrappers for setUp + disableOffload, sibling
+// pattern to moveToVnetPrivopsOrLocal above.
+static void setUpPrivopsOrLocal(const std::string &iface) {
+  std::string sock = PrivOpsClient::detectSocketPath();
+  if (!sock.empty()) {
+    auto resp = PrivOpsClient::sendRequest(sock,
+        PrivOpsClient::buildSetIfaceUp(iface));
+    if (!resp.transportError.empty())
+      ERR2("run_net", "privops set_iface_up '" << iface
+           << "' transport error: " << resp.transportError)
+    if (resp.status >= 400)
+      ERR2("run_net", "privops set_iface_up '" << iface
+           << "' failed (status " << resp.status << "): " << resp.body)
+    return;
+  }
+  IfconfigOps::setUp(iface);
+}
+
+static void disableOffloadPrivopsOrLocal(const std::string &iface) {
+  std::string sock = PrivOpsClient::detectSocketPath();
+  if (!sock.empty()) {
+    auto resp = PrivOpsClient::sendRequest(sock,
+        PrivOpsClient::buildDisableIfaceOffload(iface));
+    if (!resp.transportError.empty())
+      ERR2("run_net", "privops disable_iface_offload '" << iface
+           << "' transport error: " << resp.transportError)
+    if (resp.status >= 400)
+      ERR2("run_net", "privops disable_iface_offload '" << iface
+           << "' failed (status " << resp.status << "): " << resp.body)
+    return;
+  }
+  IfconfigOps::disableOffload(iface);
+}
+
 GatewayInfo detectGateway() {
   GatewayInfo gw;
 
@@ -123,8 +157,8 @@ EpairInfo createEpair(int jid, const std::string &jidStr,
   info.ipB = epairNumToIp(info.num, 1);
 
   // disable checksum offload on epair interfaces to work around FreeBSD 15.0 bug
-  IfconfigOps::disableOffload(info.ifaceA);
-  IfconfigOps::disableOffload(info.ifaceB);
+  disableOffloadPrivopsOrLocal(info.ifaceA);
+  disableOffloadPrivopsOrLocal(info.ifaceB);
 
   // transfer the interface into jail
   moveToVnetPrivopsOrLocal(info.ifaceB, jid);
@@ -399,11 +433,11 @@ BridgeInfo createBridgeEpair(int jid, const std::string &jidStr,
   info.num = Util::toUInt(info.ifaceA.substr(5, info.ifaceA.size()-5-1));
 
   // disable checksum offload (FreeBSD 15 workaround)
-  IfconfigOps::disableOffload(info.ifaceA);
-  IfconfigOps::disableOffload(info.ifaceB);
+  disableOffloadPrivopsOrLocal(info.ifaceA);
+  disableOffloadPrivopsOrLocal(info.ifaceB);
 
   // bring host-side up and add to bridge
-  IfconfigOps::setUp(info.ifaceA);
+  setUpPrivopsOrLocal(info.ifaceA);
   IfconfigOps::bridgeAddMember(bridgeIface, info.ifaceA);
 
   // move jail-side into jail

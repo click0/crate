@@ -98,6 +98,15 @@ enum class Verb {
   RemovePfRule,
   AddIpfwRule,
   RemoveIpfwRule,
+
+  // 0.9.23: atomic host-side iface ops needed by `crate run`'s
+  // setupBridgeEpair flow. The 0.9.0 ConfigureIface verb is the
+  // composite "move + config + bridge attach" path; these atomic
+  // verbs are the host-side primitives operators chain manually
+  // when they need finer control. Targets the `IfconfigOps::setUp`
+  // and `IfconfigOps::disableOffload` call sites in lib/run_net.cpp.
+  SetIfaceUp,
+  DisableIfaceOffload,
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -193,6 +202,15 @@ struct RemoveIpfwRuleReq {
   unsigned    number = 0;
 };
 
+// 0.9.23: atomic single-iface ops.
+struct SetIfaceUpReq {
+  std::string ifname;
+};
+
+struct DisableIfaceOffloadReq {
+  std::string ifname;
+};
+
 // --- Per-verb validators ---
 //
 // Each `validate*(req)` returns "" on success, otherwise a one-line
@@ -215,6 +233,8 @@ std::string validateAddPfRule(const AddPfRuleReq &r);
 std::string validateRemovePfRule(const RemovePfRuleReq &r);
 std::string validateAddIpfwRule(const AddIpfwRuleReq &r);
 std::string validateRemoveIpfwRule(const RemoveIpfwRuleReq &r);
+std::string validateSetIfaceUp(const SetIfaceUpReq &r);
+std::string validateDisableIfaceOffload(const DisableIfaceOffloadReq &r);
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //

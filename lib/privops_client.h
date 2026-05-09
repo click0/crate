@@ -108,6 +108,10 @@ PrivOpsNvPure::FieldMap buildCreateJail(const std::string &name,
 PrivOpsNvPure::FieldMap buildDestroyJail(const std::string &name,
                                          bool force);
 
+// 0.9.23: atomic single-iface ops.
+PrivOpsNvPure::FieldMap buildSetIfaceUp(const std::string &ifname);
+PrivOpsNvPure::FieldMap buildDisableIfaceOffload(const std::string &ifname);
+
 // --- Wire transport (FreeBSD-only) ---
 
 struct Response {
