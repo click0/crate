@@ -6,6 +6,92 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.11] — 2026-05-09
+
+**Rootless track, per-user RCTL accounting groups.** Twelfth
+0.9.x release. Fourth mini-PR of the namespacing sub-track.
+Pure module; no daemon-side wiring (lands in 0.9.12).
+
+### Why loginclass
+
+FreeBSD's rctl(8) gates resource limits per "subject":
+jail / user / loginclass / process. Today crate sets per-jail
+RCTL rules — fine for single-tenant. For multi-tenant
+rootless, alice's jails should aggregate against alice's
+umbrella quota.
+
+Loginclass is the natural unit:
+
+- rctl can express `loginclass:crate-1000:memoryuse:deny=4G`
+- login.conf assigns loginclass to UNIX accounts
+- crated assigns each operator a loginclass on first contact
+  (the assignment + login.conf edit lands in 0.9.12)
+
+Example flow:
+
+```
+alice (uid 1000) creates jail "web" → jid 7
+crated applies:
+  jail:7:memoryuse:deny=2G                     (per-jail, today)
+  loginclass:crate-1000:memoryuse:deny=4G      (umbrella, this PR)
+```
+
+If alice creates a second jail with `memoryuse=3G`, the
+umbrella keeps her total at 4G (kernel enforces). Bob's
+loginclass `crate-1001` has its own 4G — no cross-tenant
+interference.
+
+### What lands
+
+`lib/per_user_rctl_pure.{h,cpp}`:
+
+- `loginclassName(uid)` → `crate-<uid>`
+- `jailSubject(jid)` → `jail:<jid>` (ergonomic helper for
+  symmetry with loginclassSubject)
+- `loginclassSubject(uid)` → `loginclass:crate-<uid>`
+- `buildRule(subject, key, rawValue)` → full
+  `<subject>:<key>:deny=<value>` string for rctl(8)
+- `buildUserUmbrellaRules(uid, [{key, value}, ...])` →
+  whole quota set tagged with the per-user loginclass; one
+  rule per pair
+- `validateLoginclassName(name)` — accepts only what
+  `loginclassName(uid)` produces (defence in depth: daemon
+  rejects operator-supplied loginclass strings)
+
+### Tests
+
+11 new ATF tests in `per_user_rctl_pure_test.cpp`:
+
+- typical loginclass / subject / rule formats
+- `loginclass_isolation` — alice vs bob distinct, neither
+  a prefix of the other (defence against prefix-matching
+  loginclass tools)
+- umbrella rules from a 3-key set
+- empty input → empty output
+- validator accepts well-formed
+- `validate_loginclass_round_trips` — every loginclass we
+  emit must round-trip (catches future format desync)
+- validator rejects garbage: empty, no-uid suffix, alpha
+  suffix, leading-zero suffix, missing prefix, wrong case,
+  too-long suffix
+
+Suite: 1230 → **1241**, all passing.
+
+### Series state
+
+- Verb handlers: 14/14 ✅
+- Per-user mini-track:
+  - 0.9.8 — runtime path scheme ✅
+  - 0.9.9 — ZFS dataset prefix ✅
+  - 0.9.10 — network sub-CIDR ✅
+  - **0.9.11 — RCTL accounting groups ← this release**
+  - 0.9.12 — migration doc + final wiring (login.conf
+    edits, lease migration, `crated.conf` schema bump)
+- 0.9.13 — default flip
+- 1.0.0 — setuid removed
+
+---
+
 ## [0.9.10] — 2026-05-09
 
 **Rootless track, per-user network sub-CIDR allocator.**
