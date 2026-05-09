@@ -119,6 +119,10 @@ std::string parseAddIpfwRule(const FieldMap &m,
                              PrivOpsPure::AddIpfwRuleReq &out);
 std::string parseRemoveIpfwRule(const FieldMap &m,
                                 PrivOpsPure::RemoveIpfwRuleReq &out);
+std::string parseSetIfaceUp(const FieldMap &m,
+                            PrivOpsPure::SetIfaceUpReq &out);
+std::string parseDisableIfaceOffload(const FieldMap &m,
+                                     PrivOpsPure::DisableIfaceOffloadReq &out);
 
 // --- Verb routing ---
 

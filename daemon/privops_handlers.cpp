@@ -372,6 +372,28 @@ DispatchResult handleDestroyJail(const PrivOpsPure::DestroyJailReq &r) {
   return {200, PrivOpsWirePure::formatDestroyJailSuccess(r.name)};
 }
 
+// --- handleSetIfaceUp / handleDisableIfaceOffload (0.9.23) ---
+
+DispatchResult handleSetIfaceUp(const PrivOpsPure::SetIfaceUpReq &r) {
+  try {
+    IfconfigOps::setUp(r.ifname);
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("ifconfig_failed",
+                                                     e.what())};
+  }
+  return {200, PrivOpsWirePure::formatSetIfaceUpSuccess(r.ifname)};
+}
+
+DispatchResult handleDisableIfaceOffload(const PrivOpsPure::DisableIfaceOffloadReq &r) {
+  try {
+    IfconfigOps::disableOffload(r.ifname);
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("ifconfig_failed",
+                                                     e.what())};
+  }
+  return {200, PrivOpsWirePure::formatDisableIfaceOffloadSuccess(r.ifname)};
+}
+
 // --- Top-level dispatcher ---
 
 namespace {
@@ -508,6 +530,22 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleDestroyJail(r);
     }
+    case Verb::SetIfaceUp: {
+      PrivOpsPure::SetIfaceUpReq r;
+      if (auto e = PrivOpsWirePure::parseSetIfaceUp(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateSetIfaceUp(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleSetIfaceUp(r);
+    }
+    case Verb::DisableIfaceOffload: {
+      PrivOpsPure::DisableIfaceOffloadReq r;
+      if (auto e = PrivOpsWirePure::parseDisableIfaceOffload(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateDisableIfaceOffload(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleDisableIfaceOffload(r);
+    }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
   }
@@ -637,6 +675,22 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       if (auto e = PrivOpsPure::validateDestroyJail(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleDestroyJail(r);
+    }
+    case Verb::SetIfaceUp: {
+      PrivOpsPure::SetIfaceUpReq r;
+      if (auto e = PrivOpsNvPure::parseSetIfaceUp(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateSetIfaceUp(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleSetIfaceUp(r);
+    }
+    case Verb::DisableIfaceOffload: {
+      PrivOpsPure::DisableIfaceOffloadReq r;
+      if (auto e = PrivOpsNvPure::parseDisableIfaceOffload(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateDisableIfaceOffload(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleDisableIfaceOffload(r);
     }
     case Verb::Unknown:
       return {404,

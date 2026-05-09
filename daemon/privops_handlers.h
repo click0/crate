@@ -145,4 +145,11 @@ PrivOpsWirePure::DispatchResult handleRemoveIpfwRule(const PrivOpsPure::RemoveIp
 PrivOpsWirePure::DispatchResult handleCreateJail(const PrivOpsPure::CreateJailReq &r);
 PrivOpsWirePure::DispatchResult handleDestroyJail(const PrivOpsPure::DestroyJailReq &r);
 
+// 0.9.23: atomic single-iface ops needed by setupBridgeEpair flow.
+// Wrap IfconfigOps::setUp / disableOffload (which themselves use
+// libifconfig with shell fallback). Both succeed silently on
+// idempotent calls (already up / already disabled).
+PrivOpsWirePure::DispatchResult handleSetIfaceUp(const PrivOpsPure::SetIfaceUpReq &r);
+PrivOpsWirePure::DispatchResult handleDisableIfaceOffload(const PrivOpsPure::DisableIfaceOffloadReq &r);
+
 } // namespace Crated

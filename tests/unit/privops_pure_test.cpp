@@ -23,6 +23,7 @@ ATF_TEST_CASE_BODY(verb_token_roundtrips_for_every_verb) {
     Verb::ConfigureIface, Verb::TeardownIface,
     Verb::AddPfRule, Verb::RemovePfRule,
     Verb::AddIpfwRule, Verb::RemoveIpfwRule,
+    Verb::SetIfaceUp, Verb::DisableIfaceOffload,
   };
   for (Verb v : verbs) {
     std::string token = verbName(v);
@@ -488,6 +489,26 @@ ATF_TEST_CASE_BODY(teardown_iface_minimal) {
   ATF_REQUIRE(!validateTeardownIface(r).empty());
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(set_iface_up_minimal);
+ATF_TEST_CASE_BODY(set_iface_up_minimal) {
+  SetIfaceUpReq r;
+  r.ifname = "epair0a";
+  ATF_REQUIRE_EQ(validateSetIfaceUp(r), std::string());
+  r.ifname = ""; // empty -> reject
+  ATF_REQUIRE(!validateSetIfaceUp(r).empty());
+  r.ifname = "name with space";
+  ATF_REQUIRE(!validateSetIfaceUp(r).empty());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(disable_iface_offload_minimal);
+ATF_TEST_CASE_BODY(disable_iface_offload_minimal) {
+  DisableIfaceOffloadReq r;
+  r.ifname = "epair0a";
+  ATF_REQUIRE_EQ(validateDisableIfaceOffload(r), std::string());
+  r.ifname = "name;rm";
+  ATF_REQUIRE(!validateDisableIfaceOffload(r).empty());
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, verb_token_roundtrips_for_every_verb);
   ATF_ADD_TEST_CASE(tcs, verb_unknown_token_returns_unknown);
@@ -545,4 +566,6 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, add_ipfw_rule_validates_set_number_action);
   ATF_ADD_TEST_CASE(tcs, destroy_jail_minimal);
   ATF_ADD_TEST_CASE(tcs, teardown_iface_minimal);
+  ATF_ADD_TEST_CASE(tcs, set_iface_up_minimal);
+  ATF_ADD_TEST_CASE(tcs, disable_iface_offload_minimal);
 }

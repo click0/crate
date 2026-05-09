@@ -219,4 +219,18 @@ PrivOpsNvPure::FieldMap buildDestroyJail(const std::string &name, bool force) {
   };
 }
 
+PrivOpsNvPure::FieldMap buildSetIfaceUp(const std::string &ifname) {
+  return {
+    {"verb", "set_iface_up"},
+    {"ifname", ifname},
+  };
+}
+
+PrivOpsNvPure::FieldMap buildDisableIfaceOffload(const std::string &ifname) {
+  return {
+    {"verb", "disable_iface_offload"},
+    {"ifname", ifname},
+  };
+}
+
 } // namespace PrivOpsClient

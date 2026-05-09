@@ -6,6 +6,123 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.23] — 2026-05-09
+
+**Rootless track, atomic single-iface verbs.** Twenty-fourth
+0.9.x release. **First verb-set expansion since 0.9.0** —
+previously the 14-verb taxonomy was treated as frozen, but
+the `crate run` host-side bridge plumbing has primitives
+(`setUp`, `disableOffload`) that don't compose well with
+the existing `configure_iface` composite verb.
+
+### What lands
+
+#### Two new privops verbs
+
+- **`set_iface_up`** — wraps `IfconfigOps::setUp(ifname)`.
+  Single string arg; idempotent (already-up succeeds).
+- **`disable_iface_offload`** — wraps
+  `IfconfigOps::disableOffload(ifname)`. Same shape; the
+  FreeBSD 15 checksum-offload workaround.
+
+Why these two together: same shape (1 ifname, no
+response data), called as a sibling pair in
+`run_net.cpp::setupBridgeEpair`, and small enough that
+splitting into separate releases would be unhelpful.
+
+#### Wire-up across the stack
+
+- `lib/privops_pure.{h,cpp}` — `Verb::SetIfaceUp`,
+  `Verb::DisableIfaceOffload` + request structs +
+  validators (delegate to existing `validateIfaceName`)
+- `lib/privops_wire_pure.{h,cpp}` — JSON parsers +
+  `formatSetIfaceUpSuccess` / `formatDisableIfaceOffloadSuccess`
+  builders + dispatcher cases
+- `lib/privops_nv_pure.{h,cpp}` — nv parsers (FieldMap)
+- `lib/privops_client.h` + `lib/privops_client_pure.cpp` —
+  `buildSetIfaceUp` / `buildDisableIfaceOffload`
+- `daemon/privops_handlers.{h,cpp}` —
+  `handleSetIfaceUp` / `handleDisableIfaceOffload` +
+  dispatcher cases (HTTP + libnv transports)
+
+#### CLI wiring
+
+`lib/run_net.cpp` gets two new file-static helpers
+(`setUpPrivopsOrLocal`, `disableOffloadPrivopsOrLocal`)
+mirroring the 0.9.20 `moveToVnetPrivopsOrLocal` pattern.
+Five call-sites are migrated:
+
+| Site | Op |
+|------|-----|
+| `createEpair` line 160 | disableOffload(ifaceA) |
+| `createEpair` line 161 | disableOffload(ifaceB) |
+| `setupBridgeEpair` line 436 | disableOffload(ifaceA) |
+| `setupBridgeEpair` line 437 | disableOffload(ifaceB) |
+| `setupBridgeEpair` line 440 | setUp(ifaceA) |
+
+### Why expand the verb set
+
+The `configure_iface` composite verb (0.9.6) bundles
+move + IP/MAC config + bridge attach. It assumes a
+spec-driven "give me everything at once" usage. The
+`run_net.cpp` orchestration is streaming — interleave
+IfconfigOps calls with state-tracking and other ops.
+For that pattern, atomic verbs match better. The
+0.9.0 taxonomy contract isn't broken; new verbs append
+to the closed set.
+
+### Trade-offs
+
+- **No rollback** of either op. The handler succeeds or
+  fails the entire op atomically. setUp + disableOffload
+  are themselves idempotent, so retry-on-failure works.
+- **Other host-side IfconfigOps still need root.**
+  `bridgeAddMember`, `setInetAddr`, `createEpair` haven't
+  got matching verbs yet. 0.9.24 plan: `bridge_add_member`
+  + `set_iface_inet_addr`. 0.9.25: `create_epair` (returns
+  pair names — first verb with non-trivial response data).
+
+### Series state
+
+CLI call-sites wired:
+- `crate retune` → set_rctl / clear_rctl (0.9.15)
+- `crate stop` → destroy_jail (0.9.17)
+- `crate run` ZFS attach + detach → attach_zfs / detach_zfs (0.9.18)
+- `crate run` nullfs mounts (8 sites) → mount_nullfs (0.9.19)
+- `crate run` vnet moveToVnet (4 sites) → configure_iface move-only (0.9.20)
+- `crate run` removeJail teardown → destroy_jail (0.9.21)
+- `crate run` createJail → create_jail (0.9.22)
+- **`crate run` setUp + disableOffload (5 sites) → set_iface_up / disable_iface_offload ← this release**
+
+Remaining:
+- 0.9.24 — `bridge_add_member` + `set_iface_inet_addr` verbs
+- 0.9.25 — `create_epair` (first response-data verb)
+- 0.9.26 — `network_lease.cpp` per-user paths + RCTL umbrella
+- 0.9.27 — default flip
+- 1.0.0 — setuid removed
+
+### Tests
+
+2 new ATF tests (`set_iface_up_minimal`,
+`disable_iface_offload_minimal`) in privops_pure_test.
+`verb_token_roundtrips_for_every_verb` updated to include
+the 2 new verbs (catches future enum-add-without-mapping).
+Suite: 1294 → **1296**.
+
+### Files
+
+- `lib/privops_pure.{h,cpp}` — verb enum + structs + validators
+- `lib/privops_wire_pure.{h,cpp}` — JSON parsers + format builders
+- `lib/privops_nv_pure.{h,cpp}` — nv parsers
+- `lib/privops_client.h` + `lib/privops_client_pure.cpp` — builders
+- `daemon/privops_handlers.{h,cpp}` — handlers + dispatcher cases
+- `lib/run_net.cpp` — 2 new helpers + 5 call-site replacements
+- `tests/unit/privops_pure_test.cpp` — 2 new tests
+- `cli/args.cpp` — version `crate 0.9.23`
+- `CHANGELOG.md` — entry
+
+---
+
 ## [0.9.22] — 2026-05-09
 
 **Rootless track, `createJail` via privops.** Twenty-third

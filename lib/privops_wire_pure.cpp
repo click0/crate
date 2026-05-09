@@ -336,6 +336,18 @@ std::string parseRemoveIpfwRule(const std::string &body,
   return "";
 }
 
+std::string parseSetIfaceUp(const std::string &body,
+                            PrivOpsPure::SetIfaceUpReq &out) {
+  if (auto e = requireStringField(body, "ifname", out.ifname); !e.empty()) return e;
+  return "";
+}
+
+std::string parseDisableIfaceOffload(const std::string &body,
+                                     PrivOpsPure::DisableIfaceOffloadReq &out) {
+  if (auto e = requireStringField(body, "ifname", out.ifname); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing helper ---
 
 PrivOpsPure::Verb parseVerbFromPath(const std::string &path) {
@@ -574,6 +586,22 @@ std::string formatDestroyJailSuccess(const std::string &name) {
   return o.str();
 }
 
+std::string formatSetIfaceUpSuccess(const std::string &ifname) {
+  std::ostringstream o;
+  o << "{\"up\":true"
+    << ",\"ifname\":\"" << escape(ifname) << "\""
+    << "}";
+  return o.str();
+}
+
+std::string formatDisableIfaceOffloadSuccess(const std::string &ifname) {
+  std::ostringstream o;
+  o << "{\"offload_disabled\":true"
+    << ",\"ifname\":\"" << escape(ifname) << "\""
+    << "}";
+  return o.str();
+}
+
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body) {
   using namespace PrivOpsPure;
@@ -606,6 +634,10 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       return runVerb<AddIpfwRuleReq>(body, v, parseAddIpfwRule, validateAddIpfwRule);
     case Verb::RemoveIpfwRule:
       return runVerb<RemoveIpfwRuleReq>(body, v, parseRemoveIpfwRule, validateRemoveIpfwRule);
+    case Verb::SetIfaceUp:
+      return runVerb<SetIfaceUpReq>(body, v, parseSetIfaceUp, validateSetIfaceUp);
+    case Verb::DisableIfaceOffload:
+      return runVerb<DisableIfaceOffloadReq>(body, v, parseDisableIfaceOffload, validateDisableIfaceOffload);
     case Verb::Unknown:
       break;
   }
