@@ -2,6 +2,7 @@
 
 #include "privops_handlers.h"
 
+#include "audit_per_user.h"
 #include "ifconfig_ops.h"
 #include "ipfw_ops.h"
 #include "jail_query.h"
@@ -10,6 +11,10 @@
 #include "retune_pure.h"
 #include "util.h"
 #include "zfs_ops.h"
+
+#include "../lib/audit_per_user_pure.h"
+
+#include <ctime>
 
 #include <sstream>
 
@@ -357,7 +362,27 @@ DispatchResult handleDestroyJail(const PrivOpsPure::DestroyJailReq &r) {
 
 // --- Top-level dispatcher ---
 
-DispatchResult dispatchPrivOp(Verb v, const std::string &body) {
+namespace {
+
+// Best-effort per-user audit tail. No-op when uid==0 or rootless
+// is off (i.e. legacy single-tenant flow). Called after the
+// dispatcher computes its result, just before returning.
+void maybeWritePerUserAudit(bool rootlessPerUser, uint32_t uid,
+                            Verb v, int status) {
+  if (!rootlessPerUser || uid == 0) return;
+  AuditPerUserPure::Record r;
+  r.timestamp = (long)std::time(nullptr);
+  r.uid       = uid;
+  r.verb      = PrivOpsPure::verbName(v);
+  r.status    = status;
+  appendPerUserAuditLine(uid, AuditPerUserPure::formatLine(r));
+}
+
+} // anon
+
+DispatchResult dispatchPrivOp(Verb v, const std::string &body,
+                              bool rootlessPerUser, uint32_t operatorUid) {
+  DispatchResult result = [&]() -> DispatchResult {
   switch (v) {
     case Verb::SetRctl: {
       PrivOpsPure::SetRctlReq r;
@@ -474,6 +499,11 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body) {
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
   }
+  }();
+  // 0.9.13: per-user audit tail (best-effort; no-op for uid=0 /
+  // rootless off).
+  maybeWritePerUserAudit(rootlessPerUser, operatorUid, v, result.status);
+  return result;
 }
 
 } // namespace Crated

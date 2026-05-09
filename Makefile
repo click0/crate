@@ -19,6 +19,7 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/create.cpp lib/run.cpp \
            lib/privops_pure.cpp lib/privops_wire_pure.cpp \
            lib/runtime_paths_pure.cpp lib/per_user_net_pure.cpp \
            lib/per_user_rctl_pure.cpp lib/per_user_env_pure.cpp \
+           lib/audit_per_user_pure.cpp \
            lib/throttle_pure.cpp lib/throttle.cpp \
            lib/doctor_pure.cpp lib/doctor.cpp \
            lib/vmwrap_pure.cpp lib/vmwrap.cpp \
@@ -57,7 +58,8 @@ DAEMON_SRCS = daemon/main.cpp daemon/config.cpp daemon/server.cpp \
               daemon/sandbox_pure.cpp daemon/sandbox.cpp \
               daemon/rate_limit_pure.cpp daemon/rate_limit.cpp \
               daemon/socket_perms_pure.cpp \
-              daemon/privops_handlers.cpp
+              daemon/privops_handlers.cpp \
+              daemon/audit_per_user.cpp
 
 SNMPD_SRCS = snmpd/main.cpp snmpd/collector.cpp \
              snmpd/mib.cpp snmpd/mib_pure.cpp
@@ -221,6 +223,7 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              privops_pure_test privops_wire_pure_test \
              runtime_paths_pure_test per_user_net_pure_test \
              per_user_rctl_pure_test per_user_env_pure_test \
+             audit_per_user_pure_test \
              backup_prune_pure_test control_socket_pure_test \
              doctor_pure_test sandbox_pure_test rate_limit_pure_test \
              ip_alloc_pure_test auto_fw_pure_test \
@@ -264,6 +267,7 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  lib/privops_pure.cpp lib/privops_wire_pure.cpp \
                  lib/runtime_paths_pure.cpp lib/per_user_net_pure.cpp \
                  lib/per_user_rctl_pure.cpp lib/per_user_env_pure.cpp \
+                 lib/audit_per_user_pure.cpp \
                  lib/throttle_pure.cpp lib/doctor_pure.cpp \
                  lib/vmwrap_pure.cpp \
                  lib/ip_alloc_pure.cpp lib/ip6_alloc_pure.cpp \

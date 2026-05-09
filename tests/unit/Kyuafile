@@ -59,6 +59,7 @@ atf_test_program{name="runtime_paths_pure_test"}
 atf_test_program{name="per_user_net_pure_test"}
 atf_test_program{name="per_user_rctl_pure_test"}
 atf_test_program{name="per_user_env_pure_test"}
+atf_test_program{name="audit_per_user_pure_test"}
 atf_test_program{name="throttle_pure_test"}
 atf_test_program{name="backup_prune_pure_test"}
 atf_test_program{name="control_socket_pure_test"}

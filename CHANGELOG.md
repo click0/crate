@@ -6,6 +6,132 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.13] — 2026-05-09
+
+**Rootless track, first wiring step.** Fourteenth 0.9.x
+release. The first release that lights up actual rootless
+*behaviour*: per-user audit tail. Previous mini-PRs
+(0.9.8–0.9.12) only added pure modules + config schema.
+
+### What lands
+
+#### Pure formatter
+
+`lib/audit_per_user_pure.{h,cpp}` formats one JSONL audit
+record per privops verb invocation:
+
+```
+{"ts":1715250000,"uid":1000,"verb":"set_rctl","status":200,"outcome":"ok"}
+```
+
+`outcome` classifies the status into a short token:
+`ok` / `parse_or_validate` / `forbidden` / `not_found` /
+`rate_limit` / `server_error` / `other`. Detail (response
+body) is intentionally omitted — canonical record stays in
+the system audit (cap_syslog dual-write from 0.8.24).
+
+Verb name gets JSON-escaped defensively even though
+`parseVerb`'s charset can't produce a quote in practice.
+
+#### Daemon writer
+
+`daemon/audit_per_user.{cpp,h}` — best-effort append-only
+writer:
+
+- `appendPerUserAuditLine(uid, jsonLine)` mkdirs
+  `/var/run/crate/<uid>` (mode 0700) on first call, opens
+  `/var/run/crate/<uid>/audit.log` with `O_APPEND|O_CREAT`
+  mode 0600, writes one line + `\n`, closes
+- POSIX-atomic line writes (well under PIPE_BUF)
+- mkdir / open / write failures log a single line to stderr
+  and return `false` — never throws, never fails the verb
+
+#### Dispatcher hook
+
+`Crated::dispatchPrivOp` gains two optional parameters:
+
+```cpp
+DispatchResult dispatchPrivOp(PrivOpsPure::Verb v,
+                              const std::string &body,
+                              bool rootlessPerUser = false,
+                              uint32_t operatorUid = 0);
+```
+
+When `rootlessPerUser == true && operatorUid > 0`, the
+dispatcher writes a per-user audit line after computing
+its result (success or failure — both tracked).
+
+`daemon/routes.cpp::handlePrivOp` now passes
+`config.rootlessPerUser` and uid 0. **uid stays 0 in 0.9.13**
+because cpp-httplib doesn't expose the connection fd for
+`getpeereid(2)` and the bearer-token API doesn't carry uid.
+The contract is wired and testable; the actual uid plumbing
+lights up in 0.9.14 (control-socket plane already has peer
+uid via 0.7.11; can drive the audit hook today).
+
+### Why this scope
+
+0.9.13 is the **first wiring** release of the namespacing
+sub-track. Picking the smallest blast radius:
+
+- Audit is **additive** — adding a per-user log doesn't
+  change any existing audit path
+- The hook **defaults to off** — uid=0 (current call site)
+  is a no-op
+- Open/write failures **don't fail the verb** — operator
+  visibility loss, not a regression
+
+Larger wirings (network_lease per-user paths, RCTL umbrella
+application) defer to 0.9.14+ where they get a coherent
+release alongside the uid-plumbing flip.
+
+### Tests
+
+6 new ATF tests in `audit_per_user_pure_test.cpp`:
+
+- `format_typical_ok` — happy-path field-order + content
+- `outcome_classification` — full status code → outcome
+  table coverage (200/201/204/400/403/404/429/500/501/599/
+  100/0)
+- `format_outcome_matches_status` — formatLine actually
+  uses outcomeFor, not a separate code path
+- `format_escapes_verb_name` — defensive escape (smuggled
+  quote in verb name doesn't break JSON)
+- `format_no_detail_field` — locks down "no detail"
+  contract (catches future regression adding response body)
+- `format_distinct_records_alice_vs_bob` — uid varies →
+  records differ
+
+Suite: 1249 → **1255**, all passing.
+`daemon/privops_handlers.o`, `daemon/audit_per_user.o`,
+`daemon/routes.o` all compile clean.
+
+### Series state
+
+- Verb handlers: 14/14 ✅
+- Per-user mini-track:
+  - 0.9.8 — runtime path scheme ✅
+  - 0.9.9 — ZFS dataset prefix ✅
+  - 0.9.10 — network sub-CIDR ✅
+  - 0.9.11 — RCTL accounting groups ✅
+  - 0.9.12 — migration doc + config schema + composer ✅
+  - **0.9.13 — first wiring (per-user audit) ← this release**
+- 0.9.14 — uid plumbing + default flip
+- 1.0.0 — setuid removed
+
+### Files
+
+- `lib/audit_per_user_pure.{h,cpp}` (new, pure)
+- `daemon/audit_per_user.{h,cpp}` (new, syscall-bound)
+- `daemon/privops_handlers.{h,cpp}` — dispatchPrivOp gains
+  `rootlessPerUser` + `operatorUid` params
+- `daemon/routes.cpp::handlePrivOp` — passes config toggle
+- `tests/unit/audit_per_user_pure_test.cpp` (new)
+- `Makefile`, `tests/unit/Kyuafile`, `.gitignore` — wired
+- `cli/args.cpp` — version `crate 0.9.13`
+
+---
+
 ## [0.9.12] — 2026-05-09
 
 **Rootless track, migration doc + config schema + composition

@@ -63,6 +63,7 @@ tests/unit/runtime_paths_pure_test
 tests/unit/per_user_net_pure_test
 tests/unit/per_user_rctl_pure_test
 tests/unit/per_user_env_pure_test
+tests/unit/audit_per_user_pure_test
 tests/unit/backup_prune_pure_test
 tests/unit/control_socket_pure_test
 tests/unit/doctor_pure_test
