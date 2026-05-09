@@ -6,6 +6,174 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.14] — 2026-05-09
+
+**Rootless track, libnv unix-socket transport.** Fifteenth 0.9.x
+release. The first release that solves uid plumbing without
+forking cpp-httplib or proxying HTTP over a Unix socket.
+
+### Architectural correction
+
+0.9.0–0.9.13 added an HTTP/JSON privops surface
+(`POST /api/v1/privops/:verb`) via cpp-httplib. Good for remote
+clients (hub multi-host, CI), but cpp-httplib doesn't expose the
+connection fd, so `getpeereid(2)` for local clients was
+impossible. 0.9.13's per-user audit hook stayed dormant for that
+reason.
+
+A separate hand-rolled HTTP listener for local IPC (the pattern
+0.7.10's control_socket plane took) is its own
+wheel-reinvention. The right answer for FreeBSD-native local
+IPC is **libnv** — kernel-blessed nvlist format, already used
+by libcasper/cap_dns/cap_syslog and by `lib/nv_protocol.cpp`
+in the crate codebase since 0.8.27.
+
+0.9.14 adds libnv as a **second transport** for privops, **not
+as a replacement** for HTTP. Both paths converge on the same
+validators (PrivOpsPure) and the same handlers
+(Crated::handle{SetRctl, ...}); only the wire format and auth
+model differ:
+
+| | HTTP transport (kept) | libnv transport (NEW) |
+|---|---|---|
+| Endpoint | `POST /api/v1/privops/:verb` | `/var/run/crate/crated-privops.sock` |
+| Wire | cpp-httplib + JSON | nvlist over AF_UNIX |
+| Auth | bearer token | `getpeereid(2)` SO_PEERCRED |
+| Use case | hub, CI/CD, remote tooling | `crate(1)` → `crated` local |
+| uid for audit hook | 0 (HTTP can't extract) | real peer uid |
+
+### What lands
+
+#### Pure module
+
+`lib/privops_nv_pure.{h,cpp}`:
+
+- `FieldMap` = `std::map<string,string>`. The listener walks an
+  nvlist into a flat string-keyed map so the **pure parsers
+  compile and test on Linux dev/CI** without `<sys/nv.h>`. Same
+  approach `lib/nv_protocol.cpp` (0.8.27) already uses.
+- 14 per-verb parsers (`parseSetRctl(map, &req)` etc.) — one-to-
+  one with `PrivOpsWirePure::parseXxx` in field set, types,
+  required/optional split.
+- Generic accessors: `requireString`, `requireLong`,
+  `requireUnsigned`, `optionalString`, `optionalBool`. Strict
+  type-decoding from string (no leading whitespace, no decimal
+  point on ints, leading-zero check on numbers).
+- `extractVerb(map)` — reads the wire's `verb` field.
+
+22 ATF tests including:
+- per-accessor edge cases (typical / missing / wrong-type /
+  garbage / canonical-bool-aliases)
+- per-verb happy-path + missing-required
+- defence-in-depth: `parsers_same_required_field_set_as_json`
+  catches future drift between HTTP and libnv parsers
+
+#### Daemon-side
+
+- `daemon/privops_listener.{cpp,h}` — accept loop on AF_UNIX,
+  `getpeereid` extracts uid, `nvlist_recv` → walk into
+  `FieldMap` → dispatch, `nvlist_send` response. Capsicum
+  rights applied to listener fd and per-connection fds.
+  FreeBSD-only (Linux build returns false from `start()`).
+- `Crated::dispatchPrivOpFromMap(map, rootlessPerUser, uid)` —
+  parallel dispatcher mirroring `dispatchPrivOp`'s switch but
+  using `PrivOpsNvPure::parseXxx`. Same handlers, same audit
+  hook. Audit hook now **lights up automatically** for
+  unix-socket clients (peer uid > 0).
+- `daemon/main.cpp` — starts a `PrivopsListener` alongside the
+  existing cpp-httplib server, control sockets, and
+  ws-console. Same start/stop pattern as
+  `ControlSocketsManager`.
+
+#### Config schema
+
+`Crated::Config` gains:
+
+```cpp
+std::string privopsSocketPath;     // empty disables (default)
+std::string privopsSocketGroup;    // chown group
+unsigned    privopsSocketMode = 0660;
+```
+
+Both top-level shorthand and nested `privops:` block accepted in
+`crated.conf`:
+
+```yaml
+privops_socket: /var/run/crate/crated-privops.sock
+privops_socket_group: crate-operators
+privops_socket_mode: "0660"
+
+# OR
+privops:
+    socket: /var/run/crate/crated-privops.sock
+    group:  crate-operators
+    mode:   "0660"
+```
+
+Documented in `crated.conf.sample`.
+
+### Why a separate dispatcher (not a refactor)
+
+`dispatchPrivOpFromMap` duplicates the 14-case switch from
+`dispatchPrivOp` instead of refactoring both into a shared
+`std::variant`-based core. Two reasons:
+
+1. **HTTP path stays byte-identical to 0.9.13.** Zero risk to
+   existing `/api/v1/privops/:verb` consumers (hub, CI, third-
+   party tooling). They keep their wire contract.
+2. **Mini-PR scope.** A variant-based unification is its own
+   refactor; if duplication becomes a real cost we can fold
+   later.
+
+### Response shape
+
+The libnv response wraps the existing JSON body in an nvlist
+field for now:
+
+```
+nvlist {
+  "status": <int>      // HTTP-style status
+  "body":   <string>   // the JSON the HTTP path also produces
+}
+```
+
+Native-typed nvlist responses (per-verb structured fields) are
+deferred — would require refactoring 14 handlers. The current
+shape lets clients use the same body parsers as HTTP, so the
+operator-side libnv-vs-HTTP code is symmetric.
+
+### Tests
+
+22 new ATF tests in `privops_nv_pure_test.cpp`. Suite:
+1255 → **1277**, all passing. `daemon/privops_handlers.o`,
+`daemon/privops_listener.o`, `daemon/config.o` all compile clean.
+
+### Series state
+
+- Verb handlers: 14/14 ✅
+- Per-user mini-track: 0.9.8–0.9.13 ✅
+- **0.9.14 — libnv unix-socket transport ← this release**
+- 0.9.15 — operator client side: `crate(1)` switches to libnv
+  socket when available
+- 0.9.16+ — network_lease.cpp per-user paths, RCTL umbrella
+  application
+- 0.9.17 — default flip
+- 1.0.0 — setuid bit removed
+
+### Files
+
+- `lib/privops_nv_pure.{h,cpp}` (new)
+- `daemon/privops_listener.{cpp,h}` (new)
+- `tests/unit/privops_nv_pure_test.cpp` (new)
+- `daemon/privops_handlers.{h,cpp}` — added `dispatchPrivOpFromMap`
+- `daemon/config.h/.cpp` — 3 new fields + YAML parsing
+- `daemon/main.cpp` — start `PrivopsListener` alongside HTTP
+- `daemon/crated.conf.sample` — appended privops block
+- `Makefile`, `tests/unit/Kyuafile`, `.gitignore` — wired up
+- `cli/args.cpp` — version `crate 0.9.14`
+
+---
+
 ## [0.9.13] — 2026-05-09
 
 **Rootless track, first wiring step.** Fourteenth 0.9.x

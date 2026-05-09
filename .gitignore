@@ -59,6 +59,7 @@ tests/unit/retune_pure_test
 tests/unit/throttle_pure_test
 tests/unit/privops_pure_test
 tests/unit/privops_wire_pure_test
+tests/unit/privops_nv_pure_test
 tests/unit/runtime_paths_pure_test
 tests/unit/per_user_net_pure_test
 tests/unit/per_user_rctl_pure_test

@@ -506,4 +506,135 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
   return result;
 }
 
+// --- dispatchPrivOpFromMap (0.9.14, libnv transport) ---
+
+DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
+                                     bool rootlessPerUser,
+                                     uint32_t operatorUid) {
+  Verb v = PrivOpsNvPure::extractVerb(m);
+  DispatchResult result = [&]() -> DispatchResult {
+  switch (v) {
+    case Verb::SetRctl: {
+      PrivOpsPure::SetRctlReq r;
+      if (auto e = PrivOpsNvPure::parseSetRctl(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateSetRctl(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleSetRctl(r);
+    }
+    case Verb::ClearRctl: {
+      PrivOpsPure::ClearRctlReq r;
+      if (auto e = PrivOpsNvPure::parseClearRctl(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateClearRctl(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleClearRctl(r);
+    }
+    case Verb::AttachZfs: {
+      PrivOpsPure::AttachZfsReq r;
+      if (auto e = PrivOpsNvPure::parseAttachZfs(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateAttachZfs(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleAttachZfs(r);
+    }
+    case Verb::DetachZfs: {
+      PrivOpsPure::DetachZfsReq r;
+      if (auto e = PrivOpsNvPure::parseDetachZfs(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateDetachZfs(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleDetachZfs(r);
+    }
+    case Verb::MountNullfs: {
+      PrivOpsPure::MountNullfsReq r;
+      if (auto e = PrivOpsNvPure::parseMountNullfs(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateMountNullfs(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleMountNullfs(r);
+    }
+    case Verb::UnmountNullfs: {
+      PrivOpsPure::UnmountNullfsReq r;
+      if (auto e = PrivOpsNvPure::parseUnmountNullfs(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateUnmountNullfs(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleUnmountNullfs(r);
+    }
+    case Verb::ConfigureIface: {
+      PrivOpsPure::ConfigureIfaceReq r;
+      if (auto e = PrivOpsNvPure::parseConfigureIface(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateConfigureIface(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleConfigureIface(r);
+    }
+    case Verb::TeardownIface: {
+      PrivOpsPure::TeardownIfaceReq r;
+      if (auto e = PrivOpsNvPure::parseTeardownIface(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateTeardownIface(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleTeardownIface(r);
+    }
+    case Verb::AddPfRule: {
+      PrivOpsPure::AddPfRuleReq r;
+      if (auto e = PrivOpsNvPure::parseAddPfRule(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateAddPfRule(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleAddPfRule(r);
+    }
+    case Verb::RemovePfRule: {
+      PrivOpsPure::RemovePfRuleReq r;
+      if (auto e = PrivOpsNvPure::parseRemovePfRule(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateRemovePfRule(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleRemovePfRule(r);
+    }
+    case Verb::AddIpfwRule: {
+      PrivOpsPure::AddIpfwRuleReq r;
+      if (auto e = PrivOpsNvPure::parseAddIpfwRule(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateAddIpfwRule(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleAddIpfwRule(r);
+    }
+    case Verb::RemoveIpfwRule: {
+      PrivOpsPure::RemoveIpfwRuleReq r;
+      if (auto e = PrivOpsNvPure::parseRemoveIpfwRule(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateRemoveIpfwRule(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleRemoveIpfwRule(r);
+    }
+    case Verb::CreateJail: {
+      PrivOpsPure::CreateJailReq r;
+      if (auto e = PrivOpsNvPure::parseCreateJail(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateCreateJail(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleCreateJail(r);
+    }
+    case Verb::DestroyJail: {
+      PrivOpsPure::DestroyJailReq r;
+      if (auto e = PrivOpsNvPure::parseDestroyJail(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateDestroyJail(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleDestroyJail(r);
+    }
+    case Verb::Unknown:
+      return {404,
+              std::string("{\"error\":\"unknown or missing 'verb' field\"}")};
+  }
+  return {404,
+          std::string("{\"error\":\"unknown or missing 'verb' field\"}")};
+  }();
+  maybeWritePerUserAudit(rootlessPerUser, operatorUid, v, result.status);
+  return result;
+}
+
 } // namespace Crated

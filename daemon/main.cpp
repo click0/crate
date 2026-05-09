@@ -8,6 +8,7 @@
 #include "server.h"
 #include "ws_console.h"
 #include "control_socket.h"
+#include "privops_listener.h"
 
 #include "err.h"
 #include "misc.h"
@@ -111,6 +112,10 @@ int main(int argc, char **argv) {
     Crated::ControlSocketsManager controlSockets(config);
     int csStarted = controlSockets.start();
 
+    // 0.9.14: privops listener (opt-in via privops_socket: in config).
+    Crated::PrivopsListener privopsListener(config);
+    bool privopsStarted = privopsListener.start();
+
     std::cerr << "crated started";
     if (!config.unixSocket.empty())
       std::cerr << " unix=" << config.unixSocket;
@@ -121,12 +126,15 @@ int main(int argc, char **argv) {
                 << "]:" << config.consoleWsPort;
     if (csStarted > 0)
       std::cerr << " control-sockets=" << csStarted;
+    if (privopsStarted)
+      std::cerr << " privops=" << config.privopsSocketPath;
     std::cerr << std::endl;
 
     // Main loop — server runs in threads, we just wait for signals
     while (g_running)
       ::sleep(1);
 
+    privopsListener.stop();
     controlSockets.stop();
     Crated::WsConsole::stop();
     server.stop();
