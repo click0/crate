@@ -111,6 +111,35 @@ JailInfo createJail(const Spec &spec, const std::string &jailPath, bool logProgr
 }
 
 void removeJail(const JailInfo &info) {
+  // 0.9.21: prefer privops `destroy_jail` verb when crated's
+  // unix-socket listener is detected. Pass `std::to_string(jid)`
+  // as the name — for kernel-auto-named jails (no explicit
+  // `name=` in jail_setv() above), the FreeBSD kernel uses the
+  // jid as the name, so `jail -r <jid-as-string>` works.
+  // Falls back to libjail jail_remove_jd / jail_remove on any
+  // missing socket / privops error / non-FreeBSD test build.
+  std::string privopsSocket = PrivOpsClient::detectSocketPath();
+  if (!privopsSocket.empty()) {
+    auto resp = PrivOpsClient::sendRequest(privopsSocket,
+        PrivOpsClient::buildDestroyJail(std::to_string(info.jid),
+                                        /*force=*/false));
+    if (resp.transportError.empty() && resp.status < 400) {
+#ifdef JAIL_OWN_DESC
+      if (info.jailFd >= 0) ::close(info.jailFd);
+#endif
+      return;
+    }
+    // Fall through to libjail on any privops error — better to
+    // try the legacy path than leak a jail registration.
+    std::cerr << rang::fg::yellow
+              << "run_jail: privops destroy_jail failed, "
+                 "falling back to jail_remove: "
+              << (resp.transportError.empty()
+                    ? std::to_string(resp.status) + ": " + resp.body
+                    : resp.transportError)
+              << rang::style::reset << std::endl;
+  }
+
 #ifdef JAIL_OWN_DESC
   if (info.jailFd >= 0) {
     if (::jail_remove_jd(info.jailFd) == -1)
