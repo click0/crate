@@ -6,6 +6,115 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.16] — 2026-05-09
+
+**Hotfix.** Fixes FreeBSD CI failure introduced by 0.9.15 + LXQt
+nested example multi-instance docfix.
+
+### FreeBSD CI failure (root cause)
+
+0.9.15 added `lib/privops_client.cpp` to BOTH `LIB_SRCS` and
+`TEST_LINK_SRCS`. The file's `#ifdef __FreeBSD__` branch calls
+`nvlist_send` / `nvlist_recv` / `nvlist_create` etc. from
+`<sys/nv.h>`. On the lite CI's `gmake build-unit-tests` step,
+every test binary's link line picks up `lib/privops_client.o`
+via `TEST_LINK_OBJS` — and on FreeBSD 14.2 those libnv symbols
+aren't satisfied without the right link recipe.
+
+Linux unit tests passed because the file's `#else` branch has
+no libnv refs. The 0.9.14 daemon-side `daemon/privops_listener.cpp`
+also uses libnv but is `DAEMON_SRCS`-only — never compiled by
+the lite CI's `build-unit-tests` step — so 0.9.14 passed.
+
+### Fix
+
+Split `lib/privops_client.cpp` along the pure / wire boundary:
+
+- **`lib/privops_client_pure.cpp`** (new) — 14 verb builders +
+  `detectSocketPath()` + stringification helpers. **No libnv
+  references.** Goes into `LIB_SRCS` AND `TEST_LINK_SRCS`.
+  Tests still get the builders for round-trip verification.
+- **`lib/privops_client.cpp`** (slimmed down) — `sendRequest()`
+  only: FreeBSD libnv impl + Linux stub. **`LIB_SRCS`-only;
+  removed from `TEST_LINK_SRCS`.** No libnv leakage into test
+  binaries.
+
+The two `send_returns_transport_error_*` tests from 0.9.15 were
+dropped — they exercised early-return branches uninteresting on
+their own, and the wire path needs an integration test booting a
+real `crated`. Suite count goes 1296 → 1294 (−2 dropped tests,
++0 net changes elsewhere).
+
+### LXQt nested multi-instance docfix
+
+`examples/lxqt-desktop-nested.yml` was shipped in 0.8.49 with a
+multi-instance workflow comment that wouldn't actually work as
+written:
+
+```sh
+# OLD (broken — second iteration would collide on jail name)
+for i in 1 2 3 4; do crate run -f lxqt-desktop-nested.crate & done
+```
+
+Each `crate run` without `--name` derives the jail name from
+the `.crate` archive — so all four instances competed for the
+same name. Updated to the correct form:
+
+```sh
+# NEW
+crate create -s lxqt-desktop-nested.yml         # builds .crate
+for i in 1 2 3 4; do
+  crate run --name lxqt-$i -f lxqt-desktop-nested.crate &
+done
+crate gui tile
+```
+
+Plus a clarifying paragraph that `GuiRegistry` (0.7.19+)
+auto-allocates a unique `DISPLAY` per instance so the four
+Xephyr windows don't clash.
+
+### Examples audit (per-user request)
+
+Spot-checked the other 53 examples. **Nothing else is broken
+by 0.9.x.** The 0.9.x track is entirely daemon-side
+(`daemon/privops_*`, `daemon/audit_per_user`,
+`daemon/config.h` additions) plus pure helpers in `lib/`.
+`lib/spec.cpp` (the spec parser) and `lib/validate_pure.cpp`
+were not touched, so existing example specs validate
+identically to 0.8.49.
+
+The four LXQt examples (`lxqt-desktop.yml`,
+`lxqt-desktop-nested.yml`, `lxqt-minimal.yml`,
+`lxqt-wayland.yml`) all parse cleanly: `gui.mode: auto |
+nested | headless | wayland` are valid (since 0.8.46);
+`options: [net, x11, gl, video]` enum values are in
+`allOptionsLst`; `limits: { memoryuse, pcpu, maxproc }` keys
+are in `RetunePure::validateRctlKey`'s whitelist.
+
+### Files
+
+- `lib/privops_client_pure.cpp` (new — pure half)
+- `lib/privops_client.cpp` (slimmed — wire half only)
+- `tests/unit/privops_client_pure_test.cpp` — dropped 2 send
+  tests; 17 builder/round-trip/detection tests remain
+- `examples/lxqt-desktop-nested.yml` — multi-instance docfix
+- `Makefile` — `_pure` to TEST_LINK_SRCS, wire file LIB_SRCS-only
+- `cli/args.cpp` — version `crate 0.9.16`
+
+### Series state
+
+No functional change beyond the CI/docs fix. Series unchanged:
+
+- 14/14 verbs handled
+- HTTP transport (0.9.1) ✅, libnv transport (0.9.14) ✅
+- `crate retune` wired to libnv (0.9.15) ✅
+- 0.9.17 — wire `crate run` lifecycle commands
+- 0.9.18 — `network_lease.cpp` per-user paths + RCTL umbrella
+- 0.9.19 — default flip
+- 1.0.0 — setuid removed
+
+---
+
 ## [0.9.15] — 2026-05-09
 
 **Rootless track, client-side libnv wiring.** Sixteenth 0.9.x

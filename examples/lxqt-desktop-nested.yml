@@ -5,9 +5,17 @@
 ## then arrange them with `crate gui tile` (which only handles nested
 ## sessions — VNC/noVNC sessions are not tiled).
 ##
-## Workflow:
-##   for i in 1 2 3 4; do crate run -f lxqt-desktop-nested.crate & done
+## Multi-instance workflow (each `crate run` MUST get its own --name,
+## otherwise the second invocation collides on the jail name):
+##
+##   crate create -s lxqt-desktop-nested.yml         # builds .crate
+##   for i in 1 2 3 4; do
+##     crate run --name lxqt-$i -f lxqt-desktop-nested.crate &
+##   done
 ##   crate gui tile
+##
+## GuiRegistry (0.7.19+) auto-allocates a unique DISPLAY per
+## instance, so the four Xephyr windows don't clash on :0/:1/etc.
 ##
 ## Use: crate create -s lxqt-desktop-nested.yml
 ##
