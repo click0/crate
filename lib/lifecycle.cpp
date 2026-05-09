@@ -7,6 +7,7 @@
 #include "jail_query.h"
 #include "lifecycle_pure.h"
 #include "pathnames.h"
+#include "privops_client.h"
 #include "run_jail.h"
 #include "util.h"
 #include "err.h"
@@ -393,14 +394,33 @@ bool stopCrate(const Args &args) {
   // Wait briefly for cleanup
   ::sleep(1);
 
-  // Remove the jail if it's still around
+  // Remove the jail if it's still around.
+  // 0.9.17: prefer the privops `destroy_jail` verb when crated's
+  // unix-socket listener is available; otherwise fall back to the
+  // existing exec path (legacy setuid mode).
   auto stillRunning = JailQuery::getJailByJid(jail->jid);
   if (stillRunning) {
-    try {
-      // Force remove jail
-      Util::execCommand({CRATE_PATH_JAIL, "-r", std::to_string(jail->jid)},
-        "force remove jail");
-    } catch (...) {}
+    std::string privopsSocket = PrivOpsClient::detectSocketPath();
+    if (!privopsSocket.empty()) {
+      auto resp = PrivOpsClient::sendRequest(privopsSocket,
+          PrivOpsClient::buildDestroyJail(jail->name, /*force=*/false));
+      if (!resp.transportError.empty() || resp.status >= 400) {
+        // Soft-fail. Existing flow swallowed jail-removal errors;
+        // keep the same semantics so an already-collected jail
+        // doesn't surface as a stop failure.
+        std::cerr << rang::fg::yellow
+                  << "stop: privops destroy_jail returned "
+                  << (resp.transportError.empty()
+                        ? std::to_string(resp.status) + ": " + resp.body
+                        : resp.transportError)
+                  << rang::style::reset << std::endl;
+      }
+    } else {
+      try {
+        Util::execCommand({CRATE_PATH_JAIL, "-r", std::to_string(jail->jid)},
+          "force remove jail");
+      } catch (...) {}
+    }
   }
 
   std::cout << rang::fg::green << "Container " << jail->name
