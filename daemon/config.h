@@ -75,6 +75,34 @@ struct Config {
   // file mode + group + pool ACL + role. See ControlSocketPure.
   std::vector<ControlSocketPure::ControlSocketSpec> controlSockets;
 
+  // 0.9.12: rootless per-user namespacing master toggle.
+  //
+  // When true, runtime helpers (paths, ZFS dataset prefix, network
+  // sub-CIDR, RCTL umbrella loginclass) compose their results from
+  // the connecting operator's uid. When false, every helper falls
+  // back to legacy single-tenant shape so existing 0.8.x deployments
+  // are byte-identical.
+  //
+  // Default: false. Operators flip after reading
+  // docs/rootless-migration.md. The default flips to true in 0.9.14.
+  bool rootlessPerUser = false;
+
+  // Master ZFS prefix; per-user datasets land under
+  // `<zfsMasterPrefix>/<uid>/<jail>`. Empty string means "no
+  // per-user split — use the legacy `<pool>/jails/<jail>` shape".
+  // See ZfsDatasetPure::composePerUserDataset.
+  std::string zfsMasterPrefix;
+
+  // Master IPv4 CIDR + sub-prefix length for per-user network
+  // allocation. See PerUserNetPure::composeIpv4. Empty master
+  // disables v4 per-user (operator can still use v6).
+  std::string networkMasterCidr4;
+  unsigned    networkSubPrefixLen4 = 24;
+
+  // IPv6 equivalent. Empty disables.
+  std::string networkMasterCidr6;
+  unsigned    networkSubPrefixLen6 = 64;
+
   // Load from YAML file
   static Config load(const std::string &path);
 };

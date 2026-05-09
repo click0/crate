@@ -135,3 +135,51 @@ log:
 #       mode: "0660"
 #       pools: ["*"]
 #       role: viewer
+
+##
+## --- 0.9.12: rootless per-user namespacing ---
+##
+## Master toggle. When false (default), runtime helpers fall back to
+## legacy single-tenant shape — every operator shares /var/run/crate/,
+## one ZFS prefix, one IP pool, no RCTL umbrella. Existing 0.8.x
+## deployments are byte-identical at false.
+##
+## When true, per-user separation kicks in. See
+## docs/rootless-migration.md for the full migration guide.
+##
+## The default flips to true in 0.9.14.
+#
+# rootless_per_user: false
+
+##
+## ZFS master prefix. Per-user datasets land under
+## <zfs_master_prefix>/<uid>/<jail>. Empty string disables the
+## per-user split (legacy <pool>/jails/<jail> shape preserved).
+#
+# zfs_master_prefix: "zroot/jails"
+
+##
+## Network master CIDRs. Each operator gets a deterministic sub-CIDR
+## carved from the master via uid mod 2^slotBits. See
+## PerUserNetPure::composeIpv4 / composeIpv6.
+##
+## With /16 master + /24 sub: 256 slots; /48 master + /64 sub:
+## 65536 slots. Empty master disables per-user for that family;
+## set v4 only if you don't need v6 (or vice versa).
+#
+# network_master_cidr_v4: "10.66.0.0/16"
+# network_sub_prefix_len_v4: 24
+# network_master_cidr_v6: "fd00:dead::/48"
+# network_sub_prefix_len_v6: 64
+
+##
+## Equivalent nested form. Useful if you want to keep all rootless
+## knobs grouped:
+#
+# rootless:
+#     per_user: true
+#     zfs_master_prefix: "zroot/crate-tenants"
+#     network_master_cidr_v4: "10.66.0.0/16"
+#     network_sub_prefix_len_v4: 24
+#     network_master_cidr_v6: "fd00:dead::/48"
+#     network_sub_prefix_len_v6: 64
