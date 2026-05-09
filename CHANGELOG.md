@@ -6,6 +6,98 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.10] — 2026-05-09
+
+**Rootless track, per-user network sub-CIDR allocator.**
+Eleventh 0.9.x release. Third mini-PR of the namespacing
+sub-track. Pure module; no existing call sites migrate yet.
+
+### What lands
+
+`lib/per_user_net_pure.{h,cpp}` — composes a per-user sub-CIDR
+from a master CIDR + sub-prefix length + uid:
+
+```
+composeIpv4("10.66.0.0/16", 24, 1000)
+  -> "10.66.232.0/24"             (1000 mod 256 = 232)
+
+composeIpv4("10.66.0.0/16", 24, 1001)
+  -> "10.66.233.0/24"
+
+composeIpv6("fd00:dead::/48", 64, 1000)
+  -> "fd00:dead:0:3e8:0:0:0:0/64" (1000 = 0x3e8)
+```
+
+### Allocation strategy
+
+Deterministic hash: slot index = `uid mod (2^slotBits)`, where
+`slotBits = subPrefixLen − masterPrefixLen`. Trade-off:
+
+- ✅ Stable across crated restarts — no allocator state file
+- ✅ No race on slot picking
+- ❌ Collisions when `2^slotBits` operators exist, e.g. `/16`
+  master + `/24` sub gives 256 slots, so uids congruent mod 256
+  share a sub-CIDR. Typical deployments (<256 operators) are
+  fine; large multi-tenant clusters need a wider sub or a
+  state-backed allocator (tracked in TODO).
+
+### Bounds
+
+- IPv4: master prefix ≤ 32, sub prefix > master prefix, ≤ 32,
+  slotBits ≤ 24 (16M slot cap)
+- IPv6: master prefix ≤ 128, sub prefix > master prefix, ≤ 128,
+  slotBits ≤ 32 (uid fits without truncation)
+
+### Defence in depth
+
+- Master low-bits masked off before composition. Operator who
+  writes `"10.66.5.7/16"` gets the same result as `"10.66.0.0/16"`.
+  Asserted by `ipv4_master_low_bits_are_ignored` /
+  `ipv6_master_low_bits_are_ignored`.
+- Leading-zero IPv4 octets rejected (octal foot-gun).
+- Compressed IPv6 (`::`) accepted; double-`::` rejected.
+
+### Tests
+
+11 new ATF tests in `per_user_net_pure_test.cpp`:
+
+- `ipv4_typical_16_to_24` — base case + uid wrap
+- `ipv4_isolation_alice_vs_bob`
+- `ipv4_master_low_bits_are_ignored`
+- `ipv4_28_subnet` — non-default sub size
+- `ipv4_rejects_bad_master` — malformed CIDRs
+- `ipv4_rejects_sub_prefix_relations` — sub ≤ master, sub > 32,
+  slotBits > 24
+- `ipv6_typical_48_to_64`
+- `ipv6_isolation_alice_vs_bob`
+- `ipv6_master_low_bits_are_ignored`
+- `ipv6_rejects_bad_master`
+- `ipv6_rejects_sub_prefix_relations`
+
+Suite: 1219 → **1230**, all passing.
+
+### Series state
+
+- Verb handlers: 14/14 ✅
+- Per-user mini-track:
+  - 0.9.8 — runtime path scheme ✅
+  - 0.9.9 — ZFS dataset prefix ✅
+  - **0.9.10 — network sub-CIDR ← this release**
+  - 0.9.11 — RCTL accounting groups
+  - 0.9.12 — migration doc + final wiring
+- 0.9.13 — default flip
+- 1.0.0 — setuid removed
+
+### Note on lease migration
+
+The full migration from `/var/run/crate/network-leases.txt`
+(single shared file) to `/var/run/crate/<uid>/leases/<jail>.lease`
+(per-user) is deferred to 0.9.12 alongside the final wiring,
+since it touches `lib/network_lease.cpp`'s mutating IO path
+and benefits from landing with the `crated.conf` schema bump.
+
+---
+
 ## [0.9.9] — 2026-05-09
 
 **Rootless track, per-user ZFS dataset prefix.** Tenth 0.9.x
