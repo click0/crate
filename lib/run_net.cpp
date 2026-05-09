@@ -10,6 +10,7 @@
 #include "netgraph_ops.h"
 #include "pfctl_ops.h"
 #include "pathnames.h"
+#include "privops_client.h"
 #include "util.h"
 #include "err.h"
 
@@ -36,6 +37,32 @@ static const unsigned fwRuleRangeInBase   = envOrDefault("CRATE_IPFW_RULE_BASE_I
 static const unsigned fwRuleRangeOutBase  = envOrDefault("CRATE_IPFW_RULE_BASE_OUT", 50000);
 
 namespace RunNet {
+
+// 0.9.20: privops-aware moveToVnet wrapper. When crated's libnv
+// socket is detected, the move is sent as a `configure_iface` verb
+// with empty IP/MAC/bridge fields — the daemon handler runs in
+// move-only mode (added 0.9.20) and skips its `ifconfig up` step,
+// which means downstream configureDhcp / configureStaticIp /
+// inline jexec ifconfig commands keep working unchanged.
+//
+// Falls back to direct IfconfigOps::moveToVnet when no socket is
+// available, preserving legacy setuid behaviour byte-identical.
+static void moveToVnetPrivopsOrLocal(const std::string &iface, int jid) {
+  std::string sock = PrivOpsClient::detectSocketPath();
+  if (!sock.empty()) {
+    auto resp = PrivOpsClient::sendRequest(sock,
+        PrivOpsClient::buildConfigureIface(jid, iface,
+            /*bridge=*/"", /*ipv4=*/"", /*ipv6=*/"", /*mac=*/""));
+    if (!resp.transportError.empty())
+      ERR2("run_net", "privops configure_iface (move) '" << iface
+           << "' transport error: " << resp.transportError)
+    if (resp.status >= 400)
+      ERR2("run_net", "privops configure_iface (move) '" << iface
+           << "' failed (status " << resp.status << "): " << resp.body)
+    return;
+  }
+  IfconfigOps::moveToVnet(iface, jid);
+}
 
 GatewayInfo detectGateway() {
   GatewayInfo gw;
@@ -100,7 +127,7 @@ EpairInfo createEpair(int jid, const std::string &jidStr,
   IfconfigOps::disableOffload(info.ifaceB);
 
   // transfer the interface into jail
-  IfconfigOps::moveToVnet(info.ifaceB, jid);
+  moveToVnetPrivopsOrLocal(info.ifaceB, jid);
 
   // set the IP addresses on the jail epair
   execInJail({CRATE_PATH_IFCONFIG, info.ifaceB, "inet", info.ipB, "netmask", "0xfffffffe"},
@@ -285,7 +312,7 @@ PassthroughInfo passthroughInterface(int jid, const std::string &jidStr,
   execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet", "127.0.0.1"}, "set up the lo0 interface in jail");
 
   // pass the physical interface directly into the jail
-  IfconfigOps::moveToVnet(iface, jid);
+  moveToVnetPrivopsOrLocal(iface, jid);
 
   return info;
 }
@@ -346,7 +373,7 @@ NetgraphInfo createNetgraphInterface(int jid, const std::string &jidStr,
   }
 
   // Move eiface into jail
-  IfconfigOps::moveToVnet(info.ngIface, jid);
+  moveToVnetPrivopsOrLocal(info.ngIface, jid);
 
   return info;
 }
@@ -380,7 +407,7 @@ BridgeInfo createBridgeEpair(int jid, const std::string &jidStr,
   IfconfigOps::bridgeAddMember(bridgeIface, info.ifaceA);
 
   // move jail-side into jail
-  IfconfigOps::moveToVnet(info.ifaceB, jid);
+  moveToVnetPrivopsOrLocal(info.ifaceB, jid);
 
   return info;
 }

@@ -6,6 +6,111 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.20] — 2026-05-09
+
+**Rootless track, vnet `moveToVnet` via privops + handler
+move-only mode.** Twenty-first 0.9.x release. Fifth CLI
+call-site (4 actual call points in `lib/run_net.cpp`) routed
+through privops, third inside `crate run`.
+
+### Daemon-side (handler change)
+
+`Crated::handleConfigureIface` (added 0.9.6) used to
+unconditionally `jexec ifconfig <iface> up` after the move +
+optional IP/MAC config. 0.9.20 makes the `up` step
+**conditional** on at least one of `ipv4_cidr` / `ipv6_cidr` /
+`mac_addr` having been set.
+
+This is the key enabler: a bare-bones `configure_iface`
+request with all optional fields empty becomes equivalent to
+a plain `IfconfigOps::moveToVnet(iface, jid)` call — no `up`
+side-effect. Downstream `configureDhcp` / `configureStaticIp`
+in `run_net.cpp` keep working unchanged because they manage
+their own `up`/`inet`/`route` sequence inside the jail.
+
+### Client-side wiring
+
+`lib/run_net.cpp` gets a new file-static helper:
+
+```cpp
+static void moveToVnetPrivopsOrLocal(const std::string &iface, int jid) {
+  std::string sock = PrivOpsClient::detectSocketPath();
+  if (!sock.empty()) {
+    auto resp = PrivOpsClient::sendRequest(sock,
+        PrivOpsClient::buildConfigureIface(jid, iface,
+            "", "", "", ""));  // all optional fields empty -> move-only
+    if (!resp.transportError.empty()) ERR2(...)
+    if (resp.status >= 400) ERR2(...)
+    return;
+  }
+  IfconfigOps::moveToVnet(iface, jid);
+}
+```
+
+All 4 `IfconfigOps::moveToVnet` call sites in `run_net.cpp`
+now use this wrapper:
+
+| Site | Mode |
+|------|------|
+| `createEpair` (bridge mode) | epair-B → jail |
+| passthrough mode line ~315 | host iface → jail |
+| netgraph mode line ~376 | netgraph iface → jail |
+| `setupBridgeEpair` line ~410 | epair-B → jail (bridge variant) |
+
+### Trade-offs
+
+- **Other IfconfigOps still need root.** `bridgeAddMember`,
+  `disableOffload`, `setUp`, `setInetAddr`, `createEpair` —
+  all of these are still called directly in `run_net.cpp` and
+  need setuid until matching verbs land. 0.9.20 wires only the
+  **vnet move** step. Operators in pure-rootless mode still
+  need additional work; the existing setuid path keeps them
+  functional today.
+- **Why not bundle all the steps into one privops call?** The
+  `configure_iface` verb is shaped for the spec-driven case
+  (operator gives jid + iface + all fields → daemon does
+  everything). The streaming-orchestration shape that
+  `run_net.cpp` uses (createEpair → multiple Ops →
+  moveToVnet → in-jail config) doesn't fit one verb cleanly.
+  Future verbs (`create_epair`, `bridge_add_member`,
+  `disable_offload`, `set_up`) plug the remaining gaps.
+
+### Series state
+
+CLI call-sites wired:
+- `crate retune --rctl` / `--clear` → set_rctl / clear_rctl (0.9.15)
+- `crate stop` → destroy_jail (0.9.17)
+- `crate run` ZFS attach + detach → attach_zfs / detach_zfs (0.9.18)
+- `crate run` nullfs mounts (8 sites) → mount_nullfs (0.9.19)
+- **`crate run` vnet moveToVnet (4 sites) → configure_iface (move-only mode) ← this release**
+
+Remaining run-chain:
+- 0.9.21 — `create_jail` (the inner `jail -c`, last
+  major chunk)
+- 0.9.22 — `network_lease.cpp` per-user paths + RCTL
+  umbrella application
+- 0.9.23 — additional iface verbs (createEpair / bridgeAddMember
+  / setUp / disableOffload / setInetAddr) for full
+  rootless `crate run` coverage
+- 0.9.24 — default flip
+- 1.0.0 — setuid removed
+
+### Tests
+
+No new tests. Suite stays at 1294. Wire path needs
+integration test infrastructure (real `crated`).
+
+### Files
+
+- `daemon/privops_handlers.cpp::handleConfigureIface` —
+  conditional `up` step (anyConfig flag)
+- `lib/run_net.cpp` — `moveToVnetPrivopsOrLocal` helper +
+  4 call-site replacements
+- `cli/args.cpp` — version `crate 0.9.20`
+- `CHANGELOG.md` — entry
+
+---
+
 ## [0.9.19] — 2026-05-09
 
 **Rootless track, nullfs mounts via privops.** Twentieth 0.9.x

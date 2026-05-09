@@ -205,26 +205,38 @@ DispatchResult handleConfigureIface(const PrivOpsPure::ConfigureIfaceReq &r) {
     // 1. Move iface into the jail's vnet.
     IfconfigOps::moveToVnet(r.ifname, (int)r.jid);
 
-    // 2. Inside the jail, set ipv4/ipv6/MAC and bring up.
+    // 2. Inside the jail, set ipv4/ipv6/MAC and (only when at least
+    // one of those was configured) bring the iface up. The
+    // "move-only" mode (all three empty) intentionally leaves the
+    // iface down so callers can DHCP/dhclient/static-config it
+    // themselves later — added 0.9.20 so run_net.cpp can use this
+    // verb for plain moveToVnet without disturbing downstream
+    // configureDhcp / configureStaticIp.
     auto jidStr = std::to_string(r.jid);
+    bool anyConfig = false;
     if (!r.ipv4Cidr.empty()) {
       Util::execCommand({CRATE_PATH_JEXEC, jidStr, CRATE_PATH_IFCONFIG,
                          r.ifname, "inet", r.ipv4Cidr},
                         "set ipv4 in jail");
+      anyConfig = true;
     }
     if (!r.ipv6Cidr.empty()) {
       Util::execCommand({CRATE_PATH_JEXEC, jidStr, CRATE_PATH_IFCONFIG,
                          r.ifname, "inet6", r.ipv6Cidr},
                         "set ipv6 in jail");
+      anyConfig = true;
     }
     if (!r.macAddr.empty()) {
       Util::execCommand({CRATE_PATH_JEXEC, jidStr, CRATE_PATH_IFCONFIG,
                          r.ifname, "ether", r.macAddr},
                         "set MAC in jail");
+      anyConfig = true;
     }
-    Util::execCommand({CRATE_PATH_JEXEC, jidStr, CRATE_PATH_IFCONFIG,
-                       r.ifname, "up"},
-                      "bring iface up in jail");
+    if (anyConfig) {
+      Util::execCommand({CRATE_PATH_JEXEC, jidStr, CRATE_PATH_IFCONFIG,
+                         r.ifname, "up"},
+                        "bring iface up in jail");
+    }
 
     // 3. Host-side: attach the pair-A half to the bridge.
     if (!r.bridge.empty()) {
