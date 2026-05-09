@@ -157,4 +157,8 @@ PrivOpsWirePure::DispatchResult handleDisableIfaceOffload(const PrivOpsPure::Dis
 PrivOpsWirePure::DispatchResult handleBridgeAddMember(const PrivOpsPure::BridgeAddMemberReq &r);
 PrivOpsWirePure::DispatchResult handleBridgeDelMember(const PrivOpsPure::BridgeDelMemberReq &r);
 
+// 0.9.25: set host-side IPv4 address. Wraps
+// IfconfigOps::setInetAddr (3-arg primitive: iface + addr + prefixLen).
+PrivOpsWirePure::DispatchResult handleSetIfaceInetAddr(const PrivOpsPure::SetIfaceInetAddrReq &r);
+
 } // namespace Crated

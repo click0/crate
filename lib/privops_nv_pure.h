@@ -127,6 +127,8 @@ std::string parseBridgeAddMember(const FieldMap &m,
                                  PrivOpsPure::BridgeAddMemberReq &out);
 std::string parseBridgeDelMember(const FieldMap &m,
                                  PrivOpsPure::BridgeDelMemberReq &out);
+std::string parseSetIfaceInetAddr(const FieldMap &m,
+                                  PrivOpsPure::SetIfaceInetAddrReq &out);
 
 // --- Verb routing ---
 

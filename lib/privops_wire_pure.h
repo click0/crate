@@ -168,6 +168,9 @@ std::string parseBridgeAddMember(const std::string &body,
 std::string parseBridgeDelMember(const std::string &body,
                                  PrivOpsPure::BridgeDelMemberReq &out);
 
+std::string parseSetIfaceInetAddr(const std::string &body,
+                                  PrivOpsPure::SetIfaceInetAddrReq &out);
+
 // --- Verb routing helper ---
 //
 // Parse the URL path's verb segment. The route pattern is
@@ -282,5 +285,10 @@ std::string formatBridgeAddMemberSuccess(const std::string &bridge,
                                          const std::string &member);
 std::string formatBridgeDelMemberSuccess(const std::string &bridge,
                                          const std::string &member);
+
+// 0.9.25: 200 OK body for set_iface_inet_addr.
+std::string formatSetIfaceInetAddrSuccess(const std::string &ifname,
+                                          const std::string &addr,
+                                          unsigned prefixLen);
 
 } // namespace PrivOpsWirePure

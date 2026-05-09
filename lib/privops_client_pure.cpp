@@ -251,4 +251,15 @@ PrivOpsNvPure::FieldMap buildBridgeDelMember(const std::string &bridge,
   };
 }
 
+PrivOpsNvPure::FieldMap buildSetIfaceInetAddr(const std::string &ifname,
+                                              const std::string &addr,
+                                              unsigned prefixLen) {
+  return {
+    {"verb", "set_iface_inet_addr"},
+    {"ifname", ifname},
+    {"addr", addr},
+    {"prefix_len", toString(prefixLen)},
+  };
+}
+
 } // namespace PrivOpsClient

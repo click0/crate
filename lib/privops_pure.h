@@ -118,6 +118,13 @@ enum class Verb {
   // operator-supplied directly.
   BridgeAddMember,
   BridgeDelMember,
+
+  // 0.9.25: set host-side IPv4 address on a non-jail iface.
+  // Wraps IfconfigOps::setInetAddr (three-arg primitive:
+  // iface + addr + prefixLen). Targets the run_net.cpp
+  // createEpair flow where the host-side epair-A end gets a
+  // /31 IP after the jail-side epair-B is moved into the jail.
+  SetIfaceInetAddr,
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -234,6 +241,13 @@ struct BridgeDelMemberReq {
   std::string member;
 };
 
+// 0.9.25: set host-side IPv4 address on a non-jail iface.
+struct SetIfaceInetAddrReq {
+  std::string ifname;
+  std::string addr;       // IPv4 address (no /prefix here; bare addr)
+  unsigned    prefixLen = 32;  // 0..32
+};
+
 // --- Per-verb validators ---
 //
 // Each `validate*(req)` returns "" on success, otherwise a one-line
@@ -260,6 +274,7 @@ std::string validateSetIfaceUp(const SetIfaceUpReq &r);
 std::string validateDisableIfaceOffload(const DisableIfaceOffloadReq &r);
 std::string validateBridgeAddMember(const BridgeAddMemberReq &r);
 std::string validateBridgeDelMember(const BridgeDelMemberReq &r);
+std::string validateSetIfaceInetAddr(const SetIfaceInetAddrReq &r);
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //

@@ -362,6 +362,14 @@ std::string parseBridgeDelMember(const std::string &body,
   return "";
 }
 
+std::string parseSetIfaceInetAddr(const std::string &body,
+                                  PrivOpsPure::SetIfaceInetAddrReq &out) {
+  if (auto e = requireStringField(body, "ifname", out.ifname); !e.empty()) return e;
+  if (auto e = requireStringField(body, "addr", out.addr); !e.empty()) return e;
+  if (auto e = requireUnsignedField(body, "prefix_len", out.prefixLen); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing helper ---
 
 PrivOpsPure::Verb parseVerbFromPath(const std::string &path) {
@@ -636,6 +644,18 @@ std::string formatBridgeDelMemberSuccess(const std::string &bridge,
   return o.str();
 }
 
+std::string formatSetIfaceInetAddrSuccess(const std::string &ifname,
+                                          const std::string &addr,
+                                          unsigned prefixLen) {
+  std::ostringstream o;
+  o << "{\"set\":true"
+    << ",\"ifname\":\"" << escape(ifname) << "\""
+    << ",\"addr\":\"" << escape(addr) << "\""
+    << ",\"prefix_len\":" << prefixLen
+    << "}";
+  return o.str();
+}
+
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body) {
   using namespace PrivOpsPure;
@@ -676,6 +696,8 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       return runVerb<BridgeAddMemberReq>(body, v, parseBridgeAddMember, validateBridgeAddMember);
     case Verb::BridgeDelMember:
       return runVerb<BridgeDelMemberReq>(body, v, parseBridgeDelMember, validateBridgeDelMember);
+    case Verb::SetIfaceInetAddr:
+      return runVerb<SetIfaceInetAddrReq>(body, v, parseSetIfaceInetAddr, validateSetIfaceInetAddr);
     case Verb::Unknown:
       break;
   }

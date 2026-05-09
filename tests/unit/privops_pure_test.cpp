@@ -25,6 +25,7 @@ ATF_TEST_CASE_BODY(verb_token_roundtrips_for_every_verb) {
     Verb::AddIpfwRule, Verb::RemoveIpfwRule,
     Verb::SetIfaceUp, Verb::DisableIfaceOffload,
     Verb::BridgeAddMember, Verb::BridgeDelMember,
+    Verb::SetIfaceInetAddr,
   };
   for (Verb v : verbs) {
     std::string token = verbName(v);
@@ -539,6 +540,29 @@ ATF_TEST_CASE_BODY(bridge_del_member_minimal) {
   ATF_REQUIRE(!validateBridgeDelMember(r).empty());
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(set_iface_inet_addr_minimal);
+ATF_TEST_CASE_BODY(set_iface_inet_addr_minimal) {
+  SetIfaceInetAddrReq r;
+  r.ifname = "epair0a";
+  r.addr = "10.0.0.1";
+  r.prefixLen = 31;
+  ATF_REQUIRE_EQ(validateSetIfaceInetAddr(r), std::string());
+
+  // Bad iface
+  r.ifname = "name;rm";
+  ATF_REQUIRE(!validateSetIfaceInetAddr(r).empty());
+
+  // Bad addr
+  r.ifname = "epair0a";
+  r.addr = "999.999.999.999";
+  ATF_REQUIRE(!validateSetIfaceInetAddr(r).empty());
+
+  // Out-of-range prefix
+  r.addr = "10.0.0.1";
+  r.prefixLen = 33;
+  ATF_REQUIRE(!validateSetIfaceInetAddr(r).empty());
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, verb_token_roundtrips_for_every_verb);
   ATF_ADD_TEST_CASE(tcs, verb_unknown_token_returns_unknown);
@@ -600,4 +624,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, disable_iface_offload_minimal);
   ATF_ADD_TEST_CASE(tcs, bridge_add_member_minimal);
   ATF_ADD_TEST_CASE(tcs, bridge_del_member_minimal);
+  ATF_ADD_TEST_CASE(tcs, set_iface_inet_addr_minimal);
 }
