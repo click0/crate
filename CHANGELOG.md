@@ -6,6 +6,80 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.17] — 2026-05-09
+
+**Rootless track, `crate stop` wired to privops.** Eighteenth
+0.9.x release. Second CLI call-site (after `crate retune` in
+0.9.15) actually delegates a privileged operation to `crated`
+when the libnv socket is available.
+
+### What lands
+
+`lib/lifecycle.cpp::stopCommand` — the post-SIGKILL "remove
+the jail if it's still around" step at line ~401:
+
+- **Socket present:** `PrivOpsClient::sendRequest(socket,
+  buildDestroyJail(jail->name, false))`. Daemon's
+  `handleDestroyJail` runs `jail -r NAME` as root.
+- **Socket absent:** existing `Util::execCommand({jail, -r,
+  jid})` path runs unchanged. Legacy single-tenant
+  deployments keep working byte-identically.
+
+Soft-fail semantics preserved: if the privops call returns
+4xx/5xx (e.g. jail already gone, race with another stop),
+the warning is logged but `crate stop` still reports success
+— same as the pre-0.9.17 `try/catch{...}` swallowed exec
+errors.
+
+### Why the force-remove path specifically
+
+`crate stop` has two phases:
+
+1. Graceful — send signal to PID 1 inside the jail, wait up
+   to `--timeout` seconds for processes to exit. If exit
+   detected, return success. **No `jail` invocation.**
+2. Force — SIGKILL inside the jail, then `jail -r` to
+   remove the registration. **The privops-routed step.**
+
+Phase 1 doesn't need privops (operator-side `kill(1)` via
+jexec is already root-effective on the live setuid path,
+and on rootless will route through future `kill_in_jail`
+verb when added). Phase 2 is the actual `jail(8)` call —
+that's what 0.9.7's `destroy_jail` verb was built for.
+
+### Tests
+
+No new tests. Suite stays at 1294 (FreeBSD CI flow already
+covers the privops_client builders + nv parser round-trip
+from 0.9.14-0.9.16). The wire path itself needs an
+integration test booting a real `crated` — that lands when
+the integration test infrastructure does (post-1.0.0).
+
+### Series state
+
+- 14/14 verbs handled
+- HTTP transport ✅, libnv transport ✅
+- CLI call-sites wired:
+  - `crate retune --rctl` → `set_rctl` (0.9.15)
+  - `crate retune --clear` → `clear_rctl` (0.9.15)
+  - **`crate stop` → `destroy_jail` ← this release**
+- 0.9.18 — `crate run` (the heavy lifter — `create_jail` +
+  `attach_zfs` + `mount_nullfs` + `configure_iface` chain)
+- 0.9.19 — `network_lease.cpp` per-user paths + RCTL
+  umbrella application
+- 0.9.20 — default flip
+- 1.0.0 — setuid removed
+
+### Files
+
+- `lib/lifecycle.cpp` — `#include "privops_client.h"` + the
+  privops-aware fork in the force-remove block; legacy path
+  unchanged
+- `cli/args.cpp` — version `crate 0.9.17`
+- `CHANGELOG.md` — entry
+
+---
+
 ## [0.9.16] — 2026-05-09
 
 **Hotfix.** Fixes FreeBSD CI failure introduced by 0.9.15 + LXQt
