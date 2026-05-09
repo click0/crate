@@ -370,6 +370,12 @@ std::string parseSetIfaceInetAddr(const std::string &body,
   return "";
 }
 
+std::string parseCreateEpair(const std::string &/*body*/,
+                             PrivOpsPure::CreateEpairReq &/*out*/) {
+  // No required fields. Body content (if any) is ignored.
+  return "";
+}
+
 // --- Verb routing helper ---
 
 PrivOpsPure::Verb parseVerbFromPath(const std::string &path) {
@@ -656,6 +662,16 @@ std::string formatSetIfaceInetAddrSuccess(const std::string &ifname,
   return o.str();
 }
 
+std::string formatCreateEpairSuccess(const std::string &ifaceA,
+                                     const std::string &ifaceB) {
+  std::ostringstream o;
+  o << "{\"created\":true"
+    << ",\"a\":\"" << escape(ifaceA) << "\""
+    << ",\"b\":\"" << escape(ifaceB) << "\""
+    << "}";
+  return o.str();
+}
+
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body) {
   using namespace PrivOpsPure;
@@ -698,6 +714,8 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       return runVerb<BridgeDelMemberReq>(body, v, parseBridgeDelMember, validateBridgeDelMember);
     case Verb::SetIfaceInetAddr:
       return runVerb<SetIfaceInetAddrReq>(body, v, parseSetIfaceInetAddr, validateSetIfaceInetAddr);
+    case Verb::CreateEpair:
+      return runVerb<CreateEpairReq>(body, v, parseCreateEpair, validateCreateEpair);
     case Verb::Unknown:
       break;
   }

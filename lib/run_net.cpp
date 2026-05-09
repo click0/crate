@@ -11,6 +11,7 @@
 #include "pfctl_ops.h"
 #include "pathnames.h"
 #include "privops_client.h"
+#include "privops_wire_pure.h"
 #include "util.h"
 #include "err.h"
 
@@ -138,6 +139,33 @@ static void bridgeDelMemberPrivopsOrLocal(const std::string &bridge,
   IfconfigOps::bridgeDelMember(bridge, member);
 }
 
+// 0.9.26: privops-aware createEpair. Returns the kernel-assigned
+// pair names. Parses the daemon's JSON response body via
+// PrivOpsWirePure::extractStringField — no full JSON parser
+// needed for this two-field response.
+static std::pair<std::string, std::string>
+createEpairPrivopsOrLocal() {
+  std::string sock = PrivOpsClient::detectSocketPath();
+  if (!sock.empty()) {
+    auto resp = PrivOpsClient::sendRequest(sock,
+        PrivOpsClient::buildCreateEpair());
+    if (!resp.transportError.empty())
+      ERR2("run_net", "privops create_epair transport error: "
+           << resp.transportError)
+    if (resp.status >= 400)
+      ERR2("run_net", "privops create_epair failed (status "
+           << resp.status << "): " << resp.body)
+    std::string a, b;
+    auto ar = PrivOpsWirePure::extractStringField(resp.body, "a", a);
+    auto br = PrivOpsWirePure::extractStringField(resp.body, "b", b);
+    if (ar != PrivOpsWirePure::kPresent || br != PrivOpsWirePure::kPresent)
+      ERR2("run_net", "privops create_epair response missing 'a' or 'b' "
+           "fields: " << resp.body)
+    return {a, b};
+  }
+  return IfconfigOps::createEpair();
+}
+
 // 0.9.25: privops-aware setInetAddr.
 static void setInetAddrPrivopsOrLocal(const std::string &iface,
                                        const std::string &addr,
@@ -208,7 +236,7 @@ EpairInfo createEpair(int jid, const std::string &jidStr,
   execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet", "127.0.0.1"}, "set up the lo0 interface in jail");
 
   // create networking interface (uses libifconfig with shell fallback)
-  auto epairPair = IfconfigOps::createEpair();
+  auto epairPair = createEpairPrivopsOrLocal();
   info.ifaceA = epairPair.first;
   info.ifaceB = epairPair.second;
   info.num = Util::toUInt(info.ifaceA.substr(5/*skip epair*/, info.ifaceA.size()-5-1));
@@ -487,7 +515,7 @@ BridgeInfo createBridgeEpair(int jid, const std::string &jidStr,
   execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet", "127.0.0.1"}, "set up the lo0 interface in jail");
 
   // create epair
-  auto epairPair = IfconfigOps::createEpair();
+  auto epairPair = createEpairPrivopsOrLocal();
   info.ifaceA = epairPair.first;
   info.ifaceB = epairPair.second;
   info.num = Util::toUInt(info.ifaceA.substr(5, info.ifaceA.size()-5-1));

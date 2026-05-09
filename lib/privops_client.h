@@ -123,6 +123,12 @@ PrivOpsNvPure::FieldMap buildSetIfaceInetAddr(const std::string &ifname,
                                               const std::string &addr,
                                               unsigned prefixLen);
 
+// 0.9.26: create epair pair. No request fields. Response body
+// (in Response.body) is a JSON object with `a` and `b` fields
+// holding the kernel-assigned A/B iface names; clients parse
+// them via PrivOpsWirePure::extractStringField.
+PrivOpsNvPure::FieldMap buildCreateEpair();
+
 // --- Wire transport (FreeBSD-only) ---
 
 struct Response {

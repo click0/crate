@@ -90,6 +90,7 @@ const char *verbName(Verb v) {
     case Verb::BridgeAddMember:      return "bridge_add_member";
     case Verb::BridgeDelMember:      return "bridge_del_member";
     case Verb::SetIfaceInetAddr:     return "set_iface_inet_addr";
+    case Verb::CreateEpair:          return "create_epair";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -115,6 +116,7 @@ Verb parseVerb(const std::string &name) {
   if (name == "bridge_add_member")      return Verb::BridgeAddMember;
   if (name == "bridge_del_member")      return Verb::BridgeDelMember;
   if (name == "set_iface_inet_addr")    return Verb::SetIfaceInetAddr;
+  if (name == "create_epair")           return Verb::CreateEpair;
   return Verb::Unknown;
 }
 
@@ -502,6 +504,12 @@ std::string validateSetIfaceInetAddr(const SetIfaceInetAddrReq &r) {
   // duplicating the IPv4 octet logic.
   std::string cidr = r.addr + "/" + std::to_string(r.prefixLen);
   if (auto e = validateIpv4Cidr(cidr); !e.empty()) return "addr: " + e;
+  return "";
+}
+
+std::string validateCreateEpair(const CreateEpairReq &) {
+  // No fields — kernel picks the unit number. Validator is here
+  // for symmetry with the rest of the verb set; always succeeds.
   return "";
 }
 

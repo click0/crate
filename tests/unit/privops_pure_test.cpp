@@ -25,7 +25,7 @@ ATF_TEST_CASE_BODY(verb_token_roundtrips_for_every_verb) {
     Verb::AddIpfwRule, Verb::RemoveIpfwRule,
     Verb::SetIfaceUp, Verb::DisableIfaceOffload,
     Verb::BridgeAddMember, Verb::BridgeDelMember,
-    Verb::SetIfaceInetAddr,
+    Verb::SetIfaceInetAddr, Verb::CreateEpair,
   };
   for (Verb v : verbs) {
     std::string token = verbName(v);
@@ -540,6 +540,13 @@ ATF_TEST_CASE_BODY(bridge_del_member_minimal) {
   ATF_REQUIRE(!validateBridgeDelMember(r).empty());
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(create_epair_no_fields_required);
+ATF_TEST_CASE_BODY(create_epair_no_fields_required) {
+  CreateEpairReq r;
+  // Validator always succeeds — no inputs to check.
+  ATF_REQUIRE_EQ(validateCreateEpair(r), std::string());
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(set_iface_inet_addr_minimal);
 ATF_TEST_CASE_BODY(set_iface_inet_addr_minimal) {
   SetIfaceInetAddrReq r;
@@ -625,4 +632,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, bridge_add_member_minimal);
   ATF_ADD_TEST_CASE(tcs, bridge_del_member_minimal);
   ATF_ADD_TEST_CASE(tcs, set_iface_inet_addr_minimal);
+  ATF_ADD_TEST_CASE(tcs, create_epair_no_fields_required);
 }
