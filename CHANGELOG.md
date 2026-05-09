@@ -6,6 +6,154 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.12] — 2026-05-09
+
+**Rootless track, migration doc + config schema + composition
+helper.** Thirteenth 0.9.x release. Fifth (and final pure-only)
+mini-PR of the namespacing sub-track.
+
+This release lands the **operator-facing** pieces of the
+rootless transition: the migration guide, the `crated.conf`
+schema with new knobs (default off), and a pure helper that
+ties 0.9.8-0.9.11 together. **Existing 0.8.x deployments are
+byte-identical at the default `rootless_per_user: false`.**
+
+The actual wiring (network_lease.cpp switch, RCTL umbrella
+application, audit per-user) lands in 0.9.13. Default flip
+moves to 0.9.14.
+
+### What lands
+
+#### Migration guide
+
+`docs/rootless-migration.md` — comprehensive operator guide:
+
+- TL;DR + framing
+- Per-release timeline (0.9.0 verb taxonomy → 1.0.0 setuid
+  removed)
+- Migration steps for single-tenant (opt-in dry-run),
+  greenfield multi-tenant, and existing-setuid-deployment
+  scenarios
+- "What the daemon takes over" (the verb call-sites that
+  replace each direct `jail`/`mount`/`rctl` invocation in
+  `crate(1)`)
+- Compliance checklist for "no setuid root binaries" shops
+- Out-of-scope items deferred to 1.x
+
+#### Config schema
+
+`Crated::Config` (in `daemon/config.h`) gains:
+
+```cpp
+bool rootlessPerUser = false;        // master toggle
+std::string zfsMasterPrefix;         // e.g. "zroot/jails"
+std::string networkMasterCidr4;      // e.g. "10.66.0.0/16"
+unsigned    networkSubPrefixLen4 = 24;
+std::string networkMasterCidr6;      // e.g. "fd00:dead::/48"
+unsigned    networkSubPrefixLen6 = 64;
+```
+
+YAML keys accepted in two equivalent forms — top-level
+shorthand or nested under `rootless:`:
+
+```yaml
+# Top-level form
+rootless_per_user: true
+zfs_master_prefix: "zroot/jails"
+network_master_cidr_v4: "10.66.0.0/16"
+network_sub_prefix_len_v4: 24
+
+# Equivalent nested form
+rootless:
+    per_user: true
+    zfs_master_prefix: "zroot/jails"
+    network_master_cidr_v4: "10.66.0.0/16"
+    network_sub_prefix_len_v4: 24
+```
+
+Both forms documented in the updated `crated.conf.sample`.
+All defaults preserve the legacy single-tenant shape.
+
+#### Composition helper
+
+`lib/per_user_env_pure.{h,cpp}` aggregates the four
+namespacing pieces from 0.9.8-0.9.11 into a single
+`PerUserEnv` struct:
+
+```cpp
+struct Env {
+  uint32_t uid;
+  // Runtime paths (always populated)
+  std::string runtimeRoot;       // /var/run/crate/<uid>
+  std::string leasesDir;
+  std::string exportsDir;
+  std::string importsDir;
+  std::string auditLog;
+  // ZFS (empty if cfg.zfsMasterPrefix empty)
+  std::string zfsPrefix;
+  // Network (empty if corresponding master empty)
+  std::string ipv4SubCidr;
+  std::string ipv6SubCidr;
+  // RCTL (always populated)
+  std::string loginclass;          // crate-<uid>
+  std::string loginclassSubject;   // loginclass:crate-<uid>
+};
+
+Result composeForUid(const Config &cfg, uint32_t uid);
+```
+
+This is the contract 0.9.13's wiring lands against: when
+`network_lease.cpp` / RCTL handlers / audit log code want
+"what's alice's stuff?" they call `composeForUid(cfg,
+alice.uid)` once and read fields from the struct.
+
+### Tests
+
+8 new ATF tests in `per_user_env_pure_test.cpp`:
+
+- `compose_full_config` — every field populated end-to-end
+- `compose_empty_config_legacy_shape` — paths + RCTL still
+  populate (always-on); ZFS + CIDRs empty (per-category
+  opt-out)
+- `compose_v4_only` — partial config (v4 yes, v6 no)
+- `compose_isolation_alice_vs_bob` — every uid-varying
+  field differs between operators
+- `compose_rejects_bad_v4_master` / `_v6_master` —
+  field-prefix error context preserved (`"ipv4: ..."`)
+- `compose_rejects_bad_uid` — > INT32_MAX rejected via
+  validateUid
+- `compose_rctl_always_populated` — even with empty config
+
+Suite: 1241 → **1249**, all passing.
+
+### Series state
+
+- Verb handlers: 14/14 ✅
+- Per-user mini-track:
+  - 0.9.8 — runtime path scheme ✅
+  - 0.9.9 — ZFS dataset prefix ✅
+  - 0.9.10 — network sub-CIDR ✅
+  - 0.9.11 — RCTL accounting groups ✅
+  - **0.9.12 — migration doc + config schema + composition
+    ← this release**
+- 0.9.13 — wiring flip (network_lease, RCTL umbrella
+  application, audit per-user)
+- 0.9.14 — default flip (`rootless_per_user: true`)
+- 1.0.0 — setuid removed
+
+### Files
+
+- `docs/rootless-migration.md` (new)
+- `lib/per_user_env_pure.{h,cpp}` (new)
+- `tests/unit/per_user_env_pure_test.cpp` (new)
+- `daemon/config.h` — 5 new fields
+- `daemon/config.cpp` — top-level + nested YAML parsing
+- `daemon/crated.conf.sample` — appended rootless block
+- `Makefile`, `tests/unit/Kyuafile`, `.gitignore` — wired up
+- `cli/args.cpp` — version `crate 0.9.12`
+
+---
+
 ## [0.9.11] — 2026-05-09
 
 **Rootless track, per-user RCTL accounting groups.** Twelfth

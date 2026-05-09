@@ -137,6 +137,39 @@ Config Config::load(const std::string &path) {
     }
   }
 
+  // 0.9.12: rootless per-user namespacing knobs.
+  // The toggle accepts both top-level (`rootless_per_user: true`)
+  // and a nested `rootless: { per_user: true, ... }` form for
+  // future grouping room.
+  if (root["rootless_per_user"])
+    cfg.rootlessPerUser = root["rootless_per_user"].as<bool>();
+  if (auto rl = root["rootless"]) {
+    if (rl["per_user"])
+      cfg.rootlessPerUser = rl["per_user"].as<bool>();
+    if (rl["zfs_master_prefix"])
+      cfg.zfsMasterPrefix = rl["zfs_master_prefix"].as<std::string>();
+    if (rl["network_master_cidr_v4"])
+      cfg.networkMasterCidr4 = rl["network_master_cidr_v4"].as<std::string>();
+    if (rl["network_sub_prefix_len_v4"])
+      cfg.networkSubPrefixLen4 = rl["network_sub_prefix_len_v4"].as<unsigned>();
+    if (rl["network_master_cidr_v6"])
+      cfg.networkMasterCidr6 = rl["network_master_cidr_v6"].as<std::string>();
+    if (rl["network_sub_prefix_len_v6"])
+      cfg.networkSubPrefixLen6 = rl["network_sub_prefix_len_v6"].as<unsigned>();
+  }
+  // Top-level shorthand (avoids the `rootless:` block for operators
+  // who only flip the toggle without changing pools).
+  if (root["zfs_master_prefix"])
+    cfg.zfsMasterPrefix = root["zfs_master_prefix"].as<std::string>();
+  if (root["network_master_cidr_v4"])
+    cfg.networkMasterCidr4 = root["network_master_cidr_v4"].as<std::string>();
+  if (root["network_sub_prefix_len_v4"])
+    cfg.networkSubPrefixLen4 = root["network_sub_prefix_len_v4"].as<unsigned>();
+  if (root["network_master_cidr_v6"])
+    cfg.networkMasterCidr6 = root["network_master_cidr_v6"].as<std::string>();
+  if (root["network_sub_prefix_len_v6"])
+    cfg.networkSubPrefixLen6 = root["network_sub_prefix_len_v6"].as<unsigned>();
+
   return cfg;
 }
 
