@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "run_jail.h"
+#include "privops_client.h"
 #include "spec.h"
 #include "zfs_ops.h"
 #include "pathnames.h"
@@ -372,17 +373,51 @@ RunAtEnd attachZfsDatasets(const Spec &spec, int jid, bool logProgress) {
   if (spec.zfsDatasets.empty())
     return RunAtEnd();
 
+  // 0.9.18: prefer the privops `attach_zfs` verb when crated's
+  // unix-socket listener is available; fall back to direct
+  // ZfsOps call (legacy setuid mode). The teardown path
+  // (RunAtEnd lambda) mirrors the same fork.
+  std::string privopsSocket = PrivOpsClient::detectSocketPath();
+
   for (auto &dataset : spec.zfsDatasets) {
     if (logProgress)
       std::cerr << rang::fg::gray << "attaching ZFS dataset " << dataset << " to jail " << jid << rang::style::reset << std::endl;
-    ZfsOps::jailDataset(jid, dataset);
+    if (!privopsSocket.empty()) {
+      auto resp = PrivOpsClient::sendRequest(privopsSocket,
+          PrivOpsClient::buildAttachZfs(jid, dataset));
+      if (!resp.transportError.empty())
+        ERR2("run_jail", "privops attach_zfs: " << resp.transportError)
+      if (resp.status >= 400)
+        ERR2("run_jail", "privops attach_zfs failed (status "
+             << resp.status << "): " << resp.body)
+    } else {
+      ZfsOps::jailDataset(jid, dataset);
+    }
   }
 
-  return RunAtEnd([&spec, jid, logProgress]() {
+  return RunAtEnd([&spec, jid, logProgress, privopsSocket]() {
     for (auto &dataset : Util::reverseVector(spec.zfsDatasets)) {
       if (logProgress)
         std::cerr << rang::fg::gray << "detaching ZFS dataset " << dataset << " from jail " << jid << rang::style::reset << std::endl;
-      ZfsOps::unjailDataset(jid, dataset);
+      if (!privopsSocket.empty()) {
+        // Teardown is best-effort — the jail may already be gone
+        // by the time RunAtEnd fires. Soft-log non-200 (matches
+        // the existing ZfsOps::unjailDataset try-flavour: any
+        // exception bubbles up as a warning, not a hard error).
+        auto resp = PrivOpsClient::sendRequest(privopsSocket,
+            PrivOpsClient::buildDetachZfs(jid, dataset));
+        if (!resp.transportError.empty() || resp.status >= 400) {
+          std::cerr << rang::fg::yellow
+                    << "run_jail: privops detach_zfs " << dataset
+                    << " ignored: "
+                    << (resp.transportError.empty()
+                          ? std::to_string(resp.status) + ": " + resp.body
+                          : resp.transportError)
+                    << rang::style::reset << std::endl;
+        }
+      } else {
+        ZfsOps::unjailDataset(jid, dataset);
+      }
     }
   });
 }
