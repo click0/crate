@@ -6,6 +6,84 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.18] — 2026-05-09
+
+**Rootless track, `crate run` ZFS attach via privops.**
+Nineteenth 0.9.x release. Third CLI call-site delegated to
+`crated`. The first call-site inside `crate run` itself.
+
+### What lands
+
+`lib/run_jail.cpp::attachZfsDatasets` — wires both the attach
+(at jail-create time) and the detach (in the `RunAtEnd`
+teardown lambda) through privops when the socket is available:
+
+- **Socket present:** `PrivOpsClient::sendRequest(socket,
+  buildAttachZfs(jid, dataset))` per dataset. Teardown
+  mirrors with `buildDetachZfs`. Daemon's `handleAttachZfs` /
+  `handleDetachZfs` (0.9.4) call `ZfsOps::jailDataset` /
+  `unjailDataset` as root.
+- **Socket absent:** existing `ZfsOps::jailDataset(jid, ds)` /
+  `unjailDataset` direct calls run unchanged. Legacy
+  setuid-prod is byte-identical.
+
+Attach errors are HARD: `crate run` aborts with the privops
+error (`ERR2`) — same semantics as the existing
+`ZfsOps::jailDataset` throwing on failure. **Detach errors
+are SOFT** (logged, not fatal) — matches how `RunAtEnd`
+handles teardown today; a half-removed jail with detached
+datasets is less bad than a stuck `crate run -d` that won't
+exit.
+
+### Why ZFS attach first
+
+Of the four `crate run` privileged operations
+(`create_jail`, `attach_zfs`, `mount_nullfs`, `configure_iface`),
+ZFS attach has the smallest blast radius:
+
+- One call site (`run_jail.cpp::attachZfsDatasets`)
+- Both directions (attach + detach) wired in one PR
+- Spec field (`zfsDatasets`) is opt-in — operators not using
+  this feature see zero behaviour change
+- The verb already has full handler coverage from 0.9.4
+
+`mount_nullfs` is the next candidate (file-share binds), then
+`configure_iface` (vnet plumbing — most complex), then
+`create_jail` itself (which depends on the previous three
+having moved through privops first, so the rootless-`crate
+run` flow doesn't need root for any step).
+
+### Series state
+
+CLI call-sites wired:
+- `crate retune --rctl` / `--clear` → set_rctl / clear_rctl (0.9.15)
+- `crate stop` (force-remove) → destroy_jail (0.9.17)
+- **`crate run` ZFS attach + detach → attach_zfs / detach_zfs ← this release**
+
+Remaining `crate run` chain:
+- 0.9.19 — `mount_nullfs` (lib/run.cpp share/bind sites)
+- 0.9.20 — `configure_iface` (lib/run_net.cpp vnet plumbing)
+- 0.9.21 — `create_jail` (the inner `jail -c` itself, last)
+- 0.9.22 — `network_lease.cpp` per-user paths + RCTL umbrella
+- 0.9.23 — default flip
+- 1.0.0 — setuid removed
+
+### Tests
+
+No new tests — wire path needs integration (real `crated`).
+Suite stays at 1294. Existing privops_client builders +
+nv_pure round-trips already cover the request shape.
+
+### Files
+
+- `lib/run_jail.cpp` — privops-aware attach/detach in
+  `attachZfsDatasets`; legacy `ZfsOps::jailDataset` path
+  unchanged
+- `cli/args.cpp` — version `crate 0.9.18`
+- `CHANGELOG.md` — entry
+
+---
+
 ## [0.9.17] — 2026-05-09
 
 **Rootless track, `crate stop` wired to privops.** Eighteenth
