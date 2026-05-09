@@ -6,6 +6,84 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.24] — 2026-05-09
+
+**Rootless track, bridge membership verbs.** Twenty-fifth
+0.9.x release. Symmetric pair around `IfconfigOps::bridgeAddMember`
+and `bridgeDelMember`.
+
+### What lands
+
+#### Two new privops verbs
+
+- **`bridge_add_member`** — wraps `IfconfigOps::bridgeAddMember(bridge, member)`.
+  Fields: `bridge`, `member` (both validated as iface names).
+- **`bridge_del_member`** — symmetric remove.
+
+Different shape from 0.9.23's verbs (2 args vs 1) but same
+overall pattern. Validators delegate to existing
+`validateIfaceName` for both fields.
+
+#### Wire-up across the stack
+
+Same files as 0.9.23 — `privops_pure`, `privops_wire_pure`,
+`privops_nv_pure`, `privops_client`, `privops_handlers`. Each
+gained two new functions / cases.
+
+#### CLI wiring
+
+`lib/run_net.cpp` gets two more file-static helpers
+(`bridgeAddMemberPrivopsOrLocal`, `bridgeDelMemberPrivopsOrLocal`)
+and 2 call-sites migrate:
+
+| Site | Op |
+|------|-----|
+| `setupBridgeEpair` line 481 | `bridgeAddMember(bridgeIface, ifaceA)` |
+| `destroyBridgeEpair` line 491 | `bridgeDelMember(bridgeIface, ifaceA)` |
+
+`bridgeAddMember` is hard-fail (matches existing exception
+behaviour). `bridgeDelMember` is soft-fail (matches RunAtEnd
+teardown pattern from earlier releases — warn on error,
+continue cleanup).
+
+### Series state
+
+CLI call-sites wired:
+- `crate retune` (0.9.15)
+- `crate stop` (0.9.17)
+- `crate run` ZFS attach + detach (0.9.18)
+- `crate run` nullfs mounts 8 sites (0.9.19)
+- `crate run` vnet moveToVnet 4 sites (0.9.20)
+- `crate run` removeJail teardown (0.9.21)
+- `crate run` createJail (0.9.22)
+- `crate run` setUp + disableOffload 5 sites (0.9.23)
+- **`crate run` bridge add + del 2 sites → bridge_add_member / bridge_del_member ← this release**
+
+Remaining iface verbs:
+- 0.9.25 — `set_iface_inet_addr` (3-arg verb: iface + addr + prefix_len)
+- 0.9.26 — `create_epair` (first response-data verb — returns the epair pair names)
+- 0.9.27 — `network_lease.cpp` per-user paths + RCTL umbrella
+- 0.9.28 — default flip
+- 1.0.0 — setuid removed
+
+### Tests
+
+2 new ATF tests (`bridge_add_member_minimal`,
+`bridge_del_member_minimal`) in `privops_pure_test`.
+`verb_token_roundtrips_for_every_verb` updated to include
+both new verbs. Suite: 1296 → **1298**.
+
+### Files
+
+Same set as 0.9.23: `privops_pure.{h,cpp}`,
+`privops_wire_pure.{h,cpp}`, `privops_nv_pure.{h,cpp}`,
+`privops_client.h`, `privops_client_pure.cpp`,
+`privops_handlers.{h,cpp}`, `run_net.cpp`,
+`tests/unit/privops_pure_test.cpp`, `cli/args.cpp`,
+`CHANGELOG.md`.
+
+---
+
 ## [0.9.23] — 2026-05-09
 
 **Rootless track, atomic single-iface verbs.** Twenty-fourth

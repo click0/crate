@@ -112,6 +112,12 @@ PrivOpsNvPure::FieldMap buildDestroyJail(const std::string &name,
 PrivOpsNvPure::FieldMap buildSetIfaceUp(const std::string &ifname);
 PrivOpsNvPure::FieldMap buildDisableIfaceOffload(const std::string &ifname);
 
+// 0.9.24: bridge membership ops.
+PrivOpsNvPure::FieldMap buildBridgeAddMember(const std::string &bridge,
+                                              const std::string &member);
+PrivOpsNvPure::FieldMap buildBridgeDelMember(const std::string &bridge,
+                                              const std::string &member);
+
 // --- Wire transport (FreeBSD-only) ---
 
 struct Response {

@@ -233,4 +233,22 @@ PrivOpsNvPure::FieldMap buildDisableIfaceOffload(const std::string &ifname) {
   };
 }
 
+PrivOpsNvPure::FieldMap buildBridgeAddMember(const std::string &bridge,
+                                              const std::string &member) {
+  return {
+    {"verb", "bridge_add_member"},
+    {"bridge", bridge},
+    {"member", member},
+  };
+}
+
+PrivOpsNvPure::FieldMap buildBridgeDelMember(const std::string &bridge,
+                                              const std::string &member) {
+  return {
+    {"verb", "bridge_del_member"},
+    {"bridge", bridge},
+    {"member", member},
+  };
+}
+
 } // namespace PrivOpsClient

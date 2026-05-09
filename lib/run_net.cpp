@@ -98,6 +98,46 @@ static void disableOffloadPrivopsOrLocal(const std::string &iface) {
   IfconfigOps::disableOffload(iface);
 }
 
+// 0.9.24: privops-aware wrappers for bridge add/del.
+static void bridgeAddMemberPrivopsOrLocal(const std::string &bridge,
+                                          const std::string &member) {
+  std::string sock = PrivOpsClient::detectSocketPath();
+  if (!sock.empty()) {
+    auto resp = PrivOpsClient::sendRequest(sock,
+        PrivOpsClient::buildBridgeAddMember(bridge, member));
+    if (!resp.transportError.empty())
+      ERR2("run_net", "privops bridge_add_member '" << member << "' on '"
+           << bridge << "' transport error: " << resp.transportError)
+    if (resp.status >= 400)
+      ERR2("run_net", "privops bridge_add_member '" << member << "' on '"
+           << bridge << "' failed (status " << resp.status << "): "
+           << resp.body)
+    return;
+  }
+  IfconfigOps::bridgeAddMember(bridge, member);
+}
+
+static void bridgeDelMemberPrivopsOrLocal(const std::string &bridge,
+                                          const std::string &member) {
+  std::string sock = PrivOpsClient::detectSocketPath();
+  if (!sock.empty()) {
+    auto resp = PrivOpsClient::sendRequest(sock,
+        PrivOpsClient::buildBridgeDelMember(bridge, member));
+    // Soft-fail on teardown — bridge may already be gone.
+    if (!resp.transportError.empty() || resp.status >= 400) {
+      std::cerr << rang::fg::yellow
+                << "run_net: privops bridge_del_member '" << member
+                << "' on '" << bridge << "' ignored: "
+                << (resp.transportError.empty()
+                      ? std::to_string(resp.status) + ": " + resp.body
+                      : resp.transportError)
+                << rang::style::reset << std::endl;
+    }
+    return;
+  }
+  IfconfigOps::bridgeDelMember(bridge, member);
+}
+
 GatewayInfo detectGateway() {
   GatewayInfo gw;
 
@@ -438,7 +478,7 @@ BridgeInfo createBridgeEpair(int jid, const std::string &jidStr,
 
   // bring host-side up and add to bridge
   setUpPrivopsOrLocal(info.ifaceA);
-  IfconfigOps::bridgeAddMember(bridgeIface, info.ifaceA);
+  bridgeAddMemberPrivopsOrLocal(bridgeIface, info.ifaceA);
 
   // move jail-side into jail
   moveToVnetPrivopsOrLocal(info.ifaceB, jid);
@@ -448,7 +488,7 @@ BridgeInfo createBridgeEpair(int jid, const std::string &jidStr,
 
 void destroyBridgeEpair(const BridgeInfo &info) {
   // remove from bridge first, then destroy
-  IfconfigOps::bridgeDelMember(info.bridgeIface, info.ifaceA);
+  bridgeDelMemberPrivopsOrLocal(info.bridgeIface, info.ifaceA);
   IfconfigOps::destroyInterface(info.ifaceA);
 }
 

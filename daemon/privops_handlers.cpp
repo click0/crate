@@ -394,6 +394,28 @@ DispatchResult handleDisableIfaceOffload(const PrivOpsPure::DisableIfaceOffloadR
   return {200, PrivOpsWirePure::formatDisableIfaceOffloadSuccess(r.ifname)};
 }
 
+// --- handleBridgeAddMember / handleBridgeDelMember (0.9.24) ---
+
+DispatchResult handleBridgeAddMember(const PrivOpsPure::BridgeAddMemberReq &r) {
+  try {
+    IfconfigOps::bridgeAddMember(r.bridge, r.member);
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("ifconfig_failed",
+                                                     e.what())};
+  }
+  return {200, PrivOpsWirePure::formatBridgeAddMemberSuccess(r.bridge, r.member)};
+}
+
+DispatchResult handleBridgeDelMember(const PrivOpsPure::BridgeDelMemberReq &r) {
+  try {
+    IfconfigOps::bridgeDelMember(r.bridge, r.member);
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("ifconfig_failed",
+                                                     e.what())};
+  }
+  return {200, PrivOpsWirePure::formatBridgeDelMemberSuccess(r.bridge, r.member)};
+}
+
 // --- Top-level dispatcher ---
 
 namespace {
@@ -546,6 +568,22 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleDisableIfaceOffload(r);
     }
+    case Verb::BridgeAddMember: {
+      PrivOpsPure::BridgeAddMemberReq r;
+      if (auto e = PrivOpsWirePure::parseBridgeAddMember(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateBridgeAddMember(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleBridgeAddMember(r);
+    }
+    case Verb::BridgeDelMember: {
+      PrivOpsPure::BridgeDelMemberReq r;
+      if (auto e = PrivOpsWirePure::parseBridgeDelMember(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateBridgeDelMember(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleBridgeDelMember(r);
+    }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
   }
@@ -691,6 +729,22 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       if (auto e = PrivOpsPure::validateDisableIfaceOffload(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleDisableIfaceOffload(r);
+    }
+    case Verb::BridgeAddMember: {
+      PrivOpsPure::BridgeAddMemberReq r;
+      if (auto e = PrivOpsNvPure::parseBridgeAddMember(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateBridgeAddMember(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleBridgeAddMember(r);
+    }
+    case Verb::BridgeDelMember: {
+      PrivOpsPure::BridgeDelMemberReq r;
+      if (auto e = PrivOpsNvPure::parseBridgeDelMember(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateBridgeDelMember(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleBridgeDelMember(r);
     }
     case Verb::Unknown:
       return {404,
