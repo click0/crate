@@ -6,6 +6,100 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.28] — 2026-05-09
+
+**Rootless track, RCTL umbrella verbs.** Twenty-ninth 0.9.x
+release. Two new verbs that apply RCTL rules at the
+loginclass scope (umbrella) instead of per-jail. The
+infrastructure for 0.9.11's `crate-<uid>` loginclass is now
+addressable end-to-end.
+
+### What lands
+
+#### Two new privops verbs
+
+- **`set_loginclass_rctl`** — wraps
+  `rctl -a loginclass:<name>:<key>:deny=<value>`. Fields:
+  `loginclass`, `key`, `value`. Validates
+  `loginclass` via `PerUserRctlPure::validateLoginclassName`
+  (must be `crate-<uid>` shape), and `key`/`value` via
+  the existing `RetunePure` whitelist (same gate as
+  `set_rctl` from 0.9.0).
+- **`clear_loginclass_rctl`** — symmetric remove via
+  `rctl -r loginclass:<name>:<key>:deny`. Fields:
+  `loginclass`, `key`.
+
+#### Use case
+
+Today's `set_rctl` (0.9.0) is jail-scoped — alice can
+exceed her aggregate quota by spawning multiple jails,
+each below the per-jail cap. With `set_loginclass_rctl`,
+the kernel enforces a sum across all of alice's jails:
+
+```
+# Pre-0.9.28: alice spawns 3 jails, each at 2G memoryuse.
+# Total = 6G. Per-jail set_rctl can't catch this.
+
+# 0.9.28: at provisioning time, set the umbrella once:
+POST /api/v1/privops/set_loginclass_rctl
+{"loginclass":"crate-1000","key":"memoryuse","value":"4G"}
+
+# Now: alice spawns 3 jails. Kernel enforces 4G total
+# regardless of how many jails she has.
+```
+
+The umbrella rule and per-jail rules apply simultaneously
+— kernel takes the more restrictive of the two whenever
+both fire.
+
+### Wire-up
+
+Same files as previous verb-expansion releases —
+`privops_pure.{h,cpp}`, `privops_wire_pure.{h,cpp}`,
+`privops_nv_pure.{h,cpp}`, `privops_client.h`,
+`privops_client_pure.cpp`, `privops_handlers.{h,cpp}`. Two
+new functions/cases per file.
+
+`privops_pure.cpp` gains `#include "per_user_rctl_pure.h"`
+to reuse `validateLoginclassName`.
+
+### CLI wiring (intentionally none for 0.9.28)
+
+The verbs are primitives — no automatic invocation from
+`crate run` or other CLI commands. Operators wanting
+umbrella rules call them directly (e.g., from a startup
+script) or wait for **0.9.29** which will auto-apply
+umbrella rules from `crated.conf` at jail-create time.
+
+This split keeps 0.9.28 small and reviewable — pure verb
+addition. Auto-application requires a config-schema decision
+(per-key map vs structured spec) that's worth its own PR.
+
+### Series state
+
+CLI call-sites wired (12+ in total). All host-side verbs
+needed for `crate run` exist. RCTL umbrella primitives now
+exist; auto-application coming in 0.9.29.
+
+### Tests
+
+- 2 new ATF tests in `privops_pure_test`
+  (`set_loginclass_rctl_validates`,
+  `clear_loginclass_rctl_validates`) covering happy path
+  + bad loginclass + bad key + out-of-range value.
+- `verb_token_roundtrips_for_every_verb` updated.
+- Suite: 1301 → **1303**.
+
+### Files
+
+`privops_pure.{h,cpp}`, `privops_wire_pure.{h,cpp}`,
+`privops_nv_pure.{h,cpp}`, `privops_client.h`,
+`privops_client_pure.cpp`, `privops_handlers.{h,cpp}`,
+`tests/unit/privops_pure_test.cpp`, `cli/args.cpp`,
+`CHANGELOG.md`.
+
+---
+
 ## [0.9.27] — 2026-05-09
 
 **Rootless track, per-user lease file path.** Twenty-eighth

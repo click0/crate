@@ -26,6 +26,7 @@ ATF_TEST_CASE_BODY(verb_token_roundtrips_for_every_verb) {
     Verb::SetIfaceUp, Verb::DisableIfaceOffload,
     Verb::BridgeAddMember, Verb::BridgeDelMember,
     Verb::SetIfaceInetAddr, Verb::CreateEpair,
+    Verb::SetLoginclassRctl, Verb::ClearLoginclassRctl,
   };
   for (Verb v : verbs) {
     std::string token = verbName(v);
@@ -547,6 +548,41 @@ ATF_TEST_CASE_BODY(create_epair_no_fields_required) {
   ATF_REQUIRE_EQ(validateCreateEpair(r), std::string());
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(set_loginclass_rctl_validates);
+ATF_TEST_CASE_BODY(set_loginclass_rctl_validates) {
+  SetLoginclassRctlReq r;
+  r.loginclass = "crate-1000";
+  r.key = "memoryuse";
+  r.rawValue = "4G";
+  ATF_REQUIRE_EQ(validateSetLoginclassRctl(r), std::string());
+
+  // Bad loginclass (no crate- prefix)
+  r.loginclass = "ops";
+  ATF_REQUIRE(!validateSetLoginclassRctl(r).empty());
+
+  // Bad key (not in RCTL whitelist)
+  r.loginclass = "crate-1000";
+  r.key = "totally-fake-key";
+  ATF_REQUIRE(!validateSetLoginclassRctl(r).empty());
+
+  // pcpu out of range
+  r.key = "pcpu";
+  r.rawValue = "200";
+  ATF_REQUIRE(!validateSetLoginclassRctl(r).empty());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(clear_loginclass_rctl_validates);
+ATF_TEST_CASE_BODY(clear_loginclass_rctl_validates) {
+  ClearLoginclassRctlReq r;
+  r.loginclass = "crate-1000";
+  r.key = "memoryuse";
+  ATF_REQUIRE_EQ(validateClearLoginclassRctl(r), std::string());
+
+  // No value field on clear — but still validates loginclass + key
+  r.loginclass = "Bad-LoginClass";
+  ATF_REQUIRE(!validateClearLoginclassRctl(r).empty());
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(set_iface_inet_addr_minimal);
 ATF_TEST_CASE_BODY(set_iface_inet_addr_minimal) {
   SetIfaceInetAddrReq r;
@@ -633,4 +669,6 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, bridge_del_member_minimal);
   ATF_ADD_TEST_CASE(tcs, set_iface_inet_addr_minimal);
   ATF_ADD_TEST_CASE(tcs, create_epair_no_fields_required);
+  ATF_ADD_TEST_CASE(tcs, set_loginclass_rctl_validates);
+  ATF_ADD_TEST_CASE(tcs, clear_loginclass_rctl_validates);
 }

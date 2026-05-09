@@ -268,4 +268,24 @@ PrivOpsNvPure::FieldMap buildCreateEpair() {
   };
 }
 
+PrivOpsNvPure::FieldMap buildSetLoginclassRctl(const std::string &loginclass,
+                                                const std::string &key,
+                                                const std::string &rawValue) {
+  return {
+    {"verb", "set_loginclass_rctl"},
+    {"loginclass", loginclass},
+    {"key", key},
+    {"value", rawValue},
+  };
+}
+
+PrivOpsNvPure::FieldMap buildClearLoginclassRctl(const std::string &loginclass,
+                                                  const std::string &key) {
+  return {
+    {"verb", "clear_loginclass_rctl"},
+    {"loginclass", loginclass},
+    {"key", key},
+  };
+}
+
 } // namespace PrivOpsClient

@@ -166,4 +166,13 @@ PrivOpsWirePure::DispatchResult handleSetIfaceInetAddr(const PrivOpsPure::SetIfa
 // the response body carries the assigned A/B iface names.
 PrivOpsWirePure::DispatchResult handleCreateEpair(const PrivOpsPure::CreateEpairReq &r);
 
+// 0.9.28: per-loginclass RCTL umbrella ops. Wraps
+// `rctl -a loginclass:<name>:<key>:deny=<value>` and
+// `rctl -r loginclass:<name>:<key>:deny`. The set_rctl
+// (0.9.0) verb is jail-scoped; this is the umbrella variant
+// that aggregates resource use across all of one operator's
+// jails.
+PrivOpsWirePure::DispatchResult handleSetLoginclassRctl(const PrivOpsPure::SetLoginclassRctlReq &r);
+PrivOpsWirePure::DispatchResult handleClearLoginclassRctl(const PrivOpsPure::ClearLoginclassRctlReq &r);
+
 } // namespace Crated

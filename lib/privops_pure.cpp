@@ -2,6 +2,7 @@
 
 #include "privops_pure.h"
 
+#include "per_user_rctl_pure.h"
 #include "retune_pure.h"
 
 #include <cctype>
@@ -91,6 +92,8 @@ const char *verbName(Verb v) {
     case Verb::BridgeDelMember:      return "bridge_del_member";
     case Verb::SetIfaceInetAddr:     return "set_iface_inet_addr";
     case Verb::CreateEpair:          return "create_epair";
+    case Verb::SetLoginclassRctl:    return "set_loginclass_rctl";
+    case Verb::ClearLoginclassRctl:  return "clear_loginclass_rctl";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -117,6 +120,8 @@ Verb parseVerb(const std::string &name) {
   if (name == "bridge_del_member")      return Verb::BridgeDelMember;
   if (name == "set_iface_inet_addr")    return Verb::SetIfaceInetAddr;
   if (name == "create_epair")           return Verb::CreateEpair;
+  if (name == "set_loginclass_rctl")    return Verb::SetLoginclassRctl;
+  if (name == "clear_loginclass_rctl")  return Verb::ClearLoginclassRctl;
   return Verb::Unknown;
 }
 
@@ -510,6 +515,21 @@ std::string validateSetIfaceInetAddr(const SetIfaceInetAddrReq &r) {
 std::string validateCreateEpair(const CreateEpairReq &) {
   // No fields — kernel picks the unit number. Validator is here
   // for symmetry with the rest of the verb set; always succeeds.
+  return "";
+}
+
+std::string validateSetLoginclassRctl(const SetLoginclassRctlReq &r) {
+  if (auto e = PerUserRctlPure::validateLoginclassName(r.loginclass); !e.empty())
+    return "loginclass: " + e;
+  if (auto e = RetunePure::validateRctlKey(r.key); !e.empty()) return e;
+  if (auto e = RetunePure::validateRctlValue(r.key, r.rawValue); !e.empty()) return e;
+  return "";
+}
+
+std::string validateClearLoginclassRctl(const ClearLoginclassRctlReq &r) {
+  if (auto e = PerUserRctlPure::validateLoginclassName(r.loginclass); !e.empty())
+    return "loginclass: " + e;
+  if (auto e = RetunePure::validateRctlKey(r.key); !e.empty()) return e;
   return "";
 }
 
