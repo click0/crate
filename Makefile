@@ -17,7 +17,8 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/create.cpp lib/run.cpp \
            lib/pool_pure.cpp lib/warm_pure.cpp lib/warm.cpp \
            lib/retune_pure.cpp lib/retune.cpp \
            lib/privops_pure.cpp lib/privops_wire_pure.cpp \
-           lib/privops_nv_pure.cpp lib/privops_client.cpp \
+           lib/privops_nv_pure.cpp \
+           lib/privops_client_pure.cpp lib/privops_client.cpp \
            lib/runtime_paths_pure.cpp lib/per_user_net_pure.cpp \
            lib/per_user_rctl_pure.cpp lib/per_user_env_pure.cpp \
            lib/audit_per_user_pure.cpp \
@@ -268,7 +269,7 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  lib/sign_pure.cpp lib/audit_pure.cpp lib/pool_pure.cpp \
                  lib/warm_pure.cpp lib/retune_pure.cpp \
                  lib/privops_pure.cpp lib/privops_wire_pure.cpp \
-                 lib/privops_nv_pure.cpp lib/privops_client.cpp \
+                 lib/privops_nv_pure.cpp lib/privops_client_pure.cpp \
                  lib/runtime_paths_pure.cpp lib/per_user_net_pure.cpp \
                  lib/per_user_rctl_pure.cpp lib/per_user_env_pure.cpp \
                  lib/audit_per_user_pure.cpp \
