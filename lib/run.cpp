@@ -787,7 +787,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   runScript("run:before-create-jail");
   LOG("creating jail " << jailXname)
 
-  auto jailInfo = RunJail::createJail(spec, jailPath, args.logProgress);
+  auto jailInfo = RunJail::createJail(spec, jailPath, jailXname, args.logProgress);
   int jid = jailInfo.jid;
 
   // 0.8.31: publish jid to the MAC bsdextended cleanup handler so

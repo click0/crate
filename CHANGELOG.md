@@ -6,6 +6,123 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.22] — 2026-05-09
+
+**Rootless track, `createJail` via privops.** Twenty-third
+0.9.x release. Seventh CLI call-site, fifth inside `crate
+run` — and the **last major chunk** of `crate run` jail
+lifecycle to land.
+
+### What lands
+
+`lib/run_jail.cpp::createJail` now privops-aware:
+
+```cpp
+JailInfo createJail(const Spec &spec, const std::string &jailPath,
+                    const std::string &jailName, bool logProgress) {
+  // ... build optAllowMlock etc. (same as before) ...
+
+  std::string sock = PrivOpsClient::detectSocketPath();
+  if (!sock.empty()) {
+    std::ostringstream params;
+    params << "allow.raw_sockets=" << optRawSockets
+           << " allow.socket_af=" << optNet
+           // ... all 9 allow.* + enforce_statfs ...
+           ;
+    auto resp = PrivOpsClient::sendRequest(sock,
+        PrivOpsClient::buildCreateJail(jailName, jailPath,
+                                        Util::gethostname(),
+                                        /*vnet=*/true,
+                                        params.str()));
+    // error handling
+    auto jail = JailQuery::getJailByName(jailName);
+    info.jid = jail->jid;
+    return info;
+  }
+  // Legacy jail_setv() path unchanged
+}
+```
+
+The signature gained a `jailName` parameter — caller
+(`run.cpp`) passes `jailXname` which is `<nameComponent>_pid<PID>`
+(unique per `crate run` invocation, well-formed for the
+privops `validateJailName`).
+
+### Design choice: pack into `parameters`
+
+Of the two options from 0.9.21's CHANGELOG —
+"pack into parameters string" vs "extend the verb" — went
+with **option 1** (parameters packing). Reasoning:
+
+- **No verb shape change.** `CreateJailReq` from 0.9.0 stays
+  stable. The taxonomy contract is preserved.
+- **`parameters` is operator-supplied free text already** — it
+  already accepts arbitrary `jail.conf` fragments. Spec-derived
+  flags fit that model naturally.
+- **Spec values are constant alphabet** (`true` / `false` /
+  `0` / `1` / `2`) — no risk of shell metas slipping past
+  `validateRuleText`.
+
+### Trade-offs
+
+1. **JID fetched via post-create query.** The verb response
+   doesn't include the jid (it returns success bool + name).
+   We resolve via `JailQuery::getJailByName(jailName)`. Tiny
+   race window if something destroys the jail between create
+   and query; acceptable for crate-controlled flow. A future
+   verb response extension (return the jid) closes this.
+2. **No `JAIL_OWN_DESC` fd-based teardown via privops.** The
+   FreeBSD 15 fd-teardown path needs the descriptor returned
+   by `jail_setv()`. Privops verb returns nothing of the sort.
+   Falls back to jid-based `jail_remove` from 0.9.21's
+   `removeJail` privops route. Loses the
+   exit-after-fd-close race-safety of the libjail path on
+   FreeBSD 15+, but matches the CLI `jail -r NAME` semantics.
+3. **No fallback on privops error.** Unlike 0.9.21's
+   `removeJail`, createJail fails hard on privops error
+   (no `jail_setv` fallback). Reason: a partial-failure
+   scenario where privops fails mid-create then libjail
+   creates a duplicate would be worse than just failing.
+   Operators can rerun with `unset CRATE_PRIVOPS_SOCKET` to
+   force legacy.
+
+### Series state
+
+CLI call-sites wired:
+- `crate retune` → set_rctl / clear_rctl (0.9.15)
+- `crate stop` → destroy_jail (0.9.17)
+- `crate run` ZFS attach + detach → attach_zfs / detach_zfs (0.9.18)
+- `crate run` nullfs mounts (8 sites) → mount_nullfs (0.9.19)
+- `crate run` vnet moveToVnet (4 sites) → configure_iface move-only (0.9.20)
+- `crate run` removeJail (RunAtEnd) → destroy_jail (0.9.21)
+- **`crate run` createJail → create_jail ← this release**
+
+Remaining:
+- 0.9.23 — additional iface verbs (createEpair / bridgeAddMember /
+  setUp / disableOffload / setInetAddr) for full rootless
+  `crate run` coverage. Without these, rootless mode still
+  needs root for the host-side bridge plumbing in `setupBridgeEpair`.
+- 0.9.24 — `network_lease.cpp` per-user paths + RCTL umbrella
+  application (uses 0.9.10 sub-CIDR + 0.9.11 loginclass)
+- 0.9.25 — default flip
+- 1.0.0 — setuid removed
+
+### Tests
+
+No new tests. Suite stays at 1294. Wire path needs
+integration test infrastructure (real `crated`).
+
+### Files
+
+- `lib/run_jail.h` — `createJail` signature gains `jailName`
+- `lib/run_jail.cpp::createJail` — privops route + legacy
+  `jail_setv()` fallback path unchanged
+- `lib/run.cpp` — caller passes `jailXname`
+- `cli/args.cpp` — version `crate 0.9.22`
+- `CHANGELOG.md` — entry
+
+---
+
 ## [0.9.21] — 2026-05-09
 
 **Rootless track, `removeJail` via privops.** Twenty-second
