@@ -11,6 +11,7 @@
 #include "args.h"
 #include "commands.h"
 #include "jail_query.h"
+#include "privops_client.h"
 #include "retune_pure.h"
 #include "util.h"
 #include "err.h"
@@ -57,6 +58,12 @@ bool retuneCommand(const Args &args) {
   }
   if (!jail) ERR("jail '" << args.retuneTarget << "' not found or not running")
 
+  // 0.9.15: detect privops socket. If present (CRATE_PRIVOPS_SOCKET
+  // env or default path), delegate clear/set verbs to crated via
+  // libnv. Otherwise the existing rctl(8) exec path runs unchanged
+  // (legacy setuid mode).
+  std::string privopsSocket = PrivOpsClient::detectSocketPath();
+
   // Pre-show (so the operator can see the before-state in logs).
   if (args.retuneShow) {
     std::cerr << rang::fg::cyan << "retune: rctl usage BEFORE:" << rang::style::reset << std::endl;
@@ -71,14 +78,28 @@ bool retuneCommand(const Args &args) {
     std::cerr << rang::fg::cyan
               << "retune: clearing jail:" << jail->jid << ":" << k << ":deny"
               << rang::style::reset << std::endl;
-    try {
-      Util::execCommand(RetunePure::buildClearArgv(jail->jid, k),
-                        "rctl -r");
-    } catch (const std::exception &e) {
-      // Soft-fail clears — the rule may simply not exist yet.
-      std::cerr << rang::fg::yellow
-                << "retune: --clear " << k << " ignored: " << e.what()
-                << rang::style::reset << std::endl;
+    if (!privopsSocket.empty()) {
+      // Delegate via libnv → crated
+      auto resp = PrivOpsClient::sendRequest(privopsSocket,
+          PrivOpsClient::buildClearRctl(jail->jid, k));
+      if (!resp.transportError.empty() || resp.status >= 400) {
+        // Soft-fail (matches rctl(8) exec behaviour). Log and
+        // continue — caller asked for "clear and continue".
+        std::cerr << rang::fg::yellow
+                  << "retune: --clear " << k << " ignored: "
+                  << (resp.transportError.empty() ? resp.body
+                                                  : resp.transportError)
+                  << rang::style::reset << std::endl;
+      }
+    } else {
+      try {
+        Util::execCommand(RetunePure::buildClearArgv(jail->jid, k),
+                          "rctl -r");
+      } catch (const std::exception &e) {
+        std::cerr << rang::fg::yellow
+                  << "retune: --clear " << k << " ignored: " << e.what()
+                  << rang::style::reset << std::endl;
+      }
     }
   }
 
@@ -88,8 +109,18 @@ bool retuneCommand(const Args &args) {
               << "retune: setting jail:" << jail->jid << ":" << p.key
               << ":deny=" << p.rawValue
               << rang::style::reset << std::endl;
-    Util::execCommand(RetunePure::buildSetArgv(jail->jid, p),
-                      "rctl -a");
+    if (!privopsSocket.empty()) {
+      auto resp = PrivOpsClient::sendRequest(privopsSocket,
+          PrivOpsClient::buildSetRctl(jail->jid, p.key, p.rawValue));
+      if (!resp.transportError.empty())
+        ERR("privops: " << resp.transportError)
+      if (resp.status >= 400)
+        ERR("privops set_rctl failed (status " << resp.status
+            << "): " << resp.body)
+    } else {
+      Util::execCommand(RetunePure::buildSetArgv(jail->jid, p),
+                        "rctl -a");
+    }
   }
 
   // Post-show.
