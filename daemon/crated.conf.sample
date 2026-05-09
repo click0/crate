@@ -183,3 +183,34 @@ log:
 #     network_sub_prefix_len_v4: 24
 #     network_master_cidr_v6: "fd00:dead::/48"
 #     network_sub_prefix_len_v6: 64
+
+##
+## --- 0.9.14: privops Unix-socket listener (libnv transport) ---
+##
+## Local clients (crate(1) running on the same host as crated) talk
+## to the daemon over a Unix-domain socket using libnv-encoded
+## privops requests. The daemon getpeereid()'s the connection fd
+## to extract the operator's uid, which feeds the per-user audit
+## hook from 0.9.13.
+##
+## Why a separate listener:
+##   - cpp-httplib (the HTTP /api/v1/ stack) doesn't expose the
+##     connection fd, so getpeereid is impossible for HTTP clients
+##   - the HTTP path stays available for remote clients
+##     (hub multi-host, CI/CD, third-party tooling) — both
+##     transports share the same handlers and validators
+##
+## Empty `privops_socket:` disables the listener (default — only
+## HTTP path active). To enable:
+#
+# privops_socket: /var/run/crate/crated-privops.sock
+# privops_socket_group: crate-operators
+# privops_socket_mode: "0660"
+
+##
+## Equivalent nested form:
+#
+# privops:
+#     socket: /var/run/crate/crated-privops.sock
+#     group:  crate-operators
+#     mode:   "0660"

@@ -12,6 +12,8 @@
 #include "privops_pure.h"
 #include "privops_wire_pure.h"
 
+#include "../lib/privops_nv_pure.h"
+
 #include <cstdint>
 #include <string>
 
@@ -40,6 +42,23 @@ PrivOpsWirePure::DispatchResult dispatchPrivOp(PrivOpsPure::Verb v,
                                                 const std::string &body,
                                                 bool rootlessPerUser = false,
                                                 uint32_t operatorUid = 0);
+
+// 0.9.14: parallel dispatcher for the libnv transport. The verb
+// is read from the FieldMap's "verb" key; per-verb fields come
+// from the rest of the map. Same handler set as `dispatchPrivOp`,
+// same audit hook, same DispatchResult shape (status + JSON body
+// — body is wrapped into nvlist by the listener).
+//
+// Why a separate function instead of refactoring dispatchPrivOp:
+// keeps the HTTP path byte-identical to 0.9.13 (zero risk to
+// existing /api/v1/privops/:verb consumers) while adding the
+// new transport. A future release can fold both into a single
+// std::variant-based dispatch if the duplication becomes a
+// real cost.
+PrivOpsWirePure::DispatchResult dispatchPrivOpFromMap(
+    const PrivOpsNvPure::FieldMap &m,
+    bool rootlessPerUser = false,
+    uint32_t operatorUid = 0);
 
 // --- Per-verb handlers ---
 // Each takes an already-validated request struct and returns a

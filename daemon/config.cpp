@@ -170,6 +170,37 @@ Config Config::load(const std::string &path) {
   if (root["network_sub_prefix_len_v6"])
     cfg.networkSubPrefixLen6 = root["network_sub_prefix_len_v6"].as<unsigned>();
 
+  // 0.9.14: privops Unix-socket listener (libnv transport).
+  // Top-level form `privops_socket: ...` and nested form
+  // `privops: { socket: ..., group: ..., mode: ... }`. Mode
+  // accepts both string ("0660") and YAML int.
+  if (root["privops_socket"])
+    cfg.privopsSocketPath = root["privops_socket"].as<std::string>();
+  if (root["privops_socket_group"])
+    cfg.privopsSocketGroup = root["privops_socket_group"].as<std::string>();
+  if (root["privops_socket_mode"]) {
+    try {
+      auto raw = root["privops_socket_mode"].as<std::string>();
+      cfg.privopsSocketMode = std::stoul(raw, nullptr, 8);
+    } catch (...) {
+      cfg.privopsSocketMode = root["privops_socket_mode"].as<unsigned>();
+    }
+  }
+  if (auto pn = root["privops"]) {
+    if (pn["socket"])
+      cfg.privopsSocketPath = pn["socket"].as<std::string>();
+    if (pn["group"])
+      cfg.privopsSocketGroup = pn["group"].as<std::string>();
+    if (pn["mode"]) {
+      try {
+        auto raw = pn["mode"].as<std::string>();
+        cfg.privopsSocketMode = std::stoul(raw, nullptr, 8);
+      } catch (...) {
+        cfg.privopsSocketMode = pn["mode"].as<unsigned>();
+      }
+    }
+  }
+
   return cfg;
 }
 

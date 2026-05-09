@@ -17,6 +17,7 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/create.cpp lib/run.cpp \
            lib/pool_pure.cpp lib/warm_pure.cpp lib/warm.cpp \
            lib/retune_pure.cpp lib/retune.cpp \
            lib/privops_pure.cpp lib/privops_wire_pure.cpp \
+           lib/privops_nv_pure.cpp \
            lib/runtime_paths_pure.cpp lib/per_user_net_pure.cpp \
            lib/per_user_rctl_pure.cpp lib/per_user_env_pure.cpp \
            lib/audit_per_user_pure.cpp \
@@ -59,7 +60,8 @@ DAEMON_SRCS = daemon/main.cpp daemon/config.cpp daemon/server.cpp \
               daemon/rate_limit_pure.cpp daemon/rate_limit.cpp \
               daemon/socket_perms_pure.cpp \
               daemon/privops_handlers.cpp \
-              daemon/audit_per_user.cpp
+              daemon/audit_per_user.cpp \
+              daemon/privops_listener.cpp
 
 SNMPD_SRCS = snmpd/main.cpp snmpd/collector.cpp \
              snmpd/mib.cpp snmpd/mib_pure.cpp
@@ -221,6 +223,7 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              ha_pure_test pool_pure_test warm_pure_test \
              retune_pure_test throttle_pure_test \
              privops_pure_test privops_wire_pure_test \
+             privops_nv_pure_test \
              runtime_paths_pure_test per_user_net_pure_test \
              per_user_rctl_pure_test per_user_env_pure_test \
              audit_per_user_pure_test \
@@ -265,6 +268,7 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  lib/sign_pure.cpp lib/audit_pure.cpp lib/pool_pure.cpp \
                  lib/warm_pure.cpp lib/retune_pure.cpp \
                  lib/privops_pure.cpp lib/privops_wire_pure.cpp \
+                 lib/privops_nv_pure.cpp \
                  lib/runtime_paths_pure.cpp lib/per_user_net_pure.cpp \
                  lib/per_user_rctl_pure.cpp lib/per_user_env_pure.cpp \
                  lib/audit_per_user_pure.cpp \

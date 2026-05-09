@@ -55,6 +55,7 @@ atf_test_program{name="warm_pure_test"}
 atf_test_program{name="retune_pure_test"}
 atf_test_program{name="privops_pure_test"}
 atf_test_program{name="privops_wire_pure_test"}
+atf_test_program{name="privops_nv_pure_test"}
 atf_test_program{name="runtime_paths_pure_test"}
 atf_test_program{name="per_user_net_pure_test"}
 atf_test_program{name="per_user_rctl_pure_test"}

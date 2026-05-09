@@ -103,6 +103,17 @@ struct Config {
   std::string networkMasterCidr6;
   unsigned    networkSubPrefixLen6 = 64;
 
+  // 0.9.14: Unix-socket listener for libnv-based privops IPC.
+  // Empty path disables the listener (existing /api/v1/privops/:verb
+  // HTTP path remains for remote clients). When set, crated opens
+  // an AF_UNIX socket at this path (mode 0660 root:<group>) and
+  // accepts nvlist-encoded privops requests. Per-connection
+  // getpeereid extracts the operator uid which feeds the per-user
+  // audit hook from 0.9.13. See daemon/privops_listener.cpp.
+  std::string privopsSocketPath;
+  std::string privopsSocketGroup;
+  unsigned    privopsSocketMode = 0660;
+
   // Load from YAML file
   static Config load(const std::string &path);
 };
