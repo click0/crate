@@ -517,6 +517,21 @@ ATF_TEST_CASE_BODY(format_destroy_jail_success) {
   ATF_REQUIRE(body.find("\"created\":") == std::string::npos);
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(format_create_epair_response_extracts);
+ATF_TEST_CASE_BODY(format_create_epair_response_extracts) {
+  // 0.9.26: first response-data verb. Lock down that the body
+  // shape `{"created":true,"a":"epair0a","b":"epair0b"}` is
+  // re-extractable via extractStringField (the path the client
+  // in run_net.cpp uses).
+  std::string body = formatCreateEpairSuccess("epair17a", "epair17b");
+  ATF_REQUIRE(body.find("\"created\":true") != std::string::npos);
+  std::string a, b;
+  ATF_REQUIRE_EQ(extractStringField(body, "a", a), std::string(kPresent));
+  ATF_REQUIRE_EQ(a, std::string("epair17a"));
+  ATF_REQUIRE_EQ(extractStringField(body, "b", b), std::string(kPresent));
+  ATF_REQUIRE_EQ(b, std::string("epair17b"));
+}
+
 // --- parseValidateAndDispatch ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(dispatch_unknown_returns_404);
@@ -625,6 +640,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, format_remove_ipfw_rule_success);
   ATF_ADD_TEST_CASE(tcs, format_create_jail_success);
   ATF_ADD_TEST_CASE(tcs, format_destroy_jail_success);
+  ATF_ADD_TEST_CASE(tcs, format_create_epair_response_extracts);
 
   ATF_ADD_TEST_CASE(tcs, dispatch_unknown_returns_404);
   ATF_ADD_TEST_CASE(tcs, dispatch_parse_error_returns_400);

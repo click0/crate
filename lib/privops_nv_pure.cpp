@@ -234,6 +234,11 @@ std::string parseSetIfaceInetAddr(const FieldMap &m,
   return "";
 }
 
+std::string parseCreateEpair(const FieldMap &/*m*/,
+                             PrivOpsPure::CreateEpairReq &/*out*/) {
+  return "";
+}
+
 // --- Verb routing ---
 
 PrivOpsPure::Verb extractVerb(const FieldMap &m) {

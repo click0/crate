@@ -161,4 +161,9 @@ PrivOpsWirePure::DispatchResult handleBridgeDelMember(const PrivOpsPure::BridgeD
 // IfconfigOps::setInetAddr (3-arg primitive: iface + addr + prefixLen).
 PrivOpsWirePure::DispatchResult handleSetIfaceInetAddr(const PrivOpsPure::SetIfaceInetAddrReq &r);
 
+// 0.9.26: create an epair pair via libifconfig (with shell
+// fallback). The kernel assigns the next free unit number;
+// the response body carries the assigned A/B iface names.
+PrivOpsWirePure::DispatchResult handleCreateEpair(const PrivOpsPure::CreateEpairReq &r);
+
 } // namespace Crated

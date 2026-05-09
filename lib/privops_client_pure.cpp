@@ -262,4 +262,10 @@ PrivOpsNvPure::FieldMap buildSetIfaceInetAddr(const std::string &ifname,
   };
 }
 
+PrivOpsNvPure::FieldMap buildCreateEpair() {
+  return {
+    {"verb", "create_epair"},
+  };
+}
+
 } // namespace PrivOpsClient

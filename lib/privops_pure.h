@@ -125,6 +125,14 @@ enum class Verb {
   // createEpair flow where the host-side epair-A end gets a
   // /31 IP after the jail-side epair-B is moved into the jail.
   SetIfaceInetAddr,
+
+  // 0.9.26: create epair pair. First response-data verb —
+  // returns the kernel-assigned A/B iface names. Wraps
+  // IfconfigOps::createEpair() (no inputs; output is a pair
+  // of strings). Targets run_net.cpp::createEpair (line 117)
+  // and setupBridgeEpair (line 396) where the existing code
+  // unpacks `auto epairPair = IfconfigOps::createEpair();`.
+  CreateEpair,
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -248,6 +256,11 @@ struct SetIfaceInetAddrReq {
   unsigned    prefixLen = 32;  // 0..32
 };
 
+// 0.9.26: create epair pair. No request fields — kernel picks
+// the next free unit number (epair<N>a / epair<N>b).
+struct CreateEpairReq {
+};
+
 // --- Per-verb validators ---
 //
 // Each `validate*(req)` returns "" on success, otherwise a one-line
@@ -275,6 +288,7 @@ std::string validateDisableIfaceOffload(const DisableIfaceOffloadReq &r);
 std::string validateBridgeAddMember(const BridgeAddMemberReq &r);
 std::string validateBridgeDelMember(const BridgeDelMemberReq &r);
 std::string validateSetIfaceInetAddr(const SetIfaceInetAddrReq &r);
+std::string validateCreateEpair(const CreateEpairReq &r);
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //

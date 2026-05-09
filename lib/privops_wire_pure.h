@@ -171,6 +171,9 @@ std::string parseBridgeDelMember(const std::string &body,
 std::string parseSetIfaceInetAddr(const std::string &body,
                                   PrivOpsPure::SetIfaceInetAddrReq &out);
 
+std::string parseCreateEpair(const std::string &body,
+                             PrivOpsPure::CreateEpairReq &out);
+
 // --- Verb routing helper ---
 //
 // Parse the URL path's verb segment. The route pattern is
@@ -290,5 +293,14 @@ std::string formatBridgeDelMemberSuccess(const std::string &bridge,
 std::string formatSetIfaceInetAddrSuccess(const std::string &ifname,
                                           const std::string &addr,
                                           unsigned prefixLen);
+
+// 0.9.26: 200 OK body for create_epair. Returns the kernel-
+// assigned A/B iface names. First privops verb whose response
+// carries non-trivial data; clients parse the body to retrieve
+// them (existing extractStringField fits).
+//
+// Shape: {"created":true,"a":"<ifaceA>","b":"<ifaceB>"}
+std::string formatCreateEpairSuccess(const std::string &ifaceA,
+                                     const std::string &ifaceB);
 
 } // namespace PrivOpsWirePure

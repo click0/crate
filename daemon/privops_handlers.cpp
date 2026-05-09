@@ -429,6 +429,20 @@ DispatchResult handleSetIfaceInetAddr(const PrivOpsPure::SetIfaceInetAddrReq &r)
                   r.ifname, r.addr, r.prefixLen)};
 }
 
+// --- handleCreateEpair (0.9.26) ---
+
+DispatchResult handleCreateEpair(const PrivOpsPure::CreateEpairReq &/*r*/) {
+  std::pair<std::string, std::string> pair;
+  try {
+    pair = IfconfigOps::createEpair();
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("ifconfig_failed",
+                                                     e.what())};
+  }
+  return {200, PrivOpsWirePure::formatCreateEpairSuccess(pair.first,
+                                                          pair.second)};
+}
+
 // --- Top-level dispatcher ---
 
 namespace {
@@ -605,6 +619,14 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleSetIfaceInetAddr(r);
     }
+    case Verb::CreateEpair: {
+      PrivOpsPure::CreateEpairReq r;
+      if (auto e = PrivOpsWirePure::parseCreateEpair(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateCreateEpair(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleCreateEpair(r);
+    }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
   }
@@ -774,6 +796,14 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       if (auto e = PrivOpsPure::validateSetIfaceInetAddr(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleSetIfaceInetAddr(r);
+    }
+    case Verb::CreateEpair: {
+      PrivOpsPure::CreateEpairReq r;
+      if (auto e = PrivOpsNvPure::parseCreateEpair(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateCreateEpair(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleCreateEpair(r);
     }
     case Verb::Unknown:
       return {404,

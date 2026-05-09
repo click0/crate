@@ -6,6 +6,121 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.26] — 2026-05-09
+
+**Rootless track, `create_epair` verb — first response-data
+verb.** Twenty-seventh 0.9.x release. Wraps
+`IfconfigOps::createEpair()`, which the kernel auto-assigns
+the next free epair unit number for. The verb returns the
+A/B iface names so the client can plumb them downstream.
+
+### What lands
+
+#### New privops verb
+
+`create_epair` — no request fields. Response body shape:
+
+```
+{"created":true,"a":"epair17a","b":"epair17b"}
+```
+
+This is the first verb whose response carries non-trivial
+data. Previously all verbs returned status + a confirmation
+body the client could ignore. `create_epair` is different
+because the operator NEEDS the assigned names to do the
+next steps (move B-half into vnet, attach A-half to bridge).
+
+#### Wire protocol
+
+- Daemon handler: builds the JSON response via
+  `formatCreateEpairSuccess(a, b)` →
+  `{"created":true,"a":"<A>","b":"<B>"}`.
+- Client (run_net.cpp): receives `Response.body` as JSON
+  string, calls existing `PrivOpsWirePure::extractStringField`
+  twice (once for `a`, once for `b`). No new JSON parser
+  needed — extractStringField already handles top-level
+  string fields (used by daemon-side parsers).
+
+The libnv transport wraps the same JSON body in an nvlist
+field as before — clients on either transport use the same
+extraction code.
+
+#### CLI wiring
+
+`lib/run_net.cpp` gets `createEpairPrivopsOrLocal()` returning
+`std::pair<std::string, std::string>`. Two call-sites
+migrate (lines 239 / 518) — both `auto epairPair =
+IfconfigOps::createEpair();` patterns.
+
+### Trade-offs
+
+- **JSON body extraction at the client.** Native nvlist
+  responses (per-verb structured fields) would be cleaner
+  for libnv transport but require refactoring 14 handlers
+  to expose typed responses. Current JSON-in-nvlist shape
+  ships today; future optimisation if motivated.
+- **No retry on transient failures.** If `create_epair`
+  succeeds on the daemon but the response is dropped
+  (network issue, timeout), an orphan epair leaks. Same
+  constraint as direct `IfconfigOps::createEpair()` — that
+  pattern is unchanged.
+
+### Series state
+
+CLI call-sites wired:
+- `crate retune` (0.9.15)
+- `crate stop` (0.9.17)
+- `crate run` ZFS attach + detach (0.9.18)
+- `crate run` nullfs mounts 8 sites (0.9.19)
+- `crate run` vnet moveToVnet 4 sites (0.9.20)
+- `crate run` removeJail teardown (0.9.21)
+- `crate run` createJail (0.9.22)
+- `crate run` setUp + disableOffload 5 sites (0.9.23)
+- `crate run` bridge add + del 2 sites (0.9.24)
+- `crate run` setInetAddr (host-side epair-A) (0.9.25)
+- **`crate run` createEpair (2 sites) → create_epair ← this release**
+
+**Full host-side iface plumbing now coverable via privops.**
+The 5 `IfconfigOps::*` ops `crate run` uses
+(createEpair / disableOffload / setUp / setInetAddr /
+bridgeAddMember) all have privops paths. With 0.9.22's
+createJail and 0.9.21's removeJail, **`crate run` and
+`crate stop` no longer need root for any privileged step
+when the privops socket is detected** — the legacy setuid
+fallback is now optional.
+
+### Remaining
+
+- 0.9.27 — `network_lease.cpp` per-user paths + RCTL
+  umbrella application (uses 0.9.10 sub-CIDR + 0.9.11
+  loginclass)
+- 0.9.28 — default flip
+- 1.0.0 — setuid removed
+
+### Tests
+
+- 1 new ATF test in `privops_pure_test`
+  (`create_epair_no_fields_required`)
+- 1 new ATF test in `privops_wire_pure_test`
+  (`format_create_epair_response_extracts`) that locks down
+  the response shape AND verifies it round-trips through the
+  client's `extractStringField` extraction path
+- `verb_token_roundtrips_for_every_verb` updated
+- Suite: 1299 → **1301**
+
+### Files
+
+Same set as 0.9.23/0.9.24/0.9.25 plus
+`tests/unit/privops_wire_pure_test.cpp`:
+`privops_pure.{h,cpp}`, `privops_wire_pure.{h,cpp}`,
+`privops_nv_pure.{h,cpp}`, `privops_client.h`,
+`privops_client_pure.cpp`, `privops_handlers.{h,cpp}`,
+`run_net.cpp`, `tests/unit/privops_pure_test.cpp`,
+`tests/unit/privops_wire_pure_test.cpp`, `cli/args.cpp`,
+`CHANGELOG.md`.
+
+---
+
 ## [0.9.25] — 2026-05-09
 
 **Rootless track, `set_iface_inet_addr` verb.** Twenty-sixth
