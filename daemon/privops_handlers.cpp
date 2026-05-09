@@ -416,6 +416,19 @@ DispatchResult handleBridgeDelMember(const PrivOpsPure::BridgeDelMemberReq &r) {
   return {200, PrivOpsWirePure::formatBridgeDelMemberSuccess(r.bridge, r.member)};
 }
 
+// --- handleSetIfaceInetAddr (0.9.25) ---
+
+DispatchResult handleSetIfaceInetAddr(const PrivOpsPure::SetIfaceInetAddrReq &r) {
+  try {
+    IfconfigOps::setInetAddr(r.ifname, r.addr, (int)r.prefixLen);
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("ifconfig_failed",
+                                                     e.what())};
+  }
+  return {200, PrivOpsWirePure::formatSetIfaceInetAddrSuccess(
+                  r.ifname, r.addr, r.prefixLen)};
+}
+
 // --- Top-level dispatcher ---
 
 namespace {
@@ -584,6 +597,14 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleBridgeDelMember(r);
     }
+    case Verb::SetIfaceInetAddr: {
+      PrivOpsPure::SetIfaceInetAddrReq r;
+      if (auto e = PrivOpsWirePure::parseSetIfaceInetAddr(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateSetIfaceInetAddr(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleSetIfaceInetAddr(r);
+    }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
   }
@@ -745,6 +766,14 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       if (auto e = PrivOpsPure::validateBridgeDelMember(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleBridgeDelMember(r);
+    }
+    case Verb::SetIfaceInetAddr: {
+      PrivOpsPure::SetIfaceInetAddrReq r;
+      if (auto e = PrivOpsNvPure::parseSetIfaceInetAddr(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateSetIfaceInetAddr(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleSetIfaceInetAddr(r);
     }
     case Verb::Unknown:
       return {404,

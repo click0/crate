@@ -118,6 +118,11 @@ PrivOpsNvPure::FieldMap buildBridgeAddMember(const std::string &bridge,
 PrivOpsNvPure::FieldMap buildBridgeDelMember(const std::string &bridge,
                                               const std::string &member);
 
+// 0.9.25: set host-side IPv4 address.
+PrivOpsNvPure::FieldMap buildSetIfaceInetAddr(const std::string &ifname,
+                                              const std::string &addr,
+                                              unsigned prefixLen);
+
 // --- Wire transport (FreeBSD-only) ---
 
 struct Response {

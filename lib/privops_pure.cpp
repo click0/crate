@@ -89,6 +89,7 @@ const char *verbName(Verb v) {
     case Verb::DisableIfaceOffload:  return "disable_iface_offload";
     case Verb::BridgeAddMember:      return "bridge_add_member";
     case Verb::BridgeDelMember:      return "bridge_del_member";
+    case Verb::SetIfaceInetAddr:     return "set_iface_inet_addr";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -113,6 +114,7 @@ Verb parseVerb(const std::string &name) {
   if (name == "disable_iface_offload")  return Verb::DisableIfaceOffload;
   if (name == "bridge_add_member")      return Verb::BridgeAddMember;
   if (name == "bridge_del_member")      return Verb::BridgeDelMember;
+  if (name == "set_iface_inet_addr")    return Verb::SetIfaceInetAddr;
   return Verb::Unknown;
 }
 
@@ -490,6 +492,16 @@ std::string validateBridgeAddMember(const BridgeAddMemberReq &r) {
 std::string validateBridgeDelMember(const BridgeDelMemberReq &r) {
   if (auto e = validateIfaceName(r.bridge); !e.empty()) return "bridge: " + e;
   if (auto e = validateIfaceName(r.member); !e.empty()) return "member: " + e;
+  return "";
+}
+
+std::string validateSetIfaceInetAddr(const SetIfaceInetAddrReq &r) {
+  if (auto e = validateIfaceName(r.ifname); !e.empty()) return "ifname: " + e;
+  if (r.prefixLen > 32) return "prefix_len out of range (0..32)";
+  // Reuse validateIpv4Cidr by reassembling addr+prefix; cheaper than
+  // duplicating the IPv4 octet logic.
+  std::string cidr = r.addr + "/" + std::to_string(r.prefixLen);
+  if (auto e = validateIpv4Cidr(cidr); !e.empty()) return "addr: " + e;
   return "";
 }
 

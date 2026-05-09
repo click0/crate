@@ -6,6 +6,84 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.25] — 2026-05-09
+
+**Rootless track, `set_iface_inet_addr` verb.** Twenty-sixth
+0.9.x release. Third atomic iface verb. The host-side IPv4
+assignment primitive used by `run_net.cpp::createEpair` to
+configure the host-side epair-A end after the jail-side
+epair-B is moved into the jail.
+
+### What lands
+
+#### New privops verb
+
+`set_iface_inet_addr` — wraps `IfconfigOps::setInetAddr(iface,
+addr, prefixLen)`. Three-arg shape:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `ifname` | string | Iface name (validated via `validateIfaceName`) |
+| `addr` | string | Bare IPv4 (no `/prefix`) |
+| `prefix_len` | unsigned | 0..32 |
+
+Validator reuses `validateIpv4Cidr` by reassembling
+`addr + "/" + prefixLen` — cheaper than duplicating IPv4
+octet logic.
+
+#### Wire-up across the stack
+
+Same files as 0.9.23 / 0.9.24 — `privops_pure`,
+`privops_wire_pure`, `privops_nv_pure`, `privops_client`,
+`privops_handlers`. One new function/case in each.
+
+#### CLI wiring
+
+`lib/run_net.cpp::createEpair` line 229 (was line 209
+pre-0.9.24) now calls `setInetAddrPrivopsOrLocal(info.ifaceA,
+info.ipA, 31)` instead of direct `IfconfigOps::setInetAddr`.
+The /31 epair-A side gets its IP via privops when the socket
+is detected.
+
+### Series state
+
+CLI call-sites wired:
+- `crate retune` (0.9.15)
+- `crate stop` (0.9.17)
+- `crate run` ZFS attach + detach (0.9.18)
+- `crate run` nullfs mounts 8 sites (0.9.19)
+- `crate run` vnet moveToVnet 4 sites (0.9.20)
+- `crate run` removeJail teardown (0.9.21)
+- `crate run` createJail (0.9.22)
+- `crate run` setUp + disableOffload 5 sites (0.9.23)
+- `crate run` bridge add + del 2 sites (0.9.24)
+- **`crate run` setInetAddr (host-side epair-A) → set_iface_inet_addr ← this release**
+
+Remaining iface verbs:
+- 0.9.26 — `create_epair` (first response-data verb — returns
+  the epair pair names since the kernel auto-assigns them)
+- 0.9.27 — `network_lease.cpp` per-user paths + RCTL umbrella
+- 0.9.28 — default flip
+- 1.0.0 — setuid removed
+
+### Tests
+
+1 new ATF test (`set_iface_inet_addr_minimal`) covering happy
+path + 3 reject cases (bad iface, bad addr, out-of-range
+prefix). `verb_token_roundtrips_for_every_verb` updated.
+Suite: 1298 → **1299**.
+
+### Files
+
+Same set as 0.9.23/0.9.24: `privops_pure.{h,cpp}`,
+`privops_wire_pure.{h,cpp}`, `privops_nv_pure.{h,cpp}`,
+`privops_client.h`, `privops_client_pure.cpp`,
+`privops_handlers.{h,cpp}`, `run_net.cpp`,
+`tests/unit/privops_pure_test.cpp`, `cli/args.cpp`,
+`CHANGELOG.md`.
+
+---
+
 ## [0.9.24] — 2026-05-09
 
 **Rootless track, bridge membership verbs.** Twenty-fifth

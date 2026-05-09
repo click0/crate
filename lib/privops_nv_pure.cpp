@@ -226,6 +226,14 @@ std::string parseBridgeDelMember(const FieldMap &m,
   return "";
 }
 
+std::string parseSetIfaceInetAddr(const FieldMap &m,
+                                  PrivOpsPure::SetIfaceInetAddrReq &out) {
+  if (auto e = requireString(m, "ifname", out.ifname); !e.empty()) return e;
+  if (auto e = requireString(m, "addr", out.addr); !e.empty()) return e;
+  if (auto e = requireUnsigned(m, "prefix_len", out.prefixLen); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing ---
 
 PrivOpsPure::Verb extractVerb(const FieldMap &m) {

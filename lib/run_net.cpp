@@ -138,6 +138,26 @@ static void bridgeDelMemberPrivopsOrLocal(const std::string &bridge,
   IfconfigOps::bridgeDelMember(bridge, member);
 }
 
+// 0.9.25: privops-aware setInetAddr.
+static void setInetAddrPrivopsOrLocal(const std::string &iface,
+                                       const std::string &addr,
+                                       int prefixLen) {
+  std::string sock = PrivOpsClient::detectSocketPath();
+  if (!sock.empty()) {
+    auto resp = PrivOpsClient::sendRequest(sock,
+        PrivOpsClient::buildSetIfaceInetAddr(iface, addr,
+                                              (unsigned)prefixLen));
+    if (!resp.transportError.empty())
+      ERR2("run_net", "privops set_iface_inet_addr '" << iface
+           << "' transport error: " << resp.transportError)
+    if (resp.status >= 400)
+      ERR2("run_net", "privops set_iface_inet_addr '" << iface
+           << "' failed (status " << resp.status << "): " << resp.body)
+    return;
+  }
+  IfconfigOps::setInetAddr(iface, addr, prefixLen);
+}
+
 GatewayInfo detectGateway() {
   GatewayInfo gw;
 
@@ -206,7 +226,7 @@ EpairInfo createEpair(int jid, const std::string &jidStr,
   // set the IP addresses on the jail epair
   execInJail({CRATE_PATH_IFCONFIG, info.ifaceB, "inet", info.ipB, "netmask", "0xfffffffe"},
     "set up IP jail epair addresses");
-  IfconfigOps::setInetAddr(info.ifaceA, info.ipA, 31);
+  setInetAddrPrivopsOrLocal(info.ifaceA, info.ipA, 31);
 
   // set default route in jail
   execInJail({CRATE_PATH_ROUTE, "add", "default", info.ipA}, "set default route in jail");
