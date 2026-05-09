@@ -6,6 +6,113 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.27] — 2026-05-09
+
+**Rootless track, per-user lease file path.** Twenty-eighth
+0.9.x release. The IP-lease file (`network-leases.txt`)
+moves from a single shared `/var/run/crate/` location to a
+per-user `/var/run/crate/<uid>/` subtree when crated's
+privops socket is detected.
+
+### What lands
+
+`lib/network_lease.cpp::effectivePath()` — lazily resolves
+the lease file path on first use:
+
+```cpp
+const std::string &effectivePath() {
+  static std::string cached;
+  static bool computed = false;
+  if (!computed) {
+    if (g_pathOverridden) {
+      cached = g_path;  // honour test override
+    } else if (!PrivOpsClient::detectSocketPath().empty()) {
+      cached = RuntimePathsPure::perUserRoot((uint32_t)::getuid())
+             + "/network-leases.txt";
+    } else {
+      cached = g_path;  // legacy single-tenant
+    }
+    computed = true;
+  }
+  return cached;
+}
+```
+
+All call sites (`openLocked`, `readAll`, `writeAllAtomic`,
+`leasePath()`) replaced `g_path.c_str()` references with
+`effectivePath().c_str()`. Same path for the entire process
+lifetime; cache eliminates per-call detection overhead.
+
+### Behavior
+
+| Mode | Lease file path |
+|------|-----------------|
+| Legacy (no privops socket) | `/var/run/crate/network-leases.txt` |
+| Rootless (socket detected) | `/var/run/crate/<uid>/network-leases.txt` |
+| Test override (`setPathForTesting`) | the supplied path |
+
+The 0.9.10 sub-CIDR allocator already gives each operator a
+disjoint IP range. Combined with this per-user lease file,
+**alice's `crate run` never reads or writes bob's leases**
+— two operators can both run a jail named `web` simultaneously
+without IP collision.
+
+### Trade-offs
+
+- **Lease file location lock-in at process start.** The path
+  is computed once on first call to `effectivePath()` and
+  cached for the lifetime of the process. If the operator
+  starts/stops crated mid-`crate run`, the lease file
+  remains where it was first resolved. Acceptable: `crate
+  run` invocations are short-lived.
+- **Migration of existing lease entries.** Operators with
+  pre-0.9.27 deployments switching to rootless mode will
+  see an empty per-user lease file at first; existing leases
+  in the legacy path are not auto-imported. Documented in
+  the migration doc; manual `crate clean` + `crate run`
+  rebuilds them per-user.
+
+### Series state
+
+CLI call-sites wired:
+- `crate retune` (0.9.15)
+- `crate stop` (0.9.17)
+- `crate run` ZFS attach + detach (0.9.18)
+- `crate run` nullfs mounts 8 sites (0.9.19)
+- `crate run` vnet moveToVnet 4 sites (0.9.20)
+- `crate run` removeJail teardown (0.9.21)
+- `crate run` createJail (0.9.22)
+- `crate run` setUp + disableOffload 5 sites (0.9.23)
+- `crate run` bridge add + del 2 sites (0.9.24)
+- `crate run` setInetAddr (0.9.25)
+- `crate run` createEpair 2 sites (0.9.26)
+- **`crate run` lease file path → per-user under
+  /var/run/crate/<uid>/ ← this release**
+
+Remaining:
+- 0.9.28 — RCTL umbrella application (uses 0.9.11
+  loginclass to apply `loginclass:crate-<uid>:KEY:deny=...`
+  rules at jail-create time)
+- 0.9.29 — default flip (`rootless_per_user: true`
+  becomes default in `crated.conf.sample`)
+- 1.0.0 — setuid bit removed from `Makefile install`
+
+### Tests
+
+No new tests added — existing `network_lease`-using tests
+continue to pass via the `g_pathOverridden` test-override
+path (set by `setPathForTesting`). Suite stays at 1301.
+
+### Files
+
+- `lib/network_lease.cpp` — `#include "privops_client.h"` +
+  `#include "runtime_paths_pure.h"` + `effectivePath()`
+  helper + `g_pathOverridden` flag + 7 call-site updates
+- `cli/args.cpp` — version `crate 0.9.27`
+- `CHANGELOG.md` — entry
+
+---
+
 ## [0.9.26] — 2026-05-09
 
 **Rootless track, `create_epair` verb — first response-data
