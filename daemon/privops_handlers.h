@@ -12,6 +12,7 @@
 #include "privops_pure.h"
 #include "privops_wire_pure.h"
 
+#include <cstdint>
 #include <string>
 
 namespace Crated {
@@ -26,8 +27,19 @@ namespace Crated {
 // As verbs land their real handlers, the switch in this dispatcher
 // gains a case routing to the handler. Verbs without a handler
 // stay on the 501 path until their release.
+//
+// 0.9.13: optional `operatorUid` parameter. When > 0 AND
+// `rootlessPerUser` is on, the dispatcher appends a per-user
+// audit line to /var/run/crate/<uid>/audit.log via
+// `appendPerUserAuditLine`. The default uid=0 means "don't audit
+// per-user" and preserves byte-identical 0.9.12 behaviour. The
+// uid plumbing through cpp-httplib lands in 0.9.14 alongside the
+// default flip; 0.9.13 wires the contract so test harnesses and
+// the control_socket plane can drive it today.
 PrivOpsWirePure::DispatchResult dispatchPrivOp(PrivOpsPure::Verb v,
-                                                const std::string &body);
+                                                const std::string &body,
+                                                bool rootlessPerUser = false,
+                                                uint32_t operatorUid = 0);
 
 // --- Per-verb handlers ---
 // Each takes an already-validated request struct and returns a

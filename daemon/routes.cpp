@@ -1010,7 +1010,13 @@ static void handlePrivOp(const httplib::Request &req, httplib::Response &res,
   }
   auto verbName = req.path_params.at("verb");
   PrivOpsPure::Verb v = PrivOpsPure::parseVerb(verbName);
-  auto result = Crated::dispatchPrivOp(v, req.body);
+  // 0.9.13: pass the rootless toggle through. The uid stays 0 here
+  // — cpp-httplib doesn't expose the connection fd for getpeereid
+  // and the bearer-token API doesn't carry uid. Per-user audit
+  // wiring lights up in 0.9.14 alongside uid plumbing; for now
+  // dispatchPrivOp's audit hook is a no-op when uid==0.
+  auto result = Crated::dispatchPrivOp(v, req.body,
+                                       config.rootlessPerUser, 0);
   res.status = result.status;
   res.set_content(result.body, "application/json");
 }
