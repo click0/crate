@@ -6,6 +6,86 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.19] — 2026-05-09
+
+**Rootless track, nullfs mounts via privops.** Twentieth 0.9.x
+release. Fourth CLI call-site through privops, second
+inside `crate run`.
+
+### What lands
+
+`lib/mount.{h,cpp}` — the `Mount` class gains privops awareness:
+
+- Constructor detects the privops socket once via
+  `PrivOpsClient::detectSocketPath()` **only when fstype is
+  "nullfs"** (devfs and unionfs lack matching verbs).
+- `mount()` — if the cached socket is non-empty, sends a
+  `mount_nullfs` privops request (with `read_only` derived
+  from `MNT_RDONLY` flag); else nmount(2). Hard error on
+  failure (matches existing `ERR`).
+- `unmount()` — symmetric. Soft-fail / hard-fail behaviour
+  preserved (the `doThrow` parameter still gates whether
+  failure raises or warns).
+
+### Coverage
+
+All 8 nullfs `Mount` construction sites in the codebase get
+auto-routing for free — **no call-site changes needed**:
+
+- `lib/run.cpp:1569,1603,1614` — file-share binds for the
+  jail's spec-declared shares
+- `lib/run_gui.cpp:315,656` — X11 socket bind for `gui:`
+- `lib/run_gui.cpp:725,768` — Wayland socket / pipewire bind
+- `lib/run_gui.cpp:814` — PulseAudio socket bind
+
+### Trade-offs
+
+- **MNT_IGNORE flag dropped on the privops path.** The
+  daemon's `mount_nullfs` verb doesn't carry arbitrary
+  mount flags. Operators using privops mode see the nullfs
+  mounts in `mount(8)` output. A future verb extension can
+  pass `MNT_IGNORE` through; documented as accepted.
+- **Detection at construction, not mount().** A Mount object
+  built before the daemon's socket appeared (or vice versa)
+  uses whatever path was correct at construction time. In
+  practice all `Mount` lifetimes are short (few-second
+  startup window for a `crate run` invocation), so this is
+  not a real concern.
+- **Other fstypes unchanged.** `Mount("devfs", ...)` and
+  `Mount("unionfs", ...)` continue using nmount(2). The
+  privops verb taxonomy from 0.9.0 covers nullfs only;
+  expansion is a future track.
+
+### Series state
+
+CLI call-sites wired:
+- `crate retune --rctl` / `--clear` → set_rctl / clear_rctl (0.9.15)
+- `crate stop` (force-remove) → destroy_jail (0.9.17)
+- `crate run` ZFS attach + detach → attach_zfs / detach_zfs (0.9.18)
+- **`crate run` nullfs mounts (8 sites) → mount_nullfs / unmount_nullfs ← this release**
+
+Remaining run-chain:
+- 0.9.20 — `configure_iface` (`lib/run_net.cpp` vnet plumbing)
+- 0.9.21 — `create_jail` (the inner `jail -c`, last)
+- 0.9.22 — per-user lease paths + RCTL umbrella
+- 0.9.23 — default flip
+- 1.0.0 — setuid removed
+
+### Tests
+
+No new tests. Suite stays at 1294. Wire path needs
+integration test infrastructure (real `crated`) — landing
+post-1.0.0.
+
+### Files
+
+- `lib/mount.{h,cpp}` — privops-aware mount/unmount; legacy
+  nmount(2) path unchanged
+- `cli/args.cpp` — version `crate 0.9.19`
+- `CHANGELOG.md` — entry
+
+---
+
 ## [0.9.18] — 2026-05-09
 
 **Rootless track, `crate run` ZFS attach via privops.**

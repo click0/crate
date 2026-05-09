@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "mount.h"
+#include "privops_client.h"
 #include "util.h"
 #include "err.h"
 #include <rang.hpp>
@@ -21,7 +22,15 @@
 
 Mount::Mount(const char *newFstype, const std::string &newFspath, const std::string &newTarget, int newFlags)
 : fstype(newFstype), fspath(newFspath), target(newTarget), flags(newFlags)
-{ }
+{
+  // 0.9.19: nullfs gets routed through privops when crated's
+  // unix-socket listener is available. Detect once at construction;
+  // mount/unmount methods choose path based on this cached value.
+  // Other fstypes (devfs, unionfs) skip detection — there's no
+  // matching privops verb for them, so they keep using nmount(2).
+  if (::strcmp(newFstype, "nullfs") == 0)
+    privopsSocket_ = PrivOpsClient::detectSocketPath();
+}
 
 Mount::~Mount() {
   if (mounted)
@@ -29,6 +38,22 @@ Mount::~Mount() {
 }
 
 void Mount::mount() {
+  // 0.9.19 privops route — only for nullfs with a detected socket.
+  if (!privopsSocket_.empty()) {
+    bool readOnly = (flags & MNT_RDONLY) != 0;
+    auto resp = PrivOpsClient::sendRequest(privopsSocket_,
+        PrivOpsClient::buildMountNullfs(target, fspath, readOnly));
+    if (!resp.transportError.empty())
+      ERR("privops mount_nullfs '" << target << "' on '" << fspath
+          << "' transport error: " << resp.transportError)
+    if (resp.status >= 400)
+      ERR("privops mount_nullfs '" << target << "' on '" << fspath
+          << "' failed (status " << resp.status << "): " << resp.body)
+    mounted = true;
+    return;
+  }
+
+  // Legacy nmount(2) path — unchanged from pre-0.9.19.
   std::vector<struct iovec> iov;
   auto param = [&iov](const char *name, void *val, size_t len) {
     auto i = iov.size();
@@ -62,6 +87,24 @@ void Mount::mount() {
 }
 
 void Mount::unmount(bool doThrow) {
+  // 0.9.19 privops route.
+  if (!privopsSocket_.empty()) {
+    auto resp = PrivOpsClient::sendRequest(privopsSocket_,
+        PrivOpsClient::buildUnmountNullfs(fspath, /*force=*/false));
+    if (!resp.transportError.empty() || resp.status >= 400) {
+      auto msg = resp.transportError.empty()
+                   ? std::to_string(resp.status) + ": " + resp.body
+                   : resp.transportError;
+      if (doThrow)
+        ERR("privops unmount_nullfs '" << fspath << "' failed: " << msg)
+      else
+        WARN("privops unmount_nullfs '" << fspath << "' failed: " << msg)
+    }
+    mounted = false;
+    return;
+  }
+
+  // Legacy unmount(2) path.
   int res = ::unmount(fspath.c_str(), 0/*flags*/);
   if (res == -1) {
     if (doThrow)
