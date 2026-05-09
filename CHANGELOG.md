@@ -6,6 +6,126 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.15] — 2026-05-09
+
+**Rootless track, client-side libnv wiring.** Sixteenth 0.9.x
+release. First call site in `crate(1)` actually delegates a
+privileged operation to `crated` over the libnv socket from
+0.9.14 — instead of doing it itself with the setuid bit.
+
+`crate retune` is the first CLI command wired up. `set_rctl` /
+`clear_rctl` round-trip end-to-end:
+
+```
+crate retune --rctl pcpu=20 myjail
+                │
+                ├─ detect privops socket (env var or
+                │  /var/run/crate/crated-privops.sock)
+                │
+                ├─ socket present:
+                │    build SetRctlReq FieldMap
+                │    nvlist_send → crated listener
+                │    listener: getpeereid(connFd) → uid
+                │    dispatchPrivOpFromMap → handleSetRctl
+                │    rctl(8) runs as root inside crated
+                │    nvlist_send response → client
+                │    client: 200 = success, 4xx/5xx = error
+                │
+                └─ socket absent (legacy):
+                     Util::execCommand({rctl, -a, ...})
+                     (existing setuid-style path, unchanged)
+```
+
+### What lands
+
+#### Client library
+
+`lib/privops_client.{h,cpp}`:
+
+- `detectSocketPath()` — `$CRATE_PRIVOPS_SOCKET` env var takes
+  priority; else `/var/run/crate/crated-privops.sock` if it
+  exists as a socket; else `""` = legacy fallback
+- 14 pure builders (`buildSetRctl`, `buildCreateJail`, etc.)
+  emitting `PrivOpsNvPure::FieldMap` requests — one per verb,
+  ready to hand to `sendRequest`
+- `sendRequest(socketPath, fields) -> Response{status, body,
+  transportError}` — opens AF_UNIX, packs FieldMap to nvlist,
+  `nvlist_send`, `nvlist_recv`, parses status + body, closes.
+  FreeBSD-only; Linux dev build returns `transportError =
+  "libnv unavailable"`.
+
+The 14 pure builders are dual-purpose:
+1. Production callers (`lib/retune.cpp`) build a request and
+   pass to `sendRequest`.
+2. Tests round-trip them through `PrivOpsNvPure::parseXxx` —
+   the daemon-side parsers from 0.9.14. If a future verb
+   change drifts client and daemon apart, the round-trip test
+   fires.
+
+#### `crate retune` wiring
+
+`lib/retune.cpp` calls `detectSocketPath()` once at the top of
+the command. If the socket is present:
+
+- **`--rctl key=val`** → `set_rctl` verb via libnv. 4xx/5xx
+  responses become `ERR()` (operator-visible failure).
+- **`--clear key`** → `clear_rctl` verb via libnv. Soft-fail
+  preserved — non-200 logged as warning, command continues
+  (matches existing `rctl(8)` exec behaviour where clearing a
+  non-existent rule is graceful).
+
+Socket absent: existing `Util::execCommand(rctl ...)` path
+runs unchanged. Legacy single-tenant deployments keep working
+byte-identically.
+
+Operators flip on rootless behaviour by:
+1. Configuring `crated.conf`: `privops_socket: ...` (0.9.14)
+2. Restarting crated
+3. (`crate(1)` auto-detects via well-known path; no client-side
+   config needed)
+
+### Tests
+
+19 new ATF tests in `privops_client_pure_test.cpp`:
+
+- All 14 builders: shape + field set assertion
+- Optional-field handling: empty fields are present-but-empty
+  (constant wire shape for round-tripping)
+- 3 round-trip tests: builder output → `PrivOpsNvPure::parseXxx`
+  → typed request struct (`set_rctl`, `create_jail`,
+  `configure_iface`) — catches client/daemon divergence
+- `detect_uses_env_var_when_set` / `_empty_when_no_env_no_default`
+  / `_empty_env_treated_as_unset` — detection logic
+- `send_returns_transport_error_when_no_socket` /
+  `_when_unreachable` — transport error reporting
+
+Suite: 1277 → **1296**, all passing.
+
+### Series state
+
+- Verb handlers: 14/14 ✅
+- Wire transports: HTTP (0.9.1) ✅, libnv (0.9.14) ✅
+- Per-user namespacing (0.9.8–0.9.13) ✅
+- **0.9.15 — client-side libnv wiring (`crate retune` first) ← this release**
+- 0.9.16 — wire `crate run` / `crate stop` / `crate destroy`
+  to libnv (`create_jail` / `destroy_jail` + lifecycle
+  ZFS / mount / iface verbs)
+- 0.9.17 — `network_lease.cpp` per-user paths,
+  RCTL umbrella application
+- 0.9.18 — default flip
+- 1.0.0 — setuid removed
+
+### Files
+
+- `lib/privops_client.{h,cpp}` (new)
+- `tests/unit/privops_client_pure_test.cpp` (new)
+- `lib/retune.cpp` — privops-aware delegation; legacy path
+  unchanged
+- `Makefile`, `tests/unit/Kyuafile`, `.gitignore` — wired
+- `cli/args.cpp` — version `crate 0.9.15`
+
+---
+
 ## [0.9.14] — 2026-05-09
 
 **Rootless track, libnv unix-socket transport.** Fifteenth 0.9.x
