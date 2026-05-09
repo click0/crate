@@ -2,12 +2,15 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "run_jail.h"
+#include "jail_query.h"
 #include "privops_client.h"
 #include "spec.h"
 #include "zfs_ops.h"
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
+
+#include <sstream>
 
 #include <rang.hpp>
 
@@ -34,7 +37,7 @@ extern "C" {
 
 namespace RunJail {
 
-JailInfo createJail(const Spec &spec, const std::string &jailPath, bool logProgress) {
+JailInfo createJail(const Spec &spec, const std::string &jailPath, const std::string &jailName, bool logProgress) {
   const char *optNet = spec.optionExists("net") ? "true" : "false";
   const char *optRawSockets = spec.ipcRawSocketsOverride
     ? (spec.ipcRawSocketsValue ? "true" : "false")
@@ -56,6 +59,49 @@ JailInfo createJail(const Spec &spec, const std::string &jailPath, bool logProgr
 
   JailInfo info = {-1, -1};
   int res;
+
+  // 0.9.22: privops route. When crated's libnv socket is detected,
+  // pack the spec-derived flags into the verb's `parameters`
+  // string and send create_jail. The daemon-side handler runs
+  // `jail -c name=<jailName> path=<jailPath> [vnet] [params...] persist`.
+  // The kernel returns success but the verb gives us only status —
+  // we resolve the jid via JailQuery::getJailByName(jailName).
+  // Trade-off: small race window between create + query (jail
+  // could be destroyed between), accepted for 0.9.22 mini-PR scope;
+  // future work moves jid into the verb response.
+  // FreeBSD 15's JAIL_OWN_DESC fd-based teardown is NOT available
+  // on the privops path (the verb doesn't return the descriptor);
+  // removeJail (0.9.21) handles either jid or fd, so this is fine.
+  std::string privopsSocket = PrivOpsClient::detectSocketPath();
+  if (!privopsSocket.empty()) {
+    std::ostringstream params;
+    params << "allow.raw_sockets=" << optRawSockets
+           << " allow.socket_af=" << optNet
+           << " allow.sysvipc=" << optSysvipc
+           << " allow.mount=" << optZfsMount
+           << " allow.mount.zfs=" << optZfsMount
+           << " allow.quotas=" << optAllowQuotas
+           << " allow.set_hostname=" << optSetHostname
+           << " allow.chflags=" << optAllowChflags
+           << " allow.mlock=" << optAllowMlock
+           << " enforce_statfs=" << optEnforceStatfs;
+    auto resp = PrivOpsClient::sendRequest(privopsSocket,
+        PrivOpsClient::buildCreateJail(jailName, jailPath,
+                                        Util::gethostname(),
+                                        /*vnet=*/true,
+                                        params.str()));
+    if (!resp.transportError.empty())
+      ERR("privops create_jail transport error: " << resp.transportError)
+    if (resp.status >= 400)
+      ERR("privops create_jail failed (status " << resp.status << "): " << resp.body)
+    auto jail = JailQuery::getJailByName(jailName);
+    if (!jail)
+      ERR("privops create_jail returned ok but JailQuery::getJailByName('" << jailName << "') found no jail (race?)")
+    info.jid = jail->jid;
+    if (logProgress)
+      std::cerr << rang::fg::gray << "jail created via privops, jid=" << info.jid << rang::style::reset << std::endl;
+    return info;
+  }
 
 #ifdef JAIL_OWN_DESC
   if (Util::getFreeBSDMajorVersion() >= 15) {

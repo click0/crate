@@ -20,8 +20,14 @@ struct JailInfo {
   int jailFd; // owning descriptor (FreeBSD 15.0+), or -1
 };
 
-// Create a jail using jail_setv() C API
-JailInfo createJail(const Spec &spec, const std::string &jailPath, bool logProgress);
+// Create a jail using jail_setv() C API. When the privops socket
+// is detected (CRATE_PRIVOPS_SOCKET env or default path), routes
+// through the `create_jail` privops verb instead — caller must
+// provide a stable `jailName` since the privops verb identifies
+// jails by name (the kernel auto-names libjail-created jails by
+// jid string, but the verb-driven path needs an explicit name).
+JailInfo createJail(const Spec &spec, const std::string &jailPath,
+                    const std::string &jailName, bool logProgress);
 
 // Remove a jail (race-free via descriptor if available)
 void removeJail(const JailInfo &info);
