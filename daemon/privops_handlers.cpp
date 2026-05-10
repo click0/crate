@@ -491,6 +491,42 @@ void maybeWritePerUserAudit(bool rootlessPerUser, uint32_t uid,
   appendPerUserAuditLine(uid, AuditPerUserPure::formatLine(r));
 }
 
+// 0.9.29: process-global RCTL umbrella config. Set once at daemon
+// startup via setUmbrellaConfig(); read by maybeApplyUmbrella()
+// after a successful create_jail privops invocation. Safe for
+// concurrent reads after the one-time write at startup.
+std::vector<std::pair<std::string, std::string>> g_umbrellaRules;
+
+// Apply umbrella rules to the operator's `crate-<uid>` loginclass
+// after a successful create_jail. Only fires when:
+//   - operator's uid is known (uid > 0; libnv path supplies it,
+//     HTTP path always has uid=0 → no-op)
+//   - the verb was create_jail and returned 2xx
+//   - g_umbrellaRules is non-empty (operator opted in via
+//     `rctl_umbrella:` in crated.conf)
+//
+// Best-effort: rctl(8) failures are logged to stderr but do NOT
+// fail the create_jail response — the jail is already up; losing
+// an umbrella rule is a quota gap, not a correctness break.
+void maybeApplyUmbrella(Verb v, uint32_t uid, int status) {
+  if (v != Verb::CreateJail) return;
+  if (uid == 0 || status < 200 || status >= 300) return;
+  if (g_umbrellaRules.empty()) return;
+  std::string loginclass = "crate-" + std::to_string(uid);
+  for (const auto &kv : g_umbrellaRules) {
+    std::string rule = "loginclass:" + loginclass + ":" + kv.first
+                     + ":deny=" + kv.second;
+    try {
+      Util::execCommand({CRATE_PATH_RCTL, "-a", rule},
+                        "privops umbrella");
+    } catch (const std::exception &e) {
+      std::fprintf(stderr,
+          "privops_handlers: umbrella rule '%s' for uid %u failed: %s\n",
+          rule.c_str(), (unsigned)uid, e.what());
+    }
+  }
+}
+
 } // anon
 
 DispatchResult dispatchPrivOp(Verb v, const std::string &body,
@@ -875,7 +911,14 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
           std::string("{\"error\":\"unknown or missing 'verb' field\"}")};
   }();
   maybeWritePerUserAudit(rootlessPerUser, operatorUid, v, result.status);
+  maybeApplyUmbrella(v, operatorUid, result.status);
   return result;
+}
+
+// 0.9.29: setter for the process-global umbrella config. daemon/main.cpp
+// calls this once at startup with the parsed `rctl_umbrella` block.
+void setUmbrellaConfig(const std::vector<std::pair<std::string, std::string>> &rules) {
+  g_umbrellaRules = rules;
 }
 
 } // namespace Crated

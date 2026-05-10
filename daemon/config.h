@@ -114,6 +114,23 @@ struct Config {
   std::string privopsSocketGroup;
   unsigned    privopsSocketMode = 0660;
 
+  // 0.9.29: per-loginclass RCTL umbrella defaults. When non-empty
+  // AND a create_jail privops verb is invoked over the libnv
+  // socket (peer uid > 0), the daemon auto-applies these RCTL
+  // rules to the operator's `crate-<uid>` loginclass after the
+  // jail is created. Idempotent — re-applying the same rule is
+  // a no-op at the kernel.
+  //
+  // Example crated.conf:
+  //   rctl_umbrella:
+  //     memoryuse: 4G
+  //     pcpu: 200
+  //     maxproc: 256
+  //
+  // Keys / values are validated via the existing RetunePure
+  // whitelist at config-load time; bad entries throw at startup.
+  std::vector<std::pair<std::string, std::string>> rctlUmbrella;
+
   // Load from YAML file
   static Config load(const std::string &path);
 };

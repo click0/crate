@@ -3,6 +3,7 @@
 #include "config.h"
 #include "socket_perms_pure.h"
 #include "../lib/auth_pure.h"
+#include "../lib/retune_pure.h"
 
 #include <yaml-cpp/yaml.h>
 #include <stdexcept>
@@ -198,6 +199,23 @@ Config Config::load(const std::string &path) {
       } catch (...) {
         cfg.privopsSocketMode = pn["mode"].as<unsigned>();
       }
+    }
+  }
+
+  // 0.9.29: rctl_umbrella block. Map of RCTL key -> value (string).
+  // Validate against RetunePure whitelist at load time so bad
+  // entries fail startup, not first jail-create.
+  if (auto u = root["rctl_umbrella"]) {
+    if (!u.IsMap())
+      throw std::runtime_error("rctl_umbrella must be a YAML map");
+    for (auto kv : u) {
+      auto key = kv.first.as<std::string>();
+      auto val = kv.second.as<std::string>();
+      if (auto e = RetunePure::validateRctlKey(key); !e.empty())
+        throw std::runtime_error("rctl_umbrella." + key + ": " + e);
+      if (auto e = RetunePure::validateRctlValue(key, val); !e.empty())
+        throw std::runtime_error("rctl_umbrella." + key + ": " + e);
+      cfg.rctlUmbrella.emplace_back(key, val);
     }
   }
 

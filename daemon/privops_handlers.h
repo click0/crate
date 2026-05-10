@@ -16,6 +16,8 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace Crated {
 
@@ -174,5 +176,13 @@ PrivOpsWirePure::DispatchResult handleCreateEpair(const PrivOpsPure::CreateEpair
 // jails.
 PrivOpsWirePure::DispatchResult handleSetLoginclassRctl(const PrivOpsPure::SetLoginclassRctlReq &r);
 PrivOpsWirePure::DispatchResult handleClearLoginclassRctl(const PrivOpsPure::ClearLoginclassRctlReq &r);
+
+// 0.9.29: register the daemon's `rctl_umbrella:` config. Called
+// once at daemon startup. The umbrella rules apply after a
+// successful create_jail privops invocation when the operator's
+// uid is known (libnv socket; HTTP path doesn't have uid). Pass
+// an empty vector to disable. Idempotent at the kernel level
+// (rctl(8) treats re-set of an existing rule as a no-op).
+void setUmbrellaConfig(const std::vector<std::pair<std::string, std::string>> &rules);
 
 } // namespace Crated
