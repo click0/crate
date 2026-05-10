@@ -443,6 +443,36 @@ DispatchResult handleCreateEpair(const PrivOpsPure::CreateEpairReq &/*r*/) {
                                                           pair.second)};
 }
 
+// --- handleSetLoginclassRctl / handleClearLoginclassRctl (0.9.28) ---
+
+DispatchResult handleSetLoginclassRctl(const PrivOpsPure::SetLoginclassRctlReq &r) {
+  // Build `rctl -a loginclass:<name>:<key>:deny=<value>` argv.
+  // Mirrors handleSetRctl (0.9.2) but with loginclass subject.
+  std::string rule = "loginclass:" + r.loginclass + ":" + r.key
+                   + ":deny=" + r.rawValue;
+  try {
+    Util::execCommand({CRATE_PATH_RCTL, "-a", rule},
+                      "privops set_loginclass_rctl");
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("exec_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatSetLoginclassRctlSuccess(
+                  r.loginclass, r.key, r.rawValue)};
+}
+
+DispatchResult handleClearLoginclassRctl(const PrivOpsPure::ClearLoginclassRctlReq &r) {
+  // `rctl -r loginclass:<name>:<key>:deny` — symmetric remove.
+  std::string subject = "loginclass:" + r.loginclass + ":" + r.key + ":deny";
+  try {
+    Util::execCommand({CRATE_PATH_RCTL, "-r", subject},
+                      "privops clear_loginclass_rctl");
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("exec_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatClearLoginclassRctlSuccess(
+                  r.loginclass, r.key)};
+}
+
 // --- Top-level dispatcher ---
 
 namespace {
@@ -627,6 +657,22 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleCreateEpair(r);
     }
+    case Verb::SetLoginclassRctl: {
+      PrivOpsPure::SetLoginclassRctlReq r;
+      if (auto e = PrivOpsWirePure::parseSetLoginclassRctl(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateSetLoginclassRctl(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleSetLoginclassRctl(r);
+    }
+    case Verb::ClearLoginclassRctl: {
+      PrivOpsPure::ClearLoginclassRctlReq r;
+      if (auto e = PrivOpsWirePure::parseClearLoginclassRctl(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateClearLoginclassRctl(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleClearLoginclassRctl(r);
+    }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
   }
@@ -804,6 +850,22 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       if (auto e = PrivOpsPure::validateCreateEpair(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleCreateEpair(r);
+    }
+    case Verb::SetLoginclassRctl: {
+      PrivOpsPure::SetLoginclassRctlReq r;
+      if (auto e = PrivOpsNvPure::parseSetLoginclassRctl(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateSetLoginclassRctl(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleSetLoginclassRctl(r);
+    }
+    case Verb::ClearLoginclassRctl: {
+      PrivOpsPure::ClearLoginclassRctlReq r;
+      if (auto e = PrivOpsNvPure::parseClearLoginclassRctl(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateClearLoginclassRctl(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleClearLoginclassRctl(r);
     }
     case Verb::Unknown:
       return {404,

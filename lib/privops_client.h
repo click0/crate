@@ -129,6 +129,13 @@ PrivOpsNvPure::FieldMap buildSetIfaceInetAddr(const std::string &ifname,
 // them via PrivOpsWirePure::extractStringField.
 PrivOpsNvPure::FieldMap buildCreateEpair();
 
+// 0.9.28: per-loginclass RCTL umbrella ops.
+PrivOpsNvPure::FieldMap buildSetLoginclassRctl(const std::string &loginclass,
+                                                const std::string &key,
+                                                const std::string &rawValue);
+PrivOpsNvPure::FieldMap buildClearLoginclassRctl(const std::string &loginclass,
+                                                  const std::string &key);
+
 // --- Wire transport (FreeBSD-only) ---
 
 struct Response {

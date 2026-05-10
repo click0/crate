@@ -376,6 +376,21 @@ std::string parseCreateEpair(const std::string &/*body*/,
   return "";
 }
 
+std::string parseSetLoginclassRctl(const std::string &body,
+                                   PrivOpsPure::SetLoginclassRctlReq &out) {
+  if (auto e = requireStringField(body, "loginclass", out.loginclass); !e.empty()) return e;
+  if (auto e = requireStringField(body, "key", out.key); !e.empty()) return e;
+  if (auto e = requireStringField(body, "value", out.rawValue); !e.empty()) return e;
+  return "";
+}
+
+std::string parseClearLoginclassRctl(const std::string &body,
+                                     PrivOpsPure::ClearLoginclassRctlReq &out) {
+  if (auto e = requireStringField(body, "loginclass", out.loginclass); !e.empty()) return e;
+  if (auto e = requireStringField(body, "key", out.key); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing helper ---
 
 PrivOpsPure::Verb parseVerbFromPath(const std::string &path) {
@@ -672,6 +687,28 @@ std::string formatCreateEpairSuccess(const std::string &ifaceA,
   return o.str();
 }
 
+std::string formatSetLoginclassRctlSuccess(const std::string &loginclass,
+                                           const std::string &key,
+                                           const std::string &rawValue) {
+  std::ostringstream o;
+  o << "{\"set\":true"
+    << ",\"loginclass\":\"" << escape(loginclass) << "\""
+    << ",\"key\":\"" << escape(key) << "\""
+    << ",\"value\":\"" << escape(rawValue) << "\""
+    << "}";
+  return o.str();
+}
+
+std::string formatClearLoginclassRctlSuccess(const std::string &loginclass,
+                                             const std::string &key) {
+  std::ostringstream o;
+  o << "{\"cleared\":true"
+    << ",\"loginclass\":\"" << escape(loginclass) << "\""
+    << ",\"key\":\"" << escape(key) << "\""
+    << "}";
+  return o.str();
+}
+
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body) {
   using namespace PrivOpsPure;
@@ -716,6 +753,10 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       return runVerb<SetIfaceInetAddrReq>(body, v, parseSetIfaceInetAddr, validateSetIfaceInetAddr);
     case Verb::CreateEpair:
       return runVerb<CreateEpairReq>(body, v, parseCreateEpair, validateCreateEpair);
+    case Verb::SetLoginclassRctl:
+      return runVerb<SetLoginclassRctlReq>(body, v, parseSetLoginclassRctl, validateSetLoginclassRctl);
+    case Verb::ClearLoginclassRctl:
+      return runVerb<ClearLoginclassRctlReq>(body, v, parseClearLoginclassRctl, validateClearLoginclassRctl);
     case Verb::Unknown:
       break;
   }

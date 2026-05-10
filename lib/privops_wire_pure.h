@@ -174,6 +174,12 @@ std::string parseSetIfaceInetAddr(const std::string &body,
 std::string parseCreateEpair(const std::string &body,
                              PrivOpsPure::CreateEpairReq &out);
 
+std::string parseSetLoginclassRctl(const std::string &body,
+                                   PrivOpsPure::SetLoginclassRctlReq &out);
+
+std::string parseClearLoginclassRctl(const std::string &body,
+                                     PrivOpsPure::ClearLoginclassRctlReq &out);
+
 // --- Verb routing helper ---
 //
 // Parse the URL path's verb segment. The route pattern is
@@ -302,5 +308,12 @@ std::string formatSetIfaceInetAddrSuccess(const std::string &ifname,
 // Shape: {"created":true,"a":"<ifaceA>","b":"<ifaceB>"}
 std::string formatCreateEpairSuccess(const std::string &ifaceA,
                                      const std::string &ifaceB);
+
+// 0.9.28: 200 OK bodies for loginclass-scoped RCTL ops.
+std::string formatSetLoginclassRctlSuccess(const std::string &loginclass,
+                                           const std::string &key,
+                                           const std::string &rawValue);
+std::string formatClearLoginclassRctlSuccess(const std::string &loginclass,
+                                             const std::string &key);
 
 } // namespace PrivOpsWirePure

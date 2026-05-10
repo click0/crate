@@ -239,6 +239,21 @@ std::string parseCreateEpair(const FieldMap &/*m*/,
   return "";
 }
 
+std::string parseSetLoginclassRctl(const FieldMap &m,
+                                   PrivOpsPure::SetLoginclassRctlReq &out) {
+  if (auto e = requireString(m, "loginclass", out.loginclass); !e.empty()) return e;
+  if (auto e = requireString(m, "key", out.key); !e.empty()) return e;
+  if (auto e = requireString(m, "value", out.rawValue); !e.empty()) return e;
+  return "";
+}
+
+std::string parseClearLoginclassRctl(const FieldMap &m,
+                                     PrivOpsPure::ClearLoginclassRctlReq &out) {
+  if (auto e = requireString(m, "loginclass", out.loginclass); !e.empty()) return e;
+  if (auto e = requireString(m, "key", out.key); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing ---
 
 PrivOpsPure::Verb extractVerb(const FieldMap &m) {
