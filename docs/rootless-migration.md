@@ -4,13 +4,16 @@
 considering the move to the rootless model that lands in
 **1.0.0**.
 
-**Current status (0.9.12):** the rootless model is opt-in. The
-default install is unchanged — `crate(1)` is still installed
-with `mode 04755` (setuid root), and `crated.conf` ships with
-`rootless_per_user: false`. This document tells you what
-changes when you flip the toggle, what infrastructure the
-daemon takes over, and how to migrate existing single-tenant
-deployments without downtime.
+**Current status (0.9.30):** the rootless model is **on by
+default**. New installs (and old installs whose `crated.conf`
+doesn't set `rootless_per_user` explicitly) compose paths,
+ZFS prefixes, network sub-CIDRs, and RCTL umbrellas from the
+connecting operator's uid. `crate(1)` is still installed with
+`mode 04755` (setuid root) until 1.0.0; the setuid bit is
+removed in the 1.0.0 release. Operators wanting the legacy
+single-tenant shape must opt out explicitly with
+`rootless_per_user: false` — see the "Rolling back" section
+below.
 
 ---
 
@@ -111,12 +114,14 @@ Stable across crated restarts; collisions at slot capacity.
 Each operator gets a loginclass `crate-<uid>` whose RCTL
 umbrella caps total usage across all of that operator's jails.
 
-### 0.9.12 — config schema (this release)
+### 0.9.12 — config schema
 
 `crated.conf` gains:
 
 ```yaml
-rootless_per_user: false             # master toggle, default off
+rootless_per_user: true              # master toggle (default
+                                     # since 0.9.30; was off
+                                     # in 0.9.12–0.9.29)
 
 zfs_master_prefix: "zroot/jails"     # per-user datasets land
                                      # under <prefix>/<uid>/
@@ -126,22 +131,47 @@ network_master_cidr_v6: ""           # empty disables v6 per-user
 network_sub_prefix_len_v6: 64
 ```
 
-When `rootless_per_user: false` (the default), every helper
-that consults the config falls back to legacy single-tenant
-behaviour. **Existing deployments are byte-identical to 0.8.x**
-until the operator explicitly opts in.
+Setting `rootless_per_user: false` makes every helper fall
+back to legacy single-tenant behaviour, byte-identical to
+0.8.x. Set this if you upgraded from 0.8.x and don't yet
+want the per-user split.
 
-### 0.9.13 (planned) — wiring flip
+### 0.9.13 — wiring flip
 
 `lib/network_lease.cpp` switches to per-user lease files when
 the toggle is on. RCTL handlers apply both per-jail and
 loginclass umbrella rules. Audit log gets a per-user copy.
 
-### 0.9.14 (planned) — default flip
+### 0.9.14 — libnv privops listener
 
-`crated.conf.sample` ships with `rootless_per_user: true` by
-default. Operators upgrading see a one-line `pkg upgrade`
-warning pointing at this doc.
+`crated` opens an AF_UNIX socket and accepts nvlist-encoded
+privops requests from local clients. `getpeereid(2)` extracts
+the operator's uid for free, feeding the per-user audit hook.
+HTTP `/api/v1/privops/<verb>` remains for remote/CI clients.
+
+### 0.9.15–0.9.29 — call-site wiring + verb expansion
+
+`crate(1)` call sites moved through privops one mini-PR at a
+time: `set_rctl`/`clear_rctl`, `attach_zfs`, `destroy_jail`
+on stop, `mount_nullfs`, `iface` atoms (`set_iface_up`,
+`disable_iface_offload`, `bridge_add_member`, `bridge_del_member`,
+`set_iface_inet_addr`, `create_epair`), `set_loginclass_rctl` /
+`clear_loginclass_rctl`. The privops verb taxonomy grew from
+14 to 21 verbs; the original 14 stayed wire-stable.
+
+0.9.27 lazy-resolved network leases to per-user paths when
+the privops socket is detected. 0.9.29 added an opt-in
+`rctl_umbrella:` block that the daemon auto-applies to the
+operator's `crate-<uid>` loginclass after `create_jail`.
+
+### 0.9.30 — default flip
+
+`bool rootlessPerUser = true;` in `daemon/config.h`. The
+sample `crated.conf` shows the flag commented out at its new
+default value; existing crated.conf files without the field
+auto-flip on upgrade. Operators wanting the legacy single-
+tenant path must add `rootless_per_user: false` explicitly —
+see "Rolling back" below.
 
 ### 1.0.0 (planned) — setuid removed
 
@@ -154,40 +184,71 @@ patch the Makefile or pin to 0.9.x.
 
 ## Migration steps for a single-tenant deployment
 
-Single-tenant operators don't need rootless mode but may want
-to opt in to dry-run the new flow before 1.0.0 lands.
+Single-tenant operators upgrading from ≤ 0.9.29 to ≥ 0.9.30
+auto-flip into rootless mode unless their `crated.conf` sets
+`rootless_per_user: false` explicitly. Choose one of the two
+paths below.
+
+### Path A — accept the flip
 
 ```sh
-# 1. Update crated.conf — opt-in toggle plus defaults
-cat >> /usr/local/etc/crated.conf <<'EOF'
+# 1. Upgrade the package (default flips to true).
+pkg upgrade crate
 
-# 0.9.12 — rootless namespacing (off by default)
-rootless_per_user: false
-EOF
-
-# 2. Restart crated
+# 2. Restart crated.
 service crated restart
 
-# 3. Verify legacy behaviour preserved
-crate run myjail            # works as before
-ls /var/run/crate/          # contains crated.sock + legacy files,
-                            # no per-uid subdirs
-
-# 4. Opt in (dry-run)
-sed -i '' 's/rootless_per_user: false/rootless_per_user: true/' \
-       /usr/local/etc/crated.conf
-service crated restart
-
-# 5. Stop and restart your jails so they re-create with the
-#    per-user layout. (No automatic in-place migration in 0.9.12;
-#    that lands in 0.9.13 with the wiring flip.)
+# 3. Stop and restart your jails so they re-create with the
+#    per-user layout. (No automatic in-place migration; the
+#    daemon does not rearrange ZFS datasets on upgrade.)
 crate stop myjail
 crate run myjail
 ls /var/run/crate/$(id -u)/leases/
 ```
 
-Rolling back is `rootless_per_user: false` + `service crated
-restart` + jail recycle.
+### Path B — keep the legacy single-tenant shape
+
+```sh
+# 1. Pin the toggle off before restarting crated.
+cat >> /usr/local/etc/crated.conf <<'EOF'
+
+# Pinned to legacy single-tenant shape (was the default
+# pre-0.9.30; explicit setting required from 0.9.30 onward).
+rootless_per_user: false
+EOF
+
+# 2. Restart crated.
+service crated restart
+
+# 3. Verify legacy behaviour preserved.
+crate run myjail            # works as before
+ls /var/run/crate/          # contains crated.sock + legacy files,
+                            # no per-uid subdirs
+```
+
+### Rolling back
+
+If you upgraded to 0.9.30+ and the per-user split misbehaves:
+
+```sh
+# 1. Stop active jails.
+crate stop --all
+
+# 2. Pin the toggle off.
+sed -i '' 's/^# *rootless_per_user:.*/rootless_per_user: false/' \
+       /usr/local/etc/crated.conf
+grep -q '^rootless_per_user:' /usr/local/etc/crated.conf || \
+       echo 'rootless_per_user: false' >> /usr/local/etc/crated.conf
+
+# 3. Restart and recycle jails.
+service crated restart
+crate run myjail
+```
+
+No package downgrade needed — the toggle is preserved across
+0.9.30+ releases. Downgrading to ≤ 0.9.29 is also supported
+(the YAML key is the same and the legacy code path is the
+0.9.29 default).
 
 ---
 

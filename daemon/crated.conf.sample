@@ -139,17 +139,22 @@ log:
 ##
 ## --- 0.9.12: rootless per-user namespacing ---
 ##
-## Master toggle. When false (default), runtime helpers fall back to
-## legacy single-tenant shape — every operator shares /var/run/crate/,
-## one ZFS prefix, one IP pool, no RCTL umbrella. Existing 0.8.x
-## deployments are byte-identical at false.
+## Master toggle. When true (default since 0.9.30), per-user
+## separation kicks in: runtime helpers compose paths, ZFS dataset
+## prefix, network sub-CIDR, and RCTL umbrella loginclass from the
+## connecting operator's uid (via getpeereid(2) on the privops
+## socket).
 ##
-## When true, per-user separation kicks in. See
-## docs/rootless-migration.md for the full migration guide.
+## Set to false to fall back to legacy single-tenant shape — every
+## operator shares /var/run/crate/, one ZFS prefix, one IP pool,
+## no RCTL umbrella. Existing 0.8.x deployments that need
+## byte-identical behaviour after upgrade should set this to false
+## explicitly.
 ##
-## The default flips to true in 0.9.14.
+## See docs/rootless-migration.md for the full migration guide,
+## including the "Rolling back" section for downgrade procedure.
 #
-# rootless_per_user: false
+# rootless_per_user: true
 
 ##
 ## ZFS master prefix. Per-user datasets land under

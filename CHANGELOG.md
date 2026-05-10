@@ -6,6 +6,116 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.30] — 2026-05-10
+
+**Rootless track, default flip.** Thirty-first 0.9.x release.
+The `rootless_per_user` master toggle now defaults to **true**.
+New installs (and old installs whose `crated.conf` does not
+set the field explicitly) compose paths, ZFS dataset prefix,
+network sub-CIDR, and RCTL umbrella loginclass from the
+connecting operator's uid. Operators who want the legacy
+single-tenant shape must opt out with `rootless_per_user: false`.
+
+### What changes
+
+#### Default value flipped
+
+```cpp
+// daemon/config.h — was 0.9.12 .. 0.9.29
+bool rootlessPerUser = false;
+
+// daemon/config.h — 0.9.30+
+bool rootlessPerUser = true;
+```
+
+The field default flips at the C++ level. The YAML key name
+is unchanged (`rootless_per_user`), and the parser still
+honours an explicit `false` value byte-for-byte the same way
+it always did.
+
+#### Sample config rewritten
+
+`daemon/crated.conf.sample` now shows the toggle commented
+out at its new default value (`# rootless_per_user: true`),
+with prose explaining that operators wanting the legacy shape
+must uncomment to `false` explicitly. The "0.9.14" forward-
+reference is replaced with a "default since 0.9.30" note.
+
+#### Migration doc updated
+
+`docs/rootless-migration.md` rewrote two sections:
+
+1. **Status** — bumped to "rootless model is on by default",
+   with explicit `rootless_per_user: false` callout for
+   operators who want to opt out
+2. **Single-tenant migration** — split into two paths
+   (accept the flip vs. pin to legacy), added a dedicated
+   "Rolling back" subsection covering the toggle pin +
+   restart + jail recycle procedure
+
+The 0.9.13–0.9.30 release-by-release changelog inside the
+doc was also brought up to date (was last touched at 0.9.13
+planning).
+
+### Behaviour for upgraders
+
+| Pre-0.9.30 `crated.conf` state              | 0.9.30 effective value | Action needed       |
+|---------------------------------------------|------------------------|---------------------|
+| `rootless_per_user: true` (explicit)        | `true`                 | None                |
+| `rootless_per_user: false` (explicit)       | `false`                | None                |
+| key absent (most 0.8.x → 0.9.x upgrades)    | `true` (was `false`)   | Recycle jails OR pin to false |
+
+The third row is the breaking case: a 0.8.x deployment that
+upgraded through 0.9.x without ever touching `crated.conf`
+gets rootless mode at the next `service crated restart`.
+Operators in that boat who don't want to migrate jails should
+add `rootless_per_user: false` before restarting crated.
+
+The daemon does not auto-rearrange ZFS datasets or migrate
+existing jails — operators control the cutover by stopping
+and re-running their jails after the flip. See the migration
+doc's "Path A — accept the flip" section.
+
+### Wire compatibility
+
+No wire changes. All 21 privops verbs from 0.9.0–0.9.28
+unchanged. JSON + libnv schemas unchanged. Bearer token
+format unchanged. The flip is purely a config-default change
+in the daemon.
+
+### Series state
+
+Track complete except for setuid removal:
+
+- 0.9.0–0.9.7: privops verb taxonomy (14 verbs, JSON)
+- 0.9.8–0.9.13: per-user namespacing pure modules + audit
+- 0.9.14: libnv listener (FreeBSD-native, getpeereid)
+- 0.9.15–0.9.29: 14 CLI call sites wired through privops;
+  verb set grew to 21
+- **0.9.30: default flip (this release)**
+- 1.0.0: setuid bit removed from `Makefile install`
+
+### Tests
+
+No new tests — the change is a single struct member default.
+Suite stays at 1303. Existing `Crated::Config::load` coverage
+exercises both the absent-field path (now defaults true) and
+the explicit-false path. FreeBSD CI smoke-runs the daemon
+startup which validates the default end-to-end.
+
+### Files
+
+- `daemon/config.h` — default flipped to `true`, comment
+  expanded with 0.9.30 paragraph and rollback pointer
+- `daemon/crated.conf.sample` — block rewritten to show
+  new default + opt-out instructions
+- `docs/rootless-migration.md` — status, schema example,
+  migration path, and release-by-release log updated
+- `cli/args.cpp` — version `crate 0.9.30`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [0.9.29] — 2026-05-10
 
 **Rootless track, RCTL umbrella auto-apply.** Thirtieth 0.9.x
