@@ -214,3 +214,28 @@ log:
 #     socket: /var/run/crate/crated-privops.sock
 #     group:  crate-operators
 #     mode:   "0660"
+
+##
+## --- 0.9.29: per-loginclass RCTL umbrella defaults ---
+##
+## When a `create_jail` privops verb arrives over the libnv socket
+## (peer uid > 0), crated auto-applies these RCTL rules to the
+## operator's `crate-<uid>` loginclass after the jail is created.
+## Idempotent — re-applying the same rule is a no-op at the kernel.
+##
+## With multiple jails per operator, the umbrella enforces an
+## aggregate cap. If alice spawns 3 jails of 2G memoryuse each
+## and the umbrella says memoryuse: 4G, the kernel rejects the
+## third allocation (or fires the deny action) once total hits 4G.
+##
+## Keys / values validated via the same RetunePure whitelist as
+## `crate retune --rctl`. Bad entries fail crated startup.
+##
+## Empty / unset block disables auto-application — the
+## set_loginclass_rctl / clear_loginclass_rctl primitives from
+## 0.9.28 still work on demand.
+#
+# rctl_umbrella:
+#   memoryuse: 4G
+#   pcpu:      200
+#   maxproc:   256

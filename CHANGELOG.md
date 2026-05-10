@@ -6,6 +6,147 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.29] — 2026-05-10
+
+**Rootless track, RCTL umbrella auto-apply.** Thirtieth 0.9.x
+release. The `set_loginclass_rctl` primitive from 0.9.28 now
+fires automatically after a successful `create_jail` privops
+invocation, sourced from a new `rctl_umbrella:` block in
+`crated.conf`. Operators no longer need a startup-script step
+to seed loginclass quotas.
+
+### What lands
+
+#### Config schema
+
+`Crated::Config` gains:
+
+```cpp
+std::vector<std::pair<std::string, std::string>> rctlUmbrella;
+```
+
+YAML form:
+
+```yaml
+rctl_umbrella:
+  memoryuse: 4G
+  pcpu:      200
+  maxproc:   256
+```
+
+Keys / values validated via `RetunePure::validateRctlKey` /
+`validateRctlValue` at config-load time — bad entries throw
+at daemon startup, not at first jail-create.
+
+#### Process-global rules
+
+`Crated::setUmbrellaConfig(rules)` registers the parsed map
+once at daemon startup. `daemon/main.cpp` calls it just
+before opening the privops listener.
+
+#### Auto-apply in dispatcher
+
+`maybeApplyUmbrella(verb, uid, status)` runs after every
+libnv-transport dispatch. Fires only when:
+
+1. `verb == CreateJail`
+2. `uid > 0` (peer credentials known — libnv socket only;
+   HTTP path always has uid=0 → no-op)
+3. `200 <= status < 300` (jail actually created)
+4. `g_umbrellaRules` is non-empty
+
+For each rule, runs `rctl -a loginclass:crate-<uid>:KEY:deny=VALUE`
+via `Util::execCommand`. Best-effort: failures log to stderr
+but do NOT fail the create_jail response — the jail is up,
+losing an umbrella rule is a quota gap not a correctness
+break.
+
+### Behaviour
+
+```
+# crated.conf has:
+#   rctl_umbrella:
+#     memoryuse: 4G
+
+# alice (uid 1000) sends create_jail "web1" via libnv socket
+# crated:
+#   1. handleCreateJail succeeds
+#   2. maybeApplyUmbrella fires:
+#      rctl -a loginclass:crate-1000:memoryuse:deny=4G
+#   3. response 200 returned to client
+
+# alice sends create_jail "web2"
+# crated:
+#   1. handleCreateJail succeeds
+#   2. maybeApplyUmbrella re-applies the same rule
+#      (idempotent — kernel no-ops the duplicate)
+
+# Now alice has 2 jails. Per-jail rules cap each. Umbrella
+# cap of 4G applies to alice's TOTAL across both jails.
+
+# bob (uid 1001) sends create_jail
+# crated applies rctl -a loginclass:crate-1001:memoryuse:deny=4G
+# bob's umbrella is independent of alice's.
+```
+
+### HTTP path: no auto-apply
+
+The HTTP transport never has a peer uid (cpp-httplib limitation;
+0.9.14 architecture decision). Auto-apply skips on HTTP requests
+— bearer-token API isn't multi-tenant in the operator-uid sense.
+Operators wanting umbrella enforcement must use the libnv socket
+(or call `set_loginclass_rctl` manually).
+
+### Series state
+
+CLI call-sites wired (12+):
+- All `crate retune`, `crate stop`, full `crate run` chain
+- All host-side iface verbs (createEpair / disableOffload /
+  setUp / setInetAddr / bridge add+del)
+- Lease file per-user path (0.9.27)
+- Loginclass RCTL umbrella primitives (0.9.28)
+- **Auto-apply umbrella at create_jail (this release)**
+
+The `rootless_per_user: true` config block and per-user
+namespacing (paths, ZFS, network sub-CIDR, RCTL groups) are
+all wired and tested individually.
+
+Remaining:
+- 0.9.30 — default flip (`rootless_per_user: true` becomes
+  default in `crated.conf.sample`; existing setuid-prod
+  deployments unaffected, but new installs default to
+  rootless)
+- 1.0.0 — setuid bit removed from `Makefile install` target
+
+### Tests
+
+No new tests — the auto-apply path is daemon-side runtime
+behaviour requiring a real `rctl(8)` to exercise meaningfully.
+Covered by:
+- `rctl_umbrella` config parsing tested implicitly via
+  daemon startup on FreeBSD CI (bad config = startup throw)
+- `maybeApplyUmbrella` logic mirrors `maybeWritePerUserAudit`
+  shape (proven pattern from 0.9.13)
+- `set_loginclass_rctl` validator coverage from 0.9.28
+  (auto-apply uses the same key/value path)
+
+Suite stays at 1303.
+
+### Files
+
+- `daemon/config.h` — `rctlUmbrella` field
+- `daemon/config.cpp` — YAML parser, validates at load time
+- `daemon/privops_handlers.{h,cpp}` — `setUmbrellaConfig`
+  setter + `maybeApplyUmbrella` post-dispatch hook +
+  `g_umbrellaRules` storage
+- `daemon/main.cpp` — `setUmbrellaConfig(config.rctlUmbrella)`
+  at startup
+- `daemon/crated.conf.sample` — `rctl_umbrella:` block
+- `cli/args.cpp` — version `crate 0.9.29`
+- `CHANGELOG.md` — entry
+
+---
+
 ## [0.9.28] — 2026-05-09
 
 **Rootless track, RCTL umbrella verbs.** Twenty-ninth 0.9.x

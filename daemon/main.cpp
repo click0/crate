@@ -8,6 +8,7 @@
 #include "server.h"
 #include "ws_console.h"
 #include "control_socket.h"
+#include "privops_handlers.h"
 #include "privops_listener.h"
 
 #include "err.h"
@@ -113,6 +114,11 @@ int main(int argc, char **argv) {
     int csStarted = controlSockets.start();
 
     // 0.9.14: privops listener (opt-in via privops_socket: in config).
+    // 0.9.29: register umbrella RCTL rules with the privops
+    // dispatcher; consulted post-create_jail when the operator's
+    // uid is known via getpeereid (libnv socket path).
+    Crated::setUmbrellaConfig(config.rctlUmbrella);
+
     Crated::PrivopsListener privopsListener(config);
     bool privopsStarted = privopsListener.start();
 
