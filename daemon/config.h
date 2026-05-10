@@ -83,9 +83,13 @@ struct Config {
   // back to legacy single-tenant shape so existing 0.8.x deployments
   // are byte-identical.
   //
-  // Default: false. Operators flip after reading
-  // docs/rootless-migration.md. The default flips to true in 0.9.14.
-  bool rootlessPerUser = false;
+  // 0.9.30: DEFAULT FLIPPED to true. New installs (and old installs
+  // whose crated.conf doesn't set this field explicitly) now run
+  // in rootless mode. Operators wanting the legacy single-tenant
+  // path must add `rootless_per_user: false` to crated.conf
+  // explicitly. See docs/rootless-migration.md "Rolling back" for
+  // the procedure.
+  bool rootlessPerUser = true;
 
   // Master ZFS prefix; per-user datasets land under
   // `<zfsMasterPrefix>/<uid>/<jail>`. Empty string means "no
