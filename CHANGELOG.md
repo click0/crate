@@ -6,6 +6,84 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.3] — 2026-05-12
+
+**Stack DNS dirs per-user.** Third patch release of the 1.x
+line. The per-stack unbound config + pidfile directory now
+resolves to `/var/run/crate/<uid>/dns-<network>/` when the
+privops socket is detected.
+
+### What changes
+
+`lib/stack.cpp` gains a `dnsBaseDir()` static helper that
+lazy-resolves the base directory for per-stack DNS state:
+
+| Mode                          | Path                                 |
+|-------------------------------|--------------------------------------|
+| Legacy (no `crated`)          | `/var/run/crate/dns-<network>/`      |
+| Rootless (crated + privops)   | `/var/run/crate/<uid>/dns-<network>/`|
+
+Four sites updated:
+
+- `generateUnboundConf()` — pidfile path inside the rendered
+  unbound config (named + default cases)
+- `startStackDns()` — `mkdir` target + path passed to
+  `unbound -c <conf>`
+- `stopStackDns()` — `remove_all` cleanup path
+
+Net effect: when alice and bob each run a stack with a
+network named `db`, their unbound instances no longer fight
+over `/var/run/crate/dns-db/unbound.pid`.
+
+### Why this matters
+
+Before this release, every operator on a rootless host shared
+the same DNS config directory. Two operators bringing up
+stacks with the same network name would clobber each other's
+unbound.conf and pidfile. The unbound process started first
+held the pidfile; the second `crate stack up` would either
+silently overwrite the conf and not restart unbound, or
+deliver SIGTERM to the wrong process at teardown.
+
+### 1.x backlog
+
+Remaining latent per-user path leaks:
+
+- `lib/vm_run.cpp` VM + cloud-init paths hardcoded
+- `lib/run_net.cpp:446` direct `ifconfig -vnet` (should use
+  existing `SetIfaceUp` privops verb)
+
+Reclassified out of "latent path leak" into a separate 1.1.0
+work item (real bug, but bigger fix):
+
+- **PfctlOps privops-wiring**: `crate(1)` calls
+  `PfctlOps::addRules` / `loadContainerPolicy` / `flushRules`
+  directly from `lib/run.cpp`. Without setuid, the
+  non-root operator cannot open `/dev/pf` nor the host-wide
+  `/var/run/crate/pfctl.lock`. The original audit suggested
+  per-user lock but that's incorrect — pf is host-wide, the
+  lock must serialize across operators. The right fix is to
+  route the three call sites through the existing `AddPfRule`
+  privops verb (and add `FlushPfAnchor` / `LoadPfPolicy`
+  verbs if needed). 1.1.0 will cover this.
+
+### Tests
+
+No new tests — the change is a single helper + 4 string
+substitutions. The `dnsBaseDir()` cache uses the same lazy-
+resolve pattern proven in `network_lease.cpp`. Suite stays
+at 1303.
+
+### Files
+
+- `lib/stack.cpp` — `dnsBaseDir()` helper, 4 call sites
+  routed through it; new includes for `privops_client.h` and
+  `runtime_paths_pure.h`
+- `cli/args.cpp` — version `crate 1.0.3`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.0.2] — 2026-05-12
 
 **Spec registry per-user + restart wires through it.** Second
