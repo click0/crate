@@ -6,6 +6,85 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.2] — 2026-05-12
+
+**Spec registry per-user + restart wires through it.** Second
+patch release of the 1.x line. Fixes two coupled multi-tenant
+bugs that the 0.8.21 spec-registry feature inherited from the
+pre-rootless filesystem-walk era.
+
+### What changes
+
+#### `lib/spec_registry.cpp` — lazy per-user path
+
+Same `effectivePath()` lazy-resolve pattern as
+`network_lease.cpp` (0.9.27) and `network_lease6.cpp` (1.0.1).
+When the privops socket is detected, the registry file moves
+from `/var/run/crate/spec-registry.txt` to
+`/var/run/crate/<uid>/spec-registry.txt`. Alice's
+`crate run -f web.crate` registers under alice's uid; bob
+doing the same registers under bob's uid; neither sees the
+other's entry.
+
+#### `lib/lifecycle.cpp` — `restartCrate()` queries the registry
+
+`crate restart <name>` now asks `SpecRegistry::lookup(name)`
+for the `.crate` path before falling back to the legacy
+filesystem walk under `/var/run/crate/<name>.crate`. The
+fallback is preserved for two reasons:
+
+1. Jails started before 0.8.21 (no registry entry, just a
+   conventional file placement)
+2. Single-tenant deployments that historically dropped
+   `.crate` files manually under `/var/run/crate/`
+
+Net effect: existing single-tenant homelabs see no behaviour
+change; rootless multi-tenant deployments stop cross-
+contaminating.
+
+### Why this matters
+
+Before this release, two operators on the same host running
+`crate restart web` would race to find each other's `.crate`
+path. Whoever pushed last to the shared
+`/var/run/crate/spec-registry.txt` won. Cross-tenant
+restarts then either picked up the wrong spec (silent data
+corruption) or hit the legacy filesystem walk (silent
+fall-through to a stale `/var/run/crate/web.crate` left over
+from a previous deploy).
+
+### 1.x backlog
+
+Remaining latent per-user path leaks from the pre-1.0.0 audit:
+
+- `lib/pfctl_ops.cpp` pf lock not per-user
+- `lib/stack.cpp` DNS dirs hardcoded
+- `lib/vm_run.cpp` VM + cloud-init paths hardcoded
+- `lib/run_net.cpp:446` direct `ifconfig -vnet` (should use
+  existing `SetIfaceUp` privops verb)
+- Query-side privops verbs (inspect/doctor/migrate shell out)
+
+### Tests
+
+Existing `spec_registry_pure_test` covers parser + line
+format. The `effectivePath()` lazy-cache uses the same pattern
+proven in `network_lease.cpp`. No new test files; suite stays
+at 1303.
+
+### Files
+
+- `lib/spec_registry.cpp` — `effectivePath()` helper, all I/O
+  routed through it; `setPathForTesting` sets an override flag
+- `lib/spec_registry.h` — header comment documents per-user
+  storage
+- `lib/lifecycle.cpp` — `restartCrate` queries SpecRegistry
+  first, legacy fs walk as fallback; adds
+  `#include "spec_registry.h"`
+- `cli/args.cpp` — version `crate 1.0.2`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.0.1] — 2026-05-12
 
 **IPv6 lease file per-user.** First patch release of the 1.x

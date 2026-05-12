@@ -9,6 +9,7 @@
 #include "pathnames.h"
 #include "privops_client.h"
 #include "run_jail.h"
+#include "spec_registry.h"
 #include "util.h"
 #include "err.h"
 
@@ -456,13 +457,22 @@ bool restartCrate(const Args &args) {
   if (!stopCrate(stopArgs))
     return false;
 
-  // Look for .crate file to restart from
-  // Convention: crate file is stored at /var/run/crate/<name>.crate
-  auto crateFile = STR("/var/run/crate/" << jailName << ".crate");
-  if (!Util::Fs::fileExists(crateFile)) {
-    // Try with path-based name
-    auto bareName = Util::filePathToBareName(jailPath);
-    crateFile = STR("/var/run/crate/" << bareName << ".crate");
+  // 1.0.2: prefer the spec-registry mapping (populated by `crate run -f`
+  // since 0.8.21) over a filesystem walk. The registry is per-user when
+  // crated's privops socket is detected, so this also fixes the
+  // multi-tenant case where bob's `crate restart web` previously
+  // picked up alice's `.crate` path from the shared file.
+  std::string crateFile = SpecRegistry::lookup(jailName);
+
+  // Legacy fallback for jails started before 0.8.21 (no registry
+  // entry) or single-tenant deployments that placed the spec under
+  // the conventional /var/run/crate/<name>.crate path.
+  if (crateFile.empty() || !Util::Fs::fileExists(crateFile)) {
+    crateFile = STR("/var/run/crate/" << jailName << ".crate");
+    if (!Util::Fs::fileExists(crateFile)) {
+      auto bareName = Util::filePathToBareName(jailPath);
+      crateFile = STR("/var/run/crate/" << bareName << ".crate");
+    }
   }
 
   if (!Util::Fs::fileExists(crateFile)) {
