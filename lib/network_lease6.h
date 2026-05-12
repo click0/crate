@@ -7,7 +7,10 @@
 // path. See lib/network_lease.h for the design rationale; the v6
 // version is a near-copy with Ip6AllocPure types substituted.
 //
-// Storage: /var/run/crate/network-leases6.txt
+// Storage: legacy single-tenant default
+//            /var/run/crate/network-leases6.txt
+//          rootless per-user (1.0.1+, when privops socket detected)
+//            /var/run/crate/<uid>/network-leases6.txt
 // Format:  one "<name> <ip6>" per line; lines starting with `#` and
 //          empty lines are ignored. Atomic writes via tmpfile +
 //          rename + flock(2).
