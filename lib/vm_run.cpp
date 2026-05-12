@@ -4,6 +4,8 @@
 
 #include "vm_run.h"
 #include "ifconfig_ops.h"
+#include "privops_client.h"
+#include "runtime_paths_pure.h"
 #include "util.h"
 #include "err.h"
 #include <rang.hpp>
@@ -24,6 +26,28 @@
 #define ERR(msg...) ERR2("vm", msg)
 
 namespace VmRun {
+
+namespace {
+
+// 1.0.4: resolve the base directory for VM runtime state (DNS share,
+// cloud-init user-data temp files). Legacy single-tenant uses
+// /var/run/crate; rootless mode lazy-resolves to
+// /var/run/crate/<uid> when crated's privops socket is detected.
+// Same pattern as stack.cpp (1.0.3) and network_lease.cpp (0.9.27).
+const std::string &vmBaseDir() {
+  static std::string cached;
+  static bool computed = false;
+  if (!computed) {
+    if (!PrivOpsClient::detectSocketPath().empty())
+      cached = RuntimePathsPure::perUserRoot((uint32_t)::getuid());
+    else
+      cached = "/var/run/crate";
+    computed = true;
+  }
+  return cached;
+}
+
+} // anon
 
 // ---------------------------------------------------------------------------
 // libvirt connection (singleton)
@@ -225,12 +249,15 @@ void connectToSharedBridge(const std::string &vmName,
 
 void configureVmDns(const std::string &vmName, const std::string &dnsIp) {
   // Create a shared directory with resolv.conf for the VM
-  std::string dnsShareDir = "/var/run/crate/vm/" + vmName + "/dns";
+  const std::string &base = vmBaseDir();
+  std::string vmDir       = base + "/vm";
+  std::string vmInstance  = vmDir + "/" + vmName;
+  std::string dnsShareDir = vmInstance + "/dns";
 
   // Create the directory tree
-  ::mkdir("/var/run/crate", 0755);
-  ::mkdir("/var/run/crate/vm", 0755);
-  ::mkdir(("/var/run/crate/vm/" + vmName).c_str(), 0755);
+  ::mkdir(base.c_str(), 0755);
+  ::mkdir(vmDir.c_str(), 0755);
+  ::mkdir(vmInstance.c_str(), 0755);
   ::mkdir(dnsShareDir.c_str(), 0755);
 
   // Write resolv.conf with the stack DNS IP
@@ -340,12 +367,14 @@ std::string generateCloudInitFor9p(
        << " 9p " << opts << " 0 0\n";
   }
 
-  // Write to a temp file under /var/run/crate
-  ::mkdir("/var/run/crate", 0755);
-  ::mkdir("/var/run/crate/cloud-init", 0755);
+  // Write to a temp file under the per-user (or legacy) base dir
+  const std::string &base = vmBaseDir();
+  std::string cloudInitDir = base + "/cloud-init";
+  ::mkdir(base.c_str(), 0755);
+  ::mkdir(cloudInitDir.c_str(), 0755);
 
   // Use a unique name based on PID to avoid collisions
-  std::string path = "/var/run/crate/cloud-init/user-data-9p-"
+  std::string path = cloudInitDir + "/user-data-9p-"
                      + std::to_string(::getpid()) + ".yaml";
 
   std::ofstream ofs(path);

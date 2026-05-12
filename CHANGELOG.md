@@ -6,6 +6,68 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.4] — 2026-05-12
+
+**VM runtime + cloud-init paths per-user.** Fourth patch
+release of the 1.x line. `lib/vm_run.cpp` now resolves the
+VM DNS share and cloud-init user-data temp directories to
+the per-user base when the privops socket is detected.
+
+### What changes
+
+New file-local `vmBaseDir()` helper in `lib/vm_run.cpp` —
+same lazy-resolve pattern as `stack.cpp` (1.0.3) and
+`network_lease.cpp` (0.9.27).
+
+| Mode                          | DNS share base                       | cloud-init temp dir                  |
+|-------------------------------|--------------------------------------|--------------------------------------|
+| Legacy (no `crated`)          | `/var/run/crate/vm/<vmName>/dns/`    | `/var/run/crate/cloud-init/`         |
+| Rootless (crated + privops)   | `/var/run/crate/<uid>/vm/<vmName>/dns/` | `/var/run/crate/<uid>/cloud-init/`|
+
+Two functions updated:
+
+- `configureVmDns()` — DNS share dir tree (`vm/<vmName>/dns/`)
+  resolves under per-user root
+- The cloud-init user-data writer (anonymous helper near line
+  340) — writes `user-data-9p-<pid>.yaml` under per-user root
+
+### Why this matters
+
+Before this release, two operators on a rootless host with
+the VM track enabled would clobber each other's resolv.conf
+9p-share AND collide on cloud-init user-data files (despite
+the PID suffix). Single-tenant deployments saw no impact.
+
+VM track is `#ifdef HAVE_LIBVIRT`-gated, so non-libvirt
+builds are completely unaffected.
+
+### 1.x backlog
+
+Path-leak track complete with this release. Remaining 1.x
+items (different shapes):
+
+- `lib/run_net.cpp:446` direct `ifconfig -vnet` (should use
+  `SetIfaceUp` privops verb)
+- **PfctlOps privops-wiring** — `lib/run.cpp` call sites
+  (1.1.0)
+- Query-side privops verbs (inspect/doctor/migrate)
+- Test coverage on impure modules (run.cpp 1810 / run_pure.cpp
+  24 lines)
+
+### Tests
+
+No new tests — single helper + 2 sites. Same `dnsBaseDir`
+pattern from 1.0.3. Suite stays at 1303.
+
+### Files
+
+- `lib/vm_run.cpp` — `vmBaseDir()` helper; 2 sites routed
+  through it; new includes
+- `cli/args.cpp` — version `crate 1.0.4`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.0.3] — 2026-05-12
 
 **Stack DNS dirs per-user.** Third patch release of the 1.x
