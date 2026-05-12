@@ -6,6 +6,79 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.1] — 2026-05-12
+
+**IPv6 lease file per-user.** First patch release of the 1.x
+line. Mirrors the 0.9.27 IPv4 lazy-resolve into the IPv6
+sibling that was missed at the time.
+
+### What changes
+
+`lib/network_lease6.cpp` gains the same `effectivePath()`
+helper that `network_lease.cpp` has had since 0.9.27. When the
+crated privops socket is detected at first call, the IPv6
+lease file path resolves to:
+
+```
+/var/run/crate/<uid>/network-leases6.txt
+```
+
+instead of the legacy single-tenant
+`/var/run/crate/network-leases6.txt`. Empty-socket-path
+deployments (no `crated` running, or unset
+`privops_socket:`) preserve the legacy path byte-for-byte.
+
+### Why this matters
+
+Without this fix, every operator on a rootless host shared the
+same v6 lease file, racing each other for the lock and seeing
+each other's allocations. The v4 sibling was already isolated
+since 0.9.27 — meaning two operators running parallel
+`crate run` would race on v6 but not on v4, an
+asymmetry that masked the bug from single-stack v4
+deployments.
+
+### Wire / API compatibility
+
+None of the lease format, allocation algorithm, or public
+function signatures changed. `NetworkLease6::leasePath()` now
+returns the resolved per-user path instead of the legacy
+constant; callers that printed this value see the new path
+when rootless mode is active.
+
+### 1.x backlog
+
+Remaining latent per-user path leaks from the pre-1.0.0 audit
+(unchanged from 1.0.0):
+
+- `lib/lifecycle.cpp` `.crate` file path
+- `lib/pfctl_ops.cpp` pf lock
+- `lib/stack.cpp` DNS dirs
+- `lib/vm_run.cpp` VM + cloud-init paths
+- `lib/run_net.cpp:446` direct `ifconfig -vnet` (should use
+  `SetIfaceUp` privops verb)
+
+These will land in 1.0.2+ as mechanical mini-patches following
+this PR's template.
+
+### Tests
+
+No new tests — the change mirrors the 0.9.27 pattern, which
+is exercised by `tests/unit/ip6_alloc_pure_test.cpp` plus the
+runtime-paths suite. The lazy-cache + override flag pair was
+proven in network_lease.cpp.
+
+### Files
+
+- `lib/network_lease6.cpp` — `effectivePath()` helper, all
+  I/O routed through it
+- `lib/network_lease6.h` — header comment updated to document
+  per-user storage path
+- `cli/args.cpp` — version `crate 1.0.1`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.0.0] — 2026-05-12
 
 **Rootless track complete — setuid bit removed.** First 1.x
