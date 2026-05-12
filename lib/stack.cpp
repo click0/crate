@@ -9,6 +9,8 @@
 #include "ipfw_ops.h"
 #include "net.h"
 #include "pathnames.h"
+#include "privops_client.h"
+#include "runtime_paths_pure.h"
 #include "stack_pure.h"
 
 #include <rang.hpp>
@@ -183,6 +185,24 @@ static std::map<std::string, std::string> allocateIpPool(
 
 // --- Per-Stack DNS Service (§27.1) ---
 
+// Resolve the base directory for per-stack unbound config + pidfile.
+// Legacy: /var/run/crate (shared across operators).
+// Rootless (1.0.3+): /var/run/crate/<uid> when crated's privops socket
+// is detected, so two operators on the same host don't fight over
+// the same dns-<network> subdir or pidfile path.
+static const std::string &dnsBaseDir() {
+  static std::string cached;
+  static bool computed = false;
+  if (!computed) {
+    if (!PrivOpsClient::detectSocketPath().empty())
+      cached = RuntimePathsPure::perUserRoot((uint32_t)::getuid());
+    else
+      cached = "/var/run/crate";
+    computed = true;
+  }
+  return cached;
+}
+
 // Generate unbound configuration for a stack's DNS service
 static std::string generateUnboundConf(
     const std::string &listenIp,
@@ -198,9 +218,9 @@ static std::string generateUnboundConf(
   conf << "  do-daemonize: yes\n";
   // Use per-stack pidfile to avoid clashes when multiple stacks run DNS
   if (!networkName.empty())
-    conf << "  pidfile: \"/var/run/crate/dns-" << networkName << "/unbound.pid\"\n";
+    conf << "  pidfile: \"" << dnsBaseDir() << "/dns-" << networkName << "/unbound.pid\"\n";
   else
-    conf << "  pidfile: \"/var/run/crate/dns-default/unbound.pid\"\n";
+    conf << "  pidfile: \"" << dnsBaseDir() << "/dns-default/unbound.pid\"\n";
   conf << "  access-control: 127.0.0.0/8 allow\n";
   if (!subnet.empty())
     conf << "  access-control: " << subnet << " allow\n";
@@ -236,7 +256,7 @@ static pid_t startStackDns(
   // Get upstream DNS for forwarding
   auto upstreamDns = Net::getNameserverIp();
 
-  auto confDir = STR("/var/run/crate/dns-" << network.name);
+  auto confDir = STR(dnsBaseDir() << "/dns-" << network.name);
   std::filesystem::create_directories(confDir);
 
   auto confPath = STR(confDir << "/unbound.conf");
@@ -278,7 +298,7 @@ static void stopStackDns(const std::string &networkName, pid_t unboundPid) {
     ::waitpid(unboundPid, &status, 0);
   }
   // Clean up config directory
-  auto confDir = STR("/var/run/crate/dns-" << networkName);
+  auto confDir = STR(dnsBaseDir() << "/dns-" << networkName);
   std::filesystem::remove_all(confDir);
 }
 
