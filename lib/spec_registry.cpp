@@ -1,6 +1,8 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "spec_registry.h"
+#include "privops_client.h"
+#include "runtime_paths_pure.h"
 #include "err.h"
 
 #include <fcntl.h>
@@ -20,18 +22,41 @@ namespace SpecRegistry {
 
 namespace {
 
+// 1.0.2: legacy single-tenant default. `effectivePath()` lazy-
+// resolves to /var/run/crate/<uid>/spec-registry.txt when the
+// crated privops socket is detected, so two operators on the
+// same host don't see each other's jail-name → .crate mapping.
+// Mirrors NetworkLease (0.9.27) and NetworkLease6 (1.0.1).
 std::string g_path = "/var/run/crate/spec-registry.txt";
+bool g_pathOverridden = false;
+
+const std::string &effectivePath() {
+  static std::string cached;
+  static bool computed = false;
+  if (!computed) {
+    if (g_pathOverridden) {
+      cached = g_path;
+    } else if (!PrivOpsClient::detectSocketPath().empty()) {
+      cached = RuntimePathsPure::perUserRoot((uint32_t)::getuid())
+             + "/spec-registry.txt";
+    } else {
+      cached = g_path;
+    }
+    computed = true;
+  }
+  return cached;
+}
 
 int openLocked() {
-  int fd = ::open(g_path.c_str(),
+  int fd = ::open(effectivePath().c_str(),
                   O_RDWR | O_CREAT | O_CLOEXEC,
                   0640);
   if (fd < 0)
-    ERR("cannot open " << g_path << ": " << std::strerror(errno))
+    ERR("cannot open " << effectivePath() << ": " << std::strerror(errno))
   if (::flock(fd, LOCK_EX) != 0) {
     int e = errno;
     ::close(fd);
-    ERR("flock " << g_path << ": " << std::strerror(e))
+    ERR("flock " << effectivePath() << ": " << std::strerror(e))
   }
   return fd;
 }
@@ -70,7 +95,7 @@ std::vector<SpecRegistryPure::Entry> parseAll(const std::string &buf) {
 
 void writeAllAtomic(int /*lockedFd*/,
                     const std::vector<SpecRegistryPure::Entry> &entries) {
-  std::string tmp = g_path + ".tmp";
+  std::string tmp = effectivePath() + ".tmp";
   int fd = ::open(tmp.c_str(),
                   O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
                   0640);
@@ -94,23 +119,26 @@ void writeAllAtomic(int /*lockedFd*/,
   }
   ::fsync(fd);
   ::close(fd);
-  if (::rename(tmp.c_str(), g_path.c_str()) != 0) {
+  if (::rename(tmp.c_str(), effectivePath().c_str()) != 0) {
     int e = errno;
     ::unlink(tmp.c_str());
-    ERR("rename " << tmp << " -> " << g_path << ": " << std::strerror(e))
+    ERR("rename " << tmp << " -> " << effectivePath() << ": " << std::strerror(e))
   }
 }
 
 } // anon
 
-const std::string &registryPath() { return g_path; }
-void setPathForTesting(const std::string &p) { g_path = p; }
+const std::string &registryPath() { return effectivePath(); }
+void setPathForTesting(const std::string &p) {
+  g_path = p;
+  g_pathOverridden = true;
+}
 
 std::vector<SpecRegistryPure::Entry> readAll() {
-  int fd = ::open(g_path.c_str(), O_RDONLY | O_CLOEXEC);
+  int fd = ::open(effectivePath().c_str(), O_RDONLY | O_CLOEXEC);
   if (fd < 0) {
     if (errno == ENOENT) return {};
-    ERR("open " << g_path << ": " << std::strerror(errno))
+    ERR("open " << effectivePath() << ": " << std::strerror(errno))
   }
   auto buf = readAllFd(fd);
   ::close(fd);

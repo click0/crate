@@ -7,6 +7,11 @@
 // {jail name -> .crate path} store. See lib/spec_registry_pure.h
 // for the design rationale and file format.
 //
+// Storage: legacy single-tenant default
+//            /var/run/crate/spec-registry.txt
+//          rootless per-user (1.0.2+, when privops socket detected)
+//            /var/run/crate/<uid>/spec-registry.txt
+//
 
 #include "spec_registry_pure.h"
 
