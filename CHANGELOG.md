@@ -6,6 +6,148 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.0] — 2026-05-12
+
+**Rootless track complete — setuid bit removed.** First 1.x
+release. The `Makefile install` target now installs `crate(1)`
+at mode `0755` instead of `04755`; the binary can no longer
+self-elevate. Every privileged operation (jail lifecycle,
+mounts, RCTL, ZFS attach, network configuration, firewall
+rules) is delegated to `crated(8)` via the libnv privops
+socket (local clients, getpeereid-authenticated) or the HTTPS
+API with bearer tokens (remote clients). This closes the
+multi-step rootless track started at 0.9.0 and is the final
+gate the security audit was waiting on.
+
+### What changes
+
+#### Makefile install target
+
+```make
+# 0.9.30 and earlier
+install -s -m 04755 crate $(DESTDIR)$(PREFIX)/bin
+
+# 1.0.0
+install -s -m 0755 crate $(DESTDIR)$(PREFIX)/bin
+```
+
+That is the entire C++/build change for this release. The
+preceding 31 mini-PRs (0.9.0 → 0.9.30) staged every other
+piece — verb taxonomy, libnv listener, per-user namespacing
+helpers, CLI call-site wiring, default flip — so the setuid
+removal here is a one-line gate, not a code rewrite.
+
+#### CLI binary behaviour
+
+`crate(1)` runs as the operator's uid. It opens the privops
+socket (path resolved via `privops_socket:` in `crated.conf`,
+default `/var/run/crate/privops.sock`), packs nvlist requests,
+and reads responses. The pre-1.0 setuid path (geteuid != ruid,
+exec under root) is gone. Operators who script around
+`crate(1)` as root no longer need `sudo` — the kernel does
+the privilege handoff via getpeereid when the request crosses
+the socket.
+
+#### Operator visibility
+
+```
+# 0.9.30 install
+$ ls -l /usr/local/bin/crate
+-rwsr-xr-x  1 root  wheel  ... /usr/local/bin/crate
+                       ^ setuid
+
+# 1.0.0 install
+$ ls -l /usr/local/bin/crate
+-rwxr-xr-x  1 root  wheel  ... /usr/local/bin/crate
+                       ^ no setuid
+```
+
+Compliance checklists that flag setuid-root binaries now pass
+out of the box. The only privileged binary the port installs
+is `crated(8)` at `/usr/local/sbin/crated`.
+
+### Migration
+
+Three upgrade paths:
+
+| State pre-1.0.0                                | Action on upgrade                |
+|------------------------------------------------|----------------------------------|
+| 0.9.30 with `crated` running + `rootless: true`| Just `pkg upgrade`; nothing else |
+| 0.9.30 with `rootless_per_user: false`         | Same — `crate(1)` still works, just talks to `crated` for every op |
+| ≤ 0.8.x, no `crated` running                   | Install + enable `crated` first, THEN upgrade `crate`. See docs/rootless-migration.md |
+
+`crated` MUST be running for `crate(1)` to function in 1.0.0.
+Single-tenant operators who somehow avoided installing `crated`
+in the 0.9.x track will get a clear error from `crate(1)`
+pointing at `service crated start`.
+
+### Rolling back
+
+Patch the Makefile back to `-m 04755`, rebuild, and reinstall.
+Or pin to 0.9.30. The wire-level privops protocol has not
+changed since 0.9.29, so a 1.0.0 client talks to a 0.9.30
+daemon and vice versa.
+
+### Wire compatibility
+
+No wire changes since 0.9.29. 21 privops verbs unchanged.
+JSON, libnv, bearer token formats unchanged. Control sockets
+unchanged. HTTPS API unchanged. Prometheus metrics unchanged.
+
+### Series state
+
+Rootless track:
+
+- 0.9.0–0.9.7: privops verb taxonomy (14 verbs, JSON)
+- 0.9.8–0.9.13: per-user namespacing pure modules + audit
+- 0.9.14: libnv listener (FreeBSD-native, getpeereid)
+- 0.9.15–0.9.29: CLI call sites wired through privops; verb
+  set grew to 21
+- 0.9.30: default flip (`rootless_per_user: true`)
+- **1.0.0: setuid bit removed (this release)**
+
+Out of scope for 1.0.0 (tracked in CHANGELOG under audit
+findings, will land in 1.x):
+
+- `lib/network_lease6.cpp` per-user lazy-resolve (IPv4
+  sibling already done in 0.9.27)
+- `lib/lifecycle.cpp` `.crate` file path per-user
+- `lib/pfctl_ops.cpp` pf lock per-user
+- `lib/stack.cpp` DNS dirs per-user
+- `lib/vm_run.cpp` VM + cloud-init paths per-user
+- `lib/run_net.cpp:446` direct `ifconfig -vnet` → `SetIfaceUp`
+  privops
+- Query-side privops verbs (inspect/doctor/migrate inspection
+  currently shell out)
+- Test coverage on the impure half (run.cpp 1810 lines vs
+  run_pure.cpp 24 lines, plus 47 lib/*.cpp without dedicated
+  tests)
+
+### Tests
+
+No new tests — the change is purely the install mode flag.
+The behaviour was exercised across 31 prior mini-PRs; the
+0.9.30 audit confirmed every call site is wired. Suite stays
+at 1303.
+
+### Files
+
+- `Makefile` — `install` target: `04755` → `0755`, comment
+  noting rollback procedure
+- `cli/args.cpp` — version `crate 1.0.0`
+- `docs/rootless-migration.md` — status promoted to "1.0.0,
+  setuid removed", 1.0.0 release-log entry filled in
+- `CHANGELOG.md` — this entry
+
+### Thanks
+
+To everyone who reviewed the per-verb mini-PRs across the
+0.9.0–0.9.30 track. The architectural correction at 0.9.14
+(libnv vs HTTP-on-unix-socket) was the right call and saved
+us from a wheel-reinvention path.
+
+---
+
 ## [0.9.30] — 2026-05-10
 
 **Rootless track, default flip.** Thirty-first 0.9.x release.

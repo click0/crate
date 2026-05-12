@@ -1,19 +1,19 @@
 # Rootless migration guide
 
-**Audience:** operators running `crate(1)` setuid-root today,
-considering the move to the rootless model that lands in
-**1.0.0**.
+**Audience:** operators running `crate(1)` setuid-root on ≤ 0.9.x
+who are upgrading to the rootless model that ships in **1.0.0**.
 
-**Current status (0.9.30):** the rootless model is **on by
-default**. New installs (and old installs whose `crated.conf`
-doesn't set `rootless_per_user` explicitly) compose paths,
-ZFS prefixes, network sub-CIDRs, and RCTL umbrellas from the
-connecting operator's uid. `crate(1)` is still installed with
-`mode 04755` (setuid root) until 1.0.0; the setuid bit is
-removed in the 1.0.0 release. Operators wanting the legacy
-single-tenant shape must opt out explicitly with
-`rootless_per_user: false` — see the "Rolling back" section
-below.
+**Current status (1.0.0):** the rootless model is the default
+and `crate(1)` no longer ships with the setuid bit. The
+`Makefile install` target installs the binary at mode 0755;
+every privileged operation is delegated to `crated(8)` over
+the libnv privops socket (or the HTTPS API for remote clients).
+New installs (and old installs whose `crated.conf` doesn't set
+`rootless_per_user` explicitly) compose paths, ZFS prefixes,
+network sub-CIDRs, and RCTL umbrellas from the connecting
+operator's uid. Operators wanting the legacy single-tenant
+shape must opt out explicitly with `rootless_per_user: false`
+— see the "Rolling back" section below.
 
 ---
 
@@ -173,12 +173,14 @@ auto-flip on upgrade. Operators wanting the legacy single-
 tenant path must add `rootless_per_user: false` explicitly —
 see "Rolling back" below.
 
-### 1.0.0 (planned) — setuid removed
+### 1.0.0 — setuid removed
 
-`Makefile install` target switches from `-m 04755` to
-`-m 0755`. `crate(1)` can no longer self-elevate; it must
-talk to `crated`. Legacy operators who want the old model
-patch the Makefile or pin to 0.9.x.
+`Makefile install` switches from `-m 04755` to `-m 0755`.
+`crate(1)` can no longer self-elevate; it must talk to
+`crated` over the libnv privops socket (local) or the HTTPS
+API (remote). Legacy operators who want the old model patch
+the Makefile back to `-m 04755` or pin to 0.9.30. The
+rootless track is complete with this release.
 
 ---
 
