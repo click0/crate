@@ -160,7 +160,14 @@ crate-snmpd: libcrate.a $(SNMPD_OBJS)
 install: crate
 	@mkdir -p $(DESTDIR)$(PREFIX)/bin
 	@mkdir -p $(DESTDIR)$(PREFIX)/man/man5
-	install -s -m 04755 crate $(DESTDIR)$(PREFIX)/bin
+	# 1.0.0: setuid bit removed. crate(1) runs as the operator and
+	# delegates privileged operations to crated(8) via the libnv
+	# privops socket (or HTTPS API for remote clients). Operators
+	# rolling back to the legacy setuid model can pin to 0.9.30 or
+	# patch this line back to `-m 04755` — but see docs/rootless-
+	# migration.md "What the daemon takes over" for the security
+	# rationale.
+	install -s -m 0755 crate $(DESTDIR)$(PREFIX)/bin
 	gzip -9 < crate.5 > $(DESTDIR)$(PREFIX)/man/man5/crate.5.gz
 
 install-daemon: crated
