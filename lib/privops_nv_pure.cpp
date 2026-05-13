@@ -261,6 +261,12 @@ std::string parseReclaimIfaceFromVnet(const FieldMap &m,
   return "";
 }
 
+std::string parseFlushPfAnchor(const FieldMap &m,
+                               PrivOpsPure::FlushPfAnchorReq &out) {
+  if (auto e = requireString(m, "anchor", out.anchor); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing ---
 
 PrivOpsPure::Verb extractVerb(const FieldMap &m) {

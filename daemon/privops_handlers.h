@@ -181,6 +181,9 @@ PrivOpsWirePure::DispatchResult handleClearLoginclassRctl(const PrivOpsPure::Cle
 // IfconfigOps::moveFromVnet.
 PrivOpsWirePure::DispatchResult handleReclaimIfaceFromVnet(const PrivOpsPure::ReclaimIfaceFromVnetReq &r);
 
+// 1.1.0: flush a pf anchor. Wraps PfctlOps::flushRules.
+PrivOpsWirePure::DispatchResult handleFlushPfAnchor(const PrivOpsPure::FlushPfAnchorReq &r);
+
 // 0.9.29: register the daemon's `rctl_umbrella:` config. Called
 // once at daemon startup. The umbrella rules apply after a
 // successful create_jail privops invocation when the operator's

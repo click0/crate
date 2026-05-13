@@ -141,6 +141,9 @@ PrivOpsNvPure::FieldMap buildClearLoginclassRctl(const std::string &loginclass,
 PrivOpsNvPure::FieldMap buildReclaimIfaceFromVnet(const std::string &ifname,
                                                    const std::string &jailName);
 
+// 1.1.0: flush a pf anchor. Symmetric companion to buildAddPfRule.
+PrivOpsNvPure::FieldMap buildFlushPfAnchor(const std::string &anchor);
+
 // --- Wire transport (FreeBSD-only) ---
 
 struct Response {

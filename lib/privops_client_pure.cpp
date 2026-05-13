@@ -297,4 +297,11 @@ PrivOpsNvPure::FieldMap buildReclaimIfaceFromVnet(const std::string &ifname,
   };
 }
 
+PrivOpsNvPure::FieldMap buildFlushPfAnchor(const std::string &anchor) {
+  return {
+    {"verb", "flush_pf_anchor"},
+    {"anchor", anchor},
+  };
+}
+
 } // namespace PrivOpsClient

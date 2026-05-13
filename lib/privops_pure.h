@@ -151,6 +151,11 @@ enum class Verb {
   // where a passthrough interface is moved back to the host before
   // the jail is destroyed.
   ReclaimIfaceFromVnet,
+
+  // 1.1.0: flush a pf anchor. Symmetric companion to AddPfRule
+  // (0.9.0). Targets the run.cpp jail-teardown path where
+  // PfctlOps::flushRules is called to clear the per-jail anchor.
+  FlushPfAnchor,
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -302,6 +307,13 @@ struct ReclaimIfaceFromVnetReq {
   std::string jailName;    // jail that holds the iface
 };
 
+// 1.1.0: flush a pf anchor. Anchor is validated like
+// PoolPure::validatePoolName (slashes allowed for "crate/<jail>"
+// nested form).
+struct FlushPfAnchorReq {
+  std::string anchor;
+};
+
 // --- Per-verb validators ---
 //
 // Each `validate*(req)` returns "" on success, otherwise a one-line
@@ -333,6 +345,7 @@ std::string validateCreateEpair(const CreateEpairReq &r);
 std::string validateSetLoginclassRctl(const SetLoginclassRctlReq &r);
 std::string validateClearLoginclassRctl(const ClearLoginclassRctlReq &r);
 std::string validateReclaimIfaceFromVnet(const ReclaimIfaceFromVnetReq &r);
+std::string validateFlushPfAnchor(const FlushPfAnchorReq &r);
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //
