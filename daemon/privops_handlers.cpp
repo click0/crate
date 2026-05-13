@@ -473,6 +473,19 @@ DispatchResult handleClearLoginclassRctl(const PrivOpsPure::ClearLoginclassRctlR
                   r.loginclass, r.key)};
 }
 
+// --- handleReclaimIfaceFromVnet (1.0.5) ---
+
+DispatchResult handleReclaimIfaceFromVnet(const PrivOpsPure::ReclaimIfaceFromVnetReq &r) {
+  try {
+    IfconfigOps::moveFromVnet(r.ifname, r.jailName);
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("ifconfig_failed",
+                                                     e.what())};
+  }
+  return {200, PrivOpsWirePure::formatReclaimIfaceFromVnetSuccess(
+                  r.ifname, r.jailName)};
+}
+
 // --- Top-level dispatcher ---
 
 namespace {
@@ -709,6 +722,14 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleClearLoginclassRctl(r);
     }
+    case Verb::ReclaimIfaceFromVnet: {
+      PrivOpsPure::ReclaimIfaceFromVnetReq r;
+      if (auto e = PrivOpsWirePure::parseReclaimIfaceFromVnet(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateReclaimIfaceFromVnet(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleReclaimIfaceFromVnet(r);
+    }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
   }
@@ -902,6 +923,14 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       if (auto e = PrivOpsPure::validateClearLoginclassRctl(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleClearLoginclassRctl(r);
+    }
+    case Verb::ReclaimIfaceFromVnet: {
+      PrivOpsPure::ReclaimIfaceFromVnetReq r;
+      if (auto e = PrivOpsNvPure::parseReclaimIfaceFromVnet(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateReclaimIfaceFromVnet(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleReclaimIfaceFromVnet(r);
     }
     case Verb::Unknown:
       return {404,

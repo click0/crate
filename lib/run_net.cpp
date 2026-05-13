@@ -439,12 +439,32 @@ PassthroughInfo passthroughInterface(int jid, const std::string &jidStr,
   return info;
 }
 
+// 1.0.5: privops-aware wrapper for moveFromVnet (jail teardown).
+// Same shape as moveToVnetPrivopsOrLocal at line 51.
+static void moveFromVnetPrivopsOrLocal(const std::string &iface,
+                                       const std::string &jailName) {
+  std::string sock = PrivOpsClient::detectSocketPath();
+  if (!sock.empty()) {
+    auto resp = PrivOpsClient::sendRequest(sock,
+        PrivOpsClient::buildReclaimIfaceFromVnet(iface, jailName));
+    if (!resp.transportError.empty())
+      ERR2("run_net", "privops reclaim_iface_from_vnet '" << iface
+           << "' transport error: " << resp.transportError)
+    if (resp.status >= 400)
+      ERR2("run_net", "privops reclaim_iface_from_vnet '" << iface
+           << "' failed (status " << resp.status << "): " << resp.body)
+    return;
+  }
+  IfconfigOps::moveFromVnet(iface, jailName);
+}
+
 void reclaimPassthroughInterface(const PassthroughInfo &info,
     const std::string &jailName) {
-  // Reclaim the interface from the jail back to the host.
-  // Uses -vnet with the jail name. MUST be called before jail destruction.
-  Util::execCommand({CRATE_PATH_IFCONFIG, info.iface, "-vnet", jailName},
-    CSTR("reclaim interface " << info.iface << " from jail " << jailName));
+  // Reclaim the interface from the jail back to the host. Routes
+  // through the reclaim_iface_from_vnet privops verb when the
+  // socket is detected so rootless `crate(1)` doesn't need
+  // CAP_NET_ADMIN. MUST be called before jail destruction.
+  moveFromVnetPrivopsOrLocal(info.iface, jailName);
 }
 
 //

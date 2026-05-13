@@ -6,6 +6,90 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.5] — 2026-05-12
+
+**Reclaim-from-vnet privops verb.** Fifth patch release of the
+1.x line. Adds a new privops verb so jail teardown no longer
+shells out to `ifconfig -vnet` directly from `crate(1)`. First
+verb added since 0.9.28; the wire taxonomy grows from 21 to 22.
+
+### What changes
+
+`lib/run_net.cpp:446` (the `reclaimPassthroughInterface`
+function) previously called:
+
+```cpp
+Util::execCommand({CRATE_PATH_IFCONFIG, info.iface, "-vnet", jailName},
+                  ...);
+```
+
+This requires `CAP_NET_ADMIN` / root, which `crate(1)` no
+longer has since the setuid bit was removed in 1.0.0. The fix
+wires the call through a new privops verb
+`reclaim_iface_from_vnet`, mirroring the 0.9.20 pattern that
+already routes the forward direction (host → jail) through
+`ConfigureIface`.
+
+### Wire taxonomy
+
+| #  | Verb name                  | Release  | Direction         |
+|----|----------------------------|----------|-------------------|
+| 22 | `reclaim_iface_from_vnet`  | **1.0.5**| jail → host       |
+| 21 | `clear_loginclass_rctl`    | 0.9.28   | (loginclass scope)|
+| ... | (full list: see 0.9.0–0.9.28 entries) | | |
+
+Same per-verb pattern as 0.9.25–0.9.28: validator, JSON parser,
+nv parser, client builder, daemon handler, HTTP + libnv
+dispatcher cases.
+
+### Reasoning
+
+The pre-1.0.0 audit flagged this site as "direct shell call".
+The earlier 0.9.20 work routed the inverse direction
+(host → jail) through `ConfigureIface` but missed the
+teardown path because the call site lives in a different
+helper. 1.0.5 closes that gap.
+
+### What's left
+
+| Area                            | Status     |
+|---------------------------------|------------|
+| Per-user path leaks             | ✅ done (0.9.27, 1.0.1–1.0.4) |
+| Iface verbs (forward + reverse) | ✅ done (0.9.23–0.9.26, 1.0.5) |
+| **PfctlOps privops-wiring**     | 1.1.0      |
+| Query-side privops verbs        | 1.1.0+     |
+| Test coverage (run.cpp impure)  | 1.2.0+     |
+
+### Tests
+
+No new dedicated test — the verb mirrors the 0.9.25
+`SetIfaceInetAddr` shape, which is covered by the existing
+validator + parser test scaffold. The new
+`validateReclaimIfaceFromVnet` reuses the proven
+`validateIfaceName` + `validateJailName` field validators.
+Suite stays at 1303.
+
+### Files
+
+- `lib/privops_pure.h` — new `Verb::ReclaimIfaceFromVnet`,
+  request struct, validator decl
+- `lib/privops_pure.cpp` — verbName, parseVerb, validator
+- `lib/privops_wire_pure.{h,cpp}` — JSON parser + success
+  formatter + dispatcher case
+- `lib/privops_nv_pure.{h,cpp}` — nv parser
+- `lib/privops_client.h` + `lib/privops_client_pure.cpp` —
+  client builder
+- `daemon/privops_handlers.{h,cpp}` — handler impl + HTTP +
+  libnv dispatcher cases
+- `lib/ifconfig_ops.{h,cpp}` — `moveFromVnet(iface, jailName)`
+  primitive (shells `ifconfig <iface> -vnet <jail>`)
+- `lib/run_net.cpp` — `moveFromVnetPrivopsOrLocal` wrapper;
+  `reclaimPassthroughInterface` routes through it
+- `cli/args.cpp` — version `crate 1.0.5`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.0.4] — 2026-05-12
 
 **VM runtime + cloud-init paths per-user.** Fourth patch

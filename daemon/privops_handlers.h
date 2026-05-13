@@ -177,6 +177,10 @@ PrivOpsWirePure::DispatchResult handleCreateEpair(const PrivOpsPure::CreateEpair
 PrivOpsWirePure::DispatchResult handleSetLoginclassRctl(const PrivOpsPure::SetLoginclassRctlReq &r);
 PrivOpsWirePure::DispatchResult handleClearLoginclassRctl(const PrivOpsPure::ClearLoginclassRctlReq &r);
 
+// 1.0.5: reclaim a host iface from a jail's vnet. Wraps
+// IfconfigOps::moveFromVnet.
+PrivOpsWirePure::DispatchResult handleReclaimIfaceFromVnet(const PrivOpsPure::ReclaimIfaceFromVnetReq &r);
+
 // 0.9.29: register the daemon's `rctl_umbrella:` config. Called
 // once at daemon startup. The umbrella rules apply after a
 // successful create_jail privops invocation when the operator's

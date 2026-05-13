@@ -176,6 +176,16 @@ void moveToVnet(const std::string &iface, int jid) {
     STR("move " << iface << " to vnet jail " << jid));
 }
 
+void moveFromVnet(const std::string &iface, const std::string &jailName) {
+  // No clean libifconfig API for the reverse direction; ifconfig(8)
+  // accepts a jail name OR jid here. We stick with the name form
+  // because that's what the legacy call site already had — the
+  // jail's jid may already be gone by the time we reach this point.
+  Util::execCommand(
+    {CRATE_PATH_IFCONFIG, iface, "-vnet", jailName},
+    STR("reclaim " << iface << " from vnet jail " << jailName));
+}
+
 // ---------------------------------------------------------------------------
 // Offloading control
 // ---------------------------------------------------------------------------
