@@ -137,6 +137,8 @@ std::string parseClearLoginclassRctl(const FieldMap &m,
                                      PrivOpsPure::ClearLoginclassRctlReq &out);
 std::string parseReclaimIfaceFromVnet(const FieldMap &m,
                                       PrivOpsPure::ReclaimIfaceFromVnetReq &out);
+std::string parseFlushPfAnchor(const FieldMap &m,
+                               PrivOpsPure::FlushPfAnchorReq &out);
 
 // --- Verb routing ---
 

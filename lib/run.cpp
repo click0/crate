@@ -37,6 +37,7 @@
 #include "run_gui.h"
 #include "run_services.h"
 #include "pfctl_ops.h"
+#include "privops_client.h"
 
 #include <rang.hpp>
 
@@ -119,6 +120,49 @@ static void signalHandler(int sig) { g_signalReceived = sig; }
 // argsToString moved to lib/run_pure.cpp (RunPure::argsToString).
 static inline std::string argsToString(int argc, char** argv) {
   return RunPure::argsToString(argc, argv);
+}
+
+// 1.1.0: pfctl privops-routing wrappers. Same shape as the
+// IfconfigOps wrappers in lib/run_net.cpp. Without these, the
+// non-root `crate(1)` from 1.0.0+ fails to open /dev/pf when
+// composing the per-jail anchor. Falls back to the bare PfctlOps
+// primitive when no socket is available (legacy setuid builds).
+static void addPfRulePrivopsOrLocal(const std::string &anchor,
+                                    const std::string &rulesText) {
+  std::string sock = PrivOpsClient::detectSocketPath();
+  if (!sock.empty()) {
+    auto resp = PrivOpsClient::sendRequest(sock,
+        PrivOpsClient::buildAddPfRule(anchor, rulesText));
+    if (!resp.transportError.empty())
+      ERR2("run", "privops add_pf_rule '" << anchor
+           << "' transport error: " << resp.transportError)
+    if (resp.status >= 400)
+      ERR2("run", "privops add_pf_rule '" << anchor
+           << "' failed (status " << resp.status << "): " << resp.body)
+    return;
+  }
+  PfctlOps::addRules(anchor, rulesText);
+}
+
+static void flushPfAnchorPrivopsOrLocal(const std::string &anchor) {
+  std::string sock = PrivOpsClient::detectSocketPath();
+  if (!sock.empty()) {
+    auto resp = PrivOpsClient::sendRequest(sock,
+        PrivOpsClient::buildFlushPfAnchor(anchor));
+    if (!resp.transportError.empty()) {
+      // Teardown-path: warn-only. Operator can clean the anchor
+      // manually via pfctl(8) if needed.
+      WARN("privops flush_pf_anchor '" << anchor
+           << "' transport error: " << resp.transportError)
+      return;
+    }
+    if (resp.status >= 400) {
+      WARN("privops flush_pf_anchor '" << anchor
+           << "' failed (status " << resp.status << "): " << resp.body)
+    }
+    return;
+  }
+  PfctlOps::flushRules(anchor);
 }
 
 // Healthcheck (§20): run test command inside jail, return true if exit code == 0
@@ -1118,7 +1162,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
           } else if (pfStatus == 0) {
             auto anchor = std::string("crate/") + jailXname;
             try {
-              PfctlOps::addRules(anchor, rule);
+              addPfRulePrivopsOrLocal(anchor, rule);
               LOG("auto-fw[pf]: rules added to anchor " << anchor
                   << " (" << ipBare << " -> " << externalIface << ")")
             } catch (const std::exception &ex) {
@@ -1463,15 +1507,21 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         LOG("IPv6 firewall rules configured for " << v6addr)
     }
 
-    // Per-container firewall policy via pf anchors (§3)
+    // Per-container firewall policy via pf anchors (§3).
+    // 1.1.0: compose rules locally (pure), then push them via privops
+    // when the rootless socket is detected so `crate(1)` doesn't need
+    // /dev/pf access. Teardown likewise routes through flush_pf_anchor.
     if (spec.firewallPolicy) {
       auto v6addr = (optionNet->ipv6 && !epipeIp6B.empty()) ? epipeIp6B : std::string();
-      auto anchorName = PfctlOps::loadContainerPolicy(spec, jailXname, epair.ipB, v6addr);
-      if (!anchorName.empty()) {
+      auto composed = PfctlOps::composeContainerPolicy(
+                          spec, jailXname, epair.ipB, v6addr);
+      if (!composed.anchor.empty()) {
+        addPfRulePrivopsOrLocal(composed.anchor, composed.rulesText);
+        auto anchorName = composed.anchor;
         LOG("pf anchor '" << anchorName << "' loaded")
         destroyPfAnchor.reset([anchorName, &args]() {
           LOG("flushing pf anchor '" << anchorName << "'")
-          PfctlOps::flushRules(anchorName);
+          flushPfAnchorPrivopsOrLocal(anchorName);
         });
       }
     }

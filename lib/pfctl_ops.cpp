@@ -167,16 +167,17 @@ static void warnIfParentAnchorMissing() {
   }
 }
 
-std::string loadContainerPolicy(const Spec &spec,
-                                const std::string &jailXname,
-                                const std::string &ipv4,
-                                const std::string &ipv6) {
+ComposedPolicy composeContainerPolicy(const Spec &spec,
+                                      const std::string &jailXname,
+                                      const std::string &ipv4,
+                                      const std::string &ipv6) {
+  ComposedPolicy out;
   if (!spec.firewallPolicy)
-    return {};
+    return out;
 
   warnIfParentAnchorMissing();
 
-  auto anchorName = STR("crate/" << jailXname);
+  out.anchor = STR("crate/" << jailXname);
   bool hasV6 = !ipv6.empty();
   std::ostringstream pf;
 
@@ -207,8 +208,23 @@ std::string loadContainerPolicy(const Spec &spec,
   else
     pf << "pass all\n";
 
-  addRules(anchorName, pf.str());
-  return anchorName;
+  out.rulesText = pf.str();
+  return out;
+}
+
+std::string loadContainerPolicy(const Spec &spec,
+                                const std::string &jailXname,
+                                const std::string &ipv4,
+                                const std::string &ipv6) {
+  // Legacy entry point — composes the policy via the pure helper
+  // and then calls the bare addRules() locally. New callers should
+  // prefer composeContainerPolicy + a privops-routed addRules so
+  // rootless `crate(1)` doesn't need to open /dev/pf.
+  auto composed = composeContainerPolicy(spec, jailXname, ipv4, ipv6);
+  if (composed.anchor.empty())
+    return {};
+  addRules(composed.anchor, composed.rulesText);
+  return composed.anchor;
 }
 
 }

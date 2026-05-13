@@ -6,6 +6,147 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.0] — 2026-05-13
+
+**PfctlOps privops-wiring.** First minor release of the 1.x
+line. Closes the last `crate(1) → /dev/pf` direct-access path
+flagged by the pre-1.0.0 audit. Adds the 23rd privops verb
+and refactors `PfctlOps::loadContainerPolicy` into a pure
+composer + caller-driven addRules, so the rootless `crate(1)`
+binary no longer needs root for any pfctl operation.
+
+### Why this is the audit's biggest 1.x item
+
+The audit originally flagged `lib/pfctl_ops.cpp:28` as "PfLock
+file not per-user". On closer inspection that was a wrong
+finding — `pf(4)` is host-wide and the lock must serialize
+across operators. The real bug was that `lib/run.cpp` had
+three direct call sites into `PfctlOps` (`addRules`,
+`loadContainerPolicy`, `flushRules`) that all opened
+`/dev/pf` or `/var/run/crate/pfctl.lock` as the calling uid.
+
+After 1.0.0 removed the setuid bit, those calls fail for any
+non-root operator. Single-tenant workflows that don't use
+`spec.firewallPolicy` or auto-fw never hit the path; any
+operator running a jail with firewall rules under rootless
+mode hit it on first `crate run`.
+
+### What changes
+
+#### New verb: `flush_pf_anchor`
+
+Symmetric companion to the existing `add_pf_rule` verb (0.9.0).
+Same 7-file pattern as 0.9.23–1.0.5: enum + struct + validator
++ JSON parser + nv parser + client builder + daemon handler +
+HTTP/libnv dispatcher cases.
+
+Wire taxonomy grows from 22 to **23 verbs**.
+
+#### `PfctlOps::loadContainerPolicy` refactor
+
+Split into:
+
+```cpp
+// Pure composition — builds rule text from spec.firewallPolicy.
+// No /dev/pf access, no shell calls. Safe to run as any uid.
+struct ComposedPolicy { std::string anchor; std::string rulesText; };
+ComposedPolicy composeContainerPolicy(spec, jailXname, ipv4, ipv6);
+
+// Legacy entry point — composes then calls addRules() locally.
+// Kept for binary compat / out-of-tree consumers.
+std::string loadContainerPolicy(spec, jailXname, ipv4, ipv6);
+```
+
+#### `lib/run.cpp` routing helpers
+
+Two new static helpers, same shape as `moveToVnetPrivopsOrLocal`
+in `run_net.cpp`:
+
+- `addPfRulePrivopsOrLocal(anchor, rulesText)` — sends the
+  rule text via `AddPfRule` verb when the socket is detected,
+  otherwise falls through to the bare `PfctlOps::addRules`
+- `flushPfAnchorPrivopsOrLocal(anchor)` — sends the anchor
+  name via `FlushPfAnchor` verb, otherwise bare flush
+
+Three call sites updated:
+
+| Site                                            | Before                                        | After                                            |
+|-------------------------------------------------|-----------------------------------------------|--------------------------------------------------|
+| `run.cpp:~1163` (auto-fw SNAT/rdr)              | `PfctlOps::addRules(anchor, rule)`            | `addPfRulePrivopsOrLocal(anchor, rule)`          |
+| `run.cpp:~1513` (per-container firewall policy) | `PfctlOps::loadContainerPolicy(...)`          | `composeContainerPolicy(...)` + privops addRules |
+| `run.cpp:~1518` (anchor teardown)               | `PfctlOps::flushRules(anchorName)`            | `flushPfAnchorPrivopsOrLocal(anchorName)`        |
+
+### Why a minor version (1.0.5 → 1.1.0)
+
+- Adds a new wire verb (`flush_pf_anchor`) — visible to API
+  consumers and the privops dispatcher
+- Refactors a public API (`loadContainerPolicy` no longer
+  the only entry point; `composeContainerPolicy` is the
+  preferred form)
+- Changes runtime behaviour for any rootless deployment using
+  firewall policy (latent crash → working code)
+
+Patch releases (1.0.x) so far were either internal-only
+(per-user path leaks) or single-verb additions that didn't
+restructure an existing helper. This release does both, so
+it earns the minor bump.
+
+### Wire compatibility
+
+Existing 22 verbs (0.9.0–1.0.5) unchanged. New verb is
+additive. 1.1.0 daemons accept 1.0.x clients; 1.1.0 clients
+talking to a 1.0.x daemon will get 404 on `flush_pf_anchor`
+during jail teardown — operators upgrading should bump the
+daemon first, then clients. Anchor teardown failures are
+warn-only (the jail is already gone), so the only operator-
+visible symptom would be a stale `crate/<jailname>` anchor
+needing `pfctl -a crate/<jailname> -F all` manual cleanup.
+
+### What's left from the pre-1.0.0 audit
+
+| Area                            | Status     |
+|---------------------------------|------------|
+| Per-user path leaks             | ✅ done (0.9.27, 1.0.1–1.0.4) |
+| Iface verbs (forward + reverse) | ✅ done (1.0.5) |
+| **PfctlOps privops-wiring**     | ✅ **done (this release)** |
+| Query-side privops verbs        | 1.1.x      |
+| Test coverage on impure modules | 1.2.0+     |
+
+The audit's main rootless work is now COMPLETE. Remaining
+items are either polish (query-side verbs for
+inspect/doctor/migrate; these never blocked 1.0.0) or larger
+refactors (test coverage on run.cpp's impure half).
+
+### Tests
+
+No new dedicated test — the new verb mirrors the existing
+`AddPfRule` shape (one struct field validation), reusing
+the proven `validateAnchorName` field validator. The
+`composeContainerPolicy` split is structure-only; the rule-
+composition logic is unchanged from `loadContainerPolicy`.
+Suite stays at 1303.
+
+### Files
+
+- `lib/privops_pure.{h,cpp}` — `Verb::FlushPfAnchor`,
+  `FlushPfAnchorReq{anchor}`, `validateFlushPfAnchor`
+- `lib/privops_wire_pure.{h,cpp}` — JSON parser, success
+  formatter, dispatcher case
+- `lib/privops_nv_pure.{h,cpp}` — nv parser
+- `lib/privops_client.h` + `lib/privops_client_pure.cpp` —
+  `buildFlushPfAnchor`
+- `daemon/privops_handlers.{h,cpp}` — `handleFlushPfAnchor`
+  + HTTP + libnv dispatcher cases
+- `lib/pfctl_ops.{h,cpp}` — `composeContainerPolicy` pure
+  helper; `loadContainerPolicy` rewritten on top of it
+- `lib/run.cpp` — `addPfRulePrivopsOrLocal` +
+  `flushPfAnchorPrivopsOrLocal` static helpers; three call
+  sites routed through them
+- `cli/args.cpp` — version `crate 1.1.0`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.0.5] — 2026-05-12
 
 **Reclaim-from-vnet privops verb.** Fifth patch release of the

@@ -95,6 +95,7 @@ const char *verbName(Verb v) {
     case Verb::SetLoginclassRctl:    return "set_loginclass_rctl";
     case Verb::ClearLoginclassRctl:  return "clear_loginclass_rctl";
     case Verb::ReclaimIfaceFromVnet: return "reclaim_iface_from_vnet";
+    case Verb::FlushPfAnchor:        return "flush_pf_anchor";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -124,6 +125,7 @@ Verb parseVerb(const std::string &name) {
   if (name == "set_loginclass_rctl")    return Verb::SetLoginclassRctl;
   if (name == "clear_loginclass_rctl")  return Verb::ClearLoginclassRctl;
   if (name == "reclaim_iface_from_vnet") return Verb::ReclaimIfaceFromVnet;
+  if (name == "flush_pf_anchor")         return Verb::FlushPfAnchor;
   return Verb::Unknown;
 }
 
@@ -538,6 +540,11 @@ std::string validateClearLoginclassRctl(const ClearLoginclassRctlReq &r) {
 std::string validateReclaimIfaceFromVnet(const ReclaimIfaceFromVnetReq &r) {
   if (auto e = validateIfaceName(r.ifname);   !e.empty()) return "ifname: " + e;
   if (auto e = validateJailName(r.jailName);  !e.empty()) return "jail_name: " + e;
+  return "";
+}
+
+std::string validateFlushPfAnchor(const FlushPfAnchorReq &r) {
+  if (auto e = validateAnchorName(r.anchor); !e.empty()) return "anchor: " + e;
   return "";
 }
 

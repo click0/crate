@@ -28,4 +28,18 @@ std::string loadContainerPolicy(const Spec &spec,
                                 const std::string &ipv4,
                                 const std::string &ipv6);
 
+// 1.1.0: pure rule composition counterpart of loadContainerPolicy.
+// Builds the same pf rule text without calling addRules — letting
+// the caller route the privileged addRules step through privops
+// when the rootless socket is detected. Returns an empty anchor
+// when the spec has no firewall policy (no work needed).
+struct ComposedPolicy {
+  std::string anchor;     // "crate/<jailXname>" or empty if no policy
+  std::string rulesText;  // pf rule body (multi-line), unbound
+};
+ComposedPolicy composeContainerPolicy(const Spec &spec,
+                                      const std::string &jailXname,
+                                      const std::string &ipv4,
+                                      const std::string &ipv6);
+
 }

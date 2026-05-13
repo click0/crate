@@ -486,6 +486,17 @@ DispatchResult handleReclaimIfaceFromVnet(const PrivOpsPure::ReclaimIfaceFromVne
                   r.ifname, r.jailName)};
 }
 
+// --- handleFlushPfAnchor (1.1.0) ---
+
+DispatchResult handleFlushPfAnchor(const PrivOpsPure::FlushPfAnchorReq &r) {
+  try {
+    PfctlOps::flushRules(r.anchor);
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("pfctl_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatFlushPfAnchorSuccess(r.anchor)};
+}
+
 // --- Top-level dispatcher ---
 
 namespace {
@@ -730,6 +741,14 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleReclaimIfaceFromVnet(r);
     }
+    case Verb::FlushPfAnchor: {
+      PrivOpsPure::FlushPfAnchorReq r;
+      if (auto e = PrivOpsWirePure::parseFlushPfAnchor(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateFlushPfAnchor(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleFlushPfAnchor(r);
+    }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
   }
@@ -931,6 +950,14 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       if (auto e = PrivOpsPure::validateReclaimIfaceFromVnet(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleReclaimIfaceFromVnet(r);
+    }
+    case Verb::FlushPfAnchor: {
+      PrivOpsPure::FlushPfAnchorReq r;
+      if (auto e = PrivOpsNvPure::parseFlushPfAnchor(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateFlushPfAnchor(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleFlushPfAnchor(r);
     }
     case Verb::Unknown:
       return {404,
