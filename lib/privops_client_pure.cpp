@@ -288,4 +288,13 @@ PrivOpsNvPure::FieldMap buildClearLoginclassRctl(const std::string &loginclass,
   };
 }
 
+PrivOpsNvPure::FieldMap buildReclaimIfaceFromVnet(const std::string &ifname,
+                                                   const std::string &jailName) {
+  return {
+    {"verb", "reclaim_iface_from_vnet"},
+    {"ifname", ifname},
+    {"jail_name", jailName},
+  };
+}
+
 } // namespace PrivOpsClient

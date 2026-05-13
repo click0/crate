@@ -28,6 +28,11 @@ void setInet6Addr(const std::string &iface, const std::string &addr, int prefixL
 // Move interface into a VNET jail.
 void moveToVnet(const std::string &iface, int jid);
 
+// 1.0.5: reverse of moveToVnet. Removes `iface` from `jailName`'s
+// vnet and brings it back to the host. Used during jail teardown
+// when a passthrough iface needs to be reclaimed.
+void moveFromVnet(const std::string &iface, const std::string &jailName);
+
 // Disable TCP checksum offloading (txcsum, txcsum6, rxcsum, rxcsum6).
 void disableOffload(const std::string &iface);
 

@@ -254,6 +254,13 @@ std::string parseClearLoginclassRctl(const FieldMap &m,
   return "";
 }
 
+std::string parseReclaimIfaceFromVnet(const FieldMap &m,
+                                      PrivOpsPure::ReclaimIfaceFromVnetReq &out) {
+  if (auto e = requireString(m, "ifname",    out.ifname);   !e.empty()) return e;
+  if (auto e = requireString(m, "jail_name", out.jailName); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing ---
 
 PrivOpsPure::Verb extractVerb(const FieldMap &m) {

@@ -136,6 +136,11 @@ PrivOpsNvPure::FieldMap buildSetLoginclassRctl(const std::string &loginclass,
 PrivOpsNvPure::FieldMap buildClearLoginclassRctl(const std::string &loginclass,
                                                   const std::string &key);
 
+// 1.0.5: reclaim a host iface from a jail's vnet. Inverse of
+// the ConfigureIface-move path.
+PrivOpsNvPure::FieldMap buildReclaimIfaceFromVnet(const std::string &ifname,
+                                                   const std::string &jailName);
+
 // --- Wire transport (FreeBSD-only) ---
 
 struct Response {

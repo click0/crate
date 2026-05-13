@@ -180,6 +180,9 @@ std::string parseSetLoginclassRctl(const std::string &body,
 std::string parseClearLoginclassRctl(const std::string &body,
                                      PrivOpsPure::ClearLoginclassRctlReq &out);
 
+std::string parseReclaimIfaceFromVnet(const std::string &body,
+                                      PrivOpsPure::ReclaimIfaceFromVnetReq &out);
+
 // --- Verb routing helper ---
 //
 // Parse the URL path's verb segment. The route pattern is
@@ -315,5 +318,9 @@ std::string formatSetLoginclassRctlSuccess(const std::string &loginclass,
                                            const std::string &rawValue);
 std::string formatClearLoginclassRctlSuccess(const std::string &loginclass,
                                              const std::string &key);
+
+// 1.0.5: 200 OK body for reclaim_iface_from_vnet.
+std::string formatReclaimIfaceFromVnetSuccess(const std::string &ifname,
+                                              const std::string &jailName);
 
 } // namespace PrivOpsWirePure

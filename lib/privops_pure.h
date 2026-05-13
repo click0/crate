@@ -144,6 +144,13 @@ enum class Verb {
   // spawns.
   SetLoginclassRctl,
   ClearLoginclassRctl,
+
+  // 1.0.5: reclaim a host iface from a jail's vnet (inverse of the
+  // ConfigureIface-move path). Wraps `ifconfig <iface> -vnet <jail>`.
+  // Targets the run_net.cpp::reclaimPassthroughInterface call site
+  // where a passthrough interface is moved back to the host before
+  // the jail is destroyed.
+  ReclaimIfaceFromVnet,
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -286,6 +293,15 @@ struct ClearLoginclassRctlReq {
   std::string key;
 };
 
+// 1.0.5: reclaim a host iface from a jail's vnet. Inverse of
+// the ConfigureIface "move" path. Inputs are validated like
+// ifname (no shell metachars) and a jail name (same charset
+// as PoolPure::validatePoolName).
+struct ReclaimIfaceFromVnetReq {
+  std::string ifname;      // host iface currently inside the jail
+  std::string jailName;    // jail that holds the iface
+};
+
 // --- Per-verb validators ---
 //
 // Each `validate*(req)` returns "" on success, otherwise a one-line
@@ -316,6 +332,7 @@ std::string validateSetIfaceInetAddr(const SetIfaceInetAddrReq &r);
 std::string validateCreateEpair(const CreateEpairReq &r);
 std::string validateSetLoginclassRctl(const SetLoginclassRctlReq &r);
 std::string validateClearLoginclassRctl(const ClearLoginclassRctlReq &r);
+std::string validateReclaimIfaceFromVnet(const ReclaimIfaceFromVnetReq &r);
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //

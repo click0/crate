@@ -391,6 +391,13 @@ std::string parseClearLoginclassRctl(const std::string &body,
   return "";
 }
 
+std::string parseReclaimIfaceFromVnet(const std::string &body,
+                                      PrivOpsPure::ReclaimIfaceFromVnetReq &out) {
+  if (auto e = requireStringField(body, "ifname",    out.ifname);   !e.empty()) return e;
+  if (auto e = requireStringField(body, "jail_name", out.jailName); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing helper ---
 
 PrivOpsPure::Verb parseVerbFromPath(const std::string &path) {
@@ -709,6 +716,16 @@ std::string formatClearLoginclassRctlSuccess(const std::string &loginclass,
   return o.str();
 }
 
+std::string formatReclaimIfaceFromVnetSuccess(const std::string &ifname,
+                                              const std::string &jailName) {
+  std::ostringstream o;
+  o << "{\"reclaimed\":true"
+    << ",\"ifname\":\"" << escape(ifname) << "\""
+    << ",\"jail_name\":\"" << escape(jailName) << "\""
+    << "}";
+  return o.str();
+}
+
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body) {
   using namespace PrivOpsPure;
@@ -757,6 +774,8 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       return runVerb<SetLoginclassRctlReq>(body, v, parseSetLoginclassRctl, validateSetLoginclassRctl);
     case Verb::ClearLoginclassRctl:
       return runVerb<ClearLoginclassRctlReq>(body, v, parseClearLoginclassRctl, validateClearLoginclassRctl);
+    case Verb::ReclaimIfaceFromVnet:
+      return runVerb<ReclaimIfaceFromVnetReq>(body, v, parseReclaimIfaceFromVnet, validateReclaimIfaceFromVnet);
     case Verb::Unknown:
       break;
   }
