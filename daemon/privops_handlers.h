@@ -184,6 +184,10 @@ PrivOpsWirePure::DispatchResult handleReclaimIfaceFromVnet(const PrivOpsPure::Re
 // 1.1.0: flush a pf anchor. Wraps PfctlOps::flushRules.
 PrivOpsWirePure::DispatchResult handleFlushPfAnchor(const PrivOpsPure::FlushPfAnchorReq &r);
 
+// 1.1.1: query `rctl -u jail:<jid>` output. Read-side verb;
+// response body carries the raw rctl text in the `output` field.
+PrivOpsWirePure::DispatchResult handleQueryJailRctl(const PrivOpsPure::QueryJailRctlReq &r);
+
 // 0.9.29: register the daemon's `rctl_umbrella:` config. Called
 // once at daemon startup. The umbrella rules apply after a
 // successful create_jail privops invocation when the operator's

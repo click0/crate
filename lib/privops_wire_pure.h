@@ -186,6 +186,9 @@ std::string parseReclaimIfaceFromVnet(const std::string &body,
 std::string parseFlushPfAnchor(const std::string &body,
                                PrivOpsPure::FlushPfAnchorReq &out);
 
+std::string parseQueryJailRctl(const std::string &body,
+                               PrivOpsPure::QueryJailRctlReq &out);
+
 // --- Verb routing helper ---
 //
 // Parse the URL path's verb segment. The route pattern is
@@ -328,5 +331,11 @@ std::string formatReclaimIfaceFromVnetSuccess(const std::string &ifname,
 
 // 1.1.0: 200 OK body for flush_pf_anchor.
 std::string formatFlushPfAnchorSuccess(const std::string &anchor);
+
+// 1.1.1: 200 OK body for query_jail_rctl. `output` is the raw
+// text from `rctl -u jail:<jid>` (multi-line, key=value rows);
+// the client side parses it via InspectPure::applyRctlOutput.
+std::string formatQueryJailRctlSuccess(unsigned jid,
+                                       const std::string &output);
 
 } // namespace PrivOpsWirePure

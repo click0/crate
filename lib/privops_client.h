@@ -144,6 +144,10 @@ PrivOpsNvPure::FieldMap buildReclaimIfaceFromVnet(const std::string &ifname,
 // 1.1.0: flush a pf anchor. Symmetric companion to buildAddPfRule.
 PrivOpsNvPure::FieldMap buildFlushPfAnchor(const std::string &anchor);
 
+// 1.1.1: query `rctl -u jail:<jid>` output. Response carries the
+// raw rctl text in the `output` field for client-side parsing.
+PrivOpsNvPure::FieldMap buildQueryJailRctl(unsigned jid);
+
 // --- Wire transport (FreeBSD-only) ---
 
 struct Response {

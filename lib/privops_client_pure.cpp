@@ -304,4 +304,11 @@ PrivOpsNvPure::FieldMap buildFlushPfAnchor(const std::string &anchor) {
   };
 }
 
+PrivOpsNvPure::FieldMap buildQueryJailRctl(unsigned jid) {
+  return {
+    {"verb", "query_jail_rctl"},
+    {"jid", std::to_string(jid)},
+  };
+}
+
 } // namespace PrivOpsClient

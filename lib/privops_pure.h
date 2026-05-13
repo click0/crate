@@ -156,6 +156,14 @@ enum class Verb {
   // (0.9.0). Targets the run.cpp jail-teardown path where
   // PfctlOps::flushRules is called to clear the per-jail anchor.
   FlushPfAnchor,
+
+  // 1.1.1: first read-side verb that returns command output.
+  // `rctl -u jail:<jid>` is privileged on FreeBSD; rootless
+  // `crate inspect` previously swallowed the failure via
+  // try/catch and silently dropped the RCTL section. This
+  // verb hands the read to crated and returns the textual
+  // output for client-side parsing via InspectPure.
+  QueryJailRctl,
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -314,6 +322,11 @@ struct FlushPfAnchorReq {
   std::string anchor;
 };
 
+// 1.1.1: query RCTL usage for a running jail by jid.
+struct QueryJailRctlReq {
+  unsigned jid = 0;          // jail id (validated 1..65535)
+};
+
 // --- Per-verb validators ---
 //
 // Each `validate*(req)` returns "" on success, otherwise a one-line
@@ -346,6 +359,7 @@ std::string validateSetLoginclassRctl(const SetLoginclassRctlReq &r);
 std::string validateClearLoginclassRctl(const ClearLoginclassRctlReq &r);
 std::string validateReclaimIfaceFromVnet(const ReclaimIfaceFromVnetReq &r);
 std::string validateFlushPfAnchor(const FlushPfAnchorReq &r);
+std::string validateQueryJailRctl(const QueryJailRctlReq &r);
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //

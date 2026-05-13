@@ -14,6 +14,8 @@
 #include "gui_registry.h"
 #include "jail_query.h"
 #include "pathnames.h"
+#include "privops_client.h"
+#include "privops_wire_pure.h"
 #include "util.h"
 #include "err.h"
 
@@ -91,12 +93,29 @@ bool inspectCrate(const Args &args) {
 
   collectInterfaces(*jail, data);
 
-  // RCTL usage.
+  // RCTL usage. 1.1.1: when crated's privops socket is detected,
+  // route the query through the daemon so non-root `crate inspect`
+  // gets the same output that legacy setuid mode produced. Falls
+  // back to the bare rctl(8) shell call otherwise.
   try {
-    auto rctlOut = Util::execCommandGetOutput(
-      {CRATE_PATH_RCTL, "-u", "jail:" + std::to_string(jail->jid)},
-      "query RCTL usage");
-    InspectPure::applyRctlOutput(rctlOut, data);
+    std::string rctlOut;
+    std::string sock = PrivOpsClient::detectSocketPath();
+    if (!sock.empty()) {
+      auto resp = PrivOpsClient::sendRequest(sock,
+          PrivOpsClient::buildQueryJailRctl((unsigned)jail->jid));
+      if (resp.transportError.empty() && resp.status < 400) {
+        std::string out;
+        if (PrivOpsWirePure::extractStringField(resp.body, "output", out)
+            == PrivOpsWirePure::kPresent)
+          rctlOut = out;
+      }
+    } else {
+      rctlOut = Util::execCommandGetOutput(
+        {CRATE_PATH_RCTL, "-u", "jail:" + std::to_string(jail->jid)},
+        "query RCTL usage");
+    }
+    if (!rctlOut.empty())
+      InspectPure::applyRctlOutput(rctlOut, data);
   } catch (...) {}
 
   // Mounts visible from host /sbin/mount -p (path-format) — filter to

@@ -404,6 +404,12 @@ std::string parseFlushPfAnchor(const std::string &body,
   return "";
 }
 
+std::string parseQueryJailRctl(const std::string &body,
+                               PrivOpsPure::QueryJailRctlReq &out) {
+  if (auto e = requireUnsignedField(body, "jid", out.jid); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing helper ---
 
 PrivOpsPure::Verb parseVerbFromPath(const std::string &path) {
@@ -740,6 +746,15 @@ std::string formatFlushPfAnchorSuccess(const std::string &anchor) {
   return o.str();
 }
 
+std::string formatQueryJailRctlSuccess(unsigned jid,
+                                       const std::string &output) {
+  std::ostringstream o;
+  o << "{\"jid\":" << jid
+    << ",\"output\":\"" << escape(output) << "\""
+    << "}";
+  return o.str();
+}
+
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body) {
   using namespace PrivOpsPure;
@@ -792,6 +807,8 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       return runVerb<ReclaimIfaceFromVnetReq>(body, v, parseReclaimIfaceFromVnet, validateReclaimIfaceFromVnet);
     case Verb::FlushPfAnchor:
       return runVerb<FlushPfAnchorReq>(body, v, parseFlushPfAnchor, validateFlushPfAnchor);
+    case Verb::QueryJailRctl:
+      return runVerb<QueryJailRctlReq>(body, v, parseQueryJailRctl, validateQueryJailRctl);
     case Verb::Unknown:
       break;
   }

@@ -497,6 +497,20 @@ DispatchResult handleFlushPfAnchor(const PrivOpsPure::FlushPfAnchorReq &r) {
   return {200, PrivOpsWirePure::formatFlushPfAnchorSuccess(r.anchor)};
 }
 
+// --- handleQueryJailRctl (1.1.1) ---
+
+DispatchResult handleQueryJailRctl(const PrivOpsPure::QueryJailRctlReq &r) {
+  std::string output;
+  try {
+    output = Util::execCommandGetOutput(
+      {CRATE_PATH_RCTL, "-u", "jail:" + std::to_string(r.jid)},
+      "privops query_jail_rctl");
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("rctl_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatQueryJailRctlSuccess(r.jid, output)};
+}
+
 // --- Top-level dispatcher ---
 
 namespace {
@@ -749,6 +763,14 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleFlushPfAnchor(r);
     }
+    case Verb::QueryJailRctl: {
+      PrivOpsPure::QueryJailRctlReq r;
+      if (auto e = PrivOpsWirePure::parseQueryJailRctl(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateQueryJailRctl(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleQueryJailRctl(r);
+    }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
   }
@@ -958,6 +980,14 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       if (auto e = PrivOpsPure::validateFlushPfAnchor(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleFlushPfAnchor(r);
+    }
+    case Verb::QueryJailRctl: {
+      PrivOpsPure::QueryJailRctlReq r;
+      if (auto e = PrivOpsNvPure::parseQueryJailRctl(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateQueryJailRctl(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleQueryJailRctl(r);
     }
     case Verb::Unknown:
       return {404,
