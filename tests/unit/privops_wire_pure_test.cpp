@@ -581,6 +581,13 @@ ATF_TEST_CASE_BODY(dispatch_covers_every_verb) {
     Verb::ConfigureIface, Verb::TeardownIface,
     Verb::AddPfRule, Verb::RemovePfRule,
     Verb::AddIpfwRule, Verb::RemoveIpfwRule,
+    // 0.9.23–1.1.1: post-rootless verb additions.
+    Verb::SetIfaceUp, Verb::DisableIfaceOffload,
+    Verb::BridgeAddMember, Verb::BridgeDelMember,
+    Verb::SetIfaceInetAddr, Verb::CreateEpair,
+    Verb::SetLoginclassRctl, Verb::ClearLoginclassRctl,
+    Verb::ReclaimIfaceFromVnet, Verb::FlushPfAnchor,
+    Verb::QueryJailRctl,
   };
   for (auto v : verbs) {
     auto r = parseValidateAndDispatch(v, "{}");
@@ -588,6 +595,64 @@ ATF_TEST_CASE_BODY(dispatch_covers_every_verb) {
     // should slip through to 404.
     ATF_REQUIRE(r.status == 400 || r.status == 501);
   }
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(parse_reclaim_iface_from_vnet);
+ATF_TEST_CASE_BODY(parse_reclaim_iface_from_vnet) {
+  PrivOpsPure::ReclaimIfaceFromVnetReq r;
+  ATF_REQUIRE_EQ(
+    parseReclaimIfaceFromVnet(R"({"ifname":"em0","jail_name":"web"})", r),
+    std::string());
+  ATF_REQUIRE_EQ(r.ifname, std::string("em0"));
+  ATF_REQUIRE_EQ(r.jailName, std::string("web"));
+
+  // Missing jail_name
+  PrivOpsPure::ReclaimIfaceFromVnetReq r2;
+  ATF_REQUIRE(!parseReclaimIfaceFromVnet(R"({"ifname":"em0"})", r2).empty());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(parse_flush_pf_anchor);
+ATF_TEST_CASE_BODY(parse_flush_pf_anchor) {
+  PrivOpsPure::FlushPfAnchorReq r;
+  ATF_REQUIRE_EQ(parseFlushPfAnchor(R"({"anchor":"crate/web"})", r),
+                 std::string());
+  ATF_REQUIRE_EQ(r.anchor, std::string("crate/web"));
+
+  // Missing anchor
+  PrivOpsPure::FlushPfAnchorReq r2;
+  ATF_REQUIRE(!parseFlushPfAnchor(R"({})", r2).empty());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(parse_query_jail_rctl);
+ATF_TEST_CASE_BODY(parse_query_jail_rctl) {
+  PrivOpsPure::QueryJailRctlReq r;
+  ATF_REQUIRE_EQ(parseQueryJailRctl(R"({"jid":42})", r), std::string());
+  ATF_REQUIRE_EQ(r.jid, 42u);
+
+  // Missing jid
+  PrivOpsPure::QueryJailRctlReq r2;
+  ATF_REQUIRE(!parseQueryJailRctl(R"({})", r2).empty());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(format_query_jail_rctl_escapes_newlines);
+ATF_TEST_CASE_BODY(format_query_jail_rctl_escapes_newlines) {
+  // The rctl output is multi-line; the formatter must JSON-escape
+  // newlines so the response body stays valid JSON.
+  auto body = formatQueryJailRctlSuccess(42,
+      "memoryuse=512M\nmaxproc=64\n");
+  // The body should contain escaped newlines, not raw ones inside
+  // the quoted string region.
+  auto outPos = body.find("\"output\":\"");
+  ATF_REQUIRE(outPos != std::string::npos);
+  // Should contain literal "\\n" (backslash-n), not raw newline
+  ATF_REQUIRE(body.find("\\n") != std::string::npos);
+  // The body itself should be a single line (no raw newlines).
+  ATF_REQUIRE(body.find('\n') == std::string::npos);
+
+  // Round-trip through extractStringField recovers the original.
+  std::string recovered;
+  ATF_REQUIRE_EQ(extractStringField(body, "output", recovered), kPresent);
+  ATF_REQUIRE_EQ(recovered, std::string("memoryuse=512M\nmaxproc=64\n"));
 }
 
 ATF_INIT_TEST_CASES(tcs) {
@@ -647,4 +712,9 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, dispatch_validate_error_returns_400);
   ATF_ADD_TEST_CASE(tcs, dispatch_happy_returns_501);
   ATF_ADD_TEST_CASE(tcs, dispatch_covers_every_verb);
+
+  ATF_ADD_TEST_CASE(tcs, parse_reclaim_iface_from_vnet);
+  ATF_ADD_TEST_CASE(tcs, parse_flush_pf_anchor);
+  ATF_ADD_TEST_CASE(tcs, parse_query_jail_rctl);
+  ATF_ADD_TEST_CASE(tcs, format_query_jail_rctl_escapes_newlines);
 }
