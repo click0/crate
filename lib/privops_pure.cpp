@@ -362,8 +362,15 @@ std::string validateRuleText(const std::string &text) {
 std::string validateAnchorName(const std::string &name) {
   if (name.empty()) return "anchor name is empty";
   if (name.size() > 64) return "anchor name longer than 64 chars";
+  // 1.1.2: '/' allowed for pf's nested anchor convention. crate's
+  // per-jail anchors use the canonical "crate/<jail>" form (see
+  // lib/run.cpp's auto-fw + composeContainerPolicy paths). pfctl
+  // treats '/' as a path separator into the anchor hierarchy; it
+  // does NOT touch the host filesystem, so there is no traversal
+  // risk. Shell metacharacters (space, ;, &, |, $, `, etc.) remain
+  // rejected.
   for (char c : name) {
-    bool ok = isAlnum(c) || c == '.' || c == '_' || c == '-';
+    bool ok = isAlnum(c) || c == '.' || c == '_' || c == '-' || c == '/';
     if (!ok) {
       std::ostringstream os;
       os << "invalid character '" << c << "' in anchor name";

@@ -636,19 +636,27 @@ ATF_TEST_CASE_BODY(reclaim_iface_from_vnet_minimal) {
 ATF_TEST_CASE_WITHOUT_HEAD(flush_pf_anchor_minimal);
 ATF_TEST_CASE_BODY(flush_pf_anchor_minimal) {
   FlushPfAnchorReq r;
+
+  // Canonical "crate/<jail>" nested anchor form — the real-world
+  // shape produced by lib/run.cpp's per-container firewall and
+  // auto-fw paths. Requires the 1.1.2 validateAnchorName fix.
   r.anchor = "crate/web";
   ATF_REQUIRE_EQ(validateFlushPfAnchor(r), std::string());
 
-  // Plain anchor name (no slash)
+  // Plain anchor name (no slash) also valid.
   r.anchor = "crate";
   ATF_REQUIRE_EQ(validateFlushPfAnchor(r), std::string());
 
-  // Empty anchor
+  // Empty anchor.
   r.anchor = "";
   ATF_REQUIRE(!validateFlushPfAnchor(r).empty());
 
-  // Shell metachar
+  // Shell metachar still rejected — '/' allowance does NOT relax
+  // the character whitelist for ';', space, '`', etc.
   r.anchor = "crate; pfctl -F all";
+  ATF_REQUIRE(!validateFlushPfAnchor(r).empty());
+
+  r.anchor = "crate web";
   ATF_REQUIRE(!validateFlushPfAnchor(r).empty());
 }
 

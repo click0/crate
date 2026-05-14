@@ -8,11 +8,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [1.1.2] — 2026-05-13
 
-**Test coverage for recent verbs.** Backfills validator + wire
-parser tests for the three privops verbs added in 1.0.5–1.1.1
-(`reclaim_iface_from_vnet`, `flush_pf_anchor`, `query_jail_rctl`)
-and extends `dispatch_covers_every_verb` to include every verb
-added since 0.9.23. No code changes outside the tests/ tree.
+**Test coverage for recent verbs + anchor-name validator fix.**
+Backfills validator + wire parser tests for the three privops
+verbs added in 1.0.5–1.1.1 (`reclaim_iface_from_vnet`,
+`flush_pf_anchor`, `query_jail_rctl`) and extends
+`dispatch_covers_every_verb` to include every verb added since
+0.9.23.
+
+Adding those tests surfaced a latent 1.1.0 bug: the daemon's
+`validateAnchorName` rejected `/`, while every real-world
+crate anchor uses the `crate/<jail>` nested form (per pf.conf
+convention). The 1.1.0 PfctlOps privops-wiring shipped looking
+like it worked because the existing AddPfRule test cases used
+a single-segment "crate" anchor — never exercising the
+canonical `/`-separated path. 1.1.2 fixes the validator AND
+adds the missing test coverage.
+
+### validateAnchorName
+
+```cpp
+// 1.1.1 and earlier
+bool ok = isAlnum(c) || c == '.' || c == '_' || c == '-';
+
+// 1.1.2 (this release)
+bool ok = isAlnum(c) || c == '.' || c == '_' || c == '-' || c == '/';
+```
+
+Shell metacharacters (`;`, ` `, `` ` ``, `$`, etc.) remain
+rejected. pf's anchor namespace is internal to the kernel; `/`
+is a logical path separator, not a filesystem path, so there
+is no traversal risk.
 
 ### What's added
 
@@ -58,7 +83,9 @@ tests). All previously-added test cases keep passing.
 
 ### Files
 
-- `tests/unit/privops_pure_test.cpp` — 3 validator tests
+- `lib/privops_pure.cpp` — `validateAnchorName` allows `/`
+- `tests/unit/privops_pure_test.cpp` — 3 validator tests; the
+  `flush_pf_anchor_minimal` case asserts `crate/web` validates
 - `tests/unit/privops_wire_pure_test.cpp` — 4 parser/formatter
   tests; `dispatch_covers_every_verb` extended
 - `cli/args.cpp` — version `crate 1.1.2`

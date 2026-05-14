@@ -651,7 +651,8 @@ ATF_TEST_CASE_BODY(format_query_jail_rctl_escapes_newlines) {
 
   // Round-trip through extractStringField recovers the original.
   std::string recovered;
-  ATF_REQUIRE_EQ(extractStringField(body, "output", recovered), kPresent);
+  ATF_REQUIRE_EQ(extractStringField(body, "output", recovered),
+                 std::string(kPresent));
   ATF_REQUIRE_EQ(recovered, std::string("memoryuse=512M\nmaxproc=64\n"));
 }
 
