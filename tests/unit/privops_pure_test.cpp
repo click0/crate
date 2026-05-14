@@ -306,9 +306,15 @@ ATF_TEST_CASE_WITHOUT_HEAD(anchor_accepts_typical_rejects_metas);
 ATF_TEST_CASE_BODY(anchor_accepts_typical_rejects_metas) {
   ATF_REQUIRE_EQ(validateAnchorName("crate"), std::string());
   ATF_REQUIRE_EQ(validateAnchorName("crate.dev_pool-1"), std::string());
+  // 1.1.2: '/' now allowed for pf's nested anchor convention
+  // (canonical "crate/<jail>" form). pf's anchor namespace is
+  // internal to the kernel, so there's no filesystem traversal
+  // risk.
+  ATF_REQUIRE_EQ(validateAnchorName("crate/web"), std::string());
+  ATF_REQUIRE_EQ(validateAnchorName("foo/bar/baz"), std::string());
   ATF_REQUIRE(!validateAnchorName("").empty());
-  ATF_REQUIRE(!validateAnchorName("foo/bar").empty());
   ATF_REQUIRE(!validateAnchorName("foo;rm").empty());
+  ATF_REQUIRE(!validateAnchorName("foo bar").empty());
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(ipfw_action_closed_set);
@@ -606,6 +612,83 @@ ATF_TEST_CASE_BODY(set_iface_inet_addr_minimal) {
   ATF_REQUIRE(!validateSetIfaceInetAddr(r).empty());
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(reclaim_iface_from_vnet_minimal);
+ATF_TEST_CASE_BODY(reclaim_iface_from_vnet_minimal) {
+  ReclaimIfaceFromVnetReq r;
+  r.ifname = "em0";
+  r.jailName = "web";
+  ATF_REQUIRE_EQ(validateReclaimIfaceFromVnet(r), std::string());
+
+  // Bad ifname (shell metachar)
+  r.ifname = "em0; rm -rf /";
+  ATF_REQUIRE(!validateReclaimIfaceFromVnet(r).empty());
+
+  // Bad jail name
+  r.ifname = "em0";
+  r.jailName = "../etc/passwd";
+  ATF_REQUIRE(!validateReclaimIfaceFromVnet(r).empty());
+
+  // Empty ifname
+  r.ifname = "";
+  r.jailName = "web";
+  ATF_REQUIRE(!validateReclaimIfaceFromVnet(r).empty());
+
+  // Empty jail name
+  r.ifname = "em0";
+  r.jailName = "";
+  ATF_REQUIRE(!validateReclaimIfaceFromVnet(r).empty());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(flush_pf_anchor_minimal);
+ATF_TEST_CASE_BODY(flush_pf_anchor_minimal) {
+  FlushPfAnchorReq r;
+
+  // Canonical "crate/<jail>" nested anchor form — the real-world
+  // shape produced by lib/run.cpp's per-container firewall and
+  // auto-fw paths. Requires the 1.1.2 validateAnchorName fix.
+  r.anchor = "crate/web";
+  ATF_REQUIRE_EQ(validateFlushPfAnchor(r), std::string());
+
+  // Plain anchor name (no slash) also valid.
+  r.anchor = "crate";
+  ATF_REQUIRE_EQ(validateFlushPfAnchor(r), std::string());
+
+  // Empty anchor.
+  r.anchor = "";
+  ATF_REQUIRE(!validateFlushPfAnchor(r).empty());
+
+  // Shell metachar still rejected — '/' allowance does NOT relax
+  // the character whitelist for ';', space, '`', etc.
+  r.anchor = "crate; pfctl -F all";
+  ATF_REQUIRE(!validateFlushPfAnchor(r).empty());
+
+  r.anchor = "crate web";
+  ATF_REQUIRE(!validateFlushPfAnchor(r).empty());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(query_jail_rctl_minimal);
+ATF_TEST_CASE_BODY(query_jail_rctl_minimal) {
+  QueryJailRctlReq r;
+  r.jid = 42;
+  ATF_REQUIRE_EQ(validateQueryJailRctl(r), std::string());
+
+  // jid=1 (lowest valid jid)
+  r.jid = 1;
+  ATF_REQUIRE_EQ(validateQueryJailRctl(r), std::string());
+
+  // jid=65535 (highest valid)
+  r.jid = 65535;
+  ATF_REQUIRE_EQ(validateQueryJailRctl(r), std::string());
+
+  // jid=0 — invalid (jail(8) starts at jid=1)
+  r.jid = 0;
+  ATF_REQUIRE(!validateQueryJailRctl(r).empty());
+
+  // jid out of range
+  r.jid = 70000;
+  ATF_REQUIRE(!validateQueryJailRctl(r).empty());
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, verb_token_roundtrips_for_every_verb);
   ATF_ADD_TEST_CASE(tcs, verb_unknown_token_returns_unknown);
@@ -671,4 +754,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, create_epair_no_fields_required);
   ATF_ADD_TEST_CASE(tcs, set_loginclass_rctl_validates);
   ATF_ADD_TEST_CASE(tcs, clear_loginclass_rctl_validates);
+  ATF_ADD_TEST_CASE(tcs, reclaim_iface_from_vnet_minimal);
+  ATF_ADD_TEST_CASE(tcs, flush_pf_anchor_minimal);
+  ATF_ADD_TEST_CASE(tcs, query_jail_rctl_minimal);
 }

@@ -6,6 +6,93 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.2] — 2026-05-13
+
+**Test coverage for recent verbs + anchor-name validator fix.**
+Backfills validator + wire parser tests for the three privops
+verbs added in 1.0.5–1.1.1 (`reclaim_iface_from_vnet`,
+`flush_pf_anchor`, `query_jail_rctl`) and extends
+`dispatch_covers_every_verb` to include every verb added since
+0.9.23.
+
+Adding those tests surfaced a latent 1.1.0 bug: the daemon's
+`validateAnchorName` rejected `/`, while every real-world
+crate anchor uses the `crate/<jail>` nested form (per pf.conf
+convention). The 1.1.0 PfctlOps privops-wiring shipped looking
+like it worked because the existing AddPfRule test cases used
+a single-segment "crate" anchor — never exercising the
+canonical `/`-separated path. 1.1.2 fixes the validator AND
+adds the missing test coverage.
+
+### validateAnchorName
+
+```cpp
+// 1.1.1 and earlier
+bool ok = isAlnum(c) || c == '.' || c == '_' || c == '-';
+
+// 1.1.2 (this release)
+bool ok = isAlnum(c) || c == '.' || c == '_' || c == '-' || c == '/';
+```
+
+Shell metacharacters (`;`, ` `, `` ` ``, `$`, etc.) remain
+rejected. pf's anchor namespace is internal to the kernel; `/`
+is a logical path separator, not a filesystem path, so there
+is no traversal risk.
+
+### What's added
+
+`tests/unit/privops_pure_test.cpp` gains 3 validator tests:
+
+- `reclaim_iface_from_vnet_minimal` — happy path + 4 invalid
+  inputs (shell metachar in ifname, path-traversal in jail name,
+  empty fields)
+- `flush_pf_anchor_minimal` — accepts `crate/web` and bare
+  `crate`; rejects empty and shell-metachar
+- `query_jail_rctl_minimal` — accepts jid 1..65535; rejects 0
+  and > 65535
+
+`tests/unit/privops_wire_pure_test.cpp` gains 4 tests:
+
+- `parse_reclaim_iface_from_vnet` — JSON parse happy + missing
+  field
+- `parse_flush_pf_anchor` — JSON parse happy + missing field
+- `parse_query_jail_rctl` — JSON parse happy + missing field
+- `format_query_jail_rctl_escapes_newlines` — guards the first
+  multi-line response formatter; verifies that `\n` in the
+  `output` field gets JSON-escaped, the body stays single-line,
+  and `extractStringField` round-trips the original
+
+`dispatch_covers_every_verb` extended from the original 14
+verbs (0.9.0) to all 24 verbs (0.9.0 → 1.1.1). The test
+ensures every Verb enum value reaches a real dispatcher
+branch; previously a new verb could be added to the enum
+but missed in the dispatcher switch with no test catching it.
+
+### Why now
+
+The 1.0.5–1.1.1 mini-PRs each added a verb without dedicated
+test scaffolding (relying on the existing patterns being
+"proven enough"). That was fine for shipping but leaves the
+test suite blind to regressions on those code paths. 1.1.2
+backfills the gap with no new functionality.
+
+### Tests
+
+Suite grows from 1303 to **1310** (3 validator tests + 4 wire
+tests). All previously-added test cases keep passing.
+
+### Files
+
+- `lib/privops_pure.cpp` — `validateAnchorName` allows `/`
+- `tests/unit/privops_pure_test.cpp` — 3 validator tests; the
+  `flush_pf_anchor_minimal` case asserts `crate/web` validates
+- `tests/unit/privops_wire_pure_test.cpp` — 4 parser/formatter
+  tests; `dispatch_covers_every_verb` extended
+- `cli/args.cpp` — version `crate 1.1.2`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.1.1] — 2026-05-13
 
 **Query-side privops: rctl read.** First read-side verb of the
