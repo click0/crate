@@ -96,6 +96,7 @@ const char *verbName(Verb v) {
     case Verb::ClearLoginclassRctl:  return "clear_loginclass_rctl";
     case Verb::ReclaimIfaceFromVnet: return "reclaim_iface_from_vnet";
     case Verb::FlushPfAnchor:        return "flush_pf_anchor";
+    case Verb::QueryJailRctl:        return "query_jail_rctl";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -126,6 +127,7 @@ Verb parseVerb(const std::string &name) {
   if (name == "clear_loginclass_rctl")  return Verb::ClearLoginclassRctl;
   if (name == "reclaim_iface_from_vnet") return Verb::ReclaimIfaceFromVnet;
   if (name == "flush_pf_anchor")         return Verb::FlushPfAnchor;
+  if (name == "query_jail_rctl")         return Verb::QueryJailRctl;
   return Verb::Unknown;
 }
 
@@ -545,6 +547,11 @@ std::string validateReclaimIfaceFromVnet(const ReclaimIfaceFromVnetReq &r) {
 
 std::string validateFlushPfAnchor(const FlushPfAnchorReq &r) {
   if (auto e = validateAnchorName(r.anchor); !e.empty()) return "anchor: " + e;
+  return "";
+}
+
+std::string validateQueryJailRctl(const QueryJailRctlReq &r) {
+  if (r.jid == 0 || r.jid > 65535) return "jid: out of range (1..65535)";
   return "";
 }
 

@@ -6,6 +6,94 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.1] — 2026-05-13
+
+**Query-side privops: rctl read.** First read-side verb of the
+1.1.x line. Fixes `crate inspect` silently dropping the RCTL
+section under rootless. Wire taxonomy grows from 23 to 24
+verbs; `query_jail_rctl` is the first verb whose 200-OK body
+carries arbitrary text output for client-side parsing.
+
+### What changes
+
+`lib/inspect.cpp:96` previously called `rctl -u jail:<jid>`
+directly via `Util::execCommandGetOutput`. Under rootless,
+that fails for any non-root operator, the surrounding
+`try/catch(...)` swallowed the exception, and the operator
+got an inspect snapshot with no RCTL data.
+
+1.1.1 adds a new privops verb `query_jail_rctl` and routes
+the inspect call site through it when crated's socket is
+detected:
+
+```
+crate inspect web
+  ↓ (rootless)
+  privops query_jail_rctl(jid=42)
+  ↓
+  crated runs `rctl -u jail:42` as root, returns output
+  ↓
+  client parses via InspectPure::applyRctlOutput (unchanged)
+```
+
+Legacy single-tenant (setuid) deployments keep the direct
+shell-out path unchanged.
+
+### Wire-format note: text in response body
+
+This is the first verb where the response body's `output`
+field carries multi-line text. The format uses standard JSON
+string escaping (newlines become `\n`, etc.); the existing
+`PrivOpsWirePure::extractStringField` handles the unescape
+on the client side. The verb-name registry already supports
+this — `CreateEpair` (0.9.26) was the first response-data
+verb, just with short identifier strings rather than text.
+
+### Doctor / migrate
+
+The audit also listed `inspect/doctor/migrate` shell-out
+sites. The doctor/migrate paths only call `Util::execCommand`
+for the *probe* check (return zero = available, non-zero =
+not), which doesn't need privileged access — they work
+unchanged under rootless. No verb needed for those.
+
+### What's left
+
+Audit's rootless track now CLOSED.
+
+Remaining 1.x backlog (out of scope for the audit, but tracked):
+
+- Test coverage on impure modules — `run.cpp` (1810 lines) vs
+  `run_pure.cpp` (24 lines), plus 47 lib/*.cpp without dedicated
+  tests. 1.2.0+.
+- `scripts_pure` / `lifecycle_pure` / `autoname_pure` /
+  `import_pure` stub completion. 1.2.0+.
+
+### Tests
+
+No new dedicated test — the verb mirrors the existing
+single-field-input shape; the response-data path is proven
+by `CreateEpair`. Suite stays at 1303.
+
+### Files
+
+- `lib/privops_pure.{h,cpp}` — `Verb::QueryJailRctl`,
+  `QueryJailRctlReq{jid}`, `validateQueryJailRctl`
+- `lib/privops_wire_pure.{h,cpp}` — JSON parser, success
+  formatter, dispatcher case; first formatter with multi-line
+  text output
+- `lib/privops_nv_pure.{h,cpp}` — nv parser
+- `lib/privops_client.h` + `lib/privops_client_pure.cpp` —
+  `buildQueryJailRctl`
+- `daemon/privops_handlers.{h,cpp}` — `handleQueryJailRctl`
+  + HTTP + libnv dispatcher cases
+- `lib/inspect.cpp` — RCTL call site routes through privops
+  when socket detected; legacy shell-out preserved
+- `cli/args.cpp` — version `crate 1.1.1`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.1.0] — 2026-05-13
 
 **PfctlOps privops-wiring.** First minor release of the 1.x

@@ -267,6 +267,12 @@ std::string parseFlushPfAnchor(const FieldMap &m,
   return "";
 }
 
+std::string parseQueryJailRctl(const FieldMap &m,
+                               PrivOpsPure::QueryJailRctlReq &out) {
+  if (auto e = requireUnsigned(m, "jid", out.jid); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing ---
 
 PrivOpsPure::Verb extractVerb(const FieldMap &m) {
