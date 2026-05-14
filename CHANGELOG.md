@@ -6,6 +6,68 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.3] — 2026-05-14
+
+**Jail-name length ceiling raised from 64 to 200.** Fixes a
+latent 1.1.0+ bug where the daemon's `validateJailName`
+rejected the runtime-composed jail xname for any spec name
+longer than ~55 chars.
+
+### What was wrong
+
+`lib/run.cpp:802` builds the jail's exec name as:
+
+```cpp
+auto jailXname = STR(nameComponent << "_pid" << ::getpid());
+```
+
+For a typical pid like `12345`, the suffix `_pid12345` is 9
+chars. So a spec name `nameComponent` of 56+ chars would
+make `jailXname` exceed the 64-char ceiling — the daemon's
+privops `create_jail` validator returns 400 before ever
+calling `jail(8)`. Operators with descriptive jail names
+(common in stack deployments where names encode purpose)
+hit this deterministically.
+
+The pre-1.0.0 rootless audit didn't surface this because no
+test fed `validateJailName` a 60+ char input followed by a
+pid suffix. The validator unit test only checked the 64/65
+boundary against a plain `aaaa...` string.
+
+### The fix
+
+`validateJailName`'s `name.size() > 64` check becomes
+`name.size() > 200`. FreeBSD's `MAXHOSTNAMELEN` is 256;
+picking 200 leaves 56 bytes of headroom for the pid suffix
+and any future composition while staying clear of the
+kernel limit.
+
+### Tests
+
+Existing `jailname_rejects_too_long` updated to test the new
+200/201 boundary. New `jailname_accepts_runtime_pid_suffix`
+regression test that explicitly composes the `<long-name>_pid<num>`
+shape that lib/run.cpp produces at runtime.
+
+Suite grows from 1310 to **1311**.
+
+### Wire compatibility
+
+No wire change. The validator is daemon-side; a 1.1.3 daemon
+relaxes what it accepts. Old daemons still reject long names
+— operators hitting this should bump the daemon (no client
+change needed).
+
+### Files
+
+- `lib/privops_pure.cpp` — `validateJailName` ceiling 64 → 200
+- `tests/unit/privops_pure_test.cpp` — existing test updated;
+  new `jailname_accepts_runtime_pid_suffix` regression
+- `cli/args.cpp` — version `crate 1.1.3`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.1.2] — 2026-05-13
 
 **Test coverage for recent verbs + anchor-name validator fix.**
