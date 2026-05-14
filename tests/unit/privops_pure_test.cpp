@@ -306,9 +306,15 @@ ATF_TEST_CASE_WITHOUT_HEAD(anchor_accepts_typical_rejects_metas);
 ATF_TEST_CASE_BODY(anchor_accepts_typical_rejects_metas) {
   ATF_REQUIRE_EQ(validateAnchorName("crate"), std::string());
   ATF_REQUIRE_EQ(validateAnchorName("crate.dev_pool-1"), std::string());
+  // 1.1.2: '/' now allowed for pf's nested anchor convention
+  // (canonical "crate/<jail>" form). pf's anchor namespace is
+  // internal to the kernel, so there's no filesystem traversal
+  // risk.
+  ATF_REQUIRE_EQ(validateAnchorName("crate/web"), std::string());
+  ATF_REQUIRE_EQ(validateAnchorName("foo/bar/baz"), std::string());
   ATF_REQUIRE(!validateAnchorName("").empty());
-  ATF_REQUIRE(!validateAnchorName("foo/bar").empty());
   ATF_REQUIRE(!validateAnchorName("foo;rm").empty());
+  ATF_REQUIRE(!validateAnchorName("foo bar").empty());
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(ipfw_action_closed_set);
