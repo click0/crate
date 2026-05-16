@@ -368,7 +368,14 @@ std::string validateRuleText(const std::string &text) {
 
 std::string validateAnchorName(const std::string &name) {
   if (name.empty()) return "anchor name is empty";
-  if (name.size() > 64) return "anchor name longer than 64 chars";
+  // 1.1.4: limit raised from 64 to 256. lib/run.cpp composes the
+  // per-jail anchor as `crate/<jailXname>` where jailXname can be
+  // up to 200 chars (1.1.3 bumped that ceiling for `<spec>_pid<num>`
+  // composition). Total worst case is 6 + 200 = 206 chars; 256
+  // leaves headroom for any future nested-anchor patterns. pf has
+  // no hard limit on anchor path length (it's an in-kernel hash
+  // table key).
+  if (name.size() > 256) return "anchor name longer than 256 chars";
   // 1.1.2: '/' allowed for pf's nested anchor convention. crate's
   // per-jail anchors use the canonical "crate/<jail>" form (see
   // lib/run.cpp's auto-fw + composeContainerPolicy paths). pfctl
