@@ -135,7 +135,14 @@ Verb parseVerb(const std::string &name) {
 
 std::string validateJailName(const std::string &name) {
   if (name.empty()) return "jail name is empty";
-  if (name.size() > 64) return "jail name longer than 64 chars";
+  // 1.1.3: limit raised from 64 to 200. lib/run.cpp builds the
+  // jail's xname as `<spec-name>_pid<getpid()>`, so a 64-byte
+  // ceiling rejected any spec name longer than ~55 chars once
+  // the suffix is added. FreeBSD's MAXHOSTNAMELEN is 256; we
+  // pick 200 to leave 56 bytes of headroom for the pid suffix
+  // and any future composition while staying clear of the
+  // kernel limit.
+  if (name.size() > 200) return "jail name longer than 200 chars";
   if (name == "." || name == "..") return "jail name is reserved";
   for (char c : name) {
     bool ok = isAlnum(c) || c == '.' || c == '_' || c == '-';

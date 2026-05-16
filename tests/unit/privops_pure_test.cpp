@@ -93,10 +93,28 @@ ATF_TEST_CASE_BODY(jailname_rejects_metas) {
 
 ATF_TEST_CASE_WITHOUT_HEAD(jailname_rejects_too_long);
 ATF_TEST_CASE_BODY(jailname_rejects_too_long) {
-  std::string s(64, 'a');
+  // 1.1.3: limit raised from 64 to 200 to accommodate the
+  // `_pid<getpid()>` suffix that lib/run.cpp appends at runtime.
+  std::string s(200, 'a');
   ATF_REQUIRE_EQ(validateJailName(s), std::string());
   s.push_back('a');
   ATF_REQUIRE(!validateJailName(s).empty());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(jailname_accepts_runtime_pid_suffix);
+ATF_TEST_CASE_BODY(jailname_accepts_runtime_pid_suffix) {
+  // Regression coverage for the 1.1.3 fix: lib/run.cpp builds
+  // jailXname = `<spec-name>_pid<getpid()>`. With the old 64-char
+  // ceiling, any spec name >55 chars triggered a 400 from the
+  // daemon validator. Verify the canonical real-world shape now
+  // passes.
+  std::string specName(60, 'a');                 // realistic long-ish name
+  std::string suffix = "_pid99999";              // 9 chars (max-ish pid)
+  ATF_REQUIRE_EQ(validateJailName(specName + suffix), std::string());
+
+  // Even larger: 150-char spec name + pid suffix still fits 200.
+  std::string longSpec(150, 'b');
+  ATF_REQUIRE_EQ(validateJailName(longSpec + suffix), std::string());
 }
 
 // --- validateHostname ---
@@ -698,6 +716,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, jailname_rejects_empty_and_reserved);
   ATF_ADD_TEST_CASE(tcs, jailname_rejects_metas);
   ATF_ADD_TEST_CASE(tcs, jailname_rejects_too_long);
+  ATF_ADD_TEST_CASE(tcs, jailname_accepts_runtime_pid_suffix);
 
   ATF_ADD_TEST_CASE(tcs, hostname_empty_is_ok);
   ATF_ADD_TEST_CASE(tcs, hostname_accepts_typical);
