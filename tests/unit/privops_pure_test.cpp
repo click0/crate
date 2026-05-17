@@ -727,6 +727,43 @@ ATF_TEST_CASE_BODY(query_jail_rctl_minimal) {
   ATF_REQUIRE(!validateQueryJailRctl(r).empty());
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(set_jail_cpuset_minimal);
+ATF_TEST_CASE_BODY(set_jail_cpuset_minimal) {
+  SetJailCpusetReq r;
+  r.jid = 42;
+  r.cpuset = "0-3";
+  ATF_REQUIRE_EQ(validateSetJailCpuset(r), std::string());
+
+  // Comma-separated list.
+  r.cpuset = "0,2,4,6";
+  ATF_REQUIRE_EQ(validateSetJailCpuset(r), std::string());
+
+  // Mixed range + list.
+  r.cpuset = "0-3,8,12-15";
+  ATF_REQUIRE_EQ(validateSetJailCpuset(r), std::string());
+
+  // jid=0 — invalid.
+  r.jid = 0;
+  ATF_REQUIRE(!validateSetJailCpuset(r).empty());
+
+  // jid out of range.
+  r.jid = 70000;
+  ATF_REQUIRE(!validateSetJailCpuset(r).empty());
+
+  // Empty cpuset.
+  r.jid = 42;
+  r.cpuset = "";
+  ATF_REQUIRE(!validateSetJailCpuset(r).empty());
+
+  // Shell metachar in cpuset — rejected.
+  r.cpuset = "0; rm -rf /";
+  ATF_REQUIRE(!validateSetJailCpuset(r).empty());
+
+  // Letter in cpuset — rejected.
+  r.cpuset = "0-3,foo";
+  ATF_REQUIRE(!validateSetJailCpuset(r).empty());
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(configure_ipfw_nat_minimal);
 ATF_TEST_CASE_BODY(configure_ipfw_nat_minimal) {
   ConfigureIpfwNatReq r;
@@ -831,4 +868,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, flush_pf_anchor_minimal);
   ATF_ADD_TEST_CASE(tcs, query_jail_rctl_minimal);
   ATF_ADD_TEST_CASE(tcs, configure_ipfw_nat_minimal);
+  ATF_ADD_TEST_CASE(tcs, set_jail_cpuset_minimal);
 }

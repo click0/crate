@@ -417,6 +417,13 @@ std::string parseConfigureIpfwNat(const std::string &body,
   return "";
 }
 
+std::string parseSetJailCpuset(const std::string &body,
+                               PrivOpsPure::SetJailCpusetReq &out) {
+  if (auto e = requireUnsignedField(body, "jid", out.jid); !e.empty()) return e;
+  if (auto e = requireStringField(body, "cpuset", out.cpuset); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing helper ---
 
 PrivOpsPure::Verb parseVerbFromPath(const std::string &path) {
@@ -770,6 +777,16 @@ std::string formatConfigureIpfwNatSuccess(unsigned number) {
   return o.str();
 }
 
+std::string formatSetJailCpusetSuccess(unsigned jid,
+                                       const std::string &cpuset) {
+  std::ostringstream o;
+  o << "{\"bound\":true"
+    << ",\"jid\":" << jid
+    << ",\"cpuset\":\"" << escape(cpuset) << "\""
+    << "}";
+  return o.str();
+}
+
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body) {
   using namespace PrivOpsPure;
@@ -826,6 +843,8 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       return runVerb<QueryJailRctlReq>(body, v, parseQueryJailRctl, validateQueryJailRctl);
     case Verb::ConfigureIpfwNat:
       return runVerb<ConfigureIpfwNatReq>(body, v, parseConfigureIpfwNat, validateConfigureIpfwNat);
+    case Verb::SetJailCpuset:
+      return runVerb<SetJailCpusetReq>(body, v, parseSetJailCpuset, validateSetJailCpuset);
     case Verb::Unknown:
       break;
   }

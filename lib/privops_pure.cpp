@@ -98,6 +98,7 @@ const char *verbName(Verb v) {
     case Verb::FlushPfAnchor:        return "flush_pf_anchor";
     case Verb::QueryJailRctl:        return "query_jail_rctl";
     case Verb::ConfigureIpfwNat:     return "configure_ipfw_nat";
+    case Verb::SetJailCpuset:        return "set_jail_cpuset";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -130,6 +131,7 @@ Verb parseVerb(const std::string &name) {
   if (name == "flush_pf_anchor")         return Verb::FlushPfAnchor;
   if (name == "query_jail_rctl")         return Verb::QueryJailRctl;
   if (name == "configure_ipfw_nat")      return Verb::ConfigureIpfwNat;
+  if (name == "set_jail_cpuset")         return Verb::SetJailCpuset;
   return Verb::Unknown;
 }
 
@@ -582,6 +584,24 @@ std::string validateConfigureIpfwNat(const ConfigureIpfwNatReq &r) {
   if (r.number == 0 || r.number > 65534)
     return "number: out of range (1..65534)";
   if (auto e = validateRuleText(r.config); !e.empty()) return "config: " + e;
+  return "";
+}
+
+std::string validateSetJailCpuset(const SetJailCpusetReq &r) {
+  if (r.jid == 0 || r.jid > 65535) return "jid: out of range (1..65535)";
+  if (r.cpuset.empty()) return "cpuset is empty";
+  if (r.cpuset.size() > 256) return "cpuset longer than 256 chars";
+  // cpuset(1) list syntax: digits, comma, hyphen only. Reject any
+  // other char so the daemon's exec doesn't run with operator-
+  // controlled junk in argv.
+  for (char c : r.cpuset) {
+    bool ok = (c >= '0' && c <= '9') || c == ',' || c == '-';
+    if (!ok) {
+      std::ostringstream os;
+      os << "invalid character '" << c << "' in cpuset";
+      return os.str();
+    }
+  }
   return "";
 }
 

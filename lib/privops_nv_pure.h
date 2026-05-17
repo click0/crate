@@ -143,6 +143,8 @@ std::string parseQueryJailRctl(const FieldMap &m,
                                PrivOpsPure::QueryJailRctlReq &out);
 std::string parseConfigureIpfwNat(const FieldMap &m,
                                   PrivOpsPure::ConfigureIpfwNatReq &out);
+std::string parseSetJailCpuset(const FieldMap &m,
+                               PrivOpsPure::SetJailCpusetReq &out);
 
 // --- Verb routing ---
 

@@ -172,6 +172,13 @@ enum class Verb {
   // needed because lib/run_net.cpp's auto-fw setup creates a
   // NAT instance before adding rules that point to it.
   ConfigureIpfwNat,
+
+  // 1.1.9: bind a jail's processes to a CPU set.
+  // Wraps `cpuset -l <cpuset> -j <jid>`. Targets the
+  // `crate run` path's `spec.cpuset` application (lib/run.cpp).
+  // No teardown verb — cpuset binding evaporates with the
+  // jail (destroyJail handles the rest).
+  SetJailCpuset,
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -344,6 +351,15 @@ struct ConfigureIpfwNatReq {
   std::string config;
 };
 
+// 1.1.9: bind a jail's processes to a CPU set. `cpuset` is the
+// cpuset(1) list syntax — comma-separated cpu IDs and ranges
+// (e.g., "0-3", "0,2,4-7"). Validated charset is digits, comma,
+// hyphen only.
+struct SetJailCpusetReq {
+  unsigned    jid = 0;
+  std::string cpuset;
+};
+
 // --- Per-verb validators ---
 //
 // Each `validate*(req)` returns "" on success, otherwise a one-line
@@ -378,6 +394,7 @@ std::string validateReclaimIfaceFromVnet(const ReclaimIfaceFromVnetReq &r);
 std::string validateFlushPfAnchor(const FlushPfAnchorReq &r);
 std::string validateQueryJailRctl(const QueryJailRctlReq &r);
 std::string validateConfigureIpfwNat(const ConfigureIpfwNatReq &r);
+std::string validateSetJailCpuset(const SetJailCpusetReq &r);
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //

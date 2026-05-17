@@ -192,6 +192,10 @@ PrivOpsWirePure::DispatchResult handleQueryJailRctl(const PrivOpsPure::QueryJail
 // `ipfw nat <number> config <body>`.
 PrivOpsWirePure::DispatchResult handleConfigureIpfwNat(const PrivOpsPure::ConfigureIpfwNatReq &r);
 
+// 1.1.9: bind a jail's processes to a cpuset. Wraps
+// `cpuset -l <cpuset> -j <jid>`.
+PrivOpsWirePure::DispatchResult handleSetJailCpuset(const PrivOpsPure::SetJailCpusetReq &r);
+
 // 0.9.29: register the daemon's `rctl_umbrella:` config. Called
 // once at daemon startup. The umbrella rules apply after a
 // successful create_jail privops invocation when the operator's
