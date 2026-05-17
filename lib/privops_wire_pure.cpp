@@ -410,6 +410,13 @@ std::string parseQueryJailRctl(const std::string &body,
   return "";
 }
 
+std::string parseConfigureIpfwNat(const std::string &body,
+                                  PrivOpsPure::ConfigureIpfwNatReq &out) {
+  if (auto e = requireUnsignedField(body, "number", out.number); !e.empty()) return e;
+  if (auto e = requireStringField(body, "config", out.config); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing helper ---
 
 PrivOpsPure::Verb parseVerbFromPath(const std::string &path) {
@@ -755,6 +762,14 @@ std::string formatQueryJailRctlSuccess(unsigned jid,
   return o.str();
 }
 
+std::string formatConfigureIpfwNatSuccess(unsigned number) {
+  std::ostringstream o;
+  o << "{\"configured\":true"
+    << ",\"number\":" << number
+    << "}";
+  return o.str();
+}
+
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body) {
   using namespace PrivOpsPure;
@@ -809,6 +824,8 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       return runVerb<FlushPfAnchorReq>(body, v, parseFlushPfAnchor, validateFlushPfAnchor);
     case Verb::QueryJailRctl:
       return runVerb<QueryJailRctlReq>(body, v, parseQueryJailRctl, validateQueryJailRctl);
+    case Verb::ConfigureIpfwNat:
+      return runVerb<ConfigureIpfwNatReq>(body, v, parseConfigureIpfwNat, validateConfigureIpfwNat);
     case Verb::Unknown:
       break;
   }

@@ -6,6 +6,104 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.8] — 2026-05-17
+
+**ipfw setup wired through privops + new `configure_ipfw_nat`
+verb.** Closes the SETUP half of the ipfw shell-out chain
+(1.1.7 closed the teardown half). Without this fix, rootless
+`crate run` with `inbound_ports` or `outbound_nat` in the spec
+EACCES'd on the very first `ipfw add` call, killing the run
+before the jail finished setup.
+
+### What changes
+
+#### New verb: `configure_ipfw_nat`
+
+Wraps `ipfw nat <number> config <body>`. Sibling to the
+existing `add_ipfw_rule` (0.9.0) — both apply to the host's
+ipfw state, but the NAT config command has a different argv
+shape (`ipfw nat N config ...` vs `ipfw add N action ...`)
+that doesn't fit `add_ipfw_rule`'s `set/number/action/body`
+model.
+
+Same 7-file pattern as 1.0.5–1.1.4. Wire taxonomy grows from
+**24 to 25 verbs**.
+
+```cpp
+struct ConfigureIpfwNatReq {
+  unsigned    number = 0;     // NAT instance 1..65534
+  std::string config;          // "redirect_port tcp 10.0.0.1:80 ..."
+};
+```
+
+Validator reuses `validateRuleText` for the config body (no
+newlines, no `;`, `$`, backtick, backslash).
+
+#### `lib/run_net.cpp::execFW` refactored
+
+The setup lambda now inspects its argv shape and routes
+through privops when the socket is detected:
+
+| argv[0]        | Verb                 |
+|----------------|----------------------|
+| `nat`          | `ConfigureIpfwNat`   |
+| `add`          | `AddIpfwRule`        |
+| (other)        | bare exec + warn     |
+
+Legacy setuid mode keeps the bare `ipfw -q <argv>` path
+unchanged (no socket → no privops).
+
+### Coverage
+
+All ~15 `execFW(...)` call sites in `setupFirewallRules` now
+route through privops in rootless mode. Combined with 1.1.7's
+teardown wiring, the complete ipfw lifecycle (config NAT, add
+rules, delete rules) is rootless-clean.
+
+### Wire compatibility
+
+New verb is additive. 1.1.8 client → 1.1.7 daemon: the
+`configure_ipfw_nat` calls 404 at the daemon, `crate run`
+fails loudly at setup (no silent feature loss). Operators
+should bump daemon first.
+
+### Tests
+
+`tests/unit/privops_pure_test.cpp` gains
+`configure_ipfw_nat_minimal` (number boundaries, real-world
+redirect_port body, shell-meta rejection, empty/newline
+rejection). `dispatch_covers_every_verb` includes the new
+verb. Suite grows from 1312 to **1313**.
+
+### Audit chain status
+
+| Item                                              | Status        |
+|---------------------------------------------------|---------------|
+| validateAnchorName allows `/`                     | ✅ 1.1.2      |
+| validateJailName 64 → 200 chars                   | ✅ 1.1.3      |
+| validateAnchorName 64 → 256 chars                 | ✅ 1.1.4      |
+| securelevel + children.max via privops params     | ✅ 1.1.5      |
+| RCTL apply/cleanup via privops                    | ✅ 1.1.6      |
+| ipfw teardown via privops                         | ✅ 1.1.7      |
+| **ipfw setup + ConfigureIpfwNat**                 | ✅ **1.1.8**  |
+| devfs/cpuset/chroot/snapshot bare-shell           | TBD (next pass) |
+
+### Files
+
+- `lib/privops_pure.{h,cpp}` — `Verb::ConfigureIpfwNat`,
+  `ConfigureIpfwNatReq`, validator
+- `lib/privops_wire_pure.{h,cpp}` — JSON parser + format + dispatcher
+- `lib/privops_nv_pure.{h,cpp}` — nv parser
+- `lib/privops_client.h` + `lib/privops_client_pure.cpp` — builder
+- `daemon/privops_handlers.{h,cpp}` — handler + HTTP + libnv cases
+- `lib/run_net.cpp` — `execFW` lambda routes through privops
+- `tests/unit/privops_pure_test.cpp` — validator coverage
+- `tests/unit/privops_wire_pure_test.cpp` — dispatch coverage extended
+- `cli/args.cpp` — version `crate 1.1.8`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.1.7] — 2026-05-17
 
 **ipfw teardown wired through privops.** First half of the

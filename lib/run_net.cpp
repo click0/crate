@@ -305,8 +305,62 @@ RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
   if (!optionNet)
     return RunAtEnd();
 
-  // exec-based ipfw wrapper: no shell, argv array passed directly
+  // 1.1.8: ipfw setup wrapper routes through privops when the
+  // socket is detected; falls back to direct exec for legacy
+  // setuid mode. Two shapes seen at call sites here:
+  //   * `nat <N> config <body>` -> ConfigureIpfwNat verb
+  //   * `add <N> <action> <body>` -> AddIpfwRule verb
+  // Anything else (shouldn't happen in this function) falls
+  // through to the bare exec path with a warning.
   auto execFW = [](const std::vector<std::string> &fwargs) {
+    std::string sock = PrivOpsClient::detectSocketPath();
+    if (!sock.empty()) {
+      if (fwargs.size() >= 3 && fwargs[0] == "nat" && fwargs[2] == "config") {
+        unsigned natNum = 0;
+        try { natNum = (unsigned)std::stoul(fwargs[1]); }
+        catch (...) { ERR2("run_net", "privops configure_ipfw_nat: bad nat number '" << fwargs[1] << "'") }
+        std::string config;
+        for (std::size_t i = 3; i < fwargs.size(); i++) {
+          if (i > 3) config += " ";
+          config += fwargs[i];
+        }
+        auto resp = PrivOpsClient::sendRequest(sock,
+            PrivOpsClient::buildConfigureIpfwNat(natNum, config));
+        if (!resp.transportError.empty())
+          ERR2("run_net", "privops configure_ipfw_nat " << natNum
+               << " transport error: " << resp.transportError)
+        if (resp.status >= 400)
+          ERR2("run_net", "privops configure_ipfw_nat " << natNum
+               << " failed (status " << resp.status << "): " << resp.body)
+        return;
+      }
+      if (fwargs.size() >= 3 && fwargs[0] == "add") {
+        unsigned ruleNum = 0;
+        try { ruleNum = (unsigned)std::stoul(fwargs[1]); }
+        catch (...) { ERR2("run_net", "privops add_ipfw_rule: bad rule number '" << fwargs[1] << "'") }
+        std::string action = fwargs[2];
+        std::string body;
+        for (std::size_t i = 3; i < fwargs.size(); i++) {
+          if (i > 3) body += " ";
+          body += fwargs[i];
+        }
+        auto resp = PrivOpsClient::sendRequest(sock,
+            PrivOpsClient::buildAddIpfwRule(/*set=*/0, ruleNum, action, body));
+        if (!resp.transportError.empty())
+          ERR2("run_net", "privops add_ipfw_rule " << ruleNum
+               << " transport error: " << resp.transportError)
+        if (resp.status >= 400)
+          ERR2("run_net", "privops add_ipfw_rule " << ruleNum
+               << " failed (status " << resp.status << "): " << resp.body)
+        return;
+      }
+      // Unknown shape — log and fall through to bare exec
+      // (which will fail loudly under rootless rather than
+      // silently dropping the firewall configuration).
+      WARN("execFW: privops socket detected but argv shape unknown; "
+           "falling back to bare ipfw exec (rootless will likely fail): "
+           << fwargs[0])
+    }
     auto argv = std::vector<std::string>{CRATE_PATH_IPFW, "-q"};
     argv.insert(argv.end(), fwargs.begin(), fwargs.end());
     Util::execCommand(argv, "firewall rule");

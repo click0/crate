@@ -189,6 +189,9 @@ std::string parseFlushPfAnchor(const std::string &body,
 std::string parseQueryJailRctl(const std::string &body,
                                PrivOpsPure::QueryJailRctlReq &out);
 
+std::string parseConfigureIpfwNat(const std::string &body,
+                                  PrivOpsPure::ConfigureIpfwNatReq &out);
+
 // --- Verb routing helper ---
 //
 // Parse the URL path's verb segment. The route pattern is
@@ -337,5 +340,8 @@ std::string formatFlushPfAnchorSuccess(const std::string &anchor);
 // the client side parses it via InspectPure::applyRctlOutput.
 std::string formatQueryJailRctlSuccess(unsigned jid,
                                        const std::string &output);
+
+// 1.1.8: 200 OK body for configure_ipfw_nat.
+std::string formatConfigureIpfwNatSuccess(unsigned number);
 
 } // namespace PrivOpsWirePure

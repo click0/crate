@@ -141,6 +141,8 @@ std::string parseFlushPfAnchor(const FieldMap &m,
                                PrivOpsPure::FlushPfAnchorReq &out);
 std::string parseQueryJailRctl(const FieldMap &m,
                                PrivOpsPure::QueryJailRctlReq &out);
+std::string parseConfigureIpfwNat(const FieldMap &m,
+                                  PrivOpsPure::ConfigureIpfwNatReq &out);
 
 // --- Verb routing ---
 

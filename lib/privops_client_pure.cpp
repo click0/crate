@@ -311,4 +311,13 @@ PrivOpsNvPure::FieldMap buildQueryJailRctl(unsigned jid) {
   };
 }
 
+PrivOpsNvPure::FieldMap buildConfigureIpfwNat(unsigned number,
+                                               const std::string &config) {
+  return {
+    {"verb", "configure_ipfw_nat"},
+    {"number", std::to_string(number)},
+    {"config", config},
+  };
+}
+
 } // namespace PrivOpsClient

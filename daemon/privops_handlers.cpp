@@ -511,6 +511,23 @@ DispatchResult handleQueryJailRctl(const PrivOpsPure::QueryJailRctlReq &r) {
   return {200, PrivOpsWirePure::formatQueryJailRctlSuccess(r.jid, output)};
 }
 
+// --- handleConfigureIpfwNat (1.1.8) ---
+
+DispatchResult handleConfigureIpfwNat(const PrivOpsPure::ConfigureIpfwNatReq &r) {
+  std::vector<std::string> argv = {
+    CRATE_PATH_IPFW, "nat", std::to_string(r.number), "config",
+  };
+  std::istringstream iss(r.config);
+  std::string token;
+  while (iss >> token) argv.push_back(token);
+  try {
+    Util::execCommand(argv, "privops configure_ipfw_nat");
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("ipfw_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatConfigureIpfwNatSuccess(r.number)};
+}
+
 // --- Top-level dispatcher ---
 
 namespace {
@@ -771,6 +788,14 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleQueryJailRctl(r);
     }
+    case Verb::ConfigureIpfwNat: {
+      PrivOpsPure::ConfigureIpfwNatReq r;
+      if (auto e = PrivOpsWirePure::parseConfigureIpfwNat(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateConfigureIpfwNat(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleConfigureIpfwNat(r);
+    }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
   }
@@ -988,6 +1013,14 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       if (auto e = PrivOpsPure::validateQueryJailRctl(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleQueryJailRctl(r);
+    }
+    case Verb::ConfigureIpfwNat: {
+      PrivOpsPure::ConfigureIpfwNatReq r;
+      if (auto e = PrivOpsNvPure::parseConfigureIpfwNat(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateConfigureIpfwNat(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleConfigureIpfwNat(r);
     }
     case Verb::Unknown:
       return {404,

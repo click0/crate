@@ -587,7 +587,7 @@ ATF_TEST_CASE_BODY(dispatch_covers_every_verb) {
     Verb::SetIfaceInetAddr, Verb::CreateEpair,
     Verb::SetLoginclassRctl, Verb::ClearLoginclassRctl,
     Verb::ReclaimIfaceFromVnet, Verb::FlushPfAnchor,
-    Verb::QueryJailRctl,
+    Verb::QueryJailRctl, Verb::ConfigureIpfwNat,
   };
   for (auto v : verbs) {
     auto r = parseValidateAndDispatch(v, "{}");
