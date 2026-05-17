@@ -164,6 +164,14 @@ enum class Verb {
   // verb hands the read to crated and returns the textual
   // output for client-side parsing via InspectPure.
   QueryJailRctl,
+
+  // 1.1.8: configure an ipfw NAT instance.
+  // `ipfw nat <number> config <body>` — body holds the
+  // `redirect_port` rules and other NAT instance settings.
+  // Sibling to AddIpfwRule (which handles `ipfw add ...`);
+  // needed because lib/run_net.cpp's auto-fw setup creates a
+  // NAT instance before adding rules that point to it.
+  ConfigureIpfwNat,
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -327,6 +335,15 @@ struct QueryJailRctlReq {
   unsigned jid = 0;          // jail id (validated 1..65535)
 };
 
+// 1.1.8: configure an ipfw NAT instance. The `config` field is
+// the textual body following `ipfw nat <number> config` — e.g.
+// "ip 192.168.1.1" or "redirect_port tcp 10.0.0.1:80 192.168.1.1:80".
+// Validated like validateRuleText (no newlines, no shell metas).
+struct ConfigureIpfwNatReq {
+  unsigned    number = 0;     // NAT instance 1..65534
+  std::string config;
+};
+
 // --- Per-verb validators ---
 //
 // Each `validate*(req)` returns "" on success, otherwise a one-line
@@ -360,6 +377,7 @@ std::string validateClearLoginclassRctl(const ClearLoginclassRctlReq &r);
 std::string validateReclaimIfaceFromVnet(const ReclaimIfaceFromVnetReq &r);
 std::string validateFlushPfAnchor(const FlushPfAnchorReq &r);
 std::string validateQueryJailRctl(const QueryJailRctlReq &r);
+std::string validateConfigureIpfwNat(const ConfigureIpfwNatReq &r);
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //

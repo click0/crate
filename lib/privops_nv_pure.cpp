@@ -273,6 +273,13 @@ std::string parseQueryJailRctl(const FieldMap &m,
   return "";
 }
 
+std::string parseConfigureIpfwNat(const FieldMap &m,
+                                  PrivOpsPure::ConfigureIpfwNatReq &out) {
+  if (auto e = requireUnsigned(m, "number", out.number); !e.empty()) return e;
+  if (auto e = requireString(m, "config", out.config); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing ---
 
 PrivOpsPure::Verb extractVerb(const FieldMap &m) {

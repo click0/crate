@@ -188,6 +188,10 @@ PrivOpsWirePure::DispatchResult handleFlushPfAnchor(const PrivOpsPure::FlushPfAn
 // response body carries the raw rctl text in the `output` field.
 PrivOpsWirePure::DispatchResult handleQueryJailRctl(const PrivOpsPure::QueryJailRctlReq &r);
 
+// 1.1.8: configure an ipfw NAT instance. Wraps
+// `ipfw nat <number> config <body>`.
+PrivOpsWirePure::DispatchResult handleConfigureIpfwNat(const PrivOpsPure::ConfigureIpfwNatReq &r);
+
 // 0.9.29: register the daemon's `rctl_umbrella:` config. Called
 // once at daemon startup. The umbrella rules apply after a
 // successful create_jail privops invocation when the operator's

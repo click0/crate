@@ -727,6 +727,39 @@ ATF_TEST_CASE_BODY(query_jail_rctl_minimal) {
   ATF_REQUIRE(!validateQueryJailRctl(r).empty());
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(configure_ipfw_nat_minimal);
+ATF_TEST_CASE_BODY(configure_ipfw_nat_minimal) {
+  ConfigureIpfwNatReq r;
+  r.number = 100;
+  r.config = "ip 192.168.1.1";
+  ATF_REQUIRE_EQ(validateConfigureIpfwNat(r), std::string());
+
+  // Real-world body — redirect_port for inbound NAT.
+  r.config = "redirect_port tcp 10.0.0.1:80 192.168.1.1:80";
+  ATF_REQUIRE_EQ(validateConfigureIpfwNat(r), std::string());
+
+  // number=0 — invalid.
+  r.number = 0;
+  ATF_REQUIRE(!validateConfigureIpfwNat(r).empty());
+
+  // number out of range.
+  r.number = 70000;
+  ATF_REQUIRE(!validateConfigureIpfwNat(r).empty());
+
+  // Shell metachar in config — rejected by validateRuleText.
+  r.number = 1;
+  r.config = "ip 192.168.1.1; pfctl -F all";
+  ATF_REQUIRE(!validateConfigureIpfwNat(r).empty());
+
+  // Newline in config — rejected.
+  r.config = "ip 192.168.1.1\nip 10.0.0.1";
+  ATF_REQUIRE(!validateConfigureIpfwNat(r).empty());
+
+  // Empty config — rejected.
+  r.config = "";
+  ATF_REQUIRE(!validateConfigureIpfwNat(r).empty());
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, verb_token_roundtrips_for_every_verb);
   ATF_ADD_TEST_CASE(tcs, verb_unknown_token_returns_unknown);
@@ -797,4 +830,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, reclaim_iface_from_vnet_minimal);
   ATF_ADD_TEST_CASE(tcs, flush_pf_anchor_minimal);
   ATF_ADD_TEST_CASE(tcs, query_jail_rctl_minimal);
+  ATF_ADD_TEST_CASE(tcs, configure_ipfw_nat_minimal);
 }

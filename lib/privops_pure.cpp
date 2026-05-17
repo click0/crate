@@ -97,6 +97,7 @@ const char *verbName(Verb v) {
     case Verb::ReclaimIfaceFromVnet: return "reclaim_iface_from_vnet";
     case Verb::FlushPfAnchor:        return "flush_pf_anchor";
     case Verb::QueryJailRctl:        return "query_jail_rctl";
+    case Verb::ConfigureIpfwNat:     return "configure_ipfw_nat";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -128,6 +129,7 @@ Verb parseVerb(const std::string &name) {
   if (name == "reclaim_iface_from_vnet") return Verb::ReclaimIfaceFromVnet;
   if (name == "flush_pf_anchor")         return Verb::FlushPfAnchor;
   if (name == "query_jail_rctl")         return Verb::QueryJailRctl;
+  if (name == "configure_ipfw_nat")      return Verb::ConfigureIpfwNat;
   return Verb::Unknown;
 }
 
@@ -573,6 +575,13 @@ std::string validateFlushPfAnchor(const FlushPfAnchorReq &r) {
 
 std::string validateQueryJailRctl(const QueryJailRctlReq &r) {
   if (r.jid == 0 || r.jid > 65535) return "jid: out of range (1..65535)";
+  return "";
+}
+
+std::string validateConfigureIpfwNat(const ConfigureIpfwNatReq &r) {
+  if (r.number == 0 || r.number > 65534)
+    return "number: out of range (1..65534)";
+  if (auto e = validateRuleText(r.config); !e.empty()) return "config: " + e;
   return "";
 }
 

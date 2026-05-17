@@ -148,6 +148,11 @@ PrivOpsNvPure::FieldMap buildFlushPfAnchor(const std::string &anchor);
 // raw rctl text in the `output` field for client-side parsing.
 PrivOpsNvPure::FieldMap buildQueryJailRctl(unsigned jid);
 
+// 1.1.8: configure an ipfw NAT instance. `config` is the body
+// following `ipfw nat <number> config` (one line, no shell metas).
+PrivOpsNvPure::FieldMap buildConfigureIpfwNat(unsigned number,
+                                               const std::string &config);
+
 // --- Wire transport (FreeBSD-only) ---
 
 struct Response {
