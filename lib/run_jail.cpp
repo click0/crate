@@ -27,6 +27,7 @@ extern "C" {
 
 #include <iostream>
 #include <string>
+#include <vector>
 #include <filesystem>
 #include <limits>
 #include <sstream>
@@ -216,32 +217,86 @@ RunAtEnd applyRctlLimits(const Spec &spec, int jid, bool logProgress) {
   if (spec.limits.empty())
     return RunAtEnd();
 
+  // 1.1.6: route rctl apply + cleanup through SetRctl / ClearRctl
+  // privops when the socket is detected. Pre-1.1.6 this shelled out
+  // to `rctl -a <rule>` and `rctl -r jail:<jid>` directly, which
+  // EACCES'd for non-root operators under 1.0.0+ rootless mode and
+  // silently dropped every limit in spec.limits. The verification
+  // diagnostic (`rctl -l`) is suppressed when privops is active —
+  // a failed SetRctl call now surfaces as a real error from the
+  // daemon rather than a post-hoc warning.
+  std::string privopsSocket = PrivOpsClient::detectSocketPath();
+  bool privopsActive = !privopsSocket.empty();
+
   auto jidStr = std::to_string(jid);
   for (auto &lim : spec.limits) {
-    auto rule = STR("jail:" << jidStr << ":" << lim.first << ":deny=" << lim.second);
-    if (logProgress)
+    if (logProgress) {
+      auto rule = STR("jail:" << jidStr << ":" << lim.first << ":deny=" << lim.second);
       std::cerr << rang::fg::gray << "applying RCTL rule: " << rule << rang::style::reset << std::endl;
-    Util::execCommand({CRATE_PATH_RCTL, "-a", rule}, CSTR("apply RCTL rule " << lim.first));
-  }
-
-  // Verify that RCTL rules were actually applied
-  try {
-    auto listing = Util::execCommandGetOutput(
-      {CRATE_PATH_RCTL, "-l", STR("jail:" << jidStr)}, "verify RCTL rules");
-    for (auto &lim : spec.limits) {
-      if (listing.find(lim.first) == std::string::npos)
-        WARN("RCTL limit '" << lim.first << "' may not be enforced — "
-             "check that kern.racct.enable=1 is set in /boot/loader.conf")
     }
-  } catch (...) {
-    WARN("cannot verify RCTL rules — check kern.racct.enable=1 in /boot/loader.conf")
+    if (privopsActive) {
+      auto resp = PrivOpsClient::sendRequest(privopsSocket,
+          PrivOpsClient::buildSetRctl((long)jid, lim.first, lim.second));
+      if (!resp.transportError.empty())
+        ERR("privops set_rctl '" << lim.first << "' transport error: "
+            << resp.transportError)
+      if (resp.status >= 400)
+        ERR("privops set_rctl '" << lim.first << "' failed (status "
+            << resp.status << "): " << resp.body)
+    } else {
+      auto rule = STR("jail:" << jidStr << ":" << lim.first << ":deny=" << lim.second);
+      Util::execCommand({CRATE_PATH_RCTL, "-a", rule},
+                        CSTR("apply RCTL rule " << lim.first));
+    }
   }
 
-  return RunAtEnd([jid, logProgress]() {
+  // Verify that RCTL rules were actually applied. Skipped under
+  // privops mode — non-root callers can't read `rctl -l`, and a
+  // successful SetRctl response already confirms apply success.
+  if (!privopsActive) {
+    try {
+      auto listing = Util::execCommandGetOutput(
+        {CRATE_PATH_RCTL, "-l", STR("jail:" << jidStr)}, "verify RCTL rules");
+      for (auto &lim : spec.limits) {
+        if (listing.find(lim.first) == std::string::npos)
+          WARN("RCTL limit '" << lim.first << "' may not be enforced — "
+               "check that kern.racct.enable=1 is set in /boot/loader.conf")
+      }
+    } catch (...) {
+      WARN("cannot verify RCTL rules — check kern.racct.enable=1 in /boot/loader.conf")
+    }
+  }
+
+  // Capture spec.limits keys for per-key teardown so the cleanup
+  // path can route through ClearRctl (per-key) instead of the
+  // bulk `rctl -r jail:<jid>` form which has no privops verb.
+  std::vector<std::string> keys;
+  keys.reserve(spec.limits.size());
+  for (auto &lim : spec.limits) keys.push_back(lim.first);
+
+  return RunAtEnd([jid, keys, privopsSocket, logProgress]() {
     auto jidStr = std::to_string(jid);
     if (logProgress)
       std::cerr << rang::fg::gray << "removing RCTL rules for jail " << jidStr << rang::style::reset << std::endl;
-    Util::execCommand({CRATE_PATH_RCTL, "-r", STR("jail:" << jidStr)}, "remove RCTL rules");
+    if (!privopsSocket.empty()) {
+      for (auto &k : keys) {
+        auto resp = PrivOpsClient::sendRequest(privopsSocket,
+            PrivOpsClient::buildClearRctl((long)jid, k));
+        if (!resp.transportError.empty() || resp.status >= 400) {
+          // Soft-fail: jail is being torn down; logging is enough.
+          std::cerr << rang::fg::yellow
+                    << "run_jail: privops clear_rctl '" << k << "' ignored: "
+                    << (resp.transportError.empty() ? resp.body
+                                                    : resp.transportError)
+                    << rang::style::reset << std::endl;
+        }
+      }
+    } else {
+      // Legacy bulk removal — single rctl call clears every rule
+      // for this jail subject in one shot.
+      Util::execCommand({CRATE_PATH_RCTL, "-r", STR("jail:" << jidStr)},
+                        "remove RCTL rules");
+    }
   });
 }
 

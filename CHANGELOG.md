@@ -6,6 +6,86 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.6] — 2026-05-17
+
+**RCTL apply + cleanup wired through privops.** Closes the
+last bare `rctl(8)` shell-out in the jail-creation flow.
+`lib/run_jail.cpp::applyRctlLimits` previously called `rctl -a`
+and `rctl -r` directly, which EACCES'd for non-root operators
+under 1.0.0+ rootless and silently dropped every limit declared
+in `spec.limits`.
+
+### What changes
+
+Three sites in `applyRctlLimits` routed through privops when
+the socket is detected:
+
+1. **Apply** (line 224 pre-1.1.6): each `rctl -a jail:<jid>:<key>:deny=<value>`
+   becomes a `SetRctl` privops call. Failure surfaces as a real
+   error from the daemon — pre-1.1.6 the bare exec error was
+   swallowed only if the RCTL kernel wasn't loaded; the EACCES
+   case looked the same to the operator.
+
+2. **Verify diagnostic** (line 230 pre-1.1.6): suppressed under
+   privops mode. `rctl -l` requires root; rather than add a
+   `QueryJailRctlListing` verb just for the diagnostic, drop
+   the post-hoc warning — a successful `SetRctl` response is
+   stronger evidence than reading the rule back.
+
+3. **Cleanup** (line 244 pre-1.1.6): the bulk `rctl -r jail:<jid>`
+   form has no privops counterpart. The fix captures the spec's
+   limit keys at apply time and loops `ClearRctl` per-key on
+   teardown. Legacy bulk path preserved for the non-privops
+   case.
+
+### Why bare rctl wasn't caught by 0.9.x
+
+The 0.9.15 release wired `set_rctl` / `clear_rctl` through
+privops, but only for the `crate retune` command — not for the
+jail-creation RCTL setup path in `run_jail.cpp::applyRctlLimits`.
+The audit-agent's first pass classified `rctl` calls under
+"privileged container lifecycle, not exposed in rootless mode";
+correct for the destroy_jail teardown, but missed that
+`applyRctlLimits` runs from the CLI side (not the daemon's
+handler) and so still needs privops routing.
+
+### Wire compatibility
+
+Reuses existing `SetRctl` (0.9.0) and `ClearRctl` (0.9.0)
+verbs. No new wire surface. Wire taxonomy stays at 24 verbs.
+
+### Tests
+
+No new dedicated test — the privops routing uses the same
+helper pattern as `retune.cpp` (0.9.15) which is already
+covered. Suite stays at 1312.
+
+### Audit chain status
+
+| Item                                              | Status     |
+|---------------------------------------------------|------------|
+| validateAnchorName allows `/`                     | ✅ 1.1.2   |
+| validateJailName 64 → 200 chars                   | ✅ 1.1.3   |
+| validateAnchorName 64 → 256 chars                 | ✅ 1.1.4   |
+| securelevel + children.max at creation via privops | ✅ 1.1.5  |
+| **RCTL apply/cleanup via privops**                | ✅ **1.1.6** |
+
+The "validator vs runtime composition" and "bare shell-out in
+non-privileged path" audit chains are now both fully closed.
+Remaining 1.x backlog (test coverage on impure modules,
+pure-stub completion) is structural debt, not latent bugs.
+
+### Files
+
+- `lib/run_jail.cpp` — `applyRctlLimits` routes through
+  SetRctl + ClearRctl privops when socket detected; legacy
+  bulk teardown preserved; new `#include <vector>` for the
+  key-capture array
+- `cli/args.cpp` — version `crate 1.1.6`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.1.5] — 2026-05-16
 
 **securelevel + children.max applied at jail creation under
