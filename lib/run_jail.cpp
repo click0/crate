@@ -57,6 +57,16 @@ JailInfo createJail(const Spec &spec, const std::string &jailPath, const std::st
   const char *optAllowChflags = spec.allowChflags ? "true" : "false";
   const char *optAllowMlock = spec.allowMlock ? "true" : "false";
 
+  // 1.1.5: pre-stringify securelevel + children.max so the privops
+  // `parameters` block can include them when set. Legacy setuid path
+  // (jail_setv below) doesn't carry them; lib/run.cpp's post-create
+  // `jail -m` still applies them in that case, gated on the privops
+  // socket NOT being present.
+  std::string securelevelStr = spec.securelevel >= 0
+                                 ? std::to_string(spec.securelevel) : std::string();
+  std::string childrenMaxStr = spec.childrenMax >= 0
+                                 ? std::to_string(spec.childrenMax) : std::string();
+
   JailInfo info = {-1, -1};
   int res;
 
@@ -85,6 +95,10 @@ JailInfo createJail(const Spec &spec, const std::string &jailPath, const std::st
            << " allow.chflags=" << optAllowChflags
            << " allow.mlock=" << optAllowMlock
            << " enforce_statfs=" << optEnforceStatfs;
+    if (!securelevelStr.empty())
+      params << " securelevel=" << securelevelStr;
+    if (!childrenMaxStr.empty())
+      params << " children.max=" << childrenMaxStr;
     auto resp = PrivOpsClient::sendRequest(privopsSocket,
         PrivOpsClient::buildCreateJail(jailName, jailPath,
                                         Util::gethostname(),

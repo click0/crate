@@ -873,9 +873,16 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   runScript("run:after-create-jail");
   LOG("jail " << jailXname << " has been created, jid=" << jid)
 
+  // 1.1.5: securelevel + children.max are applied at jail creation
+  // when the privops path is used (RunJail::createJail packs them
+  // into the verb's `parameters` string). Skip the post-create
+  // `jail -m` step in that case — under rootless mode it would
+  // EACCES anyway, and the values are already in effect.
+  bool privopsActive = !PrivOpsClient::detectSocketPath().empty();
+
   // Apply securelevel after jail creation (§8)
   // Like bastille's securelevel=2 default, restricts kernel modifications inside the jail
-  if (!securelevelStr.empty()) {
+  if (!securelevelStr.empty() && !privopsActive) {
     auto jidS = std::to_string(jid);
     Util::execCommand({CRATE_PATH_JAIL, "-m", STR("jid=" << jidS), STR("securelevel=" << securelevelStr)},
                       CSTR("set securelevel=" << securelevelStr));
@@ -884,7 +891,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // Apply children.max after jail creation
   // Limits how many child jails this container can create (0 = none)
-  if (!childrenMaxStr.empty()) {
+  if (!childrenMaxStr.empty() && !privopsActive) {
     auto jidS = std::to_string(jid);
     Util::execCommand({CRATE_PATH_JAIL, "-m", STR("jid=" << jidS), STR("children.max=" << childrenMaxStr)},
                       CSTR("set children.max=" << childrenMaxStr));
