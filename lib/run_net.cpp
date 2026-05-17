@@ -139,6 +139,35 @@ static void bridgeDelMemberPrivopsOrLocal(const std::string &bridge,
   IfconfigOps::bridgeDelMember(bridge, member);
 }
 
+// 1.1.7: privops-aware `ipfw delete <number>` for the firewall-
+// rule teardown path. The cleanup callback in setupFirewallRules
+// previously shelled out directly; under 1.0.0+ rootless that
+// EACCES'd on each delete, leaking rules into the host's ipfw
+// table on every jail teardown. Same shape as the IfconfigOps
+// helpers above.
+static void removeIpfwRulePrivopsOrLocal(unsigned ruleNumber,
+                                          const std::string &what) {
+  std::string sock = PrivOpsClient::detectSocketPath();
+  if (!sock.empty()) {
+    auto resp = PrivOpsClient::sendRequest(sock,
+        PrivOpsClient::buildRemoveIpfwRule(/*set=*/0, ruleNumber));
+    if (!resp.transportError.empty()) {
+      // Teardown soft-fail: log + continue. Leaked rules are
+      // detected by `crate doctor` or future janitor.
+      WARN("privops remove_ipfw_rule " << ruleNumber << " (" << what
+           << ") transport error: " << resp.transportError)
+      return;
+    }
+    if (resp.status >= 400) {
+      WARN("privops remove_ipfw_rule " << ruleNumber << " (" << what
+           << ") failed (status " << resp.status << "): " << resp.body)
+    }
+    return;
+  }
+  Util::execCommand({CRATE_PATH_IPFW, "delete", std::to_string(ruleNumber)},
+                    what);
+}
+
 // 0.9.26: privops-aware createEpair. Returns the kernel-assigned
 // pair names. Parses the daemon's JSON response body via
 // PrivOpsWirePure::extractStringField — no full JSON parser
@@ -383,24 +412,21 @@ RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
 
   // cleanup callback
   return RunAtEnd([fwRuleInNo, fwRule6InNo, fwRuleOutNo, fwRuleOutCommonNo, fwRule6OutNo, hasV6, optionNet, origIpForwarding, logProgress]() {
-    auto ruleInS  = std::to_string(fwRuleInNo);
-    auto ruleOutS = std::to_string(fwRuleOutNo);
-    auto ruleOutCommonS = std::to_string(fwRuleOutCommonNo);
     if (optionNet->allowInbound()) {
-      Util::execCommand({CRATE_PATH_IPFW, "delete", ruleInS}, "destroy firewall rule");
+      removeIpfwRulePrivopsOrLocal(fwRuleInNo, "destroy firewall rule");
       if (hasV6) {
         try {
-          Util::execCommand({CRATE_PATH_IPFW, "delete", std::to_string(fwRule6InNo)}, "destroy IPv6 inbound firewall rule");
+          removeIpfwRulePrivopsOrLocal(fwRule6InNo, "destroy IPv6 inbound firewall rule");
         } catch (const std::exception &e) {
           WARN("failed to delete IPv6 inbound rule " << fwRule6InNo << ": " << e.what())
         }
       }
     }
     if (optionNet->allowOutbound()) {
-      Util::execCommand({CRATE_PATH_IPFW, "delete", ruleOutS}, "destroy firewall rule");
+      removeIpfwRulePrivopsOrLocal(fwRuleOutNo, "destroy firewall rule");
       if (hasV6 && fwRule6OutNo > 0) {
         try {
-          Util::execCommand({CRATE_PATH_IPFW, "delete", std::to_string(fwRule6OutNo)}, "destroy IPv6 firewall rule");
+          removeIpfwRulePrivopsOrLocal(fwRule6OutNo, "destroy IPv6 firewall rule");
         } catch (const std::exception &e) {
           WARN("failed to delete IPv6 firewall rule " << fwRule6OutNo << ": " << e.what())
         }
@@ -408,7 +434,7 @@ RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
       std::unique_ptr<Ctx::FwUsers> fwUsers(Ctx::FwUsers::lock());
       fwUsers->del(::getpid());
       if (fwUsers->isEmpty()) {
-        Util::execCommand({CRATE_PATH_IPFW, "delete", ruleOutCommonS}, "destroy firewall rule");
+        removeIpfwRulePrivopsOrLocal(fwRuleOutCommonNo, "destroy firewall rule");
         if (origIpForwarding == 0) {
           if (logProgress)
             std::cerr << rang::fg::gray << "restoring net.inet.ip.forwarding to 0" << rang::style::reset << std::endl;
