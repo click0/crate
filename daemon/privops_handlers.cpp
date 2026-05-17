@@ -528,6 +528,19 @@ DispatchResult handleConfigureIpfwNat(const PrivOpsPure::ConfigureIpfwNatReq &r)
   return {200, PrivOpsWirePure::formatConfigureIpfwNatSuccess(r.number)};
 }
 
+// --- handleSetJailCpuset (1.1.9) ---
+
+DispatchResult handleSetJailCpuset(const PrivOpsPure::SetJailCpusetReq &r) {
+  try {
+    Util::execCommand(
+      {CRATE_PATH_CPUSET, "-l", r.cpuset, "-j", std::to_string(r.jid)},
+      "privops set_jail_cpuset");
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("cpuset_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatSetJailCpusetSuccess(r.jid, r.cpuset)};
+}
+
 // --- Top-level dispatcher ---
 
 namespace {
@@ -796,6 +809,14 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleConfigureIpfwNat(r);
     }
+    case Verb::SetJailCpuset: {
+      PrivOpsPure::SetJailCpusetReq r;
+      if (auto e = PrivOpsWirePure::parseSetJailCpuset(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateSetJailCpuset(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleSetJailCpuset(r);
+    }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
   }
@@ -1021,6 +1042,14 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       if (auto e = PrivOpsPure::validateConfigureIpfwNat(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleConfigureIpfwNat(r);
+    }
+    case Verb::SetJailCpuset: {
+      PrivOpsPure::SetJailCpusetReq r;
+      if (auto e = PrivOpsNvPure::parseSetJailCpuset(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateSetJailCpuset(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleSetJailCpuset(r);
     }
     case Verb::Unknown:
       return {404,

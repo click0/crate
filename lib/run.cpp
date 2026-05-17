@@ -904,10 +904,27 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // the binding when the jail dies (which destroyJail handles
   // unconditionally above). Pre-0.8.22 this declared a stray
   // RunAtEnd that was never reset; harmless but misleading.
+  //
+  // 1.1.9: routes through SetJailCpuset privops verb when the
+  // socket is detected; falls back to direct cpuset(8) for legacy
+  // setuid mode. Under 1.0.0+ rootless the direct call would
+  // EACCES and silently drop the binding (same shape as
+  // securelevel/children.max pre-1.1.5).
   if (!spec.cpuset.empty()) {
     auto jidS = std::to_string(jid);
-    Util::execCommand({CRATE_PATH_CPUSET, "-l", spec.cpuset, "-j", jidS},
-                      CSTR("apply cpuset " << spec.cpuset));
+    std::string sock = PrivOpsClient::detectSocketPath();
+    if (!sock.empty()) {
+      auto resp = PrivOpsClient::sendRequest(sock,
+          PrivOpsClient::buildSetJailCpuset((unsigned)jid, spec.cpuset));
+      if (!resp.transportError.empty())
+        ERR("privops set_jail_cpuset transport error: " << resp.transportError)
+      if (resp.status >= 400)
+        ERR("privops set_jail_cpuset failed (status " << resp.status
+            << "): " << resp.body)
+    } else {
+      Util::execCommand({CRATE_PATH_CPUSET, "-l", spec.cpuset, "-j", jidS},
+                        CSTR("apply cpuset " << spec.cpuset));
+    }
     LOG("cpuset applied: CPUs " << spec.cpuset << " for jail " << jid)
   }
 

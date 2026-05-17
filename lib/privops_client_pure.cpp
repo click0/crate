@@ -320,4 +320,13 @@ PrivOpsNvPure::FieldMap buildConfigureIpfwNat(unsigned number,
   };
 }
 
+PrivOpsNvPure::FieldMap buildSetJailCpuset(unsigned jid,
+                                            const std::string &cpuset) {
+  return {
+    {"verb", "set_jail_cpuset"},
+    {"jid", std::to_string(jid)},
+    {"cpuset", cpuset},
+  };
+}
+
 } // namespace PrivOpsClient

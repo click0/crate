@@ -280,6 +280,13 @@ std::string parseConfigureIpfwNat(const FieldMap &m,
   return "";
 }
 
+std::string parseSetJailCpuset(const FieldMap &m,
+                               PrivOpsPure::SetJailCpusetReq &out) {
+  if (auto e = requireUnsigned(m, "jid", out.jid); !e.empty()) return e;
+  if (auto e = requireString(m, "cpuset", out.cpuset); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing ---
 
 PrivOpsPure::Verb extractVerb(const FieldMap &m) {

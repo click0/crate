@@ -6,6 +6,85 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.9] — 2026-05-17
+
+**cpuset binding via new `set_jail_cpuset` privops verb.**
+Fixes the silent-loss-of-feature bug at `lib/run.cpp:909`
+where `cpuset -l <list> -j <jid>` shelled out directly.
+Under 1.0.0+ rootless the call EACCES'd and the jail ran
+unbound across all host CPUs even though the spec set
+`cpuset: "0-3"`. Same shape as 1.1.5's securelevel fix.
+
+### New verb: `set_jail_cpuset`
+
+Wraps `cpuset -l <cpuset-list> -j <jid>`. Full 7-file
+pattern. Wire taxonomy grows from **25 to 26 verbs**.
+
+```cpp
+struct SetJailCpusetReq {
+  unsigned    jid = 0;        // 1..65535
+  std::string cpuset;          // "0-3", "0,2,4-7" — digits/comma/hyphen only
+};
+```
+
+The validator's charset is intentionally narrow (digits,
+comma, hyphen). cpuset(1)'s `-l` list syntax doesn't accept
+anything else — letting other chars through would only buy
+trouble in the daemon's `execCommand` argv.
+
+### Call-site change
+
+`lib/run.cpp`'s cpuset application block detects the privops
+socket and routes through the new verb; falls back to direct
+`cpuset(8)` for legacy setuid mode. Same shape as the
+securelevel/children.max gate from 1.1.5.
+
+### Tests
+
+`tests/unit/privops_pure_test.cpp` gains `set_jail_cpuset_minimal`
+covering: range form ("0-3"), comma list ("0,2,4,6"), mixed
+("0-3,8,12-15"), jid boundaries, empty cpuset, shell-meta
+rejection, letter rejection. `dispatch_covers_every_verb`
+extended. Suite grows from 1313 to **1314**.
+
+### Audit chain status
+
+| Item                                              | Status        |
+|---------------------------------------------------|---------------|
+| validateAnchorName allows `/`                     | ✅ 1.1.2      |
+| validateJailName 64 → 200 chars                   | ✅ 1.1.3      |
+| validateAnchorName 64 → 256 chars                 | ✅ 1.1.4      |
+| securelevel + children.max via privops params     | ✅ 1.1.5      |
+| RCTL apply/cleanup via privops                    | ✅ 1.1.6      |
+| ipfw teardown via privops                         | ✅ 1.1.7      |
+| ipfw setup + ConfigureIpfwNat                     | ✅ 1.1.8      |
+| **cpuset via SetJailCpuset**                      | ✅ **1.1.9**  |
+| devfs ruleset, chroot scripts, snapshot/zfs send  | TBD           |
+
+### Wire compatibility
+
+Additive verb. 1.1.9 client → 1.1.8 daemon: `set_jail_cpuset`
+404s at daemon, `crate run` fails loudly when cpuset is in
+the spec (no silent loss). Operators bump daemon first.
+
+### Files
+
+- `lib/privops_pure.{h,cpp}` — `Verb::SetJailCpuset`,
+  `SetJailCpusetReq`, validator
+- `lib/privops_wire_pure.{h,cpp}` — JSON parser + format +
+  dispatcher
+- `lib/privops_nv_pure.{h,cpp}` — nv parser
+- `lib/privops_client.h` + `lib/privops_client_pure.cpp` — builder
+- `daemon/privops_handlers.{h,cpp}` — handler + HTTP + libnv cases
+- `lib/run.cpp` — cpuset block routes through privops when
+  socket detected
+- `tests/unit/privops_pure_test.cpp` — validator coverage
+- `tests/unit/privops_wire_pure_test.cpp` — dispatch coverage
+- `cli/args.cpp` — version `crate 1.1.9`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.1.8] — 2026-05-17
 
 **ipfw setup wired through privops + new `configure_ipfw_nat`

@@ -153,6 +153,10 @@ PrivOpsNvPure::FieldMap buildQueryJailRctl(unsigned jid);
 PrivOpsNvPure::FieldMap buildConfigureIpfwNat(unsigned number,
                                                const std::string &config);
 
+// 1.1.9: bind a jail's processes to a cpuset list (e.g., "0-3").
+PrivOpsNvPure::FieldMap buildSetJailCpuset(unsigned jid,
+                                            const std::string &cpuset);
+
 // --- Wire transport (FreeBSD-only) ---
 
 struct Response {
