@@ -6,6 +6,84 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.7] — 2026-05-17
+
+**ipfw teardown wired through privops.** First half of the
+1.1.5+ "bare CLI shell-out under privileged binary" cleanup
+chain for ipfw. The cleanup callback in
+`lib/run_net.cpp::setupFirewallRules` shelled out to
+`ipfw delete <N>` for every per-jail firewall rule on teardown.
+Under 1.0.0+ rootless that EACCES'd silently and **leaked
+ipfw rules** into the host's table for every `crate stop` /
+`crate run` failure.
+
+### What changes
+
+New `removeIpfwRulePrivopsOrLocal(ruleNumber, what)` helper in
+`lib/run_net.cpp` — same shape as the IfconfigOps + PfctlOps
+wrappers from 0.9.23–1.1.0. Routes through the existing
+`RemoveIpfwRule` privops verb (0.9.0) when the socket is
+detected; falls back to the bare `ipfw delete` exec for
+legacy setuid mode.
+
+Four cleanup sites updated:
+
+| Pre-1.1.7                                                            | 1.1.7                                                   |
+|----------------------------------------------------------------------|---------------------------------------------------------|
+| `Util::execCommand({IPFW, "delete", ruleInS}, "...")`                | `removeIpfwRulePrivopsOrLocal(fwRuleInNo, "...")`       |
+| `Util::execCommand({IPFW, "delete", fwRule6InNo}, "...")`            | same helper                                             |
+| `Util::execCommand({IPFW, "delete", ruleOutS}, "...")`               | same helper                                             |
+| `Util::execCommand({IPFW, "delete", fwRule6OutNo}, "...")`           | same helper                                             |
+| `Util::execCommand({IPFW, "delete", ruleOutCommonS}, "...")` (shared)| same helper                                             |
+
+### Coming next: ipfw setup
+
+`setupFirewallRules`'s SETUP path (lines 283, 317-326, 334-340,
+348-349, 358-366, 376-381 in the same file) still shells out
+directly. Wiring it requires:
+
+- Existing `AddIpfwRule` verb for `ipfw add N action body...` (matches naturally)
+- New `ConfigureIpfwNat` verb for `ipfw nat N config redirect_port ...` (no existing verb)
+
+That's a substantial mini-PR — gets its own release (1.1.8 or
+1.2.0 depending on whether the new verb counts as a minor
+bump). 1.1.7 closes the easier half so leaked ipfw rules on
+rootless teardown stop happening even before the setup path
+is wired.
+
+### Wire compatibility
+
+Uses existing `RemoveIpfwRule` verb (0.9.0). No new wire
+surface. Taxonomy stays at 24 verbs.
+
+### Tests
+
+No new dedicated test — the wiring uses the same proven
+helper pattern from 1.1.0 (PfctlOps) and 1.0.5
+(reclaim_iface_from_vnet). Suite stays at 1312.
+
+### Audit chain status (updated)
+
+| Item                                              | Status        |
+|---------------------------------------------------|---------------|
+| validateAnchorName allows `/`                     | ✅ 1.1.2      |
+| validateJailName 64 → 200 chars                   | ✅ 1.1.3      |
+| validateAnchorName 64 → 256 chars                 | ✅ 1.1.4      |
+| securelevel + children.max via privops params     | ✅ 1.1.5      |
+| RCTL apply/cleanup via privops                    | ✅ 1.1.6      |
+| **ipfw teardown via privops**                     | ✅ **1.1.7**  |
+| ipfw setup via privops (incl. new ConfigureIpfwNat) | 1.1.8       |
+| devfs/cpuset/chroot/snapshot bare-shell           | TBD          |
+
+### Files
+
+- `lib/run_net.cpp` — `removeIpfwRulePrivopsOrLocal` helper;
+  5 teardown sites routed through it
+- `cli/args.cpp` — version `crate 1.1.7`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.1.6] — 2026-05-17
 
 **RCTL apply + cleanup wired through privops.** Closes the
