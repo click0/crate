@@ -6,6 +6,95 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.5] — 2026-05-16
+
+**securelevel + children.max applied at jail creation under
+privops.** Fixes another 1.0.0+ silent failure shape: lib/run.cpp
+shelled out to `jail -m <jid> securelevel=N` and `jail -m <jid>
+children.max=N` after `RunJail::createJail` returned. Under
+rootless mode that direct `jail(8)` invocation EACCES'd, but the
+existing error handling logged a warning and the jail continued
+without the requested securelevel — silent loss of a security
+control.
+
+### What changes
+
+#### `lib/run_jail.cpp::createJail` privops path
+
+The `parameters` string passed to the create_jail verb now
+includes `securelevel=N` and `children.max=N` when `spec.securelevel`
+/ `spec.childrenMax` are set. The daemon-side handler appends
+these to the `jail -c ...` invocation, so they take effect
+atomically with jail creation.
+
+#### `lib/run.cpp` post-create gate
+
+The post-create `jail -m` calls are kept for the legacy setuid
+path (operators who patched `Makefile install` back to `04755`
+or installed `crate.x` locally) but skipped when the privops
+socket is detected:
+
+```cpp
+bool privopsActive = !PrivOpsClient::detectSocketPath().empty();
+
+if (!securelevelStr.empty() && !privopsActive) { /* legacy jail -m */ }
+if (!childrenMaxStr.empty() && !privopsActive) { /* legacy jail -m */ }
+```
+
+### Behaviour matrix
+
+| Mode                   | securelevel/children.max applied via                      |
+|------------------------|-----------------------------------------------------------|
+| Rootless (1.0.0+)      | privops `create_jail` params at creation                  |
+| Legacy setuid (`crate.x`) | post-create `jail -m` (unchanged)                       |
+| crated stopped         | post-create `jail -m` (unchanged; same as legacy fallback) |
+
+### Why a silent failure shape
+
+Under 1.0.0+ rootless, the pre-1.1.5 `Util::execCommand(... jail -m ...)`
+call would fail with EACCES. `Util::execCommand` throws, but the
+caller doesn't try/catch around it — the exception propagates,
+the jail is left half-configured, and downstream cleanup destroys
+it. The operator sees a generic error.
+
+The audit-agent's "bare shell-out calls" pass classified `jail -m`
+under "privileged container lifecycle, not exposed in rootless
+mode". That was correct for jail CREATE/DESTROY (already wired
+through privops in 0.9.22 / 0.9.21) but missed the MODIFY step.
+
+### Wire compatibility
+
+No new verb; uses existing `create_jail` parameters field. Wire
+taxonomy stays at 24 verbs. 1.1.5 client → 1.1.4 daemon works
+(daemon just passes the params through to jail(8) unchanged).
+
+### Tests
+
+No new dedicated test — the change extends an existing string
+composition. The validator already accepted these params via
+the `parameters` field's `validateRuleText` constraint (space-
+separated `key=value` pairs, no newlines / shell metas). Suite
+stays at 1312.
+
+### What's next on the audit chain
+
+Same shape found in `lib/run_jail.cpp::applyRctlLimits` (line
+210, 230): direct `rctl -a` / `rctl -r` calls that bypass the
+existing `SetRctl` / `ClearRctl` privops verbs. Will land as
+1.1.6. The retune command already uses the privops path
+(0.9.15); only the jail-creation RCTL setup path is still bare.
+
+### Files
+
+- `lib/run_jail.cpp` — pre-stringify securelevel/childrenMax;
+  privops params block includes them when set
+- `lib/run.cpp` — post-create `jail -m` calls gated on
+  `!privopsActive`
+- `cli/args.cpp` — version `crate 1.1.5`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.1.4] — 2026-05-14
 
 **Anchor-name length ceiling raised from 64 to 256.** Companion
