@@ -6,6 +6,75 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.4] — 2026-05-14
+
+**Anchor-name length ceiling raised from 64 to 256.** Companion
+fix to 1.1.3. Same bug shape: lib/run.cpp builds anchors as
+`crate/<jailXname>`, and after 1.1.3 jailXname can be up to 200
+chars — making the worst-case anchor 206 chars, well beyond the
+old 64-char ceiling.
+
+### What was wrong
+
+`lib/run.cpp:1163` builds:
+
+```cpp
+auto anchor = std::string("crate/") + jailXname;
+```
+
+Same in `lib/pfctl_ops.cpp::composeContainerPolicy` (1.1.0)
+which composes `STR("crate/" << jailXname)`. With jailXname
+up to 200 chars (per 1.1.3) and the `crate/` prefix at 6 chars,
+the anchor is up to 206 chars — but `validateAnchorName`
+capped at 64.
+
+Even BEFORE 1.1.3, a 60-char jailXname already produced a
+66-char anchor that the old ceiling would have rejected.
+The bug was masked because:
+
+1. Existing tests only fed validateAnchorName short single-
+   segment strings ("crate", "crate.dev_pool-1") — never the
+   runtime `crate/<full-name>` shape
+2. Operators who hit it under setuid (pre-1.0.0) would have
+   seen direct pfctl(8) errors rather than the daemon's 400 —
+   harder to attribute to validation
+
+1.1.0's PfctlOps privops-wiring made the failure mode visible
+(daemon 400) but the test suite still didn't exercise the
+long-name path.
+
+### The fix
+
+`validateAnchorName`'s `name.size() > 64` check becomes
+`name.size() > 256`. pf has no hard limit on anchor path
+length (it's an in-kernel hash table key, not a kernel
+identifier); 256 is well above any realistic crate-generated
+anchor and stays well clear of `MAXHOSTNAMELEN`.
+
+### Tests
+
+New `anchor_accepts_runtime_long_form` regression test:
+
+- 200-char `jailXname` → 206-char `crate/<...>` anchor validates
+- 256-char anchor (at limit) validates
+- 257-char anchor rejected
+
+Suite grows from 1311 to **1312**.
+
+### Wire compatibility
+
+Daemon-side relaxation only. No wire format change.
+
+### Files
+
+- `lib/privops_pure.cpp` — `validateAnchorName` ceiling 64 → 256
+- `tests/unit/privops_pure_test.cpp` — new
+  `anchor_accepts_runtime_long_form` regression
+- `cli/args.cpp` — version `crate 1.1.4`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.1.3] — 2026-05-14
 
 **Jail-name length ceiling raised from 64 to 200.** Fixes a

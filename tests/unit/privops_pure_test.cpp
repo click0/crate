@@ -335,6 +335,26 @@ ATF_TEST_CASE_BODY(anchor_accepts_typical_rejects_metas) {
   ATF_REQUIRE(!validateAnchorName("foo bar").empty());
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(anchor_accepts_runtime_long_form);
+ATF_TEST_CASE_BODY(anchor_accepts_runtime_long_form) {
+  // Regression coverage for the 1.1.4 ceiling bump. lib/run.cpp
+  // composes per-jail anchors as `crate/<jailXname>` where
+  // jailXname can be up to 200 chars (1.1.3 bumped that for
+  // `<spec-name>_pid<getpid()>` composition). Worst-case anchor
+  // is `crate/` (6) + 200 = 206 chars. The previous 64-char
+  // ceiling would have rejected anything beyond a ~58-char
+  // jailXname.
+  std::string jailXname(200, 'a');
+  std::string anchor = "crate/" + jailXname;     // 206 chars
+  ATF_REQUIRE_EQ(validateAnchorName(anchor), std::string());
+
+  // Boundary: 256 chars OK, 257 rejected.
+  std::string atLimit(256, 'b');
+  ATF_REQUIRE_EQ(validateAnchorName(atLimit), std::string());
+  atLimit.push_back('b');
+  ATF_REQUIRE(!validateAnchorName(atLimit).empty());
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(ipfw_action_closed_set);
 ATF_TEST_CASE_BODY(ipfw_action_closed_set) {
   ATF_REQUIRE_EQ(validateIpfwAction("allow"), std::string());
@@ -717,6 +737,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, jailname_rejects_metas);
   ATF_ADD_TEST_CASE(tcs, jailname_rejects_too_long);
   ATF_ADD_TEST_CASE(tcs, jailname_accepts_runtime_pid_suffix);
+  ATF_ADD_TEST_CASE(tcs, anchor_accepts_runtime_long_form);
 
   ATF_ADD_TEST_CASE(tcs, hostname_empty_is_ok);
   ATF_ADD_TEST_CASE(tcs, hostname_accepts_typical);

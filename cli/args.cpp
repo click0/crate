@@ -753,7 +753,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
         args.noColor = true;
         break;
       } else if (strEq(argv[a], "--version")) {
-        std::cout << "crate 1.1.3" << std::endl;
+        std::cout << "crate 1.1.4" << std::endl;
         exit(0);
       } else if (auto argShort = isShort(argv[a])) {
         switch (argShort) {
@@ -764,7 +764,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.logProgress = true;
           break;
         case 'V':
-          std::cout << "crate 1.1.3" << std::endl;
+          std::cout << "crate 1.1.4" << std::endl;
           exit(0);
         default:
           err("unsupported short option '%s'", argv[a]);
