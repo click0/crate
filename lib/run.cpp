@@ -739,11 +739,29 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   mount(new Mount("devfs", J("/dev"), "", MNT_IGNORE));
 
   // Terminal isolation: apply devfs ruleset (§16)
+  // 1.1.10: routes through ApplyDevfsRuleset privops verb when
+  // socket detected; falls back to direct devfs(8) for legacy
+  // setuid mode. Under rootless the paired exec calls would
+  // EACCES and the jail would inherit the host's default devfs
+  // view — silent loss of the terminal isolation feature.
   if (spec.terminalOptions) {
     if (spec.terminalOptions->devfsRuleset >= 0) {
       auto rulesetStr = std::to_string(spec.terminalOptions->devfsRuleset);
-      Util::execCommand({CRATE_PATH_DEVFS, "-m", J("/dev"), "ruleset", rulesetStr}, "apply terminal devfs ruleset");
-      Util::execCommand({CRATE_PATH_DEVFS, "-m", J("/dev"), "rule", "applyset"}, "apply terminal devfs rules");
+      std::string devMount = J("/dev");
+      std::string sock = PrivOpsClient::detectSocketPath();
+      if (!sock.empty()) {
+        auto resp = PrivOpsClient::sendRequest(sock,
+            PrivOpsClient::buildApplyDevfsRuleset(devMount,
+                (unsigned)spec.terminalOptions->devfsRuleset));
+        if (!resp.transportError.empty())
+          ERR("privops apply_devfs_ruleset transport error: " << resp.transportError)
+        if (resp.status >= 400)
+          ERR("privops apply_devfs_ruleset failed (status " << resp.status
+              << "): " << resp.body)
+      } else {
+        Util::execCommand({CRATE_PATH_DEVFS, "-m", devMount, "ruleset", rulesetStr}, "apply terminal devfs ruleset");
+        Util::execCommand({CRATE_PATH_DEVFS, "-m", devMount, "rule", "applyset"}, "apply terminal devfs rules");
+      }
       LOG("terminal: devfs_ruleset=" << rulesetStr)
     }
     if (!spec.terminalOptions->allowRawTty) {

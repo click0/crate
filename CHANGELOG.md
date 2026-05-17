@@ -6,6 +6,103 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.10] — 2026-05-17
+
+**Devfs ruleset via new `apply_devfs_ruleset` verb.** Fixes
+silent loss of terminal isolation under rootless. The paired
+`devfs -m <jail/dev> ruleset <N>` + `devfs -m <jail/dev>
+rule applyset` calls in `lib/run.cpp:745-746` EACCES'd for
+non-root operators, leaving the jail with the host's default
+devfs view (which exposes raw TTYs, /dev/mem, etc.) even when
+the spec explicitly set `terminal.devfs_ruleset: 4`.
+
+### New verb: `apply_devfs_ruleset`
+
+Wraps the paired set+applyset shape — both ops are meaningless
+without the other, so a single verb handles them atomically.
+Wire taxonomy grows from **26 to 27 verbs**.
+
+```cpp
+struct ApplyDevfsRulesetReq {
+  std::string mountPath;     // absolute path to jail's /dev mount
+  unsigned    ruleset = 0;   // ruleset number 1..65535
+};
+```
+
+Validator: `validateAbsolutePath` on mountPath (rejects shell
+metachars and traversals); ruleset bounded 1..65535 (devfs
+ruleset 0 is the implicit "no rules" default, so an explicit
+0 here is treated as a bug).
+
+### Call-site change
+
+`lib/run.cpp`'s terminal-isolation block detects the privops
+socket and routes through the new verb; legacy `devfs(8)`
+exec preserved for the non-privops path.
+
+### Why this is a real regression — not a hypothetical
+
+The post-1.0.0 silent failure here is particularly bad
+because `devfs_ruleset` is a security control. The operator
+configures it expecting hardening, the call fails silently,
+and the jail runs with *more* device exposure than intended.
+Same shape as 1.1.5 (securelevel) and 1.1.6 (RCTL).
+
+### Coming next
+
+`lib/run.cpp:775-783` still has three bare devfs calls for
+GPU auto-unhide (`devfs rule add path 'dri' unhide` + sibling
+calls + applyset). Different argv shape — needs a separate
+`AddDevfsUnhideRule` verb. That's 1.1.11.
+
+### Tests
+
+`tests/unit/privops_pure_test.cpp` gains
+`apply_devfs_ruleset_minimal` covering: typical input, ruleset
+boundaries (1, 65535), ruleset=0 rejection, empty/relative/
+shell-meta path rejection. `dispatch_covers_every_verb`
+extended. Suite grows from 1314 to **1315**.
+
+### Audit chain status
+
+| Item                                              | Status        |
+|---------------------------------------------------|---------------|
+| validateAnchorName allows `/`                     | ✅ 1.1.2      |
+| validateJailName 64 → 200 chars                   | ✅ 1.1.3      |
+| validateAnchorName 64 → 256 chars                 | ✅ 1.1.4      |
+| securelevel + children.max via privops params     | ✅ 1.1.5      |
+| RCTL apply/cleanup via privops                    | ✅ 1.1.6      |
+| ipfw teardown via privops                         | ✅ 1.1.7      |
+| ipfw setup + ConfigureIpfwNat                     | ✅ 1.1.8      |
+| cpuset via SetJailCpuset                          | ✅ 1.1.9      |
+| **devfs ruleset via ApplyDevfsRuleset**           | ✅ **1.1.10** |
+| GPU devfs unhide (AddDevfsUnhideRule)             | 1.1.11        |
+| chroot scripts, snapshot/zfs send                 | TBD           |
+
+### Wire compatibility
+
+Additive verb. 1.1.10 client → 1.1.9 daemon: 404 on
+`apply_devfs_ruleset`, `crate run` fails loudly when
+`devfs_ruleset` is in the spec. Operators bump daemon first.
+
+### Files
+
+- `lib/privops_pure.{h,cpp}` — `Verb::ApplyDevfsRuleset`,
+  request struct, validator
+- `lib/privops_wire_pure.{h,cpp}` — JSON parser + formatter +
+  dispatcher
+- `lib/privops_nv_pure.{h,cpp}` — nv parser
+- `lib/privops_client.h` + `lib/privops_client_pure.cpp` — builder
+- `daemon/privops_handlers.{h,cpp}` — handler runs both
+  paired devfs ops; HTTP + libnv dispatcher cases
+- `lib/run.cpp` — terminal-isolation block routes through verb
+- `tests/unit/privops_pure_test.cpp` — validator coverage
+- `tests/unit/privops_wire_pure_test.cpp` — dispatch coverage
+- `cli/args.cpp` — version `crate 1.1.10`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.1.9] — 2026-05-17
 
 **cpuset binding via new `set_jail_cpuset` privops verb.**

@@ -99,6 +99,7 @@ const char *verbName(Verb v) {
     case Verb::QueryJailRctl:        return "query_jail_rctl";
     case Verb::ConfigureIpfwNat:     return "configure_ipfw_nat";
     case Verb::SetJailCpuset:        return "set_jail_cpuset";
+    case Verb::ApplyDevfsRuleset:    return "apply_devfs_ruleset";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -132,6 +133,7 @@ Verb parseVerb(const std::string &name) {
   if (name == "query_jail_rctl")         return Verb::QueryJailRctl;
   if (name == "configure_ipfw_nat")      return Verb::ConfigureIpfwNat;
   if (name == "set_jail_cpuset")         return Verb::SetJailCpuset;
+  if (name == "apply_devfs_ruleset")     return Verb::ApplyDevfsRuleset;
   return Verb::Unknown;
 }
 
@@ -584,6 +586,14 @@ std::string validateConfigureIpfwNat(const ConfigureIpfwNatReq &r) {
   if (r.number == 0 || r.number > 65534)
     return "number: out of range (1..65534)";
   if (auto e = validateRuleText(r.config); !e.empty()) return "config: " + e;
+  return "";
+}
+
+std::string validateApplyDevfsRuleset(const ApplyDevfsRulesetReq &r) {
+  if (auto e = validateAbsolutePath(r.mountPath); !e.empty())
+    return "mount_path: " + e;
+  if (r.ruleset == 0 || r.ruleset > 65535)
+    return "ruleset: out of range (1..65535)";
   return "";
 }
 

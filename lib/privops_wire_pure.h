@@ -195,6 +195,9 @@ std::string parseConfigureIpfwNat(const std::string &body,
 std::string parseSetJailCpuset(const std::string &body,
                                PrivOpsPure::SetJailCpusetReq &out);
 
+std::string parseApplyDevfsRuleset(const std::string &body,
+                                   PrivOpsPure::ApplyDevfsRulesetReq &out);
+
 // --- Verb routing helper ---
 //
 // Parse the URL path's verb segment. The route pattern is
@@ -350,5 +353,9 @@ std::string formatConfigureIpfwNatSuccess(unsigned number);
 // 1.1.9: 200 OK body for set_jail_cpuset.
 std::string formatSetJailCpusetSuccess(unsigned jid,
                                        const std::string &cpuset);
+
+// 1.1.10: 200 OK body for apply_devfs_ruleset.
+std::string formatApplyDevfsRulesetSuccess(const std::string &mountPath,
+                                           unsigned ruleset);
 
 } // namespace PrivOpsWirePure

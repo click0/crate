@@ -424,6 +424,13 @@ std::string parseSetJailCpuset(const std::string &body,
   return "";
 }
 
+std::string parseApplyDevfsRuleset(const std::string &body,
+                                   PrivOpsPure::ApplyDevfsRulesetReq &out) {
+  if (auto e = requireStringField(body, "mount_path", out.mountPath); !e.empty()) return e;
+  if (auto e = requireUnsignedField(body, "ruleset", out.ruleset); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing helper ---
 
 PrivOpsPure::Verb parseVerbFromPath(const std::string &path) {
@@ -787,6 +794,16 @@ std::string formatSetJailCpusetSuccess(unsigned jid,
   return o.str();
 }
 
+std::string formatApplyDevfsRulesetSuccess(const std::string &mountPath,
+                                           unsigned ruleset) {
+  std::ostringstream o;
+  o << "{\"applied\":true"
+    << ",\"mount_path\":\"" << escape(mountPath) << "\""
+    << ",\"ruleset\":" << ruleset
+    << "}";
+  return o.str();
+}
+
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body) {
   using namespace PrivOpsPure;
@@ -845,6 +862,8 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       return runVerb<ConfigureIpfwNatReq>(body, v, parseConfigureIpfwNat, validateConfigureIpfwNat);
     case Verb::SetJailCpuset:
       return runVerb<SetJailCpusetReq>(body, v, parseSetJailCpuset, validateSetJailCpuset);
+    case Verb::ApplyDevfsRuleset:
+      return runVerb<ApplyDevfsRulesetReq>(body, v, parseApplyDevfsRuleset, validateApplyDevfsRuleset);
     case Verb::Unknown:
       break;
   }

@@ -196,6 +196,11 @@ PrivOpsWirePure::DispatchResult handleConfigureIpfwNat(const PrivOpsPure::Config
 // `cpuset -l <cpuset> -j <jid>`.
 PrivOpsWirePure::DispatchResult handleSetJailCpuset(const PrivOpsPure::SetJailCpusetReq &r);
 
+// 1.1.10: apply a devfs ruleset (set + applyset) to a jail's
+// /dev mount. Wraps the paired `devfs -m P ruleset N` +
+// `devfs -m P rule applyset` commands.
+PrivOpsWirePure::DispatchResult handleApplyDevfsRuleset(const PrivOpsPure::ApplyDevfsRulesetReq &r);
+
 // 0.9.29: register the daemon's `rctl_umbrella:` config. Called
 // once at daemon startup. The umbrella rules apply after a
 // successful create_jail privops invocation when the operator's

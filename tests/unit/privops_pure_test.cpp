@@ -727,6 +727,38 @@ ATF_TEST_CASE_BODY(query_jail_rctl_minimal) {
   ATF_REQUIRE(!validateQueryJailRctl(r).empty());
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(apply_devfs_ruleset_minimal);
+ATF_TEST_CASE_BODY(apply_devfs_ruleset_minimal) {
+  ApplyDevfsRulesetReq r;
+  r.mountPath = "/var/run/crate/web/dev";
+  r.ruleset = 4;
+  ATF_REQUIRE_EQ(validateApplyDevfsRuleset(r), std::string());
+
+  // Boundary: ruleset=1 (lowest) + ruleset=65535 (highest).
+  r.ruleset = 1;
+  ATF_REQUIRE_EQ(validateApplyDevfsRuleset(r), std::string());
+  r.ruleset = 65535;
+  ATF_REQUIRE_EQ(validateApplyDevfsRuleset(r), std::string());
+
+  // ruleset=0 — invalid (devfs ruleset 0 is the "no rules"
+  // default; explicit value required).
+  r.ruleset = 0;
+  ATF_REQUIRE(!validateApplyDevfsRuleset(r).empty());
+
+  // Empty mount path.
+  r.ruleset = 4;
+  r.mountPath = "";
+  ATF_REQUIRE(!validateApplyDevfsRuleset(r).empty());
+
+  // Relative mount path — rejected by validateAbsolutePath.
+  r.mountPath = "var/run/crate/web/dev";
+  ATF_REQUIRE(!validateApplyDevfsRuleset(r).empty());
+
+  // Shell metachar in path.
+  r.mountPath = "/var/run/crate/web/dev; rm -rf /";
+  ATF_REQUIRE(!validateApplyDevfsRuleset(r).empty());
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(set_jail_cpuset_minimal);
 ATF_TEST_CASE_BODY(set_jail_cpuset_minimal) {
   SetJailCpusetReq r;
@@ -869,4 +901,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, query_jail_rctl_minimal);
   ATF_ADD_TEST_CASE(tcs, configure_ipfw_nat_minimal);
   ATF_ADD_TEST_CASE(tcs, set_jail_cpuset_minimal);
+  ATF_ADD_TEST_CASE(tcs, apply_devfs_ruleset_minimal);
 }

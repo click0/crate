@@ -179,6 +179,13 @@ enum class Verb {
   // No teardown verb — cpuset binding evaporates with the
   // jail (destroyJail handles the rest).
   SetJailCpuset,
+
+  // 1.1.10: apply a devfs ruleset to a jail's /dev mount.
+  // Runs `devfs -m <mount> ruleset <N>` followed by
+  // `devfs -m <mount> rule applyset` (the two are paired —
+  // setting the ruleset is meaningless without applyset).
+  // Targets terminal isolation in lib/run.cpp.
+  ApplyDevfsRuleset,
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -360,6 +367,14 @@ struct SetJailCpusetReq {
   std::string cpuset;
 };
 
+// 1.1.10: apply a devfs(8) ruleset to a jail's /dev mount.
+// `mountPath` is the absolute path of the jail's /dev mount;
+// `ruleset` is the numeric ruleset identifier (1..65535).
+struct ApplyDevfsRulesetReq {
+  std::string mountPath;
+  unsigned    ruleset = 0;
+};
+
 // --- Per-verb validators ---
 //
 // Each `validate*(req)` returns "" on success, otherwise a one-line
@@ -395,6 +410,7 @@ std::string validateFlushPfAnchor(const FlushPfAnchorReq &r);
 std::string validateQueryJailRctl(const QueryJailRctlReq &r);
 std::string validateConfigureIpfwNat(const ConfigureIpfwNatReq &r);
 std::string validateSetJailCpuset(const SetJailCpusetReq &r);
+std::string validateApplyDevfsRuleset(const ApplyDevfsRulesetReq &r);
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //

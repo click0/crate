@@ -157,6 +157,12 @@ PrivOpsNvPure::FieldMap buildConfigureIpfwNat(unsigned number,
 PrivOpsNvPure::FieldMap buildSetJailCpuset(unsigned jid,
                                             const std::string &cpuset);
 
+// 1.1.10: apply a devfs ruleset to a jail's /dev mount (set
+// ruleset + applyset). `mountPath` is the absolute path to
+// the jail's /dev mount; `ruleset` is the ruleset number.
+PrivOpsNvPure::FieldMap buildApplyDevfsRuleset(const std::string &mountPath,
+                                                unsigned ruleset);
+
 // --- Wire transport (FreeBSD-only) ---
 
 struct Response {

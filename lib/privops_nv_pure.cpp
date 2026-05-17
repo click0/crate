@@ -287,6 +287,13 @@ std::string parseSetJailCpuset(const FieldMap &m,
   return "";
 }
 
+std::string parseApplyDevfsRuleset(const FieldMap &m,
+                                   PrivOpsPure::ApplyDevfsRulesetReq &out) {
+  if (auto e = requireString(m, "mount_path", out.mountPath); !e.empty()) return e;
+  if (auto e = requireUnsigned(m, "ruleset", out.ruleset); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing ---
 
 PrivOpsPure::Verb extractVerb(const FieldMap &m) {
