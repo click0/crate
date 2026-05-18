@@ -163,6 +163,12 @@ PrivOpsNvPure::FieldMap buildSetJailCpuset(unsigned jid,
 PrivOpsNvPure::FieldMap buildApplyDevfsRuleset(const std::string &mountPath,
                                                 unsigned ruleset);
 
+// 1.1.10: add a `path <pattern> unhide` rule to a jail's
+// devfs mount, then `rule applyset`. Used by the GUI auto-
+// unhide path for /dev/dri/*.
+PrivOpsNvPure::FieldMap buildAddDevfsUnhideRule(const std::string &mountPath,
+                                                 const std::string &pathPattern);
+
 // --- Wire transport (FreeBSD-only) ---
 
 struct Response {

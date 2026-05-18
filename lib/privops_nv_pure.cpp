@@ -294,6 +294,13 @@ std::string parseApplyDevfsRuleset(const FieldMap &m,
   return "";
 }
 
+std::string parseAddDevfsUnhideRule(const FieldMap &m,
+                                    PrivOpsPure::AddDevfsUnhideRuleReq &out) {
+  if (auto e = requireString(m, "mount_path",   out.mountPath);   !e.empty()) return e;
+  if (auto e = requireString(m, "path_pattern", out.pathPattern); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing ---
 
 PrivOpsPure::Verb extractVerb(const FieldMap &m) {

@@ -198,6 +198,9 @@ std::string parseSetJailCpuset(const std::string &body,
 std::string parseApplyDevfsRuleset(const std::string &body,
                                    PrivOpsPure::ApplyDevfsRulesetReq &out);
 
+std::string parseAddDevfsUnhideRule(const std::string &body,
+                                    PrivOpsPure::AddDevfsUnhideRuleReq &out);
+
 // --- Verb routing helper ---
 //
 // Parse the URL path's verb segment. The route pattern is
@@ -357,5 +360,9 @@ std::string formatSetJailCpusetSuccess(unsigned jid,
 // 1.1.10: 200 OK body for apply_devfs_ruleset.
 std::string formatApplyDevfsRulesetSuccess(const std::string &mountPath,
                                            unsigned ruleset);
+
+// 1.1.10: 200 OK body for add_devfs_unhide_rule.
+std::string formatAddDevfsUnhideRuleSuccess(const std::string &mountPath,
+                                            const std::string &pathPattern);
 
 } // namespace PrivOpsWirePure

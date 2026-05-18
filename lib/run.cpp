@@ -788,18 +788,40 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       // Use devfs(8) per-jail rules: add `path 'dri/*' unhide` then
       // applyset. Operates on the jail's devfs mount, leaves host
       // devfs untouched.
+      //
+      // 1.1.10: routes through AddDevfsUnhideRule privops verb when
+      // socket detected. Each verb call internally includes applyset,
+      // so the previous 3-call (add + add + applyset) shape becomes
+      // 2 verb calls (each idempotently applyset-s). Same legacy
+      // fallback for non-privops mode.
       try {
-        Util::execCommand(
-          {CRATE_PATH_DEVFS, "-m", J("/dev"), "rule", "add",
-           "path", "dri", "unhide"},
-          "auto-gui: unhide /dev/dri");
-        Util::execCommand(
-          {CRATE_PATH_DEVFS, "-m", J("/dev"), "rule", "add",
-           "path", "dri/*", "unhide"},
-          "auto-gui: unhide /dev/dri/*");
-        Util::execCommand(
-          {CRATE_PATH_DEVFS, "-m", J("/dev"), "rule", "applyset"},
-          "auto-gui: applyset for dri unhide");
+        std::string devMount = J("/dev");
+        std::string sock = PrivOpsClient::detectSocketPath();
+        auto unhide = [&](const std::string &pat, const std::string &what) {
+          if (!sock.empty()) {
+            auto resp = PrivOpsClient::sendRequest(sock,
+                PrivOpsClient::buildAddDevfsUnhideRule(devMount, pat));
+            if (!resp.transportError.empty())
+              ERR("privops add_devfs_unhide_rule '" << pat
+                  << "' transport error: " << resp.transportError)
+            if (resp.status >= 400)
+              ERR("privops add_devfs_unhide_rule '" << pat
+                  << "' failed (status " << resp.status << "): " << resp.body)
+          } else {
+            Util::execCommand(
+              {CRATE_PATH_DEVFS, "-m", devMount, "rule", "add",
+               "path", pat, "unhide"},
+              what);
+          }
+        };
+        unhide("dri",   "auto-gui: unhide /dev/dri");
+        unhide("dri/*", "auto-gui: unhide /dev/dri/*");
+        if (sock.empty()) {
+          // Legacy path: applyset still needed after the two raw add calls.
+          Util::execCommand(
+            {CRATE_PATH_DEVFS, "-m", devMount, "rule", "applyset"},
+            "auto-gui: applyset for dri unhide");
+        }
         LOG("auto-gui: /dev/dri/* unhidden in jail's devfs view "
             "(GPU mode '" << spec.guiOptions->mode << "')")
       } catch (const std::exception &ex) {

@@ -201,6 +201,10 @@ PrivOpsWirePure::DispatchResult handleSetJailCpuset(const PrivOpsPure::SetJailCp
 // `devfs -m P rule applyset` commands.
 PrivOpsWirePure::DispatchResult handleApplyDevfsRuleset(const PrivOpsPure::ApplyDevfsRulesetReq &r);
 
+// 1.1.10: add a single `path <pattern> unhide` rule then
+// applyset. Used by the GUI auto-unhide path in lib/run.cpp.
+PrivOpsWirePure::DispatchResult handleAddDevfsUnhideRule(const PrivOpsPure::AddDevfsUnhideRuleReq &r);
+
 // 0.9.29: register the daemon's `rctl_umbrella:` config. Called
 // once at daemon startup. The umbrella rules apply after a
 // successful create_jail privops invocation when the operator's

@@ -100,6 +100,7 @@ const char *verbName(Verb v) {
     case Verb::ConfigureIpfwNat:     return "configure_ipfw_nat";
     case Verb::SetJailCpuset:        return "set_jail_cpuset";
     case Verb::ApplyDevfsRuleset:    return "apply_devfs_ruleset";
+    case Verb::AddDevfsUnhideRule:   return "add_devfs_unhide_rule";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -134,6 +135,7 @@ Verb parseVerb(const std::string &name) {
   if (name == "configure_ipfw_nat")      return Verb::ConfigureIpfwNat;
   if (name == "set_jail_cpuset")         return Verb::SetJailCpuset;
   if (name == "apply_devfs_ruleset")     return Verb::ApplyDevfsRuleset;
+  if (name == "add_devfs_unhide_rule")   return Verb::AddDevfsUnhideRule;
   return Verb::Unknown;
 }
 
@@ -594,6 +596,31 @@ std::string validateApplyDevfsRuleset(const ApplyDevfsRulesetReq &r) {
     return "mount_path: " + e;
   if (r.ruleset == 0 || r.ruleset > 65535)
     return "ruleset: out of range (1..65535)";
+  return "";
+}
+
+std::string validateAddDevfsUnhideRule(const AddDevfsUnhideRuleReq &r) {
+  if (auto e = validateAbsolutePath(r.mountPath); !e.empty())
+    return "mount_path: " + e;
+  if (r.pathPattern.empty()) return "path_pattern is empty";
+  if (r.pathPattern.size() > 256)
+    return "path_pattern longer than 256 chars";
+  // devfs(8) `path` glob: alnum + dot + slash + hyphen +
+  // underscore + asterisk. Leading slash NOT allowed (devfs
+  // paths are relative to the mount, e.g. "dri/*", not
+  // "/dev/dri/*"). Shell metas explicitly rejected.
+  for (char c : r.pathPattern) {
+    bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') ||
+              c == '.' || c == '_' || c == '-' ||
+              c == '/' || c == '*';
+    if (!ok) {
+      std::ostringstream os;
+      os << "invalid character '" << c << "' in path_pattern";
+      return os.str();
+    }
+  }
+  if (r.pathPattern.front() == '/') return "path_pattern must not start with '/'";
   return "";
 }
 

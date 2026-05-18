@@ -558,6 +558,24 @@ DispatchResult handleApplyDevfsRuleset(const PrivOpsPure::ApplyDevfsRulesetReq &
   return {200, PrivOpsWirePure::formatApplyDevfsRulesetSuccess(r.mountPath, r.ruleset)};
 }
 
+// --- handleAddDevfsUnhideRule (1.1.10) ---
+
+DispatchResult handleAddDevfsUnhideRule(const PrivOpsPure::AddDevfsUnhideRuleReq &r) {
+  try {
+    Util::execCommand(
+      {CRATE_PATH_DEVFS, "-m", r.mountPath,
+       "rule", "add", "path", r.pathPattern, "unhide"},
+      "privops add_devfs_unhide_rule (add)");
+    Util::execCommand(
+      {CRATE_PATH_DEVFS, "-m", r.mountPath, "rule", "applyset"},
+      "privops add_devfs_unhide_rule (applyset)");
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("devfs_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatAddDevfsUnhideRuleSuccess(
+                  r.mountPath, r.pathPattern)};
+}
+
 // --- Top-level dispatcher ---
 
 namespace {
@@ -842,6 +860,14 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleApplyDevfsRuleset(r);
     }
+    case Verb::AddDevfsUnhideRule: {
+      PrivOpsPure::AddDevfsUnhideRuleReq r;
+      if (auto e = PrivOpsWirePure::parseAddDevfsUnhideRule(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateAddDevfsUnhideRule(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleAddDevfsUnhideRule(r);
+    }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
   }
@@ -1083,6 +1109,14 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       if (auto e = PrivOpsPure::validateApplyDevfsRuleset(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleApplyDevfsRuleset(r);
+    }
+    case Verb::AddDevfsUnhideRule: {
+      PrivOpsPure::AddDevfsUnhideRuleReq r;
+      if (auto e = PrivOpsNvPure::parseAddDevfsUnhideRule(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateAddDevfsUnhideRule(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleAddDevfsUnhideRule(r);
     }
     case Verb::Unknown:
       return {404,

@@ -186,6 +186,15 @@ enum class Verb {
   // setting the ruleset is meaningless without applyset).
   // Targets terminal isolation in lib/run.cpp.
   ApplyDevfsRuleset,
+
+  // 1.1.10 (same release): add a `path <P> unhide` devfs rule
+  // to a jail's /dev mount, then applyset. Used by the GUI
+  // auto-unhide path in lib/run.cpp that exposes /dev/dri/* for
+  // GPU-accelerated jails. Restricted to `unhide` action to
+  // keep the attack surface narrow — `hide`, `unhide`,
+  // `mode`, `group`, `user` are the only devfs rule actions,
+  // and only `unhide` has a sensible privops use case.
+  AddDevfsUnhideRule,
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -375,6 +384,15 @@ struct ApplyDevfsRulesetReq {
   unsigned    ruleset = 0;
 };
 
+// 1.1.10: add a `path <P> unhide` rule to a jail's devfs mount,
+// then `rule applyset`. The path pattern is validated for the
+// limited charset devfs(8) actually accepts in a `path` glob —
+// alnum, dot, slash, hyphen, underscore, asterisk.
+struct AddDevfsUnhideRuleReq {
+  std::string mountPath;
+  std::string pathPattern;     // e.g. "dri" or "dri/*"
+};
+
 // --- Per-verb validators ---
 //
 // Each `validate*(req)` returns "" on success, otherwise a one-line
@@ -411,6 +429,7 @@ std::string validateQueryJailRctl(const QueryJailRctlReq &r);
 std::string validateConfigureIpfwNat(const ConfigureIpfwNatReq &r);
 std::string validateSetJailCpuset(const SetJailCpusetReq &r);
 std::string validateApplyDevfsRuleset(const ApplyDevfsRulesetReq &r);
+std::string validateAddDevfsUnhideRule(const AddDevfsUnhideRuleReq &r);
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //

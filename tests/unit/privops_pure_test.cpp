@@ -727,6 +727,43 @@ ATF_TEST_CASE_BODY(query_jail_rctl_minimal) {
   ATF_REQUIRE(!validateQueryJailRctl(r).empty());
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(add_devfs_unhide_rule_minimal);
+ATF_TEST_CASE_BODY(add_devfs_unhide_rule_minimal) {
+  AddDevfsUnhideRuleReq r;
+  r.mountPath = "/var/run/crate/web/dev";
+  r.pathPattern = "dri";
+  ATF_REQUIRE_EQ(validateAddDevfsUnhideRule(r), std::string());
+
+  // Glob form — common for GPU unhide.
+  r.pathPattern = "dri/*";
+  ATF_REQUIRE_EQ(validateAddDevfsUnhideRule(r), std::string());
+
+  // Nested glob.
+  r.pathPattern = "snd/by-name/*";
+  ATF_REQUIRE_EQ(validateAddDevfsUnhideRule(r), std::string());
+
+  // Empty path pattern.
+  r.pathPattern = "";
+  ATF_REQUIRE(!validateAddDevfsUnhideRule(r).empty());
+
+  // Leading slash — rejected (devfs paths are relative to the mount).
+  r.pathPattern = "/dri";
+  ATF_REQUIRE(!validateAddDevfsUnhideRule(r).empty());
+
+  // Shell metachar — rejected.
+  r.pathPattern = "dri; rm -rf /";
+  ATF_REQUIRE(!validateAddDevfsUnhideRule(r).empty());
+
+  // Backtick — rejected.
+  r.pathPattern = "dri/`whoami`";
+  ATF_REQUIRE(!validateAddDevfsUnhideRule(r).empty());
+
+  // Bad mount path.
+  r.pathPattern = "dri";
+  r.mountPath = "not-absolute";
+  ATF_REQUIRE(!validateAddDevfsUnhideRule(r).empty());
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(apply_devfs_ruleset_minimal);
 ATF_TEST_CASE_BODY(apply_devfs_ruleset_minimal) {
   ApplyDevfsRulesetReq r;
@@ -902,4 +939,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, configure_ipfw_nat_minimal);
   ATF_ADD_TEST_CASE(tcs, set_jail_cpuset_minimal);
   ATF_ADD_TEST_CASE(tcs, apply_devfs_ruleset_minimal);
+  ATF_ADD_TEST_CASE(tcs, add_devfs_unhide_rule_minimal);
 }

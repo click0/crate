@@ -338,4 +338,13 @@ PrivOpsNvPure::FieldMap buildApplyDevfsRuleset(const std::string &mountPath,
   };
 }
 
+PrivOpsNvPure::FieldMap buildAddDevfsUnhideRule(const std::string &mountPath,
+                                                 const std::string &pathPattern) {
+  return {
+    {"verb", "add_devfs_unhide_rule"},
+    {"mount_path", mountPath},
+    {"path_pattern", pathPattern},
+  };
+}
+
 } // namespace PrivOpsClient
