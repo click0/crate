@@ -6,6 +6,136 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.10] — 2026-05-17
+
+**Two new devfs privops verbs — terminal isolation + GPU unhide.**
+Fixes silent loss of two security/feature controls under
+rootless mode. `lib/run.cpp` had five bare `devfs(8)` shell-out
+calls split across two sites; both EACCES'd for non-root
+operators and dropped the requested configuration silently.
+
+### New verbs (2)
+
+| Verb                    | Target site                | Wraps                                                |
+|-------------------------|----------------------------|------------------------------------------------------|
+| `apply_devfs_ruleset`   | `lib/run.cpp:745-746`      | `devfs -m P ruleset N` + `devfs -m P rule applyset`  |
+| `add_devfs_unhide_rule` | `lib/run.cpp:775-783`      | `devfs -m P rule add path X unhide` + applyset       |
+
+Wire taxonomy grows from **26 to 28 verbs** (two additions
+this release).
+
+#### `apply_devfs_ruleset`
+
+Wraps the paired set+applyset shape — both ops are meaningless
+without the other, so a single verb handles them atomically.
+
+```cpp
+struct ApplyDevfsRulesetReq {
+  std::string mountPath;     // absolute path to jail's /dev mount
+  unsigned    ruleset = 0;   // ruleset number 1..65535
+};
+```
+
+Validator: `validateAbsolutePath` on mountPath (rejects shell
+metachars and traversals); ruleset bounded 1..65535 (devfs
+ruleset 0 is the implicit "no rules" default, so an explicit
+0 here is treated as a bug).
+
+#### `add_devfs_unhide_rule`
+
+```cpp
+struct AddDevfsUnhideRuleReq {
+  std::string mountPath;
+  std::string pathPattern;     // "dri" or "dri/*"
+};
+```
+
+Restricted to the `unhide` action — devfs(8) rule actions
+include `hide`, `unhide`, `mode`, `group`, `user`, but only
+`unhide` has a sensible privops use case. Locking it down
+keeps the surface narrow even if the validator's path-pattern
+check ever has a gap.
+
+Path-pattern validator allows: alnum, `.`, `_`, `-`, `/`, `*`.
+Leading slash rejected (devfs paths are relative to the
+mount, not absolute filesystem paths). Shell metas rejected.
+
+### Call-site changes
+
+Two blocks in `lib/run.cpp` now detect the privops socket and
+route through the new verbs; legacy `devfs(8)` exec preserved
+for the non-privops path. The GPU unhide block goes from a
+3-call (add + add + applyset) sequence to 2 verb calls
+(each verb internally includes applyset — idempotent at the
+kernel).
+
+### Why these are real regressions — not hypotheticals
+
+`devfs_ruleset` is a security control: the operator configures
+it expecting hardening, the call fails silently, and the jail
+runs with *more* device exposure than intended. Same shape as
+1.1.5 (securelevel) and 1.1.6 (RCTL).
+
+GPU unhide is the inverse: the operator opts INTO exposing
+`/dev/dri/*`, the call fails, and GPU-accelerated apps inside
+the jail break.
+
+### Tests
+
+`tests/unit/privops_pure_test.cpp` gains two cases:
+- `apply_devfs_ruleset_minimal` — typical input, ruleset boundaries
+  (1, 65535), ruleset=0 rejection, empty/relative/shell-meta path
+  rejection
+- `add_devfs_unhide_rule_minimal` — bare path ("dri"), glob ("dri/*"),
+  nested ("snd/by-name/*"), empty/leading-slash/shell-meta rejection,
+  bad-mount-path propagation
+
+`dispatch_covers_every_verb` extended for both verbs. Suite grows
+from 1314 to **1316** (2 new tests).
+
+### Audit chain status
+
+| Item                                              | Status        |
+|---------------------------------------------------|---------------|
+| validateAnchorName allows `/`                     | ✅ 1.1.2      |
+| validateJailName 64 → 200 chars                   | ✅ 1.1.3      |
+| validateAnchorName 64 → 256 chars                 | ✅ 1.1.4      |
+| securelevel + children.max via privops params     | ✅ 1.1.5      |
+| RCTL apply/cleanup via privops                    | ✅ 1.1.6      |
+| ipfw teardown via privops                         | ✅ 1.1.7      |
+| ipfw setup + ConfigureIpfwNat                     | ✅ 1.1.8      |
+| cpuset via SetJailCpuset                          | ✅ 1.1.9      |
+| **devfs ruleset + GPU unhide via 2 new verbs**    | ✅ **1.1.10** |
+| chroot scripts, snapshot/zfs send                 | TBD           |
+
+### Wire compatibility
+
+Additive verb. 1.1.10 client → 1.1.9 daemon: 404 on
+`apply_devfs_ruleset`, `crate run` fails loudly when
+`devfs_ruleset` is in the spec. Operators bump daemon first.
+
+### Files
+
+- `lib/privops_pure.{h,cpp}` — both verbs + request structs +
+  validators
+- `lib/privops_wire_pure.{h,cpp}` — JSON parsers + formatters +
+  dispatcher cases
+- `lib/privops_nv_pure.{h,cpp}` — nv parsers
+- `lib/privops_client.h` + `lib/privops_client_pure.cpp` —
+  client builders
+- `daemon/privops_handlers.{h,cpp}` — both handlers (each runs
+  the paired set+applyset / add+applyset shape); HTTP + libnv
+  dispatcher cases
+- `lib/run.cpp` — terminal-isolation block + GUI auto-unhide
+  block both route through verbs when socket detected
+- `tests/unit/privops_pure_test.cpp` — two validator tests
+- `tests/unit/privops_wire_pure_test.cpp` — dispatch coverage
+  extended for both verbs
+- `cli/args.cpp` — version `crate 1.1.10`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.1.9] — 2026-05-17
 
 **cpuset binding via new `set_jail_cpuset` privops verb.**

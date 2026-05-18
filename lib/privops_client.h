@@ -157,6 +157,18 @@ PrivOpsNvPure::FieldMap buildConfigureIpfwNat(unsigned number,
 PrivOpsNvPure::FieldMap buildSetJailCpuset(unsigned jid,
                                             const std::string &cpuset);
 
+// 1.1.10: apply a devfs ruleset to a jail's /dev mount (set
+// ruleset + applyset). `mountPath` is the absolute path to
+// the jail's /dev mount; `ruleset` is the ruleset number.
+PrivOpsNvPure::FieldMap buildApplyDevfsRuleset(const std::string &mountPath,
+                                                unsigned ruleset);
+
+// 1.1.10: add a `path <pattern> unhide` rule to a jail's
+// devfs mount, then `rule applyset`. Used by the GUI auto-
+// unhide path for /dev/dri/*.
+PrivOpsNvPure::FieldMap buildAddDevfsUnhideRule(const std::string &mountPath,
+                                                 const std::string &pathPattern);
+
 // --- Wire transport (FreeBSD-only) ---
 
 struct Response {

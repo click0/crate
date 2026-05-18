@@ -329,4 +329,22 @@ PrivOpsNvPure::FieldMap buildSetJailCpuset(unsigned jid,
   };
 }
 
+PrivOpsNvPure::FieldMap buildApplyDevfsRuleset(const std::string &mountPath,
+                                                unsigned ruleset) {
+  return {
+    {"verb", "apply_devfs_ruleset"},
+    {"mount_path", mountPath},
+    {"ruleset", std::to_string(ruleset)},
+  };
+}
+
+PrivOpsNvPure::FieldMap buildAddDevfsUnhideRule(const std::string &mountPath,
+                                                 const std::string &pathPattern) {
+  return {
+    {"verb", "add_devfs_unhide_rule"},
+    {"mount_path", mountPath},
+    {"path_pattern", pathPattern},
+  };
+}
+
 } // namespace PrivOpsClient
