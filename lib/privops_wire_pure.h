@@ -201,6 +201,9 @@ std::string parseApplyDevfsRuleset(const std::string &body,
 std::string parseAddDevfsUnhideRule(const std::string &body,
                                     PrivOpsPure::AddDevfsUnhideRuleReq &out);
 
+std::string parseSignalJail(const std::string &body,
+                            PrivOpsPure::SignalJailReq &out);
+
 // --- Verb routing helper ---
 //
 // Parse the URL path's verb segment. The route pattern is
@@ -364,5 +367,8 @@ std::string formatApplyDevfsRulesetSuccess(const std::string &mountPath,
 // 1.1.10: 200 OK body for add_devfs_unhide_rule.
 std::string formatAddDevfsUnhideRuleSuccess(const std::string &mountPath,
                                             const std::string &pathPattern);
+
+// 1.1.11: 200 OK body for signal_jail.
+std::string formatSignalJailSuccess(unsigned jid, const std::string &signal);
 
 } // namespace PrivOpsWirePure

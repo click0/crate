@@ -101,6 +101,7 @@ const char *verbName(Verb v) {
     case Verb::SetJailCpuset:        return "set_jail_cpuset";
     case Verb::ApplyDevfsRuleset:    return "apply_devfs_ruleset";
     case Verb::AddDevfsUnhideRule:   return "add_devfs_unhide_rule";
+    case Verb::SignalJail:           return "signal_jail";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -136,6 +137,7 @@ Verb parseVerb(const std::string &name) {
   if (name == "set_jail_cpuset")         return Verb::SetJailCpuset;
   if (name == "apply_devfs_ruleset")     return Verb::ApplyDevfsRuleset;
   if (name == "add_devfs_unhide_rule")   return Verb::AddDevfsUnhideRule;
+  if (name == "signal_jail")             return Verb::SignalJail;
   return Verb::Unknown;
 }
 
@@ -596,6 +598,17 @@ std::string validateApplyDevfsRuleset(const ApplyDevfsRulesetReq &r) {
     return "mount_path: " + e;
   if (r.ruleset == 0 || r.ruleset > 65535)
     return "ruleset: out of range (1..65535)";
+  return "";
+}
+
+std::string validateSignalJail(const SignalJailReq &r) {
+  if (r.jid == 0 || r.jid > 65535) return "jid: out of range (1..65535)";
+  // Whitelist the signals crate's lifecycle path uses. A broader
+  // set isn't needed and an open-ended signal field invites
+  // mistakes (e.g. STOP wedging a jail).
+  if (r.signal != "TERM" && r.signal != "KILL" &&
+      r.signal != "HUP"  && r.signal != "INT")
+    return "signal: must be one of TERM, KILL, HUP, INT";
   return "";
 }
 

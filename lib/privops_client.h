@@ -169,6 +169,10 @@ PrivOpsNvPure::FieldMap buildApplyDevfsRuleset(const std::string &mountPath,
 PrivOpsNvPure::FieldMap buildAddDevfsUnhideRule(const std::string &mountPath,
                                                  const std::string &pathPattern);
 
+// 1.1.11: send a signal to all processes in a jail.
+PrivOpsNvPure::FieldMap buildSignalJail(unsigned jid,
+                                         const std::string &signal);
+
 // --- Wire transport (FreeBSD-only) ---
 
 struct Response {

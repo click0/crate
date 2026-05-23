@@ -195,6 +195,15 @@ enum class Verb {
   // `mode`, `group`, `user` are the only devfs rule actions,
   // and only `unhide` has a sensible privops use case.
   AddDevfsUnhideRule,
+
+  // 1.1.11: send a signal to all processes in a jail.
+  // Wraps `jexec <jid> /bin/kill -<signal> -1`. Targets the
+  // graceful-stop path in lib/lifecycle.cpp (SIGTERM then
+  // SIGKILL). The signal name is whitelisted. Without this,
+  // rootless `crate stop` can't signal jail processes and
+  // always falls through to the full stop-timeout + forced
+  // destroy_jail.
+  SignalJail,
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -393,6 +402,14 @@ struct AddDevfsUnhideRuleReq {
   std::string pathPattern;     // e.g. "dri" or "dri/*"
 };
 
+// 1.1.11: send a signal to every process in a jail. `signal` is
+// the bare signal name (no "SIG" prefix, no number) and is
+// whitelisted to the set crate's lifecycle path actually uses.
+struct SignalJailReq {
+  unsigned    jid = 0;
+  std::string signal;          // "TERM", "KILL", "HUP", "INT"
+};
+
 // --- Per-verb validators ---
 //
 // Each `validate*(req)` returns "" on success, otherwise a one-line
@@ -430,6 +447,7 @@ std::string validateConfigureIpfwNat(const ConfigureIpfwNatReq &r);
 std::string validateSetJailCpuset(const SetJailCpusetReq &r);
 std::string validateApplyDevfsRuleset(const ApplyDevfsRulesetReq &r);
 std::string validateAddDevfsUnhideRule(const AddDevfsUnhideRuleReq &r);
+std::string validateSignalJail(const SignalJailReq &r);
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //

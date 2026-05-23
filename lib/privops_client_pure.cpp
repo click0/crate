@@ -347,4 +347,13 @@ PrivOpsNvPure::FieldMap buildAddDevfsUnhideRule(const std::string &mountPath,
   };
 }
 
+PrivOpsNvPure::FieldMap buildSignalJail(unsigned jid,
+                                         const std::string &signal) {
+  return {
+    {"verb", "signal_jail"},
+    {"jid", std::to_string(jid)},
+    {"signal", signal},
+  };
+}
+
 } // namespace PrivOpsClient

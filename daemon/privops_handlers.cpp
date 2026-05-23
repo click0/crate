@@ -576,6 +576,22 @@ DispatchResult handleAddDevfsUnhideRule(const PrivOpsPure::AddDevfsUnhideRuleReq
                   r.mountPath, r.pathPattern)};
 }
 
+// --- handleSignalJail (1.1.11) ---
+
+DispatchResult handleSignalJail(const PrivOpsPure::SignalJailReq &r) {
+  // `jexec <jid> /bin/kill -<signal> -1` — signal every process
+  // in the jail. The signal name is whitelisted by the validator.
+  try {
+    Util::execCommand(
+      {CRATE_PATH_JEXEC, std::to_string(r.jid),
+       "/bin/kill", "-" + r.signal, "-1"},
+      "privops signal_jail");
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("jexec_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatSignalJailSuccess(r.jid, r.signal)};
+}
+
 // --- Top-level dispatcher ---
 
 namespace {
@@ -868,6 +884,14 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleAddDevfsUnhideRule(r);
     }
+    case Verb::SignalJail: {
+      PrivOpsPure::SignalJailReq r;
+      if (auto e = PrivOpsWirePure::parseSignalJail(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateSignalJail(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleSignalJail(r);
+    }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
   }
@@ -1117,6 +1141,14 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       if (auto e = PrivOpsPure::validateAddDevfsUnhideRule(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleAddDevfsUnhideRule(r);
+    }
+    case Verb::SignalJail: {
+      PrivOpsPure::SignalJailReq r;
+      if (auto e = PrivOpsNvPure::parseSignalJail(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateSignalJail(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleSignalJail(r);
     }
     case Verb::Unknown:
       return {404,
