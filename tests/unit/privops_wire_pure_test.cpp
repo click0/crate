@@ -589,7 +589,7 @@ ATF_TEST_CASE_BODY(dispatch_covers_every_verb) {
     Verb::ReclaimIfaceFromVnet, Verb::FlushPfAnchor,
     Verb::QueryJailRctl, Verb::ConfigureIpfwNat,
     Verb::SetJailCpuset, Verb::ApplyDevfsRuleset,
-    Verb::AddDevfsUnhideRule,
+    Verb::AddDevfsUnhideRule, Verb::SignalJail,
   };
   for (auto v : verbs) {
     auto r = parseValidateAndDispatch(v, "{}");

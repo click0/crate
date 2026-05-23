@@ -438,6 +438,13 @@ std::string parseAddDevfsUnhideRule(const std::string &body,
   return "";
 }
 
+std::string parseSignalJail(const std::string &body,
+                            PrivOpsPure::SignalJailReq &out) {
+  if (auto e = requireUnsignedField(body, "jid", out.jid); !e.empty()) return e;
+  if (auto e = requireStringField(body, "signal", out.signal); !e.empty()) return e;
+  return "";
+}
+
 // --- Verb routing helper ---
 
 PrivOpsPure::Verb parseVerbFromPath(const std::string &path) {
@@ -821,6 +828,15 @@ std::string formatAddDevfsUnhideRuleSuccess(const std::string &mountPath,
   return o.str();
 }
 
+std::string formatSignalJailSuccess(unsigned jid, const std::string &signal) {
+  std::ostringstream o;
+  o << "{\"signalled\":true"
+    << ",\"jid\":" << jid
+    << ",\"signal\":\"" << escape(signal) << "\""
+    << "}";
+  return o.str();
+}
+
 DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
                                         const std::string &body) {
   using namespace PrivOpsPure;
@@ -883,6 +899,8 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       return runVerb<ApplyDevfsRulesetReq>(body, v, parseApplyDevfsRuleset, validateApplyDevfsRuleset);
     case Verb::AddDevfsUnhideRule:
       return runVerb<AddDevfsUnhideRuleReq>(body, v, parseAddDevfsUnhideRule, validateAddDevfsUnhideRule);
+    case Verb::SignalJail:
+      return runVerb<SignalJailReq>(body, v, parseSignalJail, validateSignalJail);
     case Verb::Unknown:
       break;
   }

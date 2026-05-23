@@ -727,6 +727,42 @@ ATF_TEST_CASE_BODY(query_jail_rctl_minimal) {
   ATF_REQUIRE(!validateQueryJailRctl(r).empty());
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(signal_jail_minimal);
+ATF_TEST_CASE_BODY(signal_jail_minimal) {
+  SignalJailReq r;
+  r.jid = 42;
+  r.signal = "TERM";
+  ATF_REQUIRE_EQ(validateSignalJail(r), std::string());
+
+  // All whitelisted signals.
+  for (const char *sig : {"TERM", "KILL", "HUP", "INT"}) {
+    r.signal = sig;
+    ATF_REQUIRE_EQ(validateSignalJail(r), std::string());
+  }
+
+  // jid=0 — invalid.
+  r.jid = 0;
+  r.signal = "TERM";
+  ATF_REQUIRE(!validateSignalJail(r).empty());
+
+  // Non-whitelisted signal (STOP could wedge a jail).
+  r.jid = 42;
+  r.signal = "STOP";
+  ATF_REQUIRE(!validateSignalJail(r).empty());
+
+  // Signal number rejected — name only.
+  r.signal = "9";
+  ATF_REQUIRE(!validateSignalJail(r).empty());
+
+  // "SIG"-prefixed rejected.
+  r.signal = "SIGTERM";
+  ATF_REQUIRE(!validateSignalJail(r).empty());
+
+  // Empty signal.
+  r.signal = "";
+  ATF_REQUIRE(!validateSignalJail(r).empty());
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(add_devfs_unhide_rule_minimal);
 ATF_TEST_CASE_BODY(add_devfs_unhide_rule_minimal) {
   AddDevfsUnhideRuleReq r;
@@ -940,4 +976,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, set_jail_cpuset_minimal);
   ATF_ADD_TEST_CASE(tcs, apply_devfs_ruleset_minimal);
   ATF_ADD_TEST_CASE(tcs, add_devfs_unhide_rule_minimal);
+  ATF_ADD_TEST_CASE(tcs, signal_jail_minimal);
 }

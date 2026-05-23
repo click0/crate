@@ -205,6 +205,10 @@ PrivOpsWirePure::DispatchResult handleApplyDevfsRuleset(const PrivOpsPure::Apply
 // applyset. Used by the GUI auto-unhide path in lib/run.cpp.
 PrivOpsWirePure::DispatchResult handleAddDevfsUnhideRule(const PrivOpsPure::AddDevfsUnhideRuleReq &r);
 
+// 1.1.11: send a signal to all processes in a jail. Wraps
+// `jexec <jid> /bin/kill -<signal> -1`.
+PrivOpsWirePure::DispatchResult handleSignalJail(const PrivOpsPure::SignalJailReq &r);
+
 // 0.9.29: register the daemon's `rctl_umbrella:` config. Called
 // once at daemon startup. The umbrella rules apply after a
 // successful create_jail privops invocation when the operator's

@@ -363,14 +363,28 @@ bool stopCrate(const Args &args) {
 
   std::cout << "Stopping container " << jail->name << " (jid=" << jail->jid << ")..." << std::endl;
 
-  // Send SIGTERM to all processes in the jail
-  // Use jexec to kill the main process group
-  try {
-    Util::execCommand({CRATE_PATH_JEXEC, std::to_string(jail->jid),
-                       "/bin/kill", "-TERM", "-1"},
-      "send SIGTERM to jail processes");
-  } catch (...) {
-    // Jail might have no processes
+  // Send SIGTERM to all processes in the jail.
+  // 1.1.11: route through signal_jail privops verb when the socket
+  // is detected. Pre-1.1.11 the bare `jexec ... kill` EACCES'd
+  // under rootless, so graceful SIGTERM never landed and every
+  // `crate stop` waited the full stopTimeout before forced
+  // destroy_jail. Best-effort either way (a jail with no processes
+  // is fine to "fail" the kill).
+  {
+    std::string sock = PrivOpsClient::detectSocketPath();
+    if (!sock.empty()) {
+      auto resp = PrivOpsClient::sendRequest(sock,
+          PrivOpsClient::buildSignalJail((unsigned)jail->jid, "TERM"));
+      (void)resp;  // best-effort
+    } else {
+      try {
+        Util::execCommand({CRATE_PATH_JEXEC, std::to_string(jail->jid),
+                           "/bin/kill", "-TERM", "-1"},
+          "send SIGTERM to jail processes");
+      } catch (...) {
+        // Jail might have no processes
+      }
+    }
   }
 
   // Wait for jail to exit
@@ -386,11 +400,20 @@ bool stopCrate(const Args &args) {
 
   // Force kill with SIGKILL
   std::cout << "Timeout reached, sending SIGKILL..." << std::endl;
-  try {
-    Util::execCommand({CRATE_PATH_JEXEC, std::to_string(jail->jid),
-                       "/bin/kill", "-KILL", "-1"},
-      "send SIGKILL to jail processes");
-  } catch (...) {}
+  {
+    std::string sock = PrivOpsClient::detectSocketPath();
+    if (!sock.empty()) {
+      auto resp = PrivOpsClient::sendRequest(sock,
+          PrivOpsClient::buildSignalJail((unsigned)jail->jid, "KILL"));
+      (void)resp;  // best-effort
+    } else {
+      try {
+        Util::execCommand({CRATE_PATH_JEXEC, std::to_string(jail->jid),
+                           "/bin/kill", "-KILL", "-1"},
+          "send SIGKILL to jail processes");
+      } catch (...) {}
+    }
+  }
 
   // Wait briefly for cleanup
   ::sleep(1);

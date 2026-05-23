@@ -6,6 +6,114 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.11] — 2026-05-18
+
+**Graceful jail stop via new `signal_jail` verb.** Fixes a UX
+regression in `crate stop` under rootless. `lib/lifecycle.cpp`
+sent SIGTERM (then SIGKILL after timeout) to jail processes via
+`jexec <jid> /bin/kill`. Under 1.0.0+ rootless those EACCES'd,
+the SIGTERM never landed, and every stop waited the FULL
+`stopTimeout` before falling through to the forced
+`destroy_jail` — turning a 1-second graceful stop into a
+10-second (default) hang.
+
+### New verb: `signal_jail`
+
+Wraps `jexec <jid> /bin/kill -<signal> -1`. The signal name is
+whitelisted to `TERM`, `KILL`, `HUP`, `INT` — the set crate's
+lifecycle path actually uses. An open-ended signal field invites
+mistakes (e.g. `STOP` wedging a jail with no resumer), so the
+validator rejects everything else, including signal numbers
+and `SIG`-prefixed names.
+
+Wire taxonomy grows from **28 to 29 verbs**.
+
+```cpp
+struct SignalJailReq {
+  unsigned    jid = 0;
+  std::string signal;     // "TERM" | "KILL" | "HUP" | "INT"
+};
+```
+
+### Call-site changes
+
+Both kill sites in `lib/lifecycle.cpp::stopCrate` (graceful
+SIGTERM + forced SIGKILL) detect the privops socket and route
+through the verb; legacy `jexec` exec preserved for non-privops
+mode. Both are best-effort (a jail with no processes "failing"
+the signal is expected and ignored).
+
+### Behaviour restored
+
+| Mode                        | `crate stop` graceful path                       |
+|-----------------------------|--------------------------------------------------|
+| Pre-1.1.11 rootless         | SIGTERM EACCES → full timeout → forced destroy   |
+| 1.1.11 rootless             | SIGTERM via verb → processes exit → fast stop    |
+| Legacy setuid               | unchanged (direct jexec)                         |
+
+### Tests
+
+`tests/unit/privops_pure_test.cpp` gains `signal_jail_minimal`
+covering: all four whitelisted signals, jid=0 rejection,
+non-whitelisted (`STOP`) rejection, signal-number rejection,
+`SIG`-prefix rejection, empty rejection.
+`dispatch_covers_every_verb` extended. Suite grows from 1316
+to **1317**.
+
+### Audit chain status
+
+| Item                                              | Status        |
+|---------------------------------------------------|---------------|
+| validateAnchorName allows `/`                     | ✅ 1.1.2      |
+| validateJailName / Anchor length                  | ✅ 1.1.3/1.1.4 |
+| securelevel + children.max via privops            | ✅ 1.1.5      |
+| RCTL apply/cleanup via privops                    | ✅ 1.1.6      |
+| ipfw teardown + setup via privops                 | ✅ 1.1.7/1.1.8 |
+| cpuset via SetJailCpuset                          | ✅ 1.1.9      |
+| devfs ruleset + GPU unhide                        | ✅ 1.1.10     |
+| **graceful stop via SignalJail**                  | ✅ **1.1.11** |
+| chroot run-hooks, zfs snapshot/send               | needs design  |
+
+### Remaining bare-shell calls — and why they're not mechanical
+
+Two remain. Both need a design decision, not just verb-wiring:
+
+1. **chroot run-hooks** (`lib/run.cpp:732,1752`) — runs
+   operator-defined scripts via `chroot <jailPath> /bin/sh -c
+   <cmd>`. A privops verb here is essentially "run arbitrary
+   command as root in this chroot". Acceptable in the threat
+   model (the operator owns the jail) ONLY if the daemon
+   enforces that `<jailPath>` belongs to the requesting uid —
+   otherwise alice could exec into bob's jail. Needs daemon-side
+   path-ownership checking against the getpeereid uid.
+
+2. **zfs send** (`lib/backup.cpp:86`, `lib/replicate.cpp:101`) —
+   streams a multi-GB dataset image. The privops request/response
+   wire protocol isn't built for streaming; a verb here needs
+   either an fd-passing extension or a fundamentally different
+   transport. `zfs snapshot` (the cheap half) could be a verb
+   today, but shipping it without `zfs send` leaves `crate
+   backup` half-rootless, so they should land together.
+
+These are tracked for a 1.2.0 design pass.
+
+### Files
+
+- `lib/privops_pure.{h,cpp}` — `Verb::SignalJail`, request
+  struct, whitelisted-signal validator
+- `lib/privops_wire_pure.{h,cpp}` — JSON parser + formatter +
+  dispatcher
+- `lib/privops_nv_pure.{h,cpp}` — nv parser
+- `lib/privops_client.h` + `lib/privops_client_pure.cpp` — builder
+- `daemon/privops_handlers.{h,cpp}` — handler + HTTP + libnv cases
+- `lib/lifecycle.cpp` — both stop signals route through verb
+- `tests/unit/privops_pure_test.cpp` — validator coverage
+- `tests/unit/privops_wire_pure_test.cpp` — dispatch coverage
+- `cli/args.cpp` — version `crate 1.1.11`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [1.1.10] — 2026-05-17
 
 **Two new devfs privops verbs — terminal isolation + GPU unhide.**

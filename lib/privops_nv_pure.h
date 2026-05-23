@@ -149,6 +149,8 @@ std::string parseApplyDevfsRuleset(const FieldMap &m,
                                    PrivOpsPure::ApplyDevfsRulesetReq &out);
 std::string parseAddDevfsUnhideRule(const FieldMap &m,
                                     PrivOpsPure::AddDevfsUnhideRuleReq &out);
+std::string parseSignalJail(const FieldMap &m,
+                            PrivOpsPure::SignalJailReq &out);
 
 // --- Verb routing ---
 
