@@ -107,3 +107,14 @@ commands default to `/usr/local/bin/` or `/usr/local/sbin/`.
 | `CRATE_PATH_XEPHYR` | `/usr/local/bin/Xephyr` | Nested X11 server for GUI isolation |
 | `CRATE_PATH_SOCAT` | `/usr/local/bin/socat` | Unix socket proxying |
 | `CRATE_PATH_UNBOUND` | `/usr/local/sbin/unbound` | Per-jail DNS filtering |
+
+## See also
+
+- [`trust-model.md`](trust-model.md) — where multi-tenant isolation is
+  (and is not) enforced across the privops and pooled control planes.
+  The command-path hardening described here protects a *trusted*
+  privileged process from a hostile environment — historically the
+  setuid `crate(1)`, and since 1.0.0 the `crated(8)` root daemon that
+  execs these host tools (see [`rootless-migration.md`](rootless-migration.md));
+  it does not separate operators from each other.
+
