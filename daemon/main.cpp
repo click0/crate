@@ -119,6 +119,14 @@ int main(int argc, char **argv) {
     // uid is known via getpeereid (libnv socket path).
     Crated::setUmbrellaConfig(config.rctlUmbrella);
 
+    // 1.1.12: register the per-user namespacing config for the privops
+    // authorize-before-dispatch gate. Only zfsMasterPrefix is needed
+    // (the gate checks the ZFS prefix and the uid-derived crate-<uid>
+    // loginclass); network CIDRs are irrelevant to authorization and
+    // left empty to avoid any CIDR parsing in composeForUid.
+    Crated::setPerUserAuthzConfig(
+        PerUserEnvPure::Config{config.zfsMasterPrefix});
+
     Crated::PrivopsListener privopsListener(config);
     bool privopsStarted = privopsListener.start();
 

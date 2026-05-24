@@ -13,6 +13,7 @@
 #include "zfs_ops.h"
 
 #include "../lib/audit_per_user_pure.h"
+#include "../lib/privops_authz_pure.h"
 
 #include <ctime>
 
@@ -616,6 +617,13 @@ void maybeWritePerUserAudit(bool rootlessPerUser, uint32_t uid,
 // concurrent reads after the one-time write at startup.
 std::vector<std::pair<std::string, std::string>> g_umbrellaRules;
 
+// 1.1.12: process-global per-user namespacing config, set once at
+// startup via setPerUserAuthzConfig(). Read by dispatchPrivOpFromMap's
+// authorize-before-dispatch gate to derive the caller's per-user env
+// (ZFS prefix, loginclass) from the getpeereid uid. Safe for concurrent
+// reads after the one-time write at startup.
+PerUserEnvPure::Config g_perUserAuthzCfg;
+
 // Apply umbrella rules to the operator's `crate-<uid>` loginclass
 // after a successful create_jail. Only fires when:
 //   - operator's uid is known (uid > 0; libnv path supplies it,
@@ -908,6 +916,28 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
                                      bool rootlessPerUser,
                                      uint32_t operatorUid) {
   Verb v = PrivOpsNvPure::extractVerb(m);
+
+  // 1.1.12: authorize-before-dispatch. The libnv transport carries a
+  // real peer uid (getpeereid); when rootless per-user is on, a verb
+  // that names another operator's ZFS prefix or RCTL umbrella is denied
+  // before the handler runs. Host-global and jid-scoped verbs pass
+  // (host-wide by design — see lib/privops_authz_pure.h). The HTTP path
+  // calls dispatchPrivOp with uid==0 and is unaffected. Fail closed.
+  if (rootlessPerUser && operatorUid > 0) {
+    const PerUserEnvPure::Env env =
+        PerUserEnvPure::composeForUid(g_perUserAuthzCfg, operatorUid).env;
+    auto field = [&m](const char *key) -> std::string {
+      auto it = m.find(key);
+      return it == m.end() ? std::string() : it->second;
+    };
+    PrivOpsAuthzPure::Decision dec = PrivOpsAuthzPure::authorize(
+        v, field("dataset"), field("loginclass"), env);
+    if (dec != PrivOpsAuthzPure::Decision::Allow) {
+      return {403, PrivOpsWirePure::formatHandlerError(
+                       "forbidden", PrivOpsAuthzPure::decisionReason(dec))};
+    }
+  }
+
   DispatchResult result = [&]() -> DispatchResult {
   switch (v) {
     case Verb::SetRctl: {
@@ -1166,6 +1196,10 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
 // calls this once at startup with the parsed `rctl_umbrella` block.
 void setUmbrellaConfig(const std::vector<std::pair<std::string, std::string>> &rules) {
   g_umbrellaRules = rules;
+}
+
+void setPerUserAuthzConfig(const PerUserEnvPure::Config &cfg) {
+  g_perUserAuthzCfg = cfg;
 }
 
 } // namespace Crated
