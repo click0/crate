@@ -13,6 +13,7 @@
 #include "privops_wire_pure.h"
 
 #include "../lib/privops_nv_pure.h"
+#include "../lib/per_user_env_pure.h"
 
 #include <cstdint>
 #include <string>
@@ -216,5 +217,12 @@ PrivOpsWirePure::DispatchResult handleSignalJail(const PrivOpsPure::SignalJailRe
 // an empty vector to disable. Idempotent at the kernel level
 // (rctl(8) treats re-set of an existing rule as a no-op).
 void setUmbrellaConfig(const std::vector<std::pair<std::string, std::string>> &rules);
+
+// 1.1.12: register the per-user namespacing config (zfs master prefix
+// etc.) used by dispatchPrivOpFromMap's authorize-before-dispatch gate.
+// Called once at daemon startup. Only the libnv transport (real peer
+// uid via getpeereid) consults it; the HTTP/admin path is host-wide and
+// unaffected. See lib/privops_authz_pure.h and docs/trust-model.md.
+void setPerUserAuthzConfig(const PerUserEnvPure::Config &cfg);
 
 } // namespace Crated

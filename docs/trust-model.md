@@ -87,24 +87,39 @@ verbs** (`create_jail`, `destroy_jail`, `attach_zfs`, `set_rctl`,
   `chmod`s the socket to its mode and `chown`s it `root:<group>`
   (`daemon/privops_listener.cpp:179,188`; default mode `0660`,
   `daemon/config.h:117-119`). `getpeereid(2)` extracts the peer uid
-  (`daemon/privops_listener.cpp:90`) — but only to feed the per-user
-  audit / namespacing hook, **not** for authorization.
+  (`daemon/privops_listener.cpp:90`) and feeds both the per-user audit /
+  namespacing hook **and** the authorize-before-dispatch gate below.
 
-**There is no per-resource authorization on either transport.** Verb
-dispatch is `parse → validate → handle` (`dispatchPrivOp`,
-`daemon/privops_handlers.cpp:651`; `dispatchPrivOpFromMap`, `:907`).
-The handlers are **uid-blind** — `handleCreateJail(const CreateJailReq
-&)` (`:332`), `handleAttachZfs` (`:93`), `handleSetRctl` (`:41`) act
-purely on request arguments. The peer uid is consumed only *after* the
-operation, by best-effort side effects: `maybeWritePerUserAudit`
-(`:602`) and `maybeApplyUmbrella` (`:630`). No pool-ACL / ownership
-check runs *before* a verb executes.
+Verb dispatch is `parse → validate → handle` (`dispatchPrivOp` /
+`dispatchPrivOpFromMap`, `daemon/privops_handlers.cpp`). Authorization
+differs by transport:
+
+- **HTTP:** no per-resource check — `admin`-only and host-wide by
+  design (`daemon/routes.cpp:997-999`).
+- **libnv (real peer uid):** as of 1.1.12 an authorize-before-dispatch
+  gate (`dispatchPrivOpFromMap` → `PrivOpsAuthzPure::authorize`,
+  `lib/privops_authz_pure.cpp`) enforces per-user ownership for the
+  verbs that carry a robust ownership signal, keyed on the caller's
+  `composeForUid` env: `attach_zfs`/`detach_zfs` (the `dataset` must lie
+  within the caller's ZFS prefix `<master>/<uid>`) and
+  `set_loginclass_rctl`/`clear_loginclass_rctl` (the `loginclass` must
+  be the caller's `crate-<uid>`). A foreign target is denied `403`
+  before the handler runs (fail closed).
+
+The remaining verbs still pass the gate: **host-global** verbs
+(iface/pf/ipfw/nat/epair) cannot be pool-scoped and stay host-wide by
+design; **jid-scoped** verbs (`set_rctl`, `signal_jail`, `create_jail`,
+`set_jail_cpuset`, devfs, …) carry no request-borne owner and are not
+yet gated — a jid→owner registry is deferred (see the open gap below).
+The per-verb handlers remain uid-blind; the gate runs ahead of them.
 
 > Consequence: whoever can reach privops — an `admin` bearer token, or
-> membership in the privops socket's group — can create, destroy,
-> signal, or re-home (ZFS/mount/RCTL) **any** jail on the host. This is
-> a single trust domain, exactly like the old setuid `crate(1)`.
-> Handing an operator privops access is handing them host-wide root.
+> membership in the privops socket's group — still has host-wide control
+> over the **un-gated** surface (jail lifecycle, signals, firewall,
+> interfaces). The 1.1.12 gate closes cross-tenant ZFS-dataset and
+> RCTL-umbrella access on the libnv path, but privops remains, in the
+> general case, a single trust domain — handing an operator privops
+> access is close to handing them the old setuid `crate(1)`.
 
 ### Per-user namespacing is convenience, not a boundary
 
@@ -215,39 +230,49 @@ This is the contract any new privileged surface inherits.
 
 ## The open gap, and the guardrail for closing it
 
-Plane 1 (privops) is, today, deliberately a single trust domain:
-host-wide `admin` token on HTTP, host-wide group membership on the
-libnv socket. That is fine **as long as privops access is treated as
-equivalent to handing out the old setuid `crate(1)`** — i.e. only ever
-given to fully-trusted operators.
+1.1.12 began closing this gap: the libnv path now authorizes
+`attach_zfs`/`detach_zfs` (by ZFS prefix) and the loginclass-RCTL verbs
+(by `crate-<uid>`) before dispatch. The rest of Plane 1 is still a
+single trust domain — host-wide `admin` token on HTTP, host-wide group
+membership on the libnv socket for every un-gated verb. That is fine
+**as long as privops access is treated as equivalent to handing out the
+old setuid `crate(1)`** — i.e. only ever given to fully-trusted
+operators.
 
 The unresolved tension: the rootless model *requires* `crate(1)` to
 reach privops to create a jail at all, while the per-user namespacing
 (above) is marketed as multi-tenant isolation. To make privops itself
-safe for **mutually-distrusting** operators, the following MUST hold —
-or the per-user split is honest-operator hygiene, not a security
-boundary:
+safe for **mutually-distrusting** operators, the following MUST hold for
+*every* verb — or the per-user split is honest-operator hygiene, not a
+security boundary:
 
 1. **Authorize before dispatch.** `getpeereid` uid/gid *identifies* the
    caller; it does **not** *authorize* the operation. Every privileged
-   verb must run a pool-ACL / ownership check — the same shape as
+   verb must run an ownership check — the same shape as
    `poolVisibleOnSocket` / `tokenAllowsContainer` — keyed on the
-   **target** jail/pool/dataset, *before* the operation runs. Today the
-   peer uid only feeds the audit tail; the verb runs regardless.
+   **target** jail/pool/dataset, *before* the operation runs.
+   *Done (1.1.12):* dataset and loginclass verbs
+   (`lib/privops_authz_pure.cpp`). *Remaining:* the jid-scoped verbs
+   (`set_rctl`, `signal_jail`, `set_jail_cpuset`, devfs, `destroy_jail`,
+   `query_jail_rctl`) and the `create_jail` / `mount_nullfs` path
+   arguments. These need a **jid→owner registry** (record the operator
+   uid at `create_jail` time, check it on every jid-keyed verb), since a
+   live jid carries no request-borne owner.
 
 2. **Per-operator namespacing is convenience, not a boundary.** Any
    `path` / `jid` / `dataset` argument crossing the privops socket must
    be re-derived or validated **daemon-side** against the caller's
-   uid-prefix — never taken at face value, which is what the uid-blind
-   handlers do today.
+   uid-prefix — never taken at face value. *Done* for `dataset`;
+   *remaining* for `path` / `jid` (see (1)).
 
 3. **Fail closed on identity loss.** On any path that authorizes, a
    `getpeereid` failure must deny. It may degrade to a no-op only for
    identity-tagged side effects that are not access decisions (e.g. the
    audit tail — its current behavior).
 
-Until (1)–(2) land, a multi-tenant deployment that needs operators to
-create their own jails must mediate jail creation through a trusted
+Until the jid-scoped verbs in (1) are gated, a multi-tenant deployment
+that needs operators to create their own jails must mediate jail
+creation through a trusted
 broker rather than handing operators raw privops-socket access.
 
 ---
