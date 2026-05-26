@@ -33,6 +33,8 @@
 
 #include <rang.hpp>
 
+#include <sys/wait.h>
+
 #include <iostream>
 #include <vector>
 
