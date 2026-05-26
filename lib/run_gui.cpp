@@ -3,6 +3,7 @@
 
 #include "run_gui.h"
 #include "run_gui_pure.h"
+#include "compositor_pure.h"
 #include "spec.h"
 #include "gui_registry.h"
 #include "pathnames.h"
@@ -402,6 +403,19 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
   if (guiMode == "none") {
     if (logProgress)
       std::cerr << rang::fg::gray << "x11 option (mode=none): no X11 access" << rang::style::reset << std::endl;
+    return RunAtEnd();
+  }
+
+  // gui.mode: compositor runs a Wayland compositor *inside* the jail,
+  // which needs the jail to already exist (jid). That launch happens in
+  // setupCompositor (called post-jail from lib/run.cpp); here in the
+  // pre-jail X11 path there is nothing to do — and we must NOT fall
+  // through to the shared block, which would bind the host X11 socket.
+  if (guiMode == "compositor") {
+    if (logProgress)
+      std::cerr << rang::fg::gray
+                << "gui.mode=compositor: deferred to post-jail setup (no X11 bind)"
+                << rang::style::reset << std::endl;
     return RunAtEnd();
   }
 
@@ -955,6 +969,187 @@ void setupDbus(const Spec &spec, const std::string &jailPath,
     if (logProgress)
       std::cerr << rang::fg::gray << "D-Bus system bus disabled (not mounting host socket)" << rang::style::reset << std::endl;
   }
+}
+
+RunAtEnd setupCompositor(const Spec &spec, const std::string &jailPath,
+                         const std::string &jailXname,
+                         const std::string &jidStr,
+                         std::list<std::unique_ptr<Mount>> &mounts,
+                         std::function<void(const std::string&, const std::string&)> setJailEnv,
+                         bool logProgress) {
+  if (!spec.guiOptions || spec.guiOptions->mode != "compositor")
+    return RunAtEnd();
+
+  using CompositorPure::Backend;
+
+  // Parse + validate the compositor command and backend (pure,
+  // fail-closed). Spec parsing already enforced compositor non-empty.
+  std::vector<std::string> compArgv;
+  std::string err;
+  if (!CompositorPure::parseCompositorCommand(spec.guiOptions->compositor, compArgv, err))
+    ERR("gui.compositor: " << err)
+
+  Backend backend;
+  if (!CompositorPure::parseBackend(spec.guiOptions->backend, backend))
+    ERR("gui.backend: unknown backend '" << spec.guiOptions->backend << "'")
+
+  auto J = [&jailPath](auto subdir) { return STR(jailPath << subdir); };
+  auto mount = [&mounts](Mount *m) {
+    mounts.push_front(std::unique_ptr<Mount>(m));
+    m->mount();
+  };
+
+  // GPU acceleration: a render node on the host means the lib/run.cpp
+  // unhide exposed /dev/dri/* into the jail too. DRM is always GPU.
+  struct stat st{};
+  bool gpuAccel = (::stat("/dev/dri/renderD128", &st) == 0) ||
+                  (::stat("/dev/dri/card0", &st) == 0);
+  if (backend == Backend::Drm)
+    gpuAccel = true;
+
+  // Per-jail XDG_RUNTIME_DIR (0700) for the compositor's wayland socket.
+  const std::string runtimeDir = "/tmp/wayland";
+  Util::Fs::mkdirIfNotExists(J(runtimeDir), 0700);
+
+  // DRM backend: bind the host seatd socket so libseat in the jail can
+  // open DRM master + input. /dev/dri/* and /dev/input/* are unhidden
+  // pre-jail in lib/run.cpp.
+  std::string seatdSock;
+  if (CompositorPure::needsSeatd(backend)) {
+    for (const auto &cand : CompositorPure::seatdSocketCandidates()) {
+      if (!Util::Fs::fileExists(cand))
+        continue;
+      try {
+        std::string target = J(cand);
+        auto slash = target.rfind('/');
+        if (slash != std::string::npos)
+          Util::Fs::mkdirIfNotExists(target.substr(0, slash), 0755);
+        if (!Util::Fs::fileExists(target)) { std::ofstream touch(target); }
+        mount(new Mount("nullfs", target, cand, MNT_IGNORE));
+        seatdSock = cand;   // bound at the same path inside the jail
+        break;
+      } catch (const std::exception &ex) {
+        std::cerr << rang::fg::yellow
+                  << "gui.compositor: failed to bind seatd socket " << cand
+                  << " (" << ex.what() << ")" << rang::style::reset << std::endl;
+      }
+    }
+    if (seatdSock.empty())
+      std::cerr << rang::fg::yellow
+                << "gui.compositor: no seatd socket on host (expected "
+                << "/var/run/seatd.sock). The drm backend needs seatd — run "
+                << "`service seatd onestart` on the host, or start seatd inside "
+                << "the jail." << rang::style::reset << std::endl;
+  }
+
+  auto env = CompositorPure::composeEnv(backend, runtimeDir, seatdSock, gpuAccel);
+
+  // Point the jail's own clients at the compositor socket.
+  setJailEnv("XDG_RUNTIME_DIR", runtimeDir);
+  setJailEnv("WAYLAND_DISPLAY", CompositorPure::defaultWaylandSocket());
+
+  // jexec <jid> /usr/bin/env K=V ... <compositor argv...>
+  std::vector<std::string> argv = { CRATE_PATH_JEXEC, jidStr, CRATE_PATH_ENV };
+  for (const auto &kv : env)
+    argv.push_back(kv.first + "=" + kv.second);
+  for (const auto &a : compArgv)
+    argv.push_back(a);
+
+  if (logProgress)
+    std::cerr << rang::fg::gray << "gui.compositor: starting '" << spec.guiOptions->compositor
+              << "' in jail " << jidStr << " (backend=" << CompositorPure::backendName(backend)
+              << ", renderer=" << (gpuAccel ? "gles2" : "pixman") << ")"
+              << rang::style::reset << std::endl;
+
+  pid_t compPid = ::fork();
+  if (compPid == 0) {
+    int devnull = ::open("/dev/null", O_RDWR);
+    if (devnull >= 0) {
+      ::dup2(devnull, STDIN_FILENO);   // leave stdout/stderr for compositor logs
+      ::close(devnull);
+    }
+    std::vector<const char*> cargv;
+    for (auto &a : argv) cargv.push_back(a.c_str());
+    cargv.push_back(nullptr);
+    ::execv(CRATE_PATH_JEXEC, const_cast<char* const*>(cargv.data()));
+    ::_exit(127);
+  }
+  if (compPid == -1)
+    ERR("failed to fork compositor (jexec): " << strerror(errno))
+
+  // Headless backend: expose the offscreen output over VNC via wayvnc
+  // inside the jail (wayvnc speaks VNC directly — no x11vnc/X server).
+  pid_t wayvncPid = -1;
+  unsigned vncPort = 0;
+  if (backend == Backend::Headless && spec.guiOptions->vnc) {
+    vncPort = (spec.guiOptions->vncPort != 0) ? spec.guiOptions->vncPort : 5900;
+
+    // Wait (≤5s) for the compositor to create its wayland socket so
+    // wayvnc doesn't race ahead and fail to connect.
+    std::string sockPath = J(runtimeDir) + "/" + CompositorPure::defaultWaylandSocket();
+    for (int i = 0; i < 100; i++) {
+      if (Util::Fs::fileExists(sockPath)) break;
+      ::usleep(50000);
+    }
+
+    std::vector<std::string> wv = {
+      CRATE_PATH_JEXEC, jidStr, CRATE_PATH_ENV,
+      std::string("XDG_RUNTIME_DIR=") + runtimeDir,
+      std::string("WAYLAND_DISPLAY=") + CompositorPure::defaultWaylandSocket(),
+      CRATE_PATH_WAYVNC,
+    };
+    for (const auto &a : CompositorPure::wayvncArgs("0.0.0.0", vncPort))
+      wv.push_back(a);
+
+    if (logProgress)
+      std::cerr << rang::fg::gray << "gui.compositor: starting wayvnc on port "
+                << vncPort << " in jail " << jidStr << rang::style::reset << std::endl;
+
+    wayvncPid = ::fork();
+    if (wayvncPid == 0) {
+      std::vector<const char*> wargv;
+      for (auto &a : wv) wargv.push_back(a.c_str());
+      wargv.push_back(nullptr);
+      ::execv(CRATE_PATH_JEXEC, const_cast<char* const*>(wargv.data()));
+      ::_exit(127);
+    }
+  }
+
+  {
+    auto regW = Ctx::GuiRegistry::lock();
+    Ctx::GuiEntry entry;
+    entry.ownerPid = ::getpid();
+    entry.displayNum = 0;
+    entry.xServerPid = compPid;
+    entry.vncPort = vncPort;
+    entry.wsPort = 0;
+    entry.mode = "compositor";
+    entry.jailName = jailXname;
+    regW->registerEntry(entry);
+    regW->unlock();
+  }
+
+  if (vncPort != 0)
+    std::cerr << rang::fg::cyan << "compositor VNC available on port " << vncPort
+              << rang::style::reset << std::endl;
+
+  auto ownerPid = ::getpid();
+  return RunAtEnd([compPid, wayvncPid, ownerPid, logProgress]() {
+    try {
+      auto reg = Ctx::GuiRegistry::lock();
+      reg->unregisterEntry(ownerPid);
+      reg->unlock();
+    } catch (...) {}
+    if (wayvncPid > 0) {
+      ::kill(wayvncPid, SIGTERM);
+      int status; ::waitpid(wayvncPid, &status, 0);
+    }
+    if (logProgress)
+      std::cerr << rang::fg::gray << "killing compositor pid=" << compPid
+                << rang::style::reset << std::endl;
+    ::kill(compPid, SIGTERM);
+    int status; ::waitpid(compPid, &status, 0);
+  });
 }
 
 void copyX11Auth(const Spec &spec, const std::string &jailPath,

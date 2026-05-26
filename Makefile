@@ -12,6 +12,7 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/create.cpp lib/run.cpp \
            lib/snapshot.cpp lib/config.cpp \
            lib/scripts_pure.cpp lib/run_pure.cpp lib/autoname_pure.cpp \
            lib/auth_pure.cpp lib/list_pure.cpp lib/run_gui_pure.cpp \
+           lib/compositor_pure.cpp \
            lib/snapshot_pure.cpp lib/crypto_pure.cpp lib/log_pure.cpp \
            lib/sign_pure.cpp lib/audit.cpp lib/audit_pure.cpp \
            lib/pool_pure.cpp lib/warm_pure.cpp lib/warm.cpp \
@@ -220,6 +221,7 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              scripts_test adversarial_test spec_validate_test \
              validate_pure_test run_pure_test autoname_test \
              auth_pure_test list_pure_test run_gui_pure_test \
+             compositor_pure_test \
              snapshot_pure_test crypto_pure_test log_pure_test \
              sign_pure_test audit_pure_test share_pure_test \
              routes_pure_test top_pure_test bridge_pure_test \
@@ -273,6 +275,7 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  lib/scripts_pure.cpp lib/validate_pure.cpp \
                  lib/run_pure.cpp lib/autoname_pure.cpp \
                  lib/auth_pure.cpp lib/list_pure.cpp lib/run_gui_pure.cpp \
+                 lib/compositor_pure.cpp \
                  lib/snapshot_pure.cpp lib/crypto_pure.cpp lib/log_pure.cpp \
                  lib/sign_pure.cpp lib/audit_pure.cpp lib/pool_pure.cpp \
                  lib/warm_pure.cpp lib/retune_pure.cpp \

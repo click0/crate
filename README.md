@@ -361,6 +361,36 @@ crate run -f firefox-headless.crate &
 crate gui url firefox    # prints noVNC URL for browser access
 ```
 
+### Wayland compositor inside a jail (`gui.mode: compositor`)
+
+Unlike `gui.mode: wayland` (which binds the **host** compositor's
+socket so an in-jail client can connect to it), `gui.mode: compositor`
+runs a full Wayland compositor — sway, weston, cage, labwc, … —
+**inside** the jail. The compositor command is whatever you put in
+`gui.compositor`. Two backends:
+
+| `gui.backend` | What it does | Devices exposed | Safety |
+|---|---|---|---|
+| `headless` (default) | `WLR_BACKEND=headless`, renders offscreen, exposed over VNC via `wayvnc` | `/dev/dri/*` only if a render node exists (GPU accel) | Safe — no input devices, no host-display conflict |
+| `drm` | `WLR_BACKEND=drm`, drives the physical GPU + input directly via `seatd` | `/dev/dri/*` **and** `/dev/input/*` | ⚠️ The jail effectively owns the screen and can read all input — see the trust-model doc |
+
+```yaml
+# Headless sway, viewable over VNC
+pkg:
+    install: [sway, wayvnc]
+options: [net]
+gui:
+    mode: compositor
+    backend: headless        # default; omit for the same effect
+    compositor: sway         # or "cage firefox", "weston", "labwc"
+    vnc: true                # start wayvnc on 5900 (override with vnc_port)
+```
+
+The `drm` backend additionally requires `seatd` reachable on the host
+(`service seatd onestart`) or running inside the jail. Because it
+exposes `/dev/input/*`, it is opt-in and documented as a privilege
+surface in [docs/trust-model.md](docs/trust-model.md).
+
 ### Network Modes
 
 ```yaml
@@ -534,7 +564,7 @@ Top-level keys supported in `.crate` / `.yml` spec files:
 | `dns_filter` | DNS filtering (allow, block, redirect_blocked) |
 | `firewall` | Per-container pf policy (block_ip, allow_tcp/udp, default) |
 | `x11` | X11 display (mode: nested/shared/none, resolution, clipboard) |
-| `gui` | GUI session (mode: nested/headless/gpu/auto, vnc, novnc, resolution) |
+| `gui` | GUI session (mode: nested/headless/gpu/auto/wayland/compositor, backend, compositor, vnc, novnc, resolution) |
 | `clipboard` | Clipboard isolation (mode: isolated/shared/none, direction) |
 | `dbus` | D-Bus policy (system, session, policy/allow_own/deny_send) |
 | `services` | Managed services (managed list, auto_start) |

@@ -288,6 +288,25 @@ broker rather than handing operators raw privops-socket access.
   enforced adversarial isolation (pool-ACL'd Plane 2) are different
   guarantees — don't conflate them.
 
+### GUI device exposure (`gui.mode: compositor`)
+
+Running a Wayland compositor inside a jail can expose host device
+nodes that the default devfs ruleset hides:
+
+- **`gui.backend: headless`** (default) — renders offscreen and is
+  surfaced over VNC (`wayvnc`). It exposes **no input devices**; it
+  touches `/dev/dri/*` only when a render node is present (GPU
+  acceleration). Safe to hand to a semi-trusted workload.
+- **`gui.backend: drm`** — the jail drives the physical GPU and input
+  directly. crate unhides **`/dev/dri/*` and `/dev/input/*`** in the
+  jail's devfs view and binds the host `seatd` socket. This is a real
+  privilege surface: a process in such a jail can read **all** input
+  events host-wide (every keystroke, every pointer event) and talk to
+  the GPU at the KMS level. Treat a `drm`-backend jail as part of the
+  host's trusted display domain — **do not** grant it to a
+  mutually-distrusting tenant. It is opt-in precisely because the
+  default (`headless`) avoids this exposure.
+
 ---
 
 ## See also

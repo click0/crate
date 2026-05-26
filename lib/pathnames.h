@@ -51,6 +51,9 @@
 
 // --- FreeBSD base system: /usr/bin ---
 
+#ifndef CRATE_PATH_ENV
+#define CRATE_PATH_ENV        "/usr/bin/env"
+#endif
 #ifndef CRATE_PATH_XZ
 #define CRATE_PATH_XZ         "/usr/bin/xz"
 #endif
@@ -140,6 +143,9 @@
 #endif
 #ifndef CRATE_PATH_WEBSOCKIFY
 #define CRATE_PATH_WEBSOCKIFY "/usr/local/bin/websockify"
+#endif
+#ifndef CRATE_PATH_WAYVNC
+#define CRATE_PATH_WAYVNC     "/usr/local/bin/wayvnc"
 #endif
 #ifndef CRATE_PATH_SOCAT
 #define CRATE_PATH_SOCAT      "/usr/local/bin/socat"
