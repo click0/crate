@@ -134,6 +134,43 @@ ATF_TEST_CASE_BODY(cmd_shell_metacharacters_rejected) {
   }
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(cmd_control_characters_rejected);
+ATF_TEST_CASE_BODY(cmd_control_characters_rejected) {
+  std::vector<std::string> argv; std::string err;
+  // Control bytes must not survive into argv (terminal-escape injection
+  // when the command is echoed to logs / ps). ESC, BS, DEL, NUL, and a
+  // C1-ish low byte. Each must fail closed.
+  const std::string bad[] = {
+    std::string("sway\x1b[2J"),                 // ESC
+    std::string("sway\x1b]0;pwned\x07"),         // ESC OSC + BEL
+    std::string("sway\bfoo"),                    // backspace
+    std::string("sway\x7f"),                     // DEL
+    std::string("sway\x01"),                     // SOH
+    std::string("good\x1b" "bad"),               // valid token before the ESC (split: \x is greedy)
+  };
+  for (const auto &b : bad) {
+    argv = {"stale"}; err.clear();
+    ATF_REQUIRE(!parseCompositorCommand(b, argv, err));
+    ATF_REQUIRE(!err.empty());
+    ATF_REQUIRE(argv.empty());          // fail-closed even after a good token
+  }
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(cmd_lone_metachar_token_fails_closed);
+ATF_TEST_CASE_BODY(cmd_lone_metachar_token_fails_closed) {
+  std::vector<std::string> argv; std::string err;
+  // A good token already pushed, then a bare metacharacter token: argv
+  // must be cleared, not left holding {"sway"}.
+  argv = {"stale"}; err.clear();
+  ATF_REQUIRE(!parseCompositorCommand("sway ; rm", argv, err));
+  ATF_REQUIRE(argv.empty());
+  // Leading/trailing dashes are ordinary tokens, not flags to reject.
+  argv.clear(); err.clear();
+  ATF_REQUIRE(parseCompositorCommand("sway -- --unsupported-gpu", argv, err));
+  ATF_REQUIRE_EQ(3u, argv.size());
+  ATF_REQUIRE_EQ("--", argv[1]);
+}
+
 // --- requiredDevfsUnhide ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(devfs_headless_software_needs_nothing);
@@ -196,6 +233,11 @@ ATF_TEST_CASE_BODY(env_headless_gpu_renderer) {
   auto e = composeEnv(Backend::Headless, "/tmp/wayland", "", /*gpuAccel=*/true);
   ATF_REQUIRE(envHas(e, "WLR_BACKEND", "headless"));
   ATF_REQUIRE(envHas(e, "WLR_RENDERER", "gles2"));
+  // GPU accel must NOT drop the headless-only knobs — without
+  // WLR_LIBINPUT_NO_DEVICES wlroots probes libinput and needs
+  // /dev/input, which the headless backend deliberately never unhides.
+  ATF_REQUIRE(envHas(e, "WLR_HEADLESS_OUTPUTS", "1"));
+  ATF_REQUIRE(envHas(e, "WLR_LIBINPUT_NO_DEVICES", "1"));
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(env_drm_with_seatd_socket);
@@ -241,6 +283,8 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, cmd_multi_token_and_whitespace);
   ATF_ADD_TEST_CASE(tcs, cmd_empty_or_blank_rejected);
   ATF_ADD_TEST_CASE(tcs, cmd_shell_metacharacters_rejected);
+  ATF_ADD_TEST_CASE(tcs, cmd_control_characters_rejected);
+  ATF_ADD_TEST_CASE(tcs, cmd_lone_metachar_token_fails_closed);
   ATF_ADD_TEST_CASE(tcs, devfs_headless_software_needs_nothing);
   ATF_ADD_TEST_CASE(tcs, devfs_headless_gpu_needs_dri_only);
   ATF_ADD_TEST_CASE(tcs, devfs_drm_needs_dri_and_input);

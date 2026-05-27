@@ -1113,6 +1113,16 @@ RunAtEnd setupCompositor(const Spec &spec, const std::string &jailPath,
       ::execv(CRATE_PATH_JEXEC, const_cast<char* const*>(wargv.data()));
       ::_exit(127);
     }
+    if (wayvncPid == -1) {
+      // Don't advertise/register a VNC port nothing is serving. The
+      // compositor itself is already running, so this is a warning,
+      // not a fatal error.
+      std::cerr << rang::fg::yellow
+                << "gui.compositor: failed to fork wayvnc (" << strerror(errno)
+                << ") — compositor is running but VNC is unavailable"
+                << rang::style::reset << std::endl;
+      vncPort = 0;
+    }
   }
 
   {

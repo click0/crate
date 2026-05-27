@@ -1941,6 +1941,12 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // release resources (order matters — reverse of creation)
   killClipboardProxy.doNow();
+  // Stop the in-jail compositor (+ wayvnc) and drop its registry entry
+  // BEFORE destroyJail/unmounts, so the processes are gone before their
+  // jail and the bound seatd socket disappear (mirrors the other GUI
+  // helpers, which are explicitly torn down here rather than at scope
+  // exit).
+  killCompositorAtEnd.doNow();
   if (!spec.limits.empty())
     removeRctlRules.doNow();
   if (!spec.zfsDatasets.empty())
