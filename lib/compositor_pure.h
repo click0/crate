@@ -91,4 +91,20 @@ composeEnv(Backend b, const std::string &runtimeDir,
 //   wayvnc <host> <port>
 std::vector<std::string> wayvncArgs(const std::string &host, unsigned port);
 
+// Resolve the address wayvnc should bind to inside the jail.
+//   requested == "" -> "127.0.0.1" (secure default: loopback only — the
+//                      VNC stream is unauthenticated, so don't expose it
+//                      on every jail address by default).
+//   otherwise       -> the requested value, after validation.
+// Validation: the value is passed to wayvnc as a bare argv token (exec,
+// no shell), so it must look like an address/hostname — [A-Za-z0-9.:_-],
+// non-empty, <=255 chars. Anything else (whitespace, shell metachars,
+// control bytes) is rejected with `err` set, and `out` is left empty.
+bool resolveVncBind(const std::string &requested, std::string &out, std::string &err);
+
+// True when a resolved bind address exposes VNC beyond the loopback
+// (i.e. is NOT 127.0.0.1 / ::1 / localhost). Callers warn on this when
+// no authentication is configured.
+bool vncBindIsPublic(const std::string &bind);
+
 } // namespace CompositorPure

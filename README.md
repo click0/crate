@@ -384,7 +384,15 @@ gui:
     backend: headless        # default; omit for the same effect
     compositor: sway         # or "cage firefox", "weston", "labwc"
     vnc: true                # start wayvnc on 5900 (override with vnc_port)
+    # vnc_bind: 0.0.0.0      # default 127.0.0.1 (loopback-only)
 ```
+
+`wayvnc` serves an **unauthenticated** VNC stream, so it binds to
+`127.0.0.1` by default — reach it over an SSH tunnel. To expose it on
+the network, set `gui.vnc_bind` explicitly (e.g. `0.0.0.0` or a jail
+address); crate prints a warning when you do, and you should restrict
+access at the firewall. (Built-in wayvnc authentication is tracked as a
+follow-up — see the issue linked from the PR.)
 
 The `drm` backend additionally requires `seatd` reachable on the host
 (`service seatd onestart`) or running inside the jail. Because it

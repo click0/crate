@@ -16,7 +16,9 @@ using CompositorPure::needsSeatd;
 using CompositorPure::parseBackend;
 using CompositorPure::parseCompositorCommand;
 using CompositorPure::requiredDevfsUnhide;
+using CompositorPure::resolveVncBind;
 using CompositorPure::seatdSocketCandidates;
+using CompositorPure::vncBindIsPublic;
 using CompositorPure::wayvncArgs;
 
 namespace {
@@ -275,6 +277,47 @@ ATF_TEST_CASE_BODY(default_wayland_socket_is_zero) {
   ATF_REQUIRE(std::string(defaultWaylandSocket()) == "wayland-0");
 }
 
+// --- resolveVncBind / vncBindIsPublic ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(vnc_bind_defaults_to_loopback);
+ATF_TEST_CASE_BODY(vnc_bind_defaults_to_loopback) {
+  std::string out, err;
+  ATF_REQUIRE(resolveVncBind("", out, err));
+  ATF_REQUIRE_EQ("127.0.0.1", out);    // unauthenticated stream -> loopback default
+  ATF_REQUIRE(err.empty());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(vnc_bind_accepts_valid_addresses);
+ATF_TEST_CASE_BODY(vnc_bind_accepts_valid_addresses) {
+  std::string out, err;
+  for (const char *addr : {"0.0.0.0", "192.168.1.5", "::1", "::", "localhost", "10.0.0.1"}) {
+    out.clear(); err.clear();
+    ATF_REQUIRE(resolveVncBind(addr, out, err));
+    ATF_REQUIRE_EQ(std::string(addr), out);
+  }
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(vnc_bind_rejects_injection);
+ATF_TEST_CASE_BODY(vnc_bind_rejects_injection) {
+  std::string out, err;
+  for (const char *bad : {"bad host", "$(reboot)", "1.2.3.4;rm", "a|b", "addr\n", "x`y`"}) {
+    out = "stale"; err.clear();
+    ATF_REQUIRE(!resolveVncBind(bad, out, err));
+    ATF_REQUIRE(!err.empty());
+    ATF_REQUIRE(out.empty());
+  }
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(vnc_bind_public_classification);
+ATF_TEST_CASE_BODY(vnc_bind_public_classification) {
+  ATF_REQUIRE(!vncBindIsPublic("127.0.0.1"));
+  ATF_REQUIRE(!vncBindIsPublic("::1"));
+  ATF_REQUIRE(!vncBindIsPublic("localhost"));
+  ATF_REQUIRE(vncBindIsPublic("0.0.0.0"));
+  ATF_REQUIRE(vncBindIsPublic("192.168.1.5"));
+  ATF_REQUIRE(vncBindIsPublic("::"));
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, backend_parse_defaults_and_known);
   ATF_ADD_TEST_CASE(tcs, backend_parse_rejects_unknown_and_case);
@@ -296,4 +339,8 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, env_drm_without_seatd_socket_omits_seat_vars);
   ATF_ADD_TEST_CASE(tcs, wayvnc_args_shape);
   ATF_ADD_TEST_CASE(tcs, default_wayland_socket_is_zero);
+  ATF_ADD_TEST_CASE(tcs, vnc_bind_defaults_to_loopback);
+  ATF_ADD_TEST_CASE(tcs, vnc_bind_accepts_valid_addresses);
+  ATF_ADD_TEST_CASE(tcs, vnc_bind_rejects_injection);
+  ATF_ADD_TEST_CASE(tcs, vnc_bind_public_classification);
 }

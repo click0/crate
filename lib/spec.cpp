@@ -1177,6 +1177,8 @@ static Spec parseSpecFromNode(YAML::Node top) {
             ERR("gui/backend must be 'headless' or 'drm'")
         } else if (isKey(b, "compositor")) {
           scalar(b.second, spec.guiOptions->compositor, "gui/compositor");
+        } else if (isKey(b, "vnc_bind") || isKey(b, "vnc-bind")) {
+          scalar(b.second, spec.guiOptions->vncBind, "gui/vnc_bind");
         } else if (isKey(b, "resolution")) {
           scalar(b.second, spec.guiOptions->resolution, "gui/resolution");
         } else if (isKey(b, "vnc")) {
@@ -1220,11 +1222,17 @@ static Spec parseSpecFromNode(YAML::Node top) {
         std::vector<std::string> compArgv; std::string compErr;
         if (!CompositorPure::parseCompositorCommand(spec.guiOptions->compositor, compArgv, compErr))
           ERR("gui/compositor: " << compErr)
+        // Validate the wayvnc bind address (defaults to loopback) early.
+        std::string vncBindOut, vncBindErr;
+        if (!CompositorPure::resolveVncBind(spec.guiOptions->vncBind, vncBindOut, vncBindErr))
+          ERR("gui/vnc_bind: " << vncBindErr)
       }
       if (spec.guiOptions->mode != "compositor" && !spec.guiOptions->compositor.empty())
         ERR("gui/compositor is only valid with gui/mode=compositor")
       if (!spec.guiOptions->backend.empty() && spec.guiOptions->mode != "compositor")
         ERR("gui/backend is only valid with gui/mode=compositor")
+      if (!spec.guiOptions->vncBind.empty() && spec.guiOptions->mode != "compositor")
+        ERR("gui/vnc_bind is only valid with gui/mode=compositor")
     } else if (isKey(k, "healthcheck")) {
       spec.healthcheck = std::make_unique<Spec::Healthcheck>();
       if (k.second.IsScalar()) {

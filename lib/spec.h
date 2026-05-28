@@ -267,6 +267,7 @@ public:
     // mode == "compositor": run a Wayland compositor *inside* the jail.
     std::string backend;                   // "" / "headless" (default) / "drm" — see CompositorPure::Backend
     std::string compositor;                // command to run as the compositor, e.g. "sway", "cage firefox"
+    std::string vncBind;                   // wayvnc bind address; "" = 127.0.0.1 (loopback-only, secure default)
   };
   std::unique_ptr<GuiOptions>                        guiOptions;
 

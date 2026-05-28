@@ -31,14 +31,20 @@ compositor.
 
 ### What's wired
 
-- New spec keys `gui.backend` and `gui.compositor`, plus `compositor`
-  added to the `gui.mode` enum (`lib/spec.{h,cpp}`), with fail-closed
-  validation (compositor required; backend ∈ {headless, drm}).
+- New spec keys `gui.backend`, `gui.compositor`, and `gui.vnc_bind`,
+  plus `compositor` added to the `gui.mode` enum (`lib/spec.{h,cpp}`),
+  with fail-closed validation (compositor required; backend ∈ {headless,
+  drm}; vnc_bind validated as an address/hostname).
 - New pure module `lib/compositor_pure.{h,cpp}`: command-string parsing
-  (rejects shell metacharacters since we exec without a shell), backend
-  parsing, devfs-unhide pattern selection, seatd need/socket candidates,
-  and compositor environment composition (`WLR_BACKEND`/`WLR_RENDERER`/
-  `LIBSEAT_BACKEND`/`SEATD_SOCK`/…). 18 new `compositor_pure_test` cases.
+  (rejects shell metacharacters and control bytes since we exec without
+  a shell), backend parsing, devfs-unhide pattern selection, seatd
+  need/socket candidates, compositor environment composition
+  (`WLR_BACKEND`/`WLR_RENDERER`/`LIBSEAT_BACKEND`/`SEATD_SOCK`/…), and
+  wayvnc bind resolution. 24 `compositor_pure_test` cases.
+- VNC exposure is loopback-only by default: `wayvnc` serves an
+  unauthenticated stream, so it binds `127.0.0.1` unless `gui.vnc_bind`
+  is set (which emits an operator warning). Built-in wayvnc auth is a
+  tracked follow-up.
 - `lib/run.cpp` extends the GPU auto-unhide to the compositor mode
   (adding `/dev/input/*` for the drm backend, via the existing
   `add_devfs_unhide_rule` privops verb — no new verb).

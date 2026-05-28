@@ -1084,6 +1084,21 @@ RunAtEnd setupCompositor(const Spec &spec, const std::string &jailPath,
   if (backend == Backend::Headless && spec.guiOptions->vnc) {
     vncPort = (spec.guiOptions->vncPort != 0) ? spec.guiOptions->vncPort : 5900;
 
+    // wayvnc serves an UNAUTHENTICATED VNC stream, so default to a
+    // loopback-only bind (gui.vnc_bind == "" -> 127.0.0.1). Operators
+    // who deliberately want it reachable set gui.vnc_bind (e.g.
+    // "0.0.0.0" or a specific jail address) and own that exposure.
+    std::string vncBind, vncBindErr;
+    if (!CompositorPure::resolveVncBind(spec.guiOptions->vncBind, vncBind, vncBindErr))
+      ERR("gui.vnc_bind: " << vncBindErr)
+    if (CompositorPure::vncBindIsPublic(vncBind))
+      std::cerr << rang::fg::yellow
+                << "gui.compositor: wayvnc bound to " << vncBind
+                << " with no authentication — the VNC stream is reachable "
+                   "beyond loopback. Prefer the default (127.0.0.1) + an SSH "
+                   "tunnel, or restrict access at the firewall."
+                << rang::style::reset << std::endl;
+
     // Wait (≤5s) for the compositor to create its wayland socket so
     // wayvnc doesn't race ahead and fail to connect.
     std::string sockPath = J(runtimeDir) + "/" + CompositorPure::defaultWaylandSocket();
@@ -1098,7 +1113,7 @@ RunAtEnd setupCompositor(const Spec &spec, const std::string &jailPath,
       std::string("WAYLAND_DISPLAY=") + CompositorPure::defaultWaylandSocket(),
       CRATE_PATH_WAYVNC,
     };
-    for (const auto &a : CompositorPure::wayvncArgs("0.0.0.0", vncPort))
+    for (const auto &a : CompositorPure::wayvncArgs(vncBind, vncPort))
       wv.push_back(a);
 
     if (logProgress)

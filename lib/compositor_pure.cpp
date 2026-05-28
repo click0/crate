@@ -125,4 +125,34 @@ std::vector<std::string> wayvncArgs(const std::string &host, unsigned port) {
   return {host, std::to_string(port)};
 }
 
+bool resolveVncBind(const std::string &requested, std::string &out, std::string &err) {
+  out.clear();
+  err.clear();
+  if (requested.empty()) {           // secure default: loopback only
+    out = "127.0.0.1";
+    return true;
+  }
+  if (requested.size() > 255) {
+    err = "gui.vnc_bind is too long";
+    return false;
+  }
+  for (char c : requested) {
+    const bool ok = (c >= '0' && c <= '9') ||
+                    (c >= 'A' && c <= 'Z') ||
+                    (c >= 'a' && c <= 'z') ||
+                    c == '.' || c == ':' || c == '-' || c == '_';
+    if (!ok) {
+      err = "gui.vnc_bind must be an address or hostname "
+            "([A-Za-z0-9.:_-]); got an unsupported character";
+      return false;
+    }
+  }
+  out = requested;
+  return true;
+}
+
+bool vncBindIsPublic(const std::string &bind) {
+  return !(bind == "127.0.0.1" || bind == "::1" || bind == "localhost");
+}
+
 } // namespace CompositorPure
