@@ -391,8 +391,8 @@ gui:
 `127.0.0.1` by default — reach it over an SSH tunnel. To expose it on
 the network, set `gui.vnc_bind` explicitly (e.g. `0.0.0.0` or a jail
 address); crate prints a warning when you do, and you should restrict
-access at the firewall. (Built-in wayvnc authentication is tracked as a
-follow-up — see the issue linked from the PR.)
+access at the firewall. (Built-in wayvnc authentication is a planned
+follow-up.)
 
 The `drm` backend additionally requires `seatd` reachable on the host
 (`service seatd onestart`) or running inside the jail. Because it
