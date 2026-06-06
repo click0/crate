@@ -35,6 +35,7 @@
 #include "run_net.h"
 #include "run_jail.h"
 #include "run_gui.h"
+#include "compositor_pure.h"
 #include "run_services.h"
 #include "pfctl_ops.h"
 #include "privops_client.h"
@@ -836,6 +837,58 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       LOG("auto-gui: GPU mode requested but /dev/dri/card0 absent "
           "on host — skipping devfs unhide (jail will fall back to "
           "software rendering)")
+    }
+  }
+
+  // gui.mode: compositor — a Wayland compositor runs *inside* the jail
+  // and needs device nodes the default ruleset hides: /dev/dri/* for
+  // GPU/KMS and (drm backend only) /dev/input/* for keyboard/mouse.
+  // The exact set is decided by CompositorPure::requiredDevfsUnhide
+  // (headless+software needs nothing). Exposing /dev/input/* is a real
+  // privilege grant — it is opt-in via gui.backend: drm and surfaced in
+  // the trust-model docs.
+  if (spec.guiOptions && spec.guiOptions->mode == "compositor") {
+    CompositorPure::Backend cbk;
+    if (!CompositorPure::parseBackend(spec.guiOptions->backend, cbk))
+      ERR("gui.backend: unknown backend '" << spec.guiOptions->backend << "'")
+    struct stat st{};
+    bool gpuAccel = (::stat("/dev/dri/renderD128", &st) == 0) ||
+                    (::stat("/dev/dri/card0", &st) == 0);
+    auto patterns = CompositorPure::requiredDevfsUnhide(cbk, gpuAccel);
+    if (!patterns.empty()) {
+      try {
+        std::string devMount = J("/dev");
+        std::string sock = PrivOpsClient::detectSocketPath();
+        for (const auto &pat : patterns) {
+          if (!sock.empty()) {
+            auto resp = PrivOpsClient::sendRequest(sock,
+                PrivOpsClient::buildAddDevfsUnhideRule(devMount, pat));
+            if (!resp.transportError.empty())
+              ERR("privops add_devfs_unhide_rule '" << pat
+                  << "' transport error: " << resp.transportError)
+            if (resp.status >= 400)
+              ERR("privops add_devfs_unhide_rule '" << pat
+                  << "' failed (status " << resp.status << "): " << resp.body)
+          } else {
+            Util::execCommand(
+              {CRATE_PATH_DEVFS, "-m", devMount, "rule", "add",
+               "path", pat, "unhide"},
+              STR("gui.compositor: unhide /dev/" << pat));
+          }
+        }
+        if (sock.empty())
+          Util::execCommand(
+            {CRATE_PATH_DEVFS, "-m", devMount, "rule", "applyset"},
+            "gui.compositor: applyset for devfs unhide");
+        LOG("gui.compositor: devfs unhidden in jail's /dev view (backend '"
+            << CompositorPure::backendName(cbk) << "')")
+      } catch (const std::exception &ex) {
+        std::cerr << rang::fg::yellow
+                  << "gui.compositor: devfs unhide failed: " << ex.what()
+                  << " — the compositor may fail to open its devices; add a "
+                     "custom devfs_ruleset manually if needed"
+                  << rang::style::reset << std::endl;
+      }
     }
   }
 
@@ -1786,6 +1839,13 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // Clipboard proxy daemon (§12)
   RunAtEnd killClipboardProxy = RunGui::setupClipboard(spec, jailXname, jidStr, args.logProgress);
 
+  // gui.mode: compositor — launch a Wayland compositor inside the jail
+  // (post-jail: needs jid; runs before the jail command so XDG_RUNTIME_DIR
+  // / WAYLAND_DISPLAY are set in jailEnv below and the compositor socket
+  // exists when the command connects).
+  RunAtEnd killCompositorAtEnd =
+    RunGui::setupCompositor(spec, jailPath, jailXname, jidStr, mounts, setJailEnv, args.logProgress);
+
   // run the process
   runScript("run:before-execute");
   int returnCode = 0;
@@ -1881,6 +1941,12 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // release resources (order matters — reverse of creation)
   killClipboardProxy.doNow();
+  // Stop the in-jail compositor (+ wayvnc) and drop its registry entry
+  // BEFORE destroyJail/unmounts, so the processes are gone before their
+  // jail and the bound seatd socket disappear (mirrors the other GUI
+  // helpers, which are explicitly torn down here rather than at scope
+  // exit).
+  killCompositorAtEnd.doNow();
   if (!spec.limits.empty())
     removeRctlRules.doNow();
   if (!spec.zfsDatasets.empty())

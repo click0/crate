@@ -3,6 +3,7 @@
 
 #include "spec.h"
 #include "spec_pure.h"
+#include "compositor_pure.h"
 #include "config.h"
 #include "util.h"
 #include "err.h"
@@ -1167,8 +1168,17 @@ static Spec parseSpecFromNode(YAML::Node top) {
           scalar(b.second, spec.guiOptions->mode, "gui/mode");
           if (spec.guiOptions->mode != "nested" && spec.guiOptions->mode != "headless"
               && spec.guiOptions->mode != "gpu" && spec.guiOptions->mode != "auto"
-              && spec.guiOptions->mode != "wayland")
-            ERR("gui/mode must be 'nested', 'headless', 'gpu', 'auto', or 'wayland'")
+              && spec.guiOptions->mode != "wayland" && spec.guiOptions->mode != "compositor")
+            ERR("gui/mode must be 'nested', 'headless', 'gpu', 'auto', 'wayland', or 'compositor'")
+        } else if (isKey(b, "backend")) {
+          scalar(b.second, spec.guiOptions->backend, "gui/backend");
+          if (!spec.guiOptions->backend.empty()
+              && spec.guiOptions->backend != "headless" && spec.guiOptions->backend != "drm")
+            ERR("gui/backend must be 'headless' or 'drm'")
+        } else if (isKey(b, "compositor")) {
+          scalar(b.second, spec.guiOptions->compositor, "gui/compositor");
+        } else if (isKey(b, "vnc_bind") || isKey(b, "vnc-bind")) {
+          scalar(b.second, spec.guiOptions->vncBind, "gui/vnc_bind");
         } else if (isKey(b, "resolution")) {
           scalar(b.second, spec.guiOptions->resolution, "gui/resolution");
         } else if (isKey(b, "vnc")) {
@@ -1202,6 +1212,27 @@ static Spec parseSpecFromNode(YAML::Node top) {
           ERR("unknown element gui/" << b.first << " in spec")
         }
       }
+      // mode: compositor runs a Wayland compositor inside the jail and
+      // therefore needs to know *what* to run; backend defaults to the
+      // safe headless path. Reject the half-configured spec early.
+      if (spec.guiOptions->mode == "compositor" && spec.guiOptions->compositor.empty())
+        ERR("gui/mode=compositor requires gui/compositor (the command to run, e.g. 'sway')")
+      if (spec.guiOptions->mode == "compositor") {
+        // Catch shell-metacharacter misuse at validate time, not run time.
+        std::vector<std::string> compArgv; std::string compErr;
+        if (!CompositorPure::parseCompositorCommand(spec.guiOptions->compositor, compArgv, compErr))
+          ERR("gui/compositor: " << compErr)
+        // Validate the wayvnc bind address (defaults to loopback) early.
+        std::string vncBindOut, vncBindErr;
+        if (!CompositorPure::resolveVncBind(spec.guiOptions->vncBind, vncBindOut, vncBindErr))
+          ERR("gui/vnc_bind: " << vncBindErr)
+      }
+      if (spec.guiOptions->mode != "compositor" && !spec.guiOptions->compositor.empty())
+        ERR("gui/compositor is only valid with gui/mode=compositor")
+      if (!spec.guiOptions->backend.empty() && spec.guiOptions->mode != "compositor")
+        ERR("gui/backend is only valid with gui/mode=compositor")
+      if (!spec.guiOptions->vncBind.empty() && spec.guiOptions->mode != "compositor")
+        ERR("gui/vnc_bind is only valid with gui/mode=compositor")
     } else if (isKey(k, "healthcheck")) {
       spec.healthcheck = std::make_unique<Spec::Healthcheck>();
       if (k.second.IsScalar()) {

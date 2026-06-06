@@ -82,7 +82,10 @@ std::string runCurl(const std::vector<std::string> &args,
 // We don't pull in a JSON parser for this — the format is daemon-
 // controlled and stable.
 std::string extractFileField(const std::string &body) {
-  std::regex re(R"("file"\s*:\s*"([^"]+)")");
+  // R"(...)": empty delimiter terminates at the first `)"` — which is
+  // INSIDE this regex, after [^"]+. Use a non-empty delimiter so the
+  // string literal closes at the right place.
+  std::regex re(R"RX("file"\s*:\s*"([^"]+)")RX");
   std::smatch m;
   if (std::regex_search(body, m, re)) return m[1].str();
   return "";

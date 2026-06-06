@@ -6,6 +6,56 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.12] — 2026-05-26
+
+**Run a Wayland compositor *inside* a jail (`gui.mode: compositor`).**
+Until now crate's Wayland support was client-only: `gui.mode: wayland`
+binds the **host** compositor's socket so an in-jail app can connect
+to it. The new `compositor` mode runs a full wlroots compositor —
+sway, weston, cage, labwc, … — **inside** the jail. The compositor
+command is operator-supplied via `gui.compositor` (a plain command +
+args; no shell features), so the feature is not tied to any single
+compositor.
+
+### Two backends (`gui.backend`)
+
+- **`headless`** (default) — `WLR_BACKEND=headless`, renders offscreen
+  and is exposed over VNC via `wayvnc`. No input devices, no conflict
+  with the host display. Touches `/dev/dri/*` only when a render node
+  exists (GPU acceleration).
+- **`drm`** — `WLR_BACKEND=drm`, the jail drives the physical GPU and
+  input directly through `seatd`. crate unhides `/dev/dri/*` **and**
+  `/dev/input/*` in the jail's devfs view and binds the host seatd
+  socket. This is a real privilege surface (host-wide input visibility)
+  — opt-in, and documented in `docs/trust-model.md`.
+
+### What's wired
+
+- New spec keys `gui.backend`, `gui.compositor`, and `gui.vnc_bind`,
+  plus `compositor` added to the `gui.mode` enum (`lib/spec.{h,cpp}`),
+  with fail-closed validation (compositor required; backend ∈ {headless,
+  drm}; vnc_bind validated as an address/hostname).
+- New pure module `lib/compositor_pure.{h,cpp}`: command-string parsing
+  (rejects shell metacharacters and control bytes since we exec without
+  a shell), backend parsing, devfs-unhide pattern selection, seatd
+  need/socket candidates, compositor environment composition
+  (`WLR_BACKEND`/`WLR_RENDERER`/`LIBSEAT_BACKEND`/`SEATD_SOCK`/…), and
+  wayvnc bind resolution. 24 `compositor_pure_test` cases.
+- VNC exposure is loopback-only by default: `wayvnc` serves an
+  unauthenticated stream, so it binds `127.0.0.1` unless `gui.vnc_bind`
+  is set (which emits an operator warning). Built-in wayvnc auth is a
+  tracked follow-up.
+- `lib/run.cpp` extends the GPU auto-unhide to the compositor mode
+  (adding `/dev/input/*` for the drm backend, via the existing
+  `add_devfs_unhide_rule` privops verb — no new verb).
+- `lib/run_gui.cpp` adds `setupCompositor`, launched post-jail (it needs
+  the jid) which fork+`jexec`s the compositor with the composed env and,
+  for the headless backend, `wayvnc` to expose the output.
+
+Note: the in-jail runtime path (seatd reachability, wayvnc, DRM master)
+needs validation on real FreeBSD hardware; the pure logic and unit
+tests are platform-independent and run in CI.
+
 ## [1.1.11] — 2026-05-18
 
 **Graceful jail stop via new `signal_jail` verb.** Fixes a UX

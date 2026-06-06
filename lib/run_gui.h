@@ -25,6 +25,17 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
 RunAtEnd setupClipboard(const Spec &spec, const std::string &jailXname,
                         const std::string &jidStr, bool logProgress);
 
+// gui.mode: compositor — launch a Wayland compositor *inside* the jail
+// (headless+VNC or DRM/KMS, per gui.backend). Must run after the jail
+// exists (jid known), unlike setupX11 which runs pre-jail. Returns a
+// cleanup callback that tears down the compositor (and wayvnc, if any).
+RunAtEnd setupCompositor(const Spec &spec, const std::string &jailPath,
+                         const std::string &jailXname,
+                         const std::string &jidStr,
+                         std::list<std::unique_ptr<Mount>> &mounts,
+                         std::function<void(const std::string&, const std::string&)> setJailEnv,
+                         bool logProgress);
+
 // Set up D-Bus isolation
 void setupDbus(const Spec &spec, const std::string &jailPath,
                std::function<void(const std::string&, const std::string&)> setJailEnv,

@@ -255,7 +255,7 @@ public:
 
   // GUI session management (§19)
   struct GuiOptions {
-    std::string mode = "nested";           // "nested" (Xephyr), "headless" (Xvfb), "gpu" (Xorg+GPU), "auto"
+    std::string mode = "nested";           // "nested" (Xephyr), "headless" (Xvfb), "gpu" (Xorg+GPU), "auto", "wayland", "compositor"
     std::string resolution = "1280x720";   // display resolution
     bool vnc = false;                      // start a VNC server for headless/gpu mode
     bool vncNative = false;                // 0.8.22: use embedded libvncserver instead of fork+exec x11vnc
@@ -264,6 +264,10 @@ public:
     std::string vncPassword;               // optional VNC password
     std::string gpuDevice;                 // PCI BusID for GPU mode (e.g. "PCI:1:0:0"), empty=auto-detect
     std::string gpuDriver;                 // GPU driver name: "nvidia", "amdgpu", "intel", "dummy" (default: auto)
+    // mode == "compositor": run a Wayland compositor *inside* the jail.
+    std::string backend;                   // "" / "headless" (default) / "drm" — see CompositorPure::Backend
+    std::string compositor;                // command to run as the compositor, e.g. "sway", "cage firefox"
+    std::string vncBind;                   // wayvnc bind address; "" = 127.0.0.1 (loopback-only, secure default)
   };
   std::unique_ptr<GuiOptions>                        guiOptions;
 
