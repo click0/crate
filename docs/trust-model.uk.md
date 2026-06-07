@@ -113,23 +113,27 @@ privileged operations to crated(8)»*).
   `mount_nullfs` / `unmount_nullfs` (за `target`) та
   `apply_devfs_ruleset` / `add_devfs_unhide_rule` (за `mount_path`).
   Шлях, що лежить у jail, який в реєстрі належить іншому оператору,
-  відбивається `403` (`DenyForeignPath`).
+  відбивається `403` (`DenyForeignPath`). 1.1.15 закриває останній
+  вузький залишок: новенький `path`-аргумент `create_jail` зіставляється
+  з пер-user `pathPrefix` викликача (виводиться з `path_master_prefix:`
+  у crated.conf); чужа ціль → `403` (`DenyForeignCreatePath`).
 
 Решта вербів проходить гейт: **host-global** верби
 (iface/pf/ipfw/nat/epair) не можна розпулити — лишаються host-wide за
-задумом; `path`-аргумент `create_jail` — єдиний вузький залишок ще не
-гейтнутий, щоб його закрити, треба per-user path-префікс у
-`PerUserEnvPure::Env` (бо новенький шлях інакше нема з чим порівняти).
-Обробники лишаються uid-сліпими; гейт іде попереду них.
+задумом. З 1.1.12+1.1.13+1.1.14+1.1.15 пер-тенант-гейт покриває
+**кожен** privops-верб, що несе operator-controlled ownership-сигнал у
+запиті. Обробники лишаються uid-сліпими; гейт іде попереду них.
 
 > Наслідок: будь-хто, хто має доступ до privops — `admin` bearer-токен
 > або членство в групі privops-сокета — досі має host-wide контроль над
-> **не-гейтнутою** поверхнею (фаєрвол, інтерфейси, `path`-аргумент
-> `create_jail`). Гейти 1.1.12 + 1.1.13 + 1.1.14 закривають
-> крос-тенантний доступ до ZFS-датасетів, RCTL-umbrella, jid-, name- і
-> path-scoped поверхні на libnv-шляху, але в загальному випадку privops
-> лишається єдиним доменом довіри — видати оператору доступ до privops
-> майже те саме, що видати старий setuid `crate(1)`.
+> **не-гейтнутою** поверхнею (фаєрвол, інтерфейси, інші host-global
+> верби спільного стану). Гейти 1.1.12 + 1.1.13 + 1.1.14 + 1.1.15
+> закривають крос-тенантний доступ до ZFS-датасетів, RCTL-umbrella,
+> jid-, name-, path-scoped та create-jail-path поверхні на libnv-шляху —
+> кожен верб, що несе operator-controlled ownership-сигнал, тепер
+> гейтнутий. Спільні host-global верби лишаються, за задумом, єдиним
+> доменом довіри — для них видати оператору privops все ще близько до
+> видачі старого setuid `crate(1)`.
 
 ### Per-user namespacing — це зручність, а не межа
 
@@ -276,18 +280,24 @@ privops безпечним для **взаємно недовірливих** о
    longest-prefix `byPath`-лукап; шлях у jail, що належить іншому
    uid'ові, відбивається `403` (`DenyForeignPath`); шлях поза будь-яким
    зареєстрованим jail-ом проходить за тією ж bootstrap-поступкою.
-   *Лишилось:* `path`-аргумент `create_jail`. Щоб його заваліджувати,
-   треба per-user path-префікс у `PerUserEnvPure::Env` (конфігурується
-   per-uid у crated.conf) — без цього новенький jail-шлях нема з чим
-   порівняти.
+   *Зроблено (1.1.15):* останній вузький залишок — `path`-аргумент
+   `create_jail`. `PerUserEnvPure::Config` отримав `pathMasterPrefix`
+   (конфіг у crated.conf через `path_master_prefix:`); `composeForUid()`
+   виводить `env.pathPrefix = <master>/<uid>`. Гейт виконує
+   `PrivOpsAuthzPure::pathOwned(req.path, env.pathPrefix)` —
+   slash-anchored prefix-match тієї ж форми, що `datasetOwned` для ZFS.
+   Чужа ціль → `403` (`DenyForeignCreatePath`). Порожній
+   `pathMasterPrefix` зберігає легасі-форму (Allow), щоб існуючим
+   deployment-ам не доводилось переконфігуруватись на апгрейді.
 
 2. **Пер-операторний namespacing — це зручність, а не межа.** Будь-який
    аргумент `path` / `jid` / `dataset`, що перетинає privops-сокет, має
    бути перевиведений або зваліджований **на боці демона** проти
    uid-префікса викликача — ніколи не братись на віру. *Зроблено* для
-   `dataset` (1.1.12), для `jid` / `name` jail-у (1.1.13, через реєстр)
-   та для path-scoped runtime-вербів (1.1.14, longest-prefix `byPath`
-   на тому ж реєстрі). *Лишилось:* path-prefix-перевірка `create_jail`.
+   `dataset` (1.1.12), для `jid` / `name` jail-у (1.1.13, через реєстр),
+   для path-scoped runtime-вербів (1.1.14, longest-prefix `byPath` на
+   тому ж реєстрі) та для новенького шляху `create_jail` (1.1.15,
+   slash-anchored prefix проти `env.pathPrefix`).
 
 3. **Fail closed при втраті ідентичності.** На будь-якому шляху, що
    авторизує, збій `getpeereid` має давати deny. Деградувати до no-op

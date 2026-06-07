@@ -6,6 +6,62 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.15] — 2026-06-07
+
+**Per-tenant authorization for `create_jail`'s `path` argument —
+last narrow item from the 1.1.x trust-model open gap.**
+
+1.1.14 closed the path-scoped runtime verbs (`mount_nullfs`,
+`unmount_nullfs`, the two devfs verbs) against the `JidOwnerRegistry`.
+But `create_jail` still passed the gate because its `path` is brand
+new — there was nothing in the registry to compare it against. A
+hostile operator could create a jail whose path lived inside another
+operator's allowed territory, and from there start using the
+path-scoped verbs against it (1.1.14 would now block those, but the
+foothold was wrong in the first place).
+
+### What's wired
+
+- **`PerUserEnvPure::Config::pathMasterPrefix`** + **`Env::pathPrefix`**
+  — per-user jail-path prefix, composed as `<master>/<uid>` (same
+  shape as the ZFS prefix). Composition strips a trailing slash so
+  operators can write `/jails` or `/jails/`.
+- **`PrivOpsAuthzPure::pathOwned(path, prefix)`** — slash-anchored
+  prefix match, identical body shape to `datasetOwned`.
+- **`authorize(CreateJail, …)`** — runs `pathOwned(req.path,
+  env.pathPrefix)`. Foreign target -> `403 DenyForeignCreatePath`.
+  Empty `pathMasterPrefix` keeps the legacy shape (Allow) — existing
+  deployments don't need to reconfigure on upgrade.
+- **`dispatchPrivOpFromMap`** fills `req.path` from the `"path"`
+  libnv field for the `CreateJail` verb (mount/devfs verbs continue
+  to use `target` / `mount_path` as in 1.1.14).
+- **`daemon/config.{h,cpp}`** parses `path_master_prefix:` (both top-
+  level shorthand and under `rootless:`, mirroring `zfs_master_prefix`).
+- **`daemon/main.cpp`** passes `pathMasterPrefix` into
+  `setPerUserAuthzConfig` so `composeForUid()` sees it on every
+  dispatch.
+
+### Tests
+
+- `per_user_env_pure_test` extended: `pathPrefix` populated in the
+  full-config case, empty in the legacy case, strips trailing slash
+  (`/jails/` → `/jails/<uid>`), composes distinctly per-uid.
+- `privops_authz_pure_test` extended: `pathOwned` prefix/descendant/
+  substring-neighbor/empty cases; `authorize(CreateJail)` inside own
+  prefix, outside the prefix (`DenyForeignCreatePath`), and the
+  unconfigured-split fall-through. `decisionReason` covers the new
+  code.
+- Standalone end-to-end harness exercises composition + the
+  `CreateJail` gate (`1.1.15 CHECKS PASSED`).
+
+### Series complete
+
+With 1.1.12 + 1.1.13 + 1.1.14 + 1.1.15, **every** privops verb that
+carries an operator-controlled ownership signal in its request is
+gated. The remaining ungated verbs (interface / pf / ipfw / nat /
+epair) are host-global by design — they touch shared state and can't
+be pool-scoped. `docs/trust-model.{md,uk.md}` updated accordingly.
+
 ## [1.1.14] — 2026-06-07
 
 **Per-tenant authorization for path-scoped privops verbs.** Continues

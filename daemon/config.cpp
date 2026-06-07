@@ -149,6 +149,8 @@ Config Config::load(const std::string &path) {
       cfg.rootlessPerUser = rl["per_user"].as<bool>();
     if (rl["zfs_master_prefix"])
       cfg.zfsMasterPrefix = rl["zfs_master_prefix"].as<std::string>();
+    if (rl["path_master_prefix"])
+      cfg.pathMasterPrefix = rl["path_master_prefix"].as<std::string>();
     if (rl["network_master_cidr_v4"])
       cfg.networkMasterCidr4 = rl["network_master_cidr_v4"].as<std::string>();
     if (rl["network_sub_prefix_len_v4"])
@@ -162,6 +164,8 @@ Config Config::load(const std::string &path) {
   // who only flip the toggle without changing pools).
   if (root["zfs_master_prefix"])
     cfg.zfsMasterPrefix = root["zfs_master_prefix"].as<std::string>();
+  if (root["path_master_prefix"])
+    cfg.pathMasterPrefix = root["path_master_prefix"].as<std::string>();
   if (root["network_master_cidr_v4"])
     cfg.networkMasterCidr4 = root["network_master_cidr_v4"].as<std::string>();
   if (root["network_sub_prefix_len_v4"])

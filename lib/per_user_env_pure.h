@@ -34,6 +34,12 @@ struct Config {
   // Master ZFS prefix; empty → no per-user ZFS split (legacy shape).
   std::string zfsMasterPrefix;
 
+  // 1.1.15: master jail-path prefix. Each operator's permitted jail
+  // paths sit under `<pathMasterPrefix>/<uid>/...`. Empty → no per-user
+  // path split (legacy shape; the privops gate falls through to
+  // bootstrap-Allow for create_jail).
+  std::string pathMasterPrefix;
+
   // Master IPv4 CIDR + sub-prefix length. Empty master → no v4
   // sub-CIDR composition.
   std::string networkMasterCidr4;
@@ -57,6 +63,9 @@ struct Env {
 
   // ZFS dataset prefix. Empty if `cfg.zfsMasterPrefix` was empty.
   std::string zfsPrefix;
+
+  // 1.1.15: jail-path prefix. Empty if `cfg.pathMasterPrefix` was empty.
+  std::string pathPrefix;
 
   // Network sub-CIDRs. Empty if the corresponding master CIDR was
   // empty in the config.

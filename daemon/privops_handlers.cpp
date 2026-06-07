@@ -1028,6 +1028,10 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       case Verb::UnmountNullfs:        req.path = field("target");     break;
       case Verb::ApplyDevfsRuleset:
       case Verb::AddDevfsUnhideRule:   req.path = field("mount_path"); break;
+      // 1.1.15: create_jail's path argument is checked against the
+      // caller's per-user path prefix (env.pathPrefix); not a registry
+      // lookup (the jail doesn't exist yet).
+      case Verb::CreateJail:           req.path = field("path");       break;
       default:                                                          break;
     }
     PrivOpsAuthzPure::OwnerLookup lookup = g_jidOwnerRegistry

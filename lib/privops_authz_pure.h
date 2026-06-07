@@ -63,6 +63,7 @@ enum class Decision {
   DenyForeignJid,        // jid is in the registry and owned by another uid
   DenyForeignJailName,   // jail name is in the registry and owned by another uid
   DenyForeignPath,       // path lies inside a registry-tracked jail owned by another uid
+  DenyForeignCreatePath, // create_jail path is outside the caller's per-user path prefix
 };
 
 // Result of looking a target up in the daemon's jid->owner registry.
@@ -109,6 +110,12 @@ struct Request {
 // enforce — returns true (nothing to gate). The boundary check is
 // slash-anchored so "<prefix>extra" does not match "<prefix>".
 bool datasetOwned(const std::string &dataset, const std::string &zfsPrefix);
+
+// 1.1.15: identical-shape helper for filesystem paths (slash-anchored
+// prefix match). Used to authorize create_jail's brand-new path against
+// the caller's per-user path prefix from PerUserEnvPure::Env. Empty
+// prefix -> nothing to gate (Allow).
+bool pathOwned(const std::string &path, const std::string &pathPrefix);
 
 // Authorize a privops verb for the operator described by `env`
 // (env = PerUserEnvPure::composeForUid(cfg, uid), uid > 0).

@@ -97,6 +97,14 @@ struct Config {
   // See ZfsDatasetPure::composePerUserDataset.
   std::string zfsMasterPrefix;
 
+  // 1.1.15: master jail-path prefix. Per-user jail paths must sit
+  // under `<pathMasterPrefix>/<uid>/...`. Empty -> no per-user path
+  // split; the privops gate falls through to bootstrap-Allow for
+  // create_jail. Set this to enforce path ownership on create_jail
+  // (PrivOpsAuthzPure::Decision::DenyForeignCreatePath on a foreign
+  // target).
+  std::string pathMasterPrefix;
+
   // Master IPv4 CIDR + sub-prefix length for per-user network
   // allocation. See PerUserNetPure::composeIpv4. Empty master
   // disables v4 per-user (operator can still use v6).

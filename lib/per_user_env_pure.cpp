@@ -39,6 +39,15 @@ Result composeForUid(const Config &cfg, uint32_t uid) {
         cfg.zfsMasterPrefix, uid);
   }
 
+  // 1.1.15: jail-path prefix — opt-in via non-empty master. Composition
+  // mirrors the ZFS shape ("<master>/<uid>") and strips a single trailing
+  // slash so callers can configure either "/jails" or "/jails/".
+  if (!cfg.pathMasterPrefix.empty()) {
+    std::string base = cfg.pathMasterPrefix;
+    if (base.back() == '/') base.pop_back();
+    r.env.pathPrefix = base + "/" + std::to_string(uid);
+  }
+
   // IPv4 sub-CIDR — opt-in via non-empty master.
   if (!cfg.networkMasterCidr4.empty()) {
     auto v4 = PerUserNetPure::composeIpv4(cfg.networkMasterCidr4,
