@@ -134,6 +134,12 @@ ATF_TEST_CASE_BODY(authorize_jid_scoped_under_null_lookup_allows) {
   // unknown. Unknown targets are treated as the bootstrap concession
   // (jails predating 1.1.13 aren't in the registry yet) -> Allow.
   // Legitimate pre-1.1.13 rootless operations must keep working.
+  //
+  // CreateJail is intentionally NOT in this list: 1.1.15 gates it on
+  // env.pathPrefix (a *config* prefix, not a registry lookup), so the
+  // 4-arg wrapper with an empty req.path against env1000() (which has
+  // pathPrefix populated) now correctly denies. The
+  // authorize_create_jail_* tests below pin that new behavior.
   auto e = env1000();
   ATF_REQUIRE(authorize(Verb::SetRctl,        "", "", e) == Decision::Allow);
   ATF_REQUIRE(authorize(Verb::ClearRctl,      "", "", e) == Decision::Allow);
@@ -141,7 +147,6 @@ ATF_TEST_CASE_BODY(authorize_jid_scoped_under_null_lookup_allows) {
   ATF_REQUIRE(authorize(Verb::SetJailCpuset,  "", "", e) == Decision::Allow);
   ATF_REQUIRE(authorize(Verb::QueryJailRctl,  "", "", e) == Decision::Allow);
   ATF_REQUIRE(authorize(Verb::DestroyJail,    "", "", e) == Decision::Allow);
-  ATF_REQUIRE(authorize(Verb::CreateJail,     "", "", e) == Decision::Allow);
 }
 
 // --- 1.1.13: jid/name-scoped gating via OwnerLookup ---
