@@ -14,6 +14,9 @@
 
 #include "../lib/audit_per_user_pure.h"
 #include "../lib/privops_authz_pure.h"
+#include "../lib/jid_owner_registry.h"
+
+#include <iostream>
 
 #include <ctime>
 
@@ -624,6 +627,65 @@ std::vector<std::pair<std::string, std::string>> g_umbrellaRules;
 // reads after the one-time write at startup.
 PerUserEnvPure::Config g_perUserAuthzCfg;
 
+// 1.1.13: process-global jid->owner registry pointer. The instance is
+// owned by daemon/main.cpp and outlives every request. nullptr disables
+// the gate (dispatcher falls back to the 1.1.12 behavior — Allow for
+// jid/name-scoped verbs). JidOwnerRegistry has its own internal mutex,
+// so multiple dispatcher threads can read/write safely.
+::JidOwnerRegistry *g_jidOwnerRegistry = nullptr;
+
+// Update the jid->owner registry after a successful create_jail /
+// destroy_jail dispatch (libnv path only — uid==0 on HTTP means we
+// don't know which operator to credit, so the registry stays untouched).
+// Errors persisting the registry are logged but do NOT fail the verb:
+// the jail is already up (or already gone), and losing the registry
+// entry only weakens authz for *this* jail until the next restart's
+// bootstrap. Fail-soft on bookkeeping is preferable to leaving an
+// orphan jail because we couldn't write a tsv line.
+void maybeUpdateJidOwnerRegistry(Verb v, uint32_t uid,
+                                  const PrivOpsNvPure::FieldMap &m,
+                                  int status) {
+  if (!g_jidOwnerRegistry || uid == 0) return;
+  if (status < 200 || status >= 300)  return;
+
+  auto field = [&m](const char *key) -> std::string {
+    auto it = m.find(key);
+    return it == m.end() ? std::string() : it->second;
+  };
+
+  if (v == Verb::CreateJail) {
+    std::string name = field("name");
+    std::string path = field("path");
+    if (name.empty()) return;          // validator already rejected this
+    // jail(8) just assigned a jid; resolve it via libjail. If lookup
+    // fails (race, deleted between create and lookup) skip the record —
+    // the next destroy_jail will be a no-op-forget, which is harmless.
+    auto j = JailQuery::getJailByName(name);
+    if (!j) {
+      std::cerr << "privops: created jail '" << name
+                << "' vanished before jid lookup — registry not updated"
+                << std::endl;
+      return;
+    }
+    try {
+      g_jidOwnerRegistry->recordCreate(static_cast<unsigned>(j->jid),
+                                       uid, name, path);
+    } catch (const std::exception &e) {
+      std::cerr << "privops: jid_owner_registry recordCreate(" << name
+                << "): " << e.what() << std::endl;
+    }
+  } else if (v == Verb::DestroyJail) {
+    std::string name = field("name");
+    if (name.empty()) return;
+    try {
+      g_jidOwnerRegistry->forgetByName(name);
+    } catch (const std::exception &e) {
+      std::cerr << "privops: jid_owner_registry forgetByName(" << name
+                << "): " << e.what() << std::endl;
+    }
+  }
+}
+
 // Apply umbrella rules to the operator's `crate-<uid>` loginclass
 // after a successful create_jail. Only fires when:
 //   - operator's uid is known (uid > 0; libnv path supplies it,
@@ -917,12 +979,22 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
                                      uint32_t operatorUid) {
   Verb v = PrivOpsNvPure::extractVerb(m);
 
-  // 1.1.12: authorize-before-dispatch. The libnv transport carries a
-  // real peer uid (getpeereid); when rootless per-user is on, a verb
-  // that names another operator's ZFS prefix or RCTL umbrella is denied
-  // before the handler runs. Host-global and jid-scoped verbs pass
-  // (host-wide by design — see lib/privops_authz_pure.h). The HTTP path
-  // calls dispatchPrivOp with uid==0 and is unaffected. Fail closed.
+  // 1.1.12 + 1.1.13: authorize-before-dispatch. The libnv transport
+  // carries a real peer uid (getpeereid); when rootless per-user is on,
+  // every verb that has a robust ownership signal in the request is
+  // gated:
+  //   - dataset (attach_zfs/detach_zfs) — outside the caller's ZFS
+  //     prefix -> 403 (1.1.12)
+  //   - loginclass (set_loginclass_rctl/clear_loginclass_rctl) — not
+  //     the caller's crate-<uid> umbrella -> 403 (1.1.12)
+  //   - jid (set_rctl/clear_rctl/set_jail_cpuset/query_jail_rctl/
+  //     signal_jail) — owned by a different uid in the registry
+  //     -> 403 (1.1.13)
+  //   - jail name (destroy_jail) — owned by a different uid in the
+  //     registry -> 403 (1.1.13)
+  // Unknown jid/name in the registry (no entry) is allowed: that
+  // covers jails created before 1.1.13. The HTTP path (uid==0,
+  // admin-only) skips the gate by design and stays host-wide.
   if (rootlessPerUser && operatorUid > 0) {
     const PerUserEnvPure::Env env =
         PerUserEnvPure::composeForUid(g_perUserAuthzCfg, operatorUid).env;
@@ -930,8 +1002,27 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       auto it = m.find(key);
       return it == m.end() ? std::string() : it->second;
     };
-    PrivOpsAuthzPure::Decision dec = PrivOpsAuthzPure::authorize(
-        v, field("dataset"), field("loginclass"), env);
+    PrivOpsAuthzPure::Request req;
+    req.dataset    = field("dataset");
+    req.loginclass = field("loginclass");
+    req.jailName   = field("name");
+    {
+      // jid arrives as a decimal string in the libnv FieldMap; parse
+      // defensively. The downstream validator will catch a missing
+      // or out-of-range jid for the actual verb call — here we just
+      // need a number to look up in the registry (0 = "not set" =
+      // no jid-scoped gate fires).
+      auto jidStr = field("jid");
+      if (!jidStr.empty()) {
+        try { req.jid = static_cast<unsigned>(std::stoul(jidStr)); }
+        catch (...) { req.jid = 0; }
+      }
+    }
+    PrivOpsAuthzPure::OwnerLookup lookup = g_jidOwnerRegistry
+        ? g_jidOwnerRegistry->makeLookup()
+        : PrivOpsAuthzPure::nullLookup();
+    PrivOpsAuthzPure::Decision dec =
+        PrivOpsAuthzPure::authorize(v, req, env, lookup);
     if (dec != PrivOpsAuthzPure::Decision::Allow) {
       return {403, PrivOpsWirePure::formatHandlerError(
                        "forbidden", PrivOpsAuthzPure::decisionReason(dec))};
@@ -1189,6 +1280,7 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
   }();
   maybeWritePerUserAudit(rootlessPerUser, operatorUid, v, result.status);
   maybeApplyUmbrella(v, operatorUid, result.status);
+  maybeUpdateJidOwnerRegistry(v, operatorUid, m, result.status);
   return result;
 }
 
@@ -1200,6 +1292,10 @@ void setUmbrellaConfig(const std::vector<std::pair<std::string, std::string>> &r
 
 void setPerUserAuthzConfig(const PerUserEnvPure::Config &cfg) {
   g_perUserAuthzCfg = cfg;
+}
+
+void setJidOwnerRegistry(::JidOwnerRegistry *registry) {
+  g_jidOwnerRegistry = registry;
 }
 
 } // namespace Crated

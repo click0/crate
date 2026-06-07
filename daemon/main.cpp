@@ -11,6 +11,8 @@
 #include "privops_handlers.h"
 #include "privops_listener.h"
 
+#include "../lib/jid_owner_registry.h"
+
 #include "err.h"
 #include "misc.h"
 #include "util.h"
@@ -126,6 +128,17 @@ int main(int argc, char **argv) {
     // left empty to avoid any CIDR parsing in composeForUid.
     Crated::setPerUserAuthzConfig(
         PerUserEnvPure::Config{config.zfsMasterPrefix});
+
+    // 1.1.13: jid->owner registry for the jid- and name-scoped authz
+    // gate. Loaded from /var/db/crate/jid_owners.tsv (created on first
+    // create_jail). Jails that existed before this release are NOT in
+    // the registry — the gate's bootstrap concession allows them
+    // through to preserve the upgrade path. Any new jail created via
+    // create_jail on the libnv path is recorded with its operator uid;
+    // subsequent jid/name-scoped verbs from a different operator are
+    // denied 403.
+    static JidOwnerRegistry jidOwnerRegistry("/var/db/crate/jid_owners.tsv");
+    Crated::setJidOwnerRegistry(&jidOwnerRegistry);
 
     Crated::PrivopsListener privopsListener(config);
     bool privopsStarted = privopsListener.start();
