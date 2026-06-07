@@ -122,4 +122,30 @@ bool lookupByName(const EntryMap &entries, const std::string &name,
   return false;
 }
 
+bool findOwnerByPath(const EntryMap &entries, const std::string &query,
+                     unsigned &jidOut, Entry &entryOut) {
+  // Slash-anchored prefix match — same shape as PrivOpsAuthzPure::
+  // datasetOwned() uses for ZFS prefixes. Among all matches, pick the
+  // entry with the LONGEST path so nested jails resolve to the inner
+  // one rather than its parent.
+  bool found = false;
+  size_t bestLen = 0;
+  for (const auto &kv : entries) {
+    const std::string &p = kv.second.path;
+    if (p.empty()) continue;                   // defensive
+    const bool exact      = (query == p);
+    const bool descendant = (query.size() > p.size()
+                          && query.compare(0, p.size(), p) == 0
+                          && query[p.size()] == '/');
+    if (!exact && !descendant) continue;
+    if (!found || p.size() > bestLen) {
+      found    = true;
+      bestLen  = p.size();
+      jidOut   = kv.first;
+      entryOut = kv.second;
+    }
+  }
+  return found;
+}
+
 } // namespace JidOwnerRegistryPure

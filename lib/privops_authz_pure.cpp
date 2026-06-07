@@ -20,6 +20,7 @@ OwnerLookup nullLookup() {
   OwnerLookup l;
   l.byJid  = [](unsigned)              { return Owner{}; };
   l.byName = [](const std::string &)   { return Owner{}; };
+  l.byPath = [](const std::string &)   { return Owner{}; };
   return l;
 }
 
@@ -43,6 +44,15 @@ Decision checkOwnedName(const std::string &name,
   Owner o = lookup.byName(name);
   if (!o.known) return Decision::Allow;
   return o.uid == env.uid ? Decision::Allow : Decision::DenyForeignJailName;
+}
+
+Decision checkOwnedPath(const std::string &path,
+                        const PerUserEnvPure::Env &env,
+                        const OwnerLookup &lookup) {
+  if (!lookup.byPath) return Decision::Allow;
+  Owner o = lookup.byPath(path);
+  if (!o.known) return Decision::Allow;        // path not in any tracked jail
+  return o.uid == env.uid ? Decision::Allow : Decision::DenyForeignPath;
 }
 
 } // namespace
@@ -78,16 +88,33 @@ Decision authorize(PrivOpsPure::Verb v,
 
     // Name-scoped verbs. CreateJail itself is intentionally NOT gated
     // here (the name is brand-new — there's nothing to compare to yet;
-    // path validation is the open follow-up). DestroyJail IS gated:
-    // the name already exists and must be one this caller created.
+    // path validation against a per-user path prefix is the remaining
+    // open item). DestroyJail IS gated: the name already exists and
+    // must be one this caller created.
     case V::DestroyJail:
       return checkOwnedName(req.jailName, env, lookup);
 
+    // 1.1.14: path-scoped verbs. The dispatcher fills req.path from
+    // the right libnv field per verb:
+    //   mount_nullfs / unmount_nullfs -> "target"  (must lie under
+    //                                     an owned jail's path)
+    //   apply_devfs_ruleset / add_devfs_unhide_rule -> "mount_path"
+    //                                     (typically <jailPath>/dev)
+    // An unknown path (no registry hit) is allowed — same bootstrap
+    // concession as the jid/name gate (jails predating 1.1.13 aren't
+    // in the registry).
+    case V::MountNullfs:
+    case V::UnmountNullfs:
+    case V::ApplyDevfsRuleset:
+    case V::AddDevfsUnhideRule:
+      return checkOwnedPath(req.path, env, lookup);
+
     default:
-      // Host-global verbs (interface / pf / ipfw / nat / epair) cannot
-      // be pool-scoped — they touch shared host state. The remaining
-      // path-scoped verbs (devfs apply/unhide, mount/unmount nullfs)
-      // still need design work and stay host-wide for now.
+      // Remaining host-global verbs (interface / pf / ipfw / nat /
+      // epair) cannot be pool-scoped — they touch shared host state
+      // and stay host-wide by design. create_jail's path argument
+      // still needs validation against a per-user path prefix —
+      // tracked as the next open item once Env grows pathPrefix.
       return Decision::Allow;
   }
 }
@@ -114,6 +141,8 @@ const char *decisionReason(Decision d) {
       return "jid is owned by a different operator";
     case Decision::DenyForeignJailName:
       return "jail name is owned by a different operator";
+    case Decision::DenyForeignPath:
+      return "path lies inside a jail owned by a different operator";
   }
   return "deny";
 }

@@ -58,4 +58,14 @@ bool parse(const std::string &text, EntryMap &out, std::string &err);
 bool lookupByName(const EntryMap &entries, const std::string &name,
                   unsigned &jidOut, Entry &entryOut);
 
+// Find the entry whose `path` is a prefix of `query` (slash-anchored:
+// query equals entry.path OR query starts with `entry.path + "/"`).
+// On multiple matches returns the LONGEST entry.path so that nested
+// jails resolve to the inner one rather than the outer one. Used by
+// the privops authz layer for path-scoped verbs (mount_nullfs target,
+// devfs mount_path) where the request carries a path that should lie
+// inside an owned jail. Returns false on no match.
+bool findOwnerByPath(const EntryMap &entries, const std::string &query,
+                     unsigned &jidOut, Entry &entryOut);
+
 } // namespace JidOwnerRegistryPure

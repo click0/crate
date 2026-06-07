@@ -109,24 +109,29 @@ differs by transport:
   `set_jail_cpuset`, `query_jail_rctl`, `signal_jail`, `destroy_jail`.
   A daemon-owned jid→owner registry (`lib/jid_owner_registry.*`) records
   the operator uid at `create_jail` time; subsequent verbs from a
-  different operator are denied `403` against the same registry.
+  different operator are denied `403` against the same registry. 1.1.14
+  extends the same registry with a longest-prefix `byPath` lookup that
+  gates the **path-scoped verbs** — `mount_nullfs` / `unmount_nullfs`
+  (by `target`) and `apply_devfs_ruleset` / `add_devfs_unhide_rule` (by
+  `mount_path`). A path that lies inside another operator's registered
+  jail is denied `403` (`DenyForeignPath`).
 
 The remaining verbs still pass the gate: **host-global** verbs
 (iface/pf/ipfw/nat/epair) cannot be pool-scoped and stay host-wide by
-design; the **path-scoped** verbs (devfs `apply_ruleset` /
-`add_unhide_rule`, `mount_nullfs` / `unmount_nullfs`) and the
-`create_jail` `path` argument still need a path→jail resolver to land
-the same gate — see the open gap below. The per-verb handlers remain
-uid-blind; the gate runs ahead of them.
+design; the `create_jail` `path` argument is the last narrow item
+still ungated — closing it needs a per-user path prefix on
+`PerUserEnvPure::Env` so the brand-new path has something to be
+compared against. The per-verb handlers remain uid-blind; the gate
+runs ahead of them.
 
 > Consequence: whoever can reach privops — an `admin` bearer token, or
 > membership in the privops socket's group — still has host-wide control
-> over the **un-gated** surface (path-scoped devfs/mount verbs,
-> firewall, interfaces). The 1.1.12 + 1.1.13 gates close cross-tenant
-> ZFS-dataset, RCTL-umbrella, jid- and name-scoped access on the libnv
-> path, but privops remains, in the
-> general case, a single trust domain — handing an operator privops
-> access is close to handing them the old setuid `crate(1)`.
+> over the **un-gated** surface (firewall, interfaces, and the
+> brand-new-jail `create_jail` path argument). The 1.1.12 + 1.1.13 +
+> 1.1.14 gates close cross-tenant ZFS-dataset, RCTL-umbrella, jid-,
+> name-, and path-scoped access on the libnv path, but privops remains,
+> in the general case, a single trust domain — handing an operator
+> privops access is close to handing them the old setuid `crate(1)`.
 
 ### Per-user namespacing is convenience, not a boundary
 
@@ -269,17 +274,26 @@ security boundary:
    different operator are denied 403 before the handler runs. Jails
    that pre-date 1.1.13 are not in the registry — the gate's
    bootstrap concession allows them through to preserve the upgrade
-   path. *Remaining:* the path-scoped verbs (devfs `apply_ruleset` /
-   `add_unhide_rule`, `mount_nullfs` / `unmount_nullfs`) and the
-   `create_jail` path argument. Closing those needs a
-   path→jail-name resolver layered on top of the registry.
+   path.
+   *Done (1.1.14):* the path-scoped verbs — `mount_nullfs` /
+   `unmount_nullfs` (gated by `target`) and `apply_devfs_ruleset` /
+   `add_devfs_unhide_rule` (gated by `mount_path`). The registry now
+   exposes a longest-prefix `byPath` lookup; a path inside a tracked
+   jail owned by another uid is denied 403 (`DenyForeignPath`); paths
+   outside every registered jail fall through under the same
+   bootstrap concession.
+   *Remaining:* the `create_jail` `path` argument. Validating it
+   needs a per-user path prefix on `PerUserEnvPure::Env`
+   (configured per-uid via crated.conf) — without that there is
+   nothing to compare a brand-new jail path against.
 
 2. **Per-operator namespacing is convenience, not a boundary.** Any
    `path` / `jid` / `dataset` argument crossing the privops socket must
    be re-derived or validated **daemon-side** against the caller's
-   uid-prefix — never taken at face value. *Done* for `dataset` (1.1.12)
-   and for `jid` / jail `name` (1.1.13, via the registry); *remaining*
-   for `path`.
+   uid-prefix — never taken at face value. *Done* for `dataset` (1.1.12),
+   for `jid` / jail `name` (1.1.13, via the registry), and for
+   path-scoped runtime verbs (1.1.14, longest-prefix `byPath` on the
+   same registry). *Remaining:* the `create_jail` path-prefix check.
 
 3. **Fail closed on identity loss.** On any path that authorizes, a
    `getpeereid` failure must deny. It may degrade to a no-op only for

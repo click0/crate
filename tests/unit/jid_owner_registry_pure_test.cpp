@@ -6,6 +6,7 @@
 
 using JidOwnerRegistryPure::Entry;
 using JidOwnerRegistryPure::EntryMap;
+using JidOwnerRegistryPure::findOwnerByPath;
 using JidOwnerRegistryPure::lookupByName;
 using JidOwnerRegistryPure::parse;
 using JidOwnerRegistryPure::serialize;
@@ -169,6 +170,79 @@ ATF_TEST_CASE_BODY(lookup_by_name_empty_map) {
   ATF_REQUIRE(!lookupByName(m, "web", jid, e));
 }
 
+// --- findOwnerByPath ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(path_lookup_exact_match);
+ATF_TEST_CASE_BODY(path_lookup_exact_match) {
+  auto m = twoEntries();
+  unsigned jid; Entry e;
+  ATF_REQUIRE(findOwnerByPath(m, "/jails/web", jid, e));
+  ATF_REQUIRE_EQ(12u, jid);
+  ATF_REQUIRE_EQ(1000u, e.uid);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(path_lookup_descendant_match);
+ATF_TEST_CASE_BODY(path_lookup_descendant_match) {
+  auto m = twoEntries();
+  unsigned jid; Entry e;
+  ATF_REQUIRE(findOwnerByPath(m, "/jails/web/dev", jid, e));
+  ATF_REQUIRE_EQ(12u, jid);
+  ATF_REQUIRE(findOwnerByPath(m, "/jails/web/etc/rc.conf", jid, e));
+  ATF_REQUIRE_EQ(12u, jid);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(path_lookup_slash_anchored_rejects_substring_neighbor);
+ATF_TEST_CASE_BODY(path_lookup_slash_anchored_rejects_substring_neighbor) {
+  // /jails/web should NOT match /jails/web2/anything. Slash-anchored
+  // boundary is the whole point — names sharing a prefix are common
+  // (web / web2 / webhook), and a substring match would let one
+  // operator's mount target wander into another's tree.
+  EntryMap m;
+  m[12] = Entry{1000, "web",  "/jails/web"};
+  unsigned jid; Entry e;
+  ATF_REQUIRE(!findOwnerByPath(m, "/jails/web2", jid, e));
+  ATF_REQUIRE(!findOwnerByPath(m, "/jails/web2/dev", jid, e));
+  ATF_REQUIRE(!findOwnerByPath(m, "/jails/webhook/etc", jid, e));
+  ATF_REQUIRE(!findOwnerByPath(m, "/jails/webextra", jid, e));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(path_lookup_picks_longest_prefix);
+ATF_TEST_CASE_BODY(path_lookup_picks_longest_prefix) {
+  // Nested jails: /jails/outer registered AND /jails/outer/inner
+  // registered. A query for /jails/outer/inner/dev must resolve to
+  // the inner jail, not the outer one (most-specific wins).
+  EntryMap m;
+  m[5]  = Entry{1000, "outer", "/jails/outer"};
+  m[6]  = Entry{1001, "inner", "/jails/outer/inner"};
+  unsigned jid; Entry e;
+  ATF_REQUIRE(findOwnerByPath(m, "/jails/outer/inner/dev", jid, e));
+  ATF_REQUIRE_EQ(6u, jid);
+  ATF_REQUIRE_EQ(1001u, e.uid);
+  // A query that lives in outer but not in inner still resolves to outer.
+  ATF_REQUIRE(findOwnerByPath(m, "/jails/outer/etc", jid, e));
+  ATF_REQUIRE_EQ(5u, jid);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(path_lookup_unknown_path_misses);
+ATF_TEST_CASE_BODY(path_lookup_unknown_path_misses) {
+  auto m = twoEntries();
+  unsigned jid; Entry e;
+  ATF_REQUIRE(!findOwnerByPath(m, "/zpool/elsewhere/foo", jid, e));
+  ATF_REQUIRE(!findOwnerByPath(m, "/", jid, e));
+  ATF_REQUIRE(!findOwnerByPath(m, "", jid, e));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(path_lookup_skips_entries_with_empty_path);
+ATF_TEST_CASE_BODY(path_lookup_skips_entries_with_empty_path) {
+  // Defensive: an entry whose path is empty should never match
+  // anything — otherwise every query would falsely resolve to it.
+  EntryMap m;
+  m[7] = Entry{1000, "broken", ""};
+  unsigned jid; Entry e;
+  ATF_REQUIRE(!findOwnerByPath(m, "/jails/anything", jid, e));
+  ATF_REQUIRE(!findOwnerByPath(m, "",                jid, e));
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, serialize_empty_is_empty_string);
   ATF_ADD_TEST_CASE(tcs, serialize_sorts_by_jid_and_terminates);
@@ -184,4 +258,10 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, lookup_by_name_hits);
   ATF_ADD_TEST_CASE(tcs, lookup_by_name_miss);
   ATF_ADD_TEST_CASE(tcs, lookup_by_name_empty_map);
+  ATF_ADD_TEST_CASE(tcs, path_lookup_exact_match);
+  ATF_ADD_TEST_CASE(tcs, path_lookup_descendant_match);
+  ATF_ADD_TEST_CASE(tcs, path_lookup_slash_anchored_rejects_substring_neighbor);
+  ATF_ADD_TEST_CASE(tcs, path_lookup_picks_longest_prefix);
+  ATF_ADD_TEST_CASE(tcs, path_lookup_unknown_path_misses);
+  ATF_ADD_TEST_CASE(tcs, path_lookup_skips_entries_with_empty_path);
 }

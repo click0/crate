@@ -62,6 +62,7 @@ enum class Decision {
   DenyForeignLoginclass, // loginclass is not the caller's crate-<uid>
   DenyForeignJid,        // jid is in the registry and owned by another uid
   DenyForeignJailName,   // jail name is in the registry and owned by another uid
+  DenyForeignPath,       // path lies inside a registry-tracked jail owned by another uid
 };
 
 // Result of looking a target up in the daemon's jid->owner registry.
@@ -71,12 +72,16 @@ struct Owner {
 };
 
 // Lookup callbacks injected by the daemon. The pure module never
-// reads state — it only queries through these. Either may be null:
-// authorize falls back to "unknown" (Allow) and the daemon's audit
-// tail still records the call.
+// reads state — it only queries through these. Any callback may be
+// null: authorize falls back to "unknown" (Allow) and the daemon's
+// audit tail still records the call.
 struct OwnerLookup {
   std::function<Owner(unsigned jid)>             byJid;
   std::function<Owner(const std::string &name)>  byName;
+  // 1.1.14: longest-prefix path lookup for path-scoped verbs
+  // (mount_nullfs target, devfs mount_path). The path is considered
+  // owned by jail J if it equals J.path or starts with J.path + "/".
+  std::function<Owner(const std::string &path)>  byPath;
 };
 
 // Convenience: a lookup where every probe reports "unknown". Useful
@@ -92,6 +97,10 @@ struct Request {
   std::string loginclass;
   std::string jailName;
   unsigned    jid = 0;
+  // 1.1.14: path-scoped verbs (mount_nullfs target, devfs mount_path).
+  // Dispatcher fills this from the right libnv field per verb; empty
+  // when the verb doesn't carry a path argument.
+  std::string path;
 };
 
 // True when `dataset` is the caller's prefix itself or a descendant

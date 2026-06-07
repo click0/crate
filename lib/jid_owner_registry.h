@@ -46,6 +46,12 @@ class JidOwnerRegistry {
   // Look up by jail name. Returns {known=false} on miss.
   PrivOpsAuthzPure::Owner lookupByName(const std::string &name) const;
 
+  // Look up by path — longest-prefix, slash-anchored: `path` is owned
+  // by jail J if path == J.path or starts with J.path + "/".
+  // Returns {known=false} when no registered jail's path is a prefix
+  // of `path` (the bootstrap concession applies at the authz layer).
+  PrivOpsAuthzPure::Owner lookupByPath(const std::string &path) const;
+
   // Build an OwnerLookup that the privops authz layer can call. The
   // returned struct captures `this` by reference — the registry must
   // outlive the lookup (true in crated's main thread lifetime).

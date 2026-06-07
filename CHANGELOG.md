@@ -6,6 +6,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.14] — 2026-06-07
+
+**Per-tenant authorization for path-scoped privops verbs.** Continues
+the verb-by-verb closure of the trust-model open gap started in 1.1.12
+and 1.1.13.
+
+1.1.13 wired the `JidOwnerRegistry` for jid- and name-scoped verbs.
+Path-scoped verbs — `mount_nullfs`, `unmount_nullfs`, the two devfs
+verbs — still passed the gate, which meant a hostile operator could
+mount over another operator's jail tree, or apply a hostile devfs
+ruleset to their `/dev`.
+
+### What's wired
+
+- **`JidOwnerRegistryPure::findOwnerByPath`** — longest-prefix,
+  slash-anchored lookup. Resolves `/jails/web/dev` to the jail at
+  `/jails/web`; nested jails (`/jails/outer/inner`) resolve to the
+  inner one. `/jails/web2` does NOT match `/jails/web` (substring
+  neighbors stay distinct).
+- **`PrivOpsAuthzPure`** — new `Decision::DenyForeignPath`,
+  `OwnerLookup::byPath` callback, `Request::path` field. The four
+  path-scoped verbs are now gated:
+
+  | verb | request field |
+  |---|---|
+  | `mount_nullfs`, `unmount_nullfs` | `target` |
+  | `apply_devfs_ruleset`, `add_devfs_unhide_rule` | `mount_path` |
+
+- **`JidOwnerRegistry::lookupByPath` + `makeLookup`** — thread-safe
+  wrapper, integrated into the `OwnerLookup` the dispatcher builds.
+- **`dispatchPrivOpFromMap`** fills `req.path` per verb from the right
+  libnv field.
+
+### Tests
+
+- `jid_owner_registry_pure_test` grows by 6 cases: exact match,
+  descendant match, slash-anchored neighbor rejection, longest-prefix
+  selection on nested jails, unknown-path miss, empty-path defensive.
+- `privops_authz_pure_test` extended: own/foreign/unknown path across
+  all four verbs, substring-neighbor falls through to bootstrap-Allow
+  (not DenyForeignPath), `decisionReason` covers the new code.
+
+### Still open
+
+The `create_jail` `path` argument. Validating it needs a per-user
+path prefix on `PerUserEnvPure::Env` (configured per-uid via
+`crated.conf`) — there's nothing to compare a brand-new jail path
+against today. That's the final narrow item on the per-tenant gate.
+
 ## [1.1.13] — 2026-06-07
 
 **Per-tenant authorization for jid- and name-scoped privops verbs.**

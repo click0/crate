@@ -87,11 +87,23 @@ PrivOpsAuthzPure::Owner JidOwnerRegistry::lookupByName(const std::string &name) 
   return o;
 }
 
+PrivOpsAuthzPure::Owner JidOwnerRegistry::lookupByPath(const std::string &path) const {
+  std::lock_guard<std::mutex> g(m_);
+  PrivOpsAuthzPure::Owner o;
+  unsigned jid; JidOwnerRegistryPure::Entry e;
+  if (JidOwnerRegistryPure::findOwnerByPath(entries_, path, jid, e)) {
+    o.known = true;
+    o.uid   = e.uid;
+  }
+  return o;
+}
+
 PrivOpsAuthzPure::OwnerLookup JidOwnerRegistry::makeLookup() const {
   PrivOpsAuthzPure::OwnerLookup l;
   // Capture by-ref: the registry outlives the dispatcher (held by main).
   l.byJid  = [this](unsigned jid)            { return this->lookupByJid(jid); };
   l.byName = [this](const std::string &name) { return this->lookupByName(name); };
+  l.byPath = [this](const std::string &path) { return this->lookupByPath(path); };
   return l;
 }
 
