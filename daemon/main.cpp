@@ -126,8 +126,14 @@ int main(int argc, char **argv) {
     // (the gate checks the ZFS prefix and the uid-derived crate-<uid>
     // loginclass); network CIDRs are irrelevant to authorization and
     // left empty to avoid any CIDR parsing in composeForUid.
-    Crated::setPerUserAuthzConfig(
-        PerUserEnvPure::Config{config.zfsMasterPrefix});
+    // 1.1.15: also pass pathMasterPrefix so authorize() can gate
+    // create_jail's brand-new path against env.pathPrefix.
+    {
+      PerUserEnvPure::Config authzCfg;
+      authzCfg.zfsMasterPrefix  = config.zfsMasterPrefix;
+      authzCfg.pathMasterPrefix = config.pathMasterPrefix;
+      Crated::setPerUserAuthzConfig(authzCfg);
+    }
 
     // 1.1.13: jid->owner registry for the jid- and name-scoped authz
     // gate. Loaded from /var/db/crate/jid_owners.tsv (created on first

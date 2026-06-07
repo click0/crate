@@ -16,6 +16,17 @@ bool datasetOwned(const std::string &dataset, const std::string &zfsPrefix) {
       && dataset[zfsPrefix.size()] == '/';
 }
 
+bool pathOwned(const std::string &path, const std::string &pathPrefix) {
+  // Identical shape to datasetOwned — kept as a separate helper so each
+  // call-site reads as "is this PATH inside the per-user path prefix"
+  // rather than reusing the dataset spelling.
+  if (pathPrefix.empty())  return true;
+  if (path == pathPrefix)  return true;
+  return path.size() > pathPrefix.size()
+      && path.compare(0, pathPrefix.size(), pathPrefix) == 0
+      && path[pathPrefix.size()] == '/';
+}
+
 OwnerLookup nullLookup() {
   OwnerLookup l;
   l.byJid  = [](unsigned)              { return Owner{}; };
@@ -86,13 +97,23 @@ Decision authorize(PrivOpsPure::Verb v,
     case V::SignalJail:
       return checkOwnedJid(req.jid, env, lookup);
 
-    // Name-scoped verbs. CreateJail itself is intentionally NOT gated
-    // here (the name is brand-new — there's nothing to compare to yet;
-    // path validation against a per-user path prefix is the remaining
-    // open item). DestroyJail IS gated: the name already exists and
-    // must be one this caller created.
+    // Name-scoped verb. The jail name itself is brand-new and there's
+    // nothing in the registry to compare against on create; the gate
+    // for create_jail is below (path-prefix). destroy_jail gates on
+    // the name — it must be one this caller created.
     case V::DestroyJail:
       return checkOwnedName(req.jailName, env, lookup);
+
+    // 1.1.15: create_jail's brand-new path must fall inside the
+    // caller's per-user path prefix (cfg.pathMasterPrefix/<uid>). When
+    // the deployment didn't configure pathMasterPrefix, env.pathPrefix
+    // is empty and pathOwned() Allows — same opt-in shape as the ZFS
+    // gate (cfg.zfsMasterPrefix). This is the last narrow item from
+    // the 1.1.x trust-model open gap.
+    case V::CreateJail:
+      return pathOwned(req.path, env.pathPrefix)
+                 ? Decision::Allow
+                 : Decision::DenyForeignCreatePath;
 
     // 1.1.14: path-scoped verbs. The dispatcher fills req.path from
     // the right libnv field per verb:
@@ -143,6 +164,8 @@ const char *decisionReason(Decision d) {
       return "jail name is owned by a different operator";
     case Decision::DenyForeignPath:
       return "path lies inside a jail owned by a different operator";
+    case Decision::DenyForeignCreatePath:
+      return "create_jail path is outside the caller's per-user path prefix";
   }
   return "deny";
 }

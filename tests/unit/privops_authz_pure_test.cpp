@@ -10,6 +10,7 @@ using PrivOpsAuthzPure::Decision;
 using PrivOpsAuthzPure::authorize;
 using PrivOpsAuthzPure::datasetOwned;
 using PrivOpsAuthzPure::decisionReason;
+using PrivOpsAuthzPure::pathOwned;
 using PrivOpsPure::Verb;
 
 namespace {
@@ -19,6 +20,7 @@ PerUserEnvPure::Env env1000() {
   PerUserEnvPure::Env e;
   e.uid        = 1000;
   e.zfsPrefix  = "zroot/crate-tenants/1000";
+  e.pathPrefix = "/jails-tenants/1000";    // 1.1.15
   e.loginclass = "crate-1000";
   return e;
 }
@@ -132,6 +134,12 @@ ATF_TEST_CASE_BODY(authorize_jid_scoped_under_null_lookup_allows) {
   // unknown. Unknown targets are treated as the bootstrap concession
   // (jails predating 1.1.13 aren't in the registry yet) -> Allow.
   // Legitimate pre-1.1.13 rootless operations must keep working.
+  //
+  // CreateJail is intentionally NOT in this list: 1.1.15 gates it on
+  // env.pathPrefix (a *config* prefix, not a registry lookup), so the
+  // 4-arg wrapper with an empty req.path against env1000() (which has
+  // pathPrefix populated) now correctly denies. The
+  // authorize_create_jail_* tests below pin that new behavior.
   auto e = env1000();
   ATF_REQUIRE(authorize(Verb::SetRctl,        "", "", e) == Decision::Allow);
   ATF_REQUIRE(authorize(Verb::ClearRctl,      "", "", e) == Decision::Allow);
@@ -139,7 +147,6 @@ ATF_TEST_CASE_BODY(authorize_jid_scoped_under_null_lookup_allows) {
   ATF_REQUIRE(authorize(Verb::SetJailCpuset,  "", "", e) == Decision::Allow);
   ATF_REQUIRE(authorize(Verb::QueryJailRctl,  "", "", e) == Decision::Allow);
   ATF_REQUIRE(authorize(Verb::DestroyJail,    "", "", e) == Decision::Allow);
-  ATF_REQUIRE(authorize(Verb::CreateJail,     "", "", e) == Decision::Allow);
 }
 
 // --- 1.1.13: jid/name-scoped gating via OwnerLookup ---
@@ -247,16 +254,18 @@ ATF_TEST_CASE_BODY(authorize_destroy_jail_unknown_name_allowed_bootstrap) {
               == Decision::Allow);
 }
 
-ATF_TEST_CASE_WITHOUT_HEAD(authorize_create_jail_never_gated_here);
-ATF_TEST_CASE_BODY(authorize_create_jail_never_gated_here) {
-  // The name is brand new (it would be the *future* registry entry) so
-  // there's nothing to compare against. Path-prefix validation for
-  // create_jail is the open follow-up and lives outside this module.
+ATF_TEST_CASE_WITHOUT_HEAD(authorize_create_jail_not_keyed_on_jail_name);
+ATF_TEST_CASE_BODY(authorize_create_jail_not_keyed_on_jail_name) {
+  // Distinct from destroy_jail: create_jail does NOT compare the new
+  // jail's name against the registry (the name is brand new). The gate
+  // is the path-prefix check below; this test pins the "no name gate"
+  // shape so a future refactor can't accidentally reintroduce one.
   auto e = env1000();
   auto l = fixedOwner(77, "web", 1001);   // someone else owns "web"
-  // create_jail still passes here; if the operator tries to create a
-  // SECOND jail under the existing name, the kernel will refuse it.
-  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::CreateJail, reqName("brand-new"), e, l)
+  Request rq;
+  rq.jailName = "brand-new";
+  rq.path     = e.pathPrefix + "/brand-new";   // inside the caller's prefix
+  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::CreateJail, rq, e, l)
               == Decision::Allow);
 }
 
@@ -331,6 +340,74 @@ ATF_TEST_CASE_BODY(authorize_path_substring_neighbor_not_owned) {
               == Decision::Allow);
 }
 
+// --- 1.1.15: pathOwned + create_jail path-prefix gate ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(path_owned_prefix_and_descendants);
+ATF_TEST_CASE_BODY(path_owned_prefix_and_descendants) {
+  const std::string p = "/jails-tenants/1000";
+  ATF_REQUIRE(pathOwned(p, p));                              // prefix root
+  ATF_REQUIRE(pathOwned(p + "/web", p));                     // child
+  ATF_REQUIRE(pathOwned(p + "/web/etc", p));                 // grandchild
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(path_owned_rejects_foreign_and_substring);
+ATF_TEST_CASE_BODY(path_owned_rejects_foreign_and_substring) {
+  const std::string p = "/jails-tenants/1000";
+  ATF_REQUIRE(!pathOwned("/jails-tenants/1001/web", p));     // other uid
+  ATF_REQUIRE(!pathOwned("/elsewhere/1000", p));             // other master
+  // Slash-anchored: a numerically-prefixed neighbor must not pass
+  // (/...1000 must not own /...10001).
+  ATF_REQUIRE(!pathOwned("/jails-tenants/10001", p));
+  ATF_REQUIRE(!pathOwned("/jails-tenants/1000extra", p));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(path_owned_empty_prefix_allows_all);
+ATF_TEST_CASE_BODY(path_owned_empty_prefix_allows_all) {
+  // No per-user path split configured -> nothing to gate.
+  ATF_REQUIRE(pathOwned("/anything/at/all", ""));
+  ATF_REQUIRE(pathOwned("", ""));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(authorize_create_jail_inside_own_prefix);
+ATF_TEST_CASE_BODY(authorize_create_jail_inside_own_prefix) {
+  auto e = env1000();
+  OwnerLookup empty;   // create_jail doesn't consult the registry
+  Request rq;
+  rq.jailName = "web";
+  rq.path     = "/jails-tenants/1000/web";
+  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::CreateJail, rq, e, empty)
+              == Decision::Allow);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(authorize_create_jail_outside_prefix_denied);
+ATF_TEST_CASE_BODY(authorize_create_jail_outside_prefix_denied) {
+  auto e = env1000();
+  OwnerLookup empty;
+  Request rq;
+  rq.jailName = "evil";
+  rq.path     = "/jails-tenants/1001/evil";   // another operator's territory
+  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::CreateJail, rq, e, empty)
+              == Decision::DenyForeignCreatePath);
+
+  rq.path = "/etc/passwd";                    // anywhere outside the prefix
+  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::CreateJail, rq, e, empty)
+              == Decision::DenyForeignCreatePath);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(authorize_create_jail_unconfigured_split_allows);
+ATF_TEST_CASE_BODY(authorize_create_jail_unconfigured_split_allows) {
+  // Deployment didn't set pathMasterPrefix -> env.pathPrefix is empty
+  // -> nothing to gate, allow any path. Preserves the upgrade shape.
+  PerUserEnvPure::Env e = env1000();
+  e.pathPrefix = "";
+  Request rq;
+  rq.jailName = "anywhere";
+  rq.path     = "/zpool/jails/anywhere";
+  OwnerLookup empty;
+  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::CreateJail, rq, e, empty)
+              == Decision::Allow);
+}
+
 // --- decisionReason ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(decision_reason_non_empty);
@@ -341,6 +418,7 @@ ATF_TEST_CASE_BODY(decision_reason_non_empty) {
   ATF_REQUIRE(!std::string(decisionReason(Decision::DenyForeignJid)).empty());
   ATF_REQUIRE(!std::string(decisionReason(Decision::DenyForeignJailName)).empty());
   ATF_REQUIRE(!std::string(decisionReason(Decision::DenyForeignPath)).empty());
+  ATF_REQUIRE(!std::string(decisionReason(Decision::DenyForeignCreatePath)).empty());
 }
 
 ATF_INIT_TEST_CASES(tcs) {
@@ -361,11 +439,17 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, authorize_destroy_jail_own_name_allowed);
   ATF_ADD_TEST_CASE(tcs, authorize_destroy_jail_foreign_name_denied);
   ATF_ADD_TEST_CASE(tcs, authorize_destroy_jail_unknown_name_allowed_bootstrap);
-  ATF_ADD_TEST_CASE(tcs, authorize_create_jail_never_gated_here);
+  ATF_ADD_TEST_CASE(tcs, authorize_create_jail_not_keyed_on_jail_name);
   ATF_ADD_TEST_CASE(tcs, authorize_null_callbacks_in_lookup_allow);
   ATF_ADD_TEST_CASE(tcs, authorize_path_own_target_allowed);
   ATF_ADD_TEST_CASE(tcs, authorize_path_foreign_target_denied);
   ATF_ADD_TEST_CASE(tcs, authorize_path_unknown_target_allowed_bootstrap);
   ATF_ADD_TEST_CASE(tcs, authorize_path_substring_neighbor_not_owned);
+  ATF_ADD_TEST_CASE(tcs, path_owned_prefix_and_descendants);
+  ATF_ADD_TEST_CASE(tcs, path_owned_rejects_foreign_and_substring);
+  ATF_ADD_TEST_CASE(tcs, path_owned_empty_prefix_allows_all);
+  ATF_ADD_TEST_CASE(tcs, authorize_create_jail_inside_own_prefix);
+  ATF_ADD_TEST_CASE(tcs, authorize_create_jail_outside_prefix_denied);
+  ATF_ADD_TEST_CASE(tcs, authorize_create_jail_unconfigured_split_allows);
   ATF_ADD_TEST_CASE(tcs, decision_reason_non_empty);
 }

@@ -12,6 +12,7 @@ using namespace PerUserEnvPure;
 static Config defaultCfg() {
   Config c;
   c.zfsMasterPrefix       = "zroot/jails";
+  c.pathMasterPrefix      = "/jails-tenants";
   c.networkMasterCidr4    = "10.66.0.0/16";
   c.networkSubPrefixLen4  = 24;
   c.networkMasterCidr6    = "fd00:dead::/48";
@@ -32,6 +33,8 @@ ATF_TEST_CASE_BODY(compose_full_config) {
   ATF_REQUIRE_EQ(r.env.auditLog,    std::string("/var/run/crate/1000/audit.log"));
   // ZFS
   ATF_REQUIRE_EQ(r.env.zfsPrefix,   std::string("zroot/jails/1000"));
+  // 1.1.15: jail path prefix
+  ATF_REQUIRE_EQ(r.env.pathPrefix,  std::string("/jails-tenants/1000"));
   // Network
   ATF_REQUIRE_EQ(r.env.ipv4SubCidr, std::string("10.66.232.0/24"));
   ATF_REQUIRE_EQ(r.env.ipv6SubCidr,
@@ -52,8 +55,26 @@ ATF_TEST_CASE_BODY(compose_empty_config_legacy_shape) {
   ATF_REQUIRE_EQ(r.env.runtimeRoot, std::string("/var/run/crate/1000"));
   ATF_REQUIRE_EQ(r.env.loginclass,  std::string("crate-1000"));
   ATF_REQUIRE_EQ(r.env.zfsPrefix,   std::string());
+  ATF_REQUIRE_EQ(r.env.pathPrefix,  std::string());   // 1.1.15: opt-in
   ATF_REQUIRE_EQ(r.env.ipv4SubCidr, std::string());
   ATF_REQUIRE_EQ(r.env.ipv6SubCidr, std::string());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(path_prefix_strips_trailing_slash);
+ATF_TEST_CASE_BODY(path_prefix_strips_trailing_slash) {
+  // Operators may type "/jails/" or "/jails" — both compose the same.
+  Config c;  c.pathMasterPrefix = "/jails/";
+  auto r = composeForUid(c, 1000);
+  ATF_REQUIRE_EQ(r.env.pathPrefix, std::string("/jails/1000"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(path_prefix_with_different_uids);
+ATF_TEST_CASE_BODY(path_prefix_with_different_uids) {
+  Config c;  c.pathMasterPrefix = "/zpool/jails";
+  ATF_REQUIRE_EQ(composeForUid(c, 1000).env.pathPrefix,
+                 std::string("/zpool/jails/1000"));
+  ATF_REQUIRE_EQ(composeForUid(c, 1001).env.pathPrefix,
+                 std::string("/zpool/jails/1001"));
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(compose_v4_only);
@@ -129,6 +150,8 @@ ATF_TEST_CASE_BODY(compose_rctl_always_populated) {
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, compose_full_config);
   ATF_ADD_TEST_CASE(tcs, compose_empty_config_legacy_shape);
+  ATF_ADD_TEST_CASE(tcs, path_prefix_strips_trailing_slash);
+  ATF_ADD_TEST_CASE(tcs, path_prefix_with_different_uids);
   ATF_ADD_TEST_CASE(tcs, compose_v4_only);
   ATF_ADD_TEST_CASE(tcs, compose_isolation_alice_vs_bob);
   ATF_ADD_TEST_CASE(tcs, compose_rejects_bad_v4_master);
