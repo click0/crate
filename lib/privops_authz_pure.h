@@ -37,7 +37,18 @@
 // 403. Only invoked on the libnv path for a real uid > 0; the HTTP
 // path (uid == 0, admin-only) is unaffected and stays host-wide.
 //
+// 1.1.13 extension — jid-scoped verbs. The privops daemon now keeps a
+// jid->owner registry (lib/jid_owner_registry.{h,cpp}), populated at
+// create_jail time. authorize() takes a small lookup interface to that
+// registry and gates the verbs that carry a jid or jail name in the
+// request: SignalJail, SetRctl, ClearRctl, SetJailCpuset,
+// QueryJailRctl, DestroyJail. An unknown jid/name is allowed (jails
+// pre-dating 1.1.13 aren't in the registry); a *known* jid/name with
+// the wrong owner is denied 403. Path-scoped verbs (devfs, mount) and
+// create_jail path validation remain in the open gap.
+//
 
+#include <functional>
 #include <string>
 
 #include "privops_pure.h"
@@ -49,6 +60,38 @@ enum class Decision {
   Allow,
   DenyForeignDataset,    // dataset outside the caller's per-user ZFS prefix
   DenyForeignLoginclass, // loginclass is not the caller's crate-<uid>
+  DenyForeignJid,        // jid is in the registry and owned by another uid
+  DenyForeignJailName,   // jail name is in the registry and owned by another uid
+};
+
+// Result of looking a target up in the daemon's jid->owner registry.
+struct Owner {
+  bool     known = false;   // false => not in registry (pre-1.1.13 / external jail)
+  uint32_t uid   = 0;       // operator uid recorded at create_jail (only valid if known)
+};
+
+// Lookup callbacks injected by the daemon. The pure module never
+// reads state — it only queries through these. Either may be null:
+// authorize falls back to "unknown" (Allow) and the daemon's audit
+// tail still records the call.
+struct OwnerLookup {
+  std::function<Owner(unsigned jid)>             byJid;
+  std::function<Owner(const std::string &name)>  byName;
+};
+
+// Convenience: a lookup where every probe reports "unknown". Useful
+// for the existing dataset/loginclass-only tests and for the HTTP
+// admin path (uid==0, gate is skipped anyway).
+OwnerLookup nullLookup();
+
+// All of the per-verb request fields the authorizer might consult.
+// Daemon fills only the ones the request actually carries; unused
+// fields stay default-initialized.
+struct Request {
+  std::string dataset;
+  std::string loginclass;
+  std::string jailName;
+  unsigned    jid = 0;
 };
 
 // True when `dataset` is the caller's prefix itself or a descendant
@@ -59,10 +102,25 @@ enum class Decision {
 bool datasetOwned(const std::string &dataset, const std::string &zfsPrefix);
 
 // Authorize a privops verb for the operator described by `env`
-// (env = PerUserEnvPure::composeForUid(cfg, uid), uid > 0). `dataset`
-// and `loginclass` are the corresponding request fields (empty when
-// the verb doesn't carry them). Returns Allow for every verb that is
-// not one of the gated, robustly-ownable verbs.
+// (env = PerUserEnvPure::composeForUid(cfg, uid), uid > 0).
+//
+// Returns Allow for every verb that is NOT one of the gated classes:
+// dataset (attach_zfs/detach_zfs), loginclass (set_loginclass_rctl /
+// clear_loginclass_rctl), or jid/name-scoped (set_rctl, clear_rctl,
+// set_jail_cpuset, query_jail_rctl, signal_jail, destroy_jail).
+//
+// For the jid/name-scoped verbs: an unknown target (lookup returns
+// known=false) is allowed — the registry does not know about jails
+// created before 1.1.13. A known target with the wrong owner is
+// denied 403 with DenyForeignJid / DenyForeignJailName.
+Decision authorize(PrivOpsPure::Verb v,
+                   const Request &req,
+                   const PerUserEnvPure::Env &env,
+                   const OwnerLookup &lookup);
+
+// Backward-compatible thin wrapper for the dataset/loginclass-only
+// tests written for 1.1.12. Equivalent to authorize() with all other
+// Request fields empty and nullLookup().
 Decision authorize(PrivOpsPure::Verb v,
                    const std::string &dataset,
                    const std::string &loginclass,

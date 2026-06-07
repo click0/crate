@@ -20,6 +20,11 @@
 #include <utility>
 #include <vector>
 
+// 1.1.13: full type lives in lib/jid_owner_registry.h; the dispatcher
+// only needs a pointer at this header level, so a forward decl avoids
+// dragging the registry includes into every TU that #includes us.
+class JidOwnerRegistry;
+
 namespace Crated {
 
 // Top-level dispatcher used by daemon/routes.cpp's handlePrivOp.
@@ -224,5 +229,15 @@ void setUmbrellaConfig(const std::vector<std::pair<std::string, std::string>> &r
 // uid via getpeereid) consults it; the HTTP/admin path is host-wide and
 // unaffected. See lib/privops_authz_pure.h and docs/trust-model.md.
 void setPerUserAuthzConfig(const PerUserEnvPure::Config &cfg);
+
+// 1.1.13: register the jid->owner registry that drives authorization
+// for jid- and name-scoped verbs (signal_jail, set_rctl, clear_rctl,
+// set_jail_cpuset, query_jail_rctl, destroy_jail). Called once at
+// daemon startup with a long-lived JidOwnerRegistry instance — the
+// dispatcher captures it by raw pointer, so the instance must outlive
+// the daemon's request loop. Pass nullptr to disable the gate (the
+// dispatcher falls back to the 1.1.12 behavior — Allow for these
+// verbs).
+void setJidOwnerRegistry(::JidOwnerRegistry *registry);
 
 } // namespace Crated

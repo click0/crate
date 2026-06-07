@@ -59,6 +59,7 @@ atf_test_program{name="privops_wire_pure_test"}
 atf_test_program{name="privops_nv_pure_test"}
 atf_test_program{name="privops_client_pure_test"}
 atf_test_program{name="privops_authz_pure_test"}
+atf_test_program{name="jid_owner_registry_pure_test"}
 atf_test_program{name="runtime_paths_pure_test"}
 atf_test_program{name="per_user_net_pure_test"}
 atf_test_program{name="per_user_rctl_pure_test"}

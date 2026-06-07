@@ -6,6 +6,65 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.13] — 2026-06-07
+
+**Per-tenant authorization for jid- and name-scoped privops verbs.**
+Closes the largest remaining piece of the 1.1.x trust-model open gap
+(see `docs/trust-model.md`).
+
+1.1.12 added authorize-before-dispatch for the verbs that carry a robust
+ownership signal in the request itself — ZFS dataset prefix (`attach_zfs`
+/ `detach_zfs`) and RCTL umbrella loginclass. Every other libnv-socket
+verb still passed the gate, which meant a hostile operator in the
+privops group could name another operator's `jid` to `set_rctl`,
+`signal_jail`, `set_jail_cpuset`, `query_jail_rctl`, or destroy a jail
+by name.
+
+### What's wired
+
+- **New `JidOwnerRegistry`** (`lib/jid_owner_registry.{pure,h,cpp}`)
+  persisted at `/var/db/crate/jid_owners.tsv`. Atomic
+  tempfile+rename writes. Loaded at daemon startup.
+- **`PrivOpsAuthzPure::authorize` extended** with a `Request` bag and an
+  `OwnerLookup` callback. Six verbs now gated:
+  - jid-keyed: `set_rctl`, `clear_rctl`, `set_jail_cpuset`,
+    `query_jail_rctl`, `signal_jail`
+  - name-keyed: `destroy_jail`
+- **`handleCreateJail` records** the new jail's `(jid, uid, name, path)`
+  after `jail(8)` succeeds (jid resolved via `JailQuery::getJailByName`).
+- **`handleDestroyJail` forgets** the entry after the kernel removes
+  the jail.
+- **Bootstrap concession:** jails that pre-date 1.1.13 are not in the
+  registry; the gate allows the verb through (the alternative would
+  lock operators out of their existing jails on upgrade). The audit
+  tail still records every dispatch so unowned activity is visible.
+
+### Backward compatibility
+
+- The HTTP path (`uid == 0`, admin-only) skips the gate by design and
+  remains host-wide.
+- The legacy 4-arg `authorize(verb, dataset, loginclass, env)` form is
+  kept as a thin wrapper around the new one with a no-op lookup, so
+  every existing 1.1.12 unit test still passes unchanged.
+
+### Tests
+
+- New `jid_owner_registry_pure_test` (14 cases): serde round-trip,
+  blank/comment handling, fail-closed on malformed input (wrong column
+  count, empty column, out-of-range jid, duplicate jid), lookup hits
+  and misses.
+- Extended `privops_authz_pure_test`: own-jid Allow, foreign-jid
+  `DenyForeignJid`, unknown-jid bootstrap Allow, own/foreign/unknown
+  jail-name cases, null-callbacks safety, decision-reason coverage
+  for the two new codes.
+
+### Still open
+
+Path-scoped verbs (devfs `apply_ruleset` / `add_unhide_rule`,
+`mount_nullfs` / `unmount_nullfs`) and the `create_jail` `path`
+argument remain host-wide. Closing them needs a path→jail resolver
+layered on top of the registry; tracked as the next slice.
+
 ## [1.1.12] — 2026-05-26
 
 **Run a Wayland compositor *inside* a jail (`gui.mode: compositor`).**

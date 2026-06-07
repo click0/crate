@@ -103,20 +103,27 @@ privileged operations to crated(8)»*).
   викликача `<master>/<uid>`) та
   `set_loginclass_rctl`/`clear_loginclass_rctl` (`loginclass` має бути
   `crate-<uid>` викликача). Чужа ціль → `403` ще до handler'а (fail
-  closed).
+  closed). 1.1.13 поширює цей самий гейт на **jid- та name-scoped
+  верби**: `set_rctl`, `clear_rctl`, `set_jail_cpuset`, `query_jail_rctl`,
+  `signal_jail`, `destroy_jail`. Демон веде jid→owner-реєстр
+  (`lib/jid_owner_registry.*`), фіксує uid оператора в момент
+  `create_jail`; наступні верби від іншого оператора відбиваються `403`
+  за тим самим реєстром.
 
 Решта вербів проходить гейт: **host-global** верби
 (iface/pf/ipfw/nat/epair) не можна розпулити — лишаються host-wide за
-задумом; **jid-scoped** верби (`set_rctl`, `signal_jail`, `create_jail`,
-`set_jail_cpuset`, devfs, …) не несуть власника в запиті й поки не
-гейтяться — jid→owner реєстр відкладено (див. «Відкритий розрив»
-нижче). Обробники лишаються uid-сліпими; гейт іде попереду них.
+задумом; **path-scoped** верби (devfs `apply_ruleset` / `add_unhide_rule`,
+`mount_nullfs` / `unmount_nullfs`) і `path`-аргумент `create_jail` ще
+потребують path→jail-резолвера, щоб обвести їх тим самим гейтом —
+див. «Відкритий розрив» нижче. Обробники лишаються uid-сліпими; гейт
+іде попереду них.
 
 > Наслідок: будь-хто, хто має доступ до privops — `admin` bearer-токен
 > або членство в групі privops-сокета — досі має host-wide контроль над
-> **не-гейтнутою** поверхнею (lifecycle jail, сигнали, фаєрвол,
-> інтерфейси). Гейт 1.1.12 закриває крос-тенантний доступ до ZFS-датасетів
-> і RCTL-umbrella на libnv-шляху, але в загальному випадку privops
+> **не-гейтнутою** поверхнею (path-scoped devfs/mount-верби, фаєрвол,
+> інтерфейси). Гейти 1.1.12 + 1.1.13 закривають крос-тенантний доступ до
+> ZFS-датасетів, RCTL-umbrella, jid- і name-scoped поверхні на libnv-шляху,
+> але в загальному випадку privops
 > лишається єдиним доменом довіри — видати оператору доступ до privops
 > майже те саме, що видати старий setuid `crate(1)`.
 
@@ -249,18 +256,26 @@ privops безпечним для **взаємно недовірливих** о
    що `poolVisibleOnSocket` / `tokenAllowsContainer` — прив'язану до
    **цільового** jail/пулу/датасета, *перед* виконанням операції.
    *Зроблено (1.1.12):* dataset- і loginclass-верби
-   (`lib/privops_authz_pure.cpp`). *Лишилось:* jid-scoped верби
-   (`set_rctl`, `signal_jail`, `set_jail_cpuset`, devfs, `destroy_jail`,
-   `query_jail_rctl`) та аргументи-шляхи `create_jail` / `mount_nullfs`.
-   Їм потрібен **jid→owner реєстр** (записати uid оператора при
-   `create_jail`, перевіряти на кожному jid-верба), бо живий jid не несе
-   власника в запиті.
+   (`lib/privops_authz_pure.cpp`).
+   *Зроблено (1.1.13):* jid- та name-scoped верби — `set_rctl`,
+   `clear_rctl`, `set_jail_cpuset`, `query_jail_rctl`, `signal_jail`
+   (за `jid`) і `destroy_jail` (за `name`). Демон веде
+   **jid→owner-реєстр** (`lib/jid_owner_registry.*`, persist у
+   `/var/db/crate/jid_owners.tsv`); uid оператора записується у момент
+   `create_jail`; наступні jid/name-scoped верби від іншого оператора
+   відбиваються `403` ще до handler'а. Jail-и, створені до 1.1.13, у
+   реєстрі відсутні — bootstrap-поступка пропускає їх, щоб не зламати
+   upgrade-шлях. *Лишилось:* path-scoped верби (devfs `apply_ruleset` /
+   `add_unhide_rule`, `mount_nullfs` / `unmount_nullfs`) і `path`-
+   аргумент `create_jail`. Для них потрібен path→jail-резолвер поверх
+   реєстру.
 
 2. **Пер-операторний namespacing — це зручність, а не межа.** Будь-який
    аргумент `path` / `jid` / `dataset`, що перетинає privops-сокет, має
    бути перевиведений або зваліджований **на боці демона** проти
    uid-префікса викликача — ніколи не братись на віру. *Зроблено* для
-   `dataset`; *лишилось* для `path` / `jid` (див. (1)).
+   `dataset` (1.1.12) і для `jid` / `name` jail-у (1.1.13, через
+   реєстр); *лишилось* для `path`.
 
 3. **Fail closed при втраті ідентичності.** На будь-якому шляху, що
    авторизує, збій `getpeereid` має давати deny. Деградувати до no-op
