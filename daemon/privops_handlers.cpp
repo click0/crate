@@ -1018,6 +1018,18 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
         catch (...) { req.jid = 0; }
       }
     }
+    // 1.1.14: path-scoped verbs. The field name differs per verb —
+    // mount/unmount nullfs use "target" (the mount destination, which
+    // must lie under an owned jail); devfs verbs use "mount_path"
+    // (the jail's /dev mount). Empty for verbs that don't carry a
+    // path arg — checkOwnedPath then short-circuits to Allow.
+    switch (v) {
+      case Verb::MountNullfs:
+      case Verb::UnmountNullfs:        req.path = field("target");     break;
+      case Verb::ApplyDevfsRuleset:
+      case Verb::AddDevfsUnhideRule:   req.path = field("mount_path"); break;
+      default:                                                          break;
+    }
     PrivOpsAuthzPure::OwnerLookup lookup = g_jidOwnerRegistry
         ? g_jidOwnerRegistry->makeLookup()
         : PrivOpsAuthzPure::nullLookup();

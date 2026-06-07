@@ -150,10 +150,11 @@ using PrivOpsAuthzPure::Owner;
 using PrivOpsAuthzPure::OwnerLookup;
 using PrivOpsAuthzPure::Request;
 
-// Lookup that knows exactly one (jid, name) -> uid mapping. Useful for
-// driving the gate without pulling in the impure registry class.
+// Lookup that knows exactly one (jid, name, path) -> uid mapping.
+// Useful for driving the gate without pulling in the impure registry.
 OwnerLookup fixedOwner(unsigned ownedJid, const std::string &ownedName,
-                       uint32_t ownerUid) {
+                       uint32_t ownerUid,
+                       const std::string &ownedPath = "") {
   OwnerLookup l;
   l.byJid = [ownedJid, ownerUid](unsigned jid) -> Owner {
     Owner o;
@@ -165,11 +166,22 @@ OwnerLookup fixedOwner(unsigned ownedJid, const std::string &ownedName,
     if (name == ownedName) { o.known = true; o.uid = ownerUid; }
     return o;
   };
+  l.byPath = [ownedPath, ownerUid](const std::string &p) -> Owner {
+    Owner o;
+    if (ownedPath.empty()) return o;
+    const bool exact      = (p == ownedPath);
+    const bool descendant = (p.size() > ownedPath.size()
+                          && p.compare(0, ownedPath.size(), ownedPath) == 0
+                          && p[ownedPath.size()] == '/');
+    if (exact || descendant) { o.known = true; o.uid = ownerUid; }
+    return o;
+  };
   return l;
 }
 
 Request reqJid(unsigned j) { Request r; r.jid = j; return r; }
 Request reqName(std::string n) { Request r; r.jailName = std::move(n); return r; }
+Request reqPath(std::string p) { Request r; r.path = std::move(p); return r; }
 
 } // namespace
 
@@ -254,10 +266,68 @@ ATF_TEST_CASE_BODY(authorize_null_callbacks_in_lookup_allow) {
   // (e.g. registry not yet initialized), every probe is treated as
   // unknown -> Allow. Mirrors nullLookup() semantics for safety.
   auto e = env1000();
-  OwnerLookup empty;   // both std::function members default-constructed (null)
+  OwnerLookup empty;   // all std::function members default-constructed (null)
   ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::SignalJail, reqJid(77), e, empty)
               == Decision::Allow);
   ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::DestroyJail, reqName("web"), e, empty)
+              == Decision::Allow);
+  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::MountNullfs, reqPath("/jails/web/etc"),
+                                          e, empty) == Decision::Allow);
+}
+
+// --- 1.1.14: path-scoped gating ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(authorize_path_own_target_allowed);
+ATF_TEST_CASE_BODY(authorize_path_own_target_allowed) {
+  auto e = env1000();
+  auto l = fixedOwner(77, "web", 1000, "/jails/web");
+  for (Verb v : {Verb::MountNullfs, Verb::UnmountNullfs,
+                 Verb::ApplyDevfsRuleset, Verb::AddDevfsUnhideRule}) {
+    ATF_REQUIRE(PrivOpsAuthzPure::authorize(v, reqPath("/jails/web/dev"), e, l)
+                == Decision::Allow);
+    ATF_REQUIRE(PrivOpsAuthzPure::authorize(v, reqPath("/jails/web/etc/rc.conf"), e, l)
+                == Decision::Allow);
+  }
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(authorize_path_foreign_target_denied);
+ATF_TEST_CASE_BODY(authorize_path_foreign_target_denied) {
+  // Hostile operator (uid 1000) names a path inside a jail owned by 1001.
+  auto e = env1000();
+  auto l = fixedOwner(77, "web", /*ownerUid=*/1001, "/jails/web");
+  for (Verb v : {Verb::MountNullfs, Verb::UnmountNullfs,
+                 Verb::ApplyDevfsRuleset, Verb::AddDevfsUnhideRule}) {
+    ATF_REQUIRE(PrivOpsAuthzPure::authorize(v, reqPath("/jails/web/dev"), e, l)
+                == Decision::DenyForeignPath);
+    ATF_REQUIRE(PrivOpsAuthzPure::authorize(v, reqPath("/jails/web"), e, l)
+                == Decision::DenyForeignPath);
+  }
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(authorize_path_unknown_target_allowed_bootstrap);
+ATF_TEST_CASE_BODY(authorize_path_unknown_target_allowed_bootstrap) {
+  // Path outside every registered jail — pre-1.1.14 mount points and
+  // jails created before 1.1.13 fall here. Allow with audit.
+  auto e = env1000();
+  auto l = fixedOwner(77, "web", 1001, "/jails/web");
+  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::MountNullfs,
+                                          reqPath("/jails/legacy/etc"), e, l)
+              == Decision::Allow);
+  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::ApplyDevfsRuleset,
+                                          reqPath("/zpool/somewhere/dev"), e, l)
+              == Decision::Allow);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(authorize_path_substring_neighbor_not_owned);
+ATF_TEST_CASE_BODY(authorize_path_substring_neighbor_not_owned) {
+  // The fixedOwner lookup is slash-anchored: /jails/web does NOT own
+  // /jails/webhook. So a verb targeting the neighbor falls through to
+  // bootstrap-Allow, not DenyForeignPath — fewer false denies, same
+  // safety (it's not our jail, so whoever does own it is responsible).
+  auto e = env1000();
+  auto l = fixedOwner(77, "web", 1001, "/jails/web");
+  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::MountNullfs,
+                                          reqPath("/jails/webhook/etc"), e, l)
               == Decision::Allow);
 }
 
@@ -270,6 +340,7 @@ ATF_TEST_CASE_BODY(decision_reason_non_empty) {
   ATF_REQUIRE(!std::string(decisionReason(Decision::DenyForeignLoginclass)).empty());
   ATF_REQUIRE(!std::string(decisionReason(Decision::DenyForeignJid)).empty());
   ATF_REQUIRE(!std::string(decisionReason(Decision::DenyForeignJailName)).empty());
+  ATF_REQUIRE(!std::string(decisionReason(Decision::DenyForeignPath)).empty());
 }
 
 ATF_INIT_TEST_CASES(tcs) {
@@ -292,5 +363,9 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, authorize_destroy_jail_unknown_name_allowed_bootstrap);
   ATF_ADD_TEST_CASE(tcs, authorize_create_jail_never_gated_here);
   ATF_ADD_TEST_CASE(tcs, authorize_null_callbacks_in_lookup_allow);
+  ATF_ADD_TEST_CASE(tcs, authorize_path_own_target_allowed);
+  ATF_ADD_TEST_CASE(tcs, authorize_path_foreign_target_denied);
+  ATF_ADD_TEST_CASE(tcs, authorize_path_unknown_target_allowed_bootstrap);
+  ATF_ADD_TEST_CASE(tcs, authorize_path_substring_neighbor_not_owned);
   ATF_ADD_TEST_CASE(tcs, decision_reason_non_empty);
 }

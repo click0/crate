@@ -108,22 +108,26 @@ privileged operations to crated(8)»*).
   `signal_jail`, `destroy_jail`. Демон веде jid→owner-реєстр
   (`lib/jid_owner_registry.*`), фіксує uid оператора в момент
   `create_jail`; наступні верби від іншого оператора відбиваються `403`
-  за тим самим реєстром.
+  за тим самим реєстром. 1.1.14 додає до того ж реєстру longest-prefix
+  `byPath`-резолвер і поширює гейт на **path-scoped верби** —
+  `mount_nullfs` / `unmount_nullfs` (за `target`) та
+  `apply_devfs_ruleset` / `add_devfs_unhide_rule` (за `mount_path`).
+  Шлях, що лежить у jail, який в реєстрі належить іншому оператору,
+  відбивається `403` (`DenyForeignPath`).
 
 Решта вербів проходить гейт: **host-global** верби
 (iface/pf/ipfw/nat/epair) не можна розпулити — лишаються host-wide за
-задумом; **path-scoped** верби (devfs `apply_ruleset` / `add_unhide_rule`,
-`mount_nullfs` / `unmount_nullfs`) і `path`-аргумент `create_jail` ще
-потребують path→jail-резолвера, щоб обвести їх тим самим гейтом —
-див. «Відкритий розрив» нижче. Обробники лишаються uid-сліпими; гейт
-іде попереду них.
+задумом; `path`-аргумент `create_jail` — єдиний вузький залишок ще не
+гейтнутий, щоб його закрити, треба per-user path-префікс у
+`PerUserEnvPure::Env` (бо новенький шлях інакше нема з чим порівняти).
+Обробники лишаються uid-сліпими; гейт іде попереду них.
 
 > Наслідок: будь-хто, хто має доступ до privops — `admin` bearer-токен
 > або членство в групі privops-сокета — досі має host-wide контроль над
-> **не-гейтнутою** поверхнею (path-scoped devfs/mount-верби, фаєрвол,
-> інтерфейси). Гейти 1.1.12 + 1.1.13 закривають крос-тенантний доступ до
-> ZFS-датасетів, RCTL-umbrella, jid- і name-scoped поверхні на libnv-шляху,
-> але в загальному випадку privops
+> **не-гейтнутою** поверхнею (фаєрвол, інтерфейси, `path`-аргумент
+> `create_jail`). Гейти 1.1.12 + 1.1.13 + 1.1.14 закривають
+> крос-тенантний доступ до ZFS-датасетів, RCTL-umbrella, jid-, name- і
+> path-scoped поверхні на libnv-шляху, але в загальному випадку privops
 > лишається єдиним доменом довіри — видати оператору доступ до privops
 > майже те саме, що видати старий setuid `crate(1)`.
 
@@ -265,17 +269,25 @@ privops безпечним для **взаємно недовірливих** о
    `create_jail`; наступні jid/name-scoped верби від іншого оператора
    відбиваються `403` ще до handler'а. Jail-и, створені до 1.1.13, у
    реєстрі відсутні — bootstrap-поступка пропускає їх, щоб не зламати
-   upgrade-шлях. *Лишилось:* path-scoped верби (devfs `apply_ruleset` /
-   `add_unhide_rule`, `mount_nullfs` / `unmount_nullfs`) і `path`-
-   аргумент `create_jail`. Для них потрібен path→jail-резолвер поверх
-   реєстру.
+   upgrade-шлях.
+   *Зроблено (1.1.14):* path-scoped верби — `mount_nullfs` /
+   `unmount_nullfs` (за `target`) та `apply_devfs_ruleset` /
+   `add_devfs_unhide_rule` (за `mount_path`). Реєстр віддає
+   longest-prefix `byPath`-лукап; шлях у jail, що належить іншому
+   uid'ові, відбивається `403` (`DenyForeignPath`); шлях поза будь-яким
+   зареєстрованим jail-ом проходить за тією ж bootstrap-поступкою.
+   *Лишилось:* `path`-аргумент `create_jail`. Щоб його заваліджувати,
+   треба per-user path-префікс у `PerUserEnvPure::Env` (конфігурується
+   per-uid у crated.conf) — без цього новенький jail-шлях нема з чим
+   порівняти.
 
 2. **Пер-операторний namespacing — це зручність, а не межа.** Будь-який
    аргумент `path` / `jid` / `dataset`, що перетинає privops-сокет, має
    бути перевиведений або зваліджований **на боці демона** проти
    uid-префікса викликача — ніколи не братись на віру. *Зроблено* для
-   `dataset` (1.1.12) і для `jid` / `name` jail-у (1.1.13, через
-   реєстр); *лишилось* для `path`.
+   `dataset` (1.1.12), для `jid` / `name` jail-у (1.1.13, через реєстр)
+   та для path-scoped runtime-вербів (1.1.14, longest-prefix `byPath`
+   на тому ж реєстрі). *Лишилось:* path-prefix-перевірка `create_jail`.
 
 3. **Fail closed при втраті ідентичності.** На будь-якому шляху, що
    авторизує, збій `getpeereid` має давати deny. Деградувати до no-op
