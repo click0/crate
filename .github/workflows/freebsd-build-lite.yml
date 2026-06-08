@@ -68,6 +68,20 @@ jobs:
             done
             echo "::endgroup::"
 
+            echo "::group::Link crate(1) binary (catches missing -lxxx in PR CI)"
+            # 1.1.15-followup: the lite workflow previously skipped the
+            # final crate binary link, so missing-library bugs (e.g. the
+            # 2026-06 -lnv miss for the FreeBSD nvpair API) slipped past
+            # PR review and only fired in the full freebsd-build.yml — a
+            # path that has been blocked on a broken SSH runner for the
+            # past several weeks. Building the binary here closes that
+            # gap with one extra link step; the .o for libcrate.a is
+            # already produced as a side effect of build-unit-tests, so
+            # the actual extra cost is the ar + link, ~1-2s.
+            gmake -j"$NCPU" crate
+            ls -la crate
+            echo "::endgroup::"
+
             echo "::group::Build unit tests"
             # Drive via gmake so the test list lives in one place
             # (Makefile's UNIT_TESTS variable). Adding a new test requires
