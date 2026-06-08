@@ -79,7 +79,7 @@ SNMPD_OBJS = $(SNMPD_SRCS:.cpp=.o)
 PREFIX   ?= /usr/local
 CXXFLAGS += `pkg-config --cflags yaml-cpp`
 LDFLAGS  += `pkg-config --libs yaml-cpp`
-LIBS     += -ljail -lnetgraph -lmd -lpthread
+LIBS     += -ljail -lnetgraph -lmd -lpthread -lnv
 
 # Optional native API support (fallback to shell commands if not defined)
 ifdef HAVE_LIBZFS
