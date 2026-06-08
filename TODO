@@ -137,8 +137,27 @@ suitable for one-shot sprints; need their own design pass.
   `crate run`, `crate import`, `crate export` simultaneously —
   the on-disk archive format becomes a manifest pointing at
   multiple parent snapshots. Spec format extension required.
+  *Next step:* operator-input discovery session before any
+  design doc. Open questions blocking design:
+    - What are the canonical layer sources (base OS, language
+      runtime, app code) for the target workloads?
+    - Is the goal disk savings, cold-start latency, both, or
+      pull/push bandwidth on hub?
+    - How does layering interact with the existing ZFS-send
+      backup/replicate path (0.7.x) and per-user ZFS prefixes?
+  Without those answers a design doc is speculation; punted
+  until a real operator request makes the shape concrete.
 
 * (security) True getpeereid(2)-based unix-socket auth in crated.
+  *Design notes shipped 2026-06: docs/getpeereid-main-api-refactor.md
+  argues for deferring the big refactor — the trust model
+  intentionally treats the main HTTP API as a single trust domain,
+  so the per-tenant gate already lives on control sockets (Plane 2).
+  The bind→chmod race is closeable separately with a small
+  set_socket-based fix (~50 LOC); execute that as a 1.1.x hygiene PR
+  when convenient. The big refactor (Plan B in the doc) is reserved
+  for whenever a concrete per-tenant feature lands on the main HTTP
+  API, which is not on the roadmap today.*
   *Partial mitigation shipped in 0.8.19* — operators can now
   scope `/var/run/crate/crated.sock` access via filesystem perms
   (`listen.unix_owner / unix_group / unix_mode` in crated.conf).
