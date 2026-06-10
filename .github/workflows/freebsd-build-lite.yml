@@ -39,7 +39,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Compile + unit tests on FreeBSD
-        uses: cross-platform-actions/action@v0.32.0
+        # 2026-06: v0.32.0 -> v1.2.0 — Node 24 readiness (GitHub
+        # вимикає Node 20 на раннерах з 16 червня 2026). Деталі —
+        # коментар у freebsd-build.yml.
+        uses: cross-platform-actions/action@v1.2.0
         # Bumped from 20m to 30m: the per-test Makefile rule recompiles
         # every TEST_LINK_SRCS for each test binary (~30 files × ~40
         # tests = ~1200 compiles), so each new pure-test adds ~1m to

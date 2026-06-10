@@ -58,7 +58,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build + test on FreeBSD
-        uses: cross-platform-actions/action@v0.32.0
+        # 2026-06: bump v0.32.0 -> v1.2.0. Драйвер — GitHub примусово
+        # перемикає Node 20 -> Node 24 на раннерах з 16 червня 2026;
+        # v0.x екшени на Node 20, v1.0.0+ зібрані під Node 24. Breaking
+        # changes v1.0.0 нас не зачіпають (ми ubuntu-latest + QEMU;
+        # прибрані macOS-раннери та Xhyve). `run:`-input у v1.x
+        # deprecated на користь cpa.sh-степів, але працює; міграція на
+        # cpa.sh — окремий крок, не змішуємо з бампом.
+        uses: cross-platform-actions/action@v1.2.0
         timeout-minutes: 45
         with:
           operating_system: freebsd
