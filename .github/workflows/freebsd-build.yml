@@ -71,10 +71,17 @@ jobs:
           operating_system: freebsd
           version: ${{ matrix.freebsd-version }}
           shell: sh
-          # Стримуємо ресурси VM, щоб уникнути OOM на CI-runner'і.
-          # cross-platform-actions за замовчуванням дає ~6GB / 4 vCPU.
-          memory: 6G
-          cpu_count: 3
+          # 2026-06: прибрано явні memory: 6G / cpu_count: 3.
+          # Емпірика: lite-джоба (без overrides, дефолти екшена —
+          # 6G / 2 vCPU у v1.x) проходить SSH-фазу стабільно; full із
+          # цими overrides повисала на SSH у КОЖНОМУ спостереженому
+          # прогоні (6 тижневих cron'ів + 2 прогони 2026-06-10, на
+          # v0.32.0 і v1.2.0 однаково): VM бутиться, DNS у slirp
+          # мертвий, host-ssh висить до 45-хв таймауту. Єдина
+          # конфіг-різниця між робочою lite і висячою full — саме ці
+          # два рядки, тож вирівнюємо з known-good. Коментар про
+          # "default ~6GB / 4 vCPU" був застарілий: у v1.x дефолт
+          # cpu_count = 2, тобто 3 його ПІДВИЩУВАВ, а не стримував.
           run: |
             set -ex
 
