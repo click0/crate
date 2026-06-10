@@ -4,7 +4,7 @@
 (кілька операторів на одній машині), і контрибʼютори, які розширюють
 привілейовану поверхню.
 
-**Стосується:** 1.1.15 (rootless-модель + серія per-tenant authz 1.1.12 →
+**Стосується:** 1.1.16 (rootless-модель + серія per-tenant authz 1.1.12 →
 1.1.15 покриває кожен privops-верб з operator-controlled ownership-
 сигналом). Про ≤ 0.9.x setuid-модель і міграцію див.
 [`rootless-migration.md`](rootless-migration.md).
