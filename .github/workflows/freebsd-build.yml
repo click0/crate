@@ -2,16 +2,22 @@ name: FreeBSD Build (full)
 
 # Повна збірка через `gmake`, всі kyua-тести і ci-verify.sh.
 # Запускається на:
-#   * push у master       (gate'ить mainline);
-#   * pull_request → master (gate'ить злиття);
+#   * push у main         (gate'ить mainline);
+#   * pull_request → main (gate'ить злиття);
 #   * щотижневий cron     (ловить bit-rot із новими версіями FreeBSD);
 #   * workflow_dispatch   (ручний запуск).
 #
 # Швидкий смок-чек на feature-гілках живе в freebsd-build-lite.yml.
+#
+# 2026-06: push/PR-тригери вказували на `master`, але дефолтна гілка
+# репо — `main`, тож вони були мертві: full бігав ЛИШЕ за щотижневим
+# cron'ом. Саме тому -lnv-промах у лінку crate(1) жив у main тижнями
+# (lite не лінкував бінарники до 2026-06; weekly-прогони падали ще на
+# SSH-фазі до VM). Виправлено на `main`.
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     paths-ignore:
       - '**.md'
       - 'docs/**'
@@ -24,7 +30,7 @@ on:
       - 'crate.5'
       - '.github/workflows/freebsd-build-lite.yml'
   pull_request:
-    branches: [master]
+    branches: [main]
   schedule:
     # Щопонеділка о 04:00 UTC — ловить регресії від оновлень pkg.
     - cron: '0 4 * * 1'
