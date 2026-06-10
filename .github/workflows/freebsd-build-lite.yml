@@ -1,18 +1,17 @@
 name: FreeBSD Build (lite)
 
-# Швидкий компайл-чек + юніт-тести.
-# Запускається на push у будь-яку гілку, окрім main,
-# щоб давати швидкий зворотній зв'язок під час розробки.
-# Повний build (make + ci-verify) живе в freebsd-build.yml.
+# Швидкий компайл-чек + юніт-тести: boot + pkg + компіляція + лінк
+# crate(1) + юніт-сюїта (~3-5 хв, стабільно зелений).
 #
-# 2026-06: ignore-список вказував на `master`, але дефолтна гілка —
-# `main`; тож lite дублювався на main-пушах, а full (чиї push-тригери
-# теж дивились на master) не бігав узагалі. Тепер: lite — feature-
-# гілки, full — main. Виправлено разом із freebsd-build.yml.
+# Це ЄДИНЕ авто-FreeBSD-покриття: бігає на КОЖЕН пуш (включно з main).
+# Повна збірка (функціональні тести + ci-verify) у freebsd-build.yml
+# стала manual-only 2026-06 — GitHub-hosted QEMU-раннери для неї
+# непридатні (per-boot SSH/DNS-флейк + >90 хв на ci-verify); деталі
+# в шапці freebsd-build.yml. Доки full не повернеться (self-hosted
+# раннер), lite gate'ить усе, тож тут НЕ можна ignore'ити main.
 
 on:
   push:
-    branches-ignore: [main]
     paths-ignore:
       - '**.md'
       - 'docs/**'
