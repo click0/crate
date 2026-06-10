@@ -48,14 +48,10 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 2026-06: 50 -> 100. Після лікування SSH-hang з'ясувалось, що
-    # повний пайплайн (deps + build + повна kyua-сюїта з функціональними
-    # тестами + 29 секцій ci-verify.sh з runtime-інтеграцією на реальних
-    # jail'ах) фізично не влазив у старий ліміт: перший прогін, що
-    # взагалі дійшов до ci-verify, був зрізаний 45-хв step-таймаутом на
-    # секції T10/29. Сам білд швидкий (~3 хв, див. lite) — час їдять
-    # runtime-тести на 2 vCPU VM.
-    timeout-minutes: 100
+    # 2026-06: 100 -> 50. Немає сенсу марнувати 90 хв на завідомо
+    # мертвий hang; короткий цикл = повторний пуш (їх і так багато
+    # за день) ловить здорову VM швидше за один довгий "ану як".
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
@@ -64,17 +60,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 2026-06: повна історія розсліду SSH-hang'у задокументована,
+      # щоб наступний maintainer не починав з нуля:
+      #
+      # 8 травня (#160) у workflow додали `memory: 6G`/`cpu_count: 3`.
+      # З 11.05 по 08.06 — 6 поспіль weekly cron'ів падали на SSH-фазі:
+      # VM бутиться до `login:`, ntpd 45 хв спамить "Name does not
+      # resolve" (slirp-DNS мертвий усередині VM), host-ssh висне до
+      # step-timeout. 10.06 фікс мертвих тригерів (master->main, #216)
+      # розкрив справжню частоту: на v1.2.0 один 14.2-прогін пройшов
+      # SSH і доїхав до T10/29 ci-verify за 45 хв, тоді як 4 з 5
+      # прогонів обох VM далі зависають. Дефолтні ресурси і бамп
+      # екшена не дають детерміновано — це per-boot infra-флейк у
+      # пулі QEMU-VM cross-platform-actions, не наш конфіг.
+      #
+      # Рішення: тримати короткий step-timeout (45 хв), дочекатись
+      # здорової VM повторними пушами, а full-сюїту запускати
+      # послідовно (jails з ci-verify займають bulk часу). retry в
+      # одному прогоні неможливий тривіально: cross-platform-actions
+      # обгортка через nick-fields/retry потребує cpa.sh-міграції
+      # (deprecated `run:` -> мульти-степ синтаксис). Це окремий PR.
       - name: Build + test on FreeBSD
-        # 2026-06: bump v0.32.0 -> v1.2.0. Драйвер — GitHub примусово
-        # перемикає Node 20 -> Node 24 на раннерах з 16 червня 2026;
-        # v0.x екшени на Node 20, v1.0.0+ зібрані під Node 24. Breaking
-        # changes v1.0.0 нас не зачіпають (ми ubuntu-latest + QEMU;
-        # прибрані macOS-раннери та Xhyve). `run:`-input у v1.x
-        # deprecated на користь cpa.sh-степів, але працює; міграція на
-        # cpa.sh — окремий крок, не змішуємо з бампом.
         uses: cross-platform-actions/action@v1.2.0
-        # 45 -> 90: див. коментар біля job-level timeout.
-        timeout-minutes: 90
+        timeout-minutes: 45
         with:
           operating_system: freebsd
           version: ${{ matrix.freebsd-version }}
