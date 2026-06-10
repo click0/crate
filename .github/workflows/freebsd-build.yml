@@ -48,7 +48,14 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    # 2026-06: 50 -> 100. Після лікування SSH-hang з'ясувалось, що
+    # повний пайплайн (deps + build + повна kyua-сюїта з функціональними
+    # тестами + 29 секцій ci-verify.sh з runtime-інтеграцією на реальних
+    # jail'ах) фізично не влазив у старий ліміт: перший прогін, що
+    # взагалі дійшов до ci-verify, був зрізаний 45-хв step-таймаутом на
+    # секції T10/29. Сам білд швидкий (~3 хв, див. lite) — час їдять
+    # runtime-тести на 2 vCPU VM.
+    timeout-minutes: 100
     strategy:
       fail-fast: false
       matrix:
@@ -66,7 +73,8 @@ jobs:
         # deprecated на користь cpa.sh-степів, але працює; міграція на
         # cpa.sh — окремий крок, не змішуємо з бампом.
         uses: cross-platform-actions/action@v1.2.0
-        timeout-minutes: 45
+        # 45 -> 90: див. коментар біля job-level timeout.
+        timeout-minutes: 90
         with:
           operating_system: freebsd
           version: ${{ matrix.freebsd-version }}
