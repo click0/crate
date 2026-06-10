@@ -6,6 +6,77 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.16] — 2026-06-10
+
+**Hygiene release: CI, build, and process fixes after the 1.1.12 →
+1.1.15 per-tenant authz series.** No new user-facing features; every
+change is in the build system, CI, or developer docs.
+
+### Build
+
+- `lib/nv_protocol.cpp` + `lib/privops_client.cpp` +
+  `daemon/privops_listener.cpp` use FreeBSD's nvpair API
+  (`<sys/nv.h>`, `nvlist_*`), but the Makefile only ever set
+  `-lnvpair` (Solaris-style OpenZFS nvpair, distinct lib). The
+  `crate(1)` / `crated` link silently relied on a transitive symbol
+  resolution that broke on FreeBSD: `undefined symbol:
+  FreeBSD_nvlist_create` and 11 siblings. Latent because the
+  PR-level lite workflow didn't link the binaries. Fixed by adding
+  `-lnv` to the unconditional `LIBS`.
+
+### CI
+
+- `freebsd-build-lite.yml` now also runs `gmake crate`, so a missing
+  link library can't slip past PR review again. `lib/*` doesn't
+  depend on `cpp-httplib`, so the lite pkg set is sufficient.
+- `freebsd-build.yml`'s `push` / `pull_request` triggers had been
+  pointing at `master` while the repo's default branch is `main` —
+  the full workflow had not run on a merge for months and was
+  effectively dead-code. Triggers retargeted to `main`; the cron
+  cadence dropped from weekly to monthly.
+- After observing the full workflow on real merges, GitHub-hosted
+  FreeBSD runners (QEMU via `cross-platform-actions`) turn out to
+  flake the SSH/DNS handshake on ~4 of 5 boots, and even a healthy
+  boot can't fit the 29-section `ci-verify.sh` jail tests in 90 min.
+  The full workflow was converted to `workflow_dispatch`-only; lite
+  (boot + pkg + compile + link `crate(1)` + unit suite, ~3-5 min,
+  stable green) now gates every push including `main`. Header in
+  `freebsd-build.yml` documents the investigation and the path back
+  to automation (self-hosted FreeBSD runner, or upstream slirp fix).
+- `cross-platform-actions/action` bumped `v0.32.0` → `v1.2.0` in all
+  three pinned sites for the June 16 Node 24 cutover. v1.x has no
+  breaking changes affecting us (`ubuntu-latest` + QEMU). The
+  superstitious `memory: 6G` / `cpu_count: 3` overrides were removed
+  (the comment claimed they "restrained" defaults; v1.x default
+  `cpu_count` is 2, so `3` was raising it).
+
+### Operator docs
+
+- `scripts/on-hardware-validation.sh` + `docs/on-hardware-validation.md`
+  consolidate the "on real FreeBSD hardware" unchecked checkboxes
+  from PRs #210..#213 (compositor runtime, jid→owner registry
+  bookkeeping, path-scoped gate against `mount(8)` canonicalisation,
+  `create_jail` path-prefix gate) into one POSIX-`sh` driver
+  (`PASS:`/`FAIL:`/`SKIP:` lines + final summary) plus a runbook
+  for the genuinely-manual cross-tenant 403 checks.
+- `docs/getpeereid-main-api-refactor.md` records the design call to
+  *defer* the big getpeereid refactor (trust model intentionally
+  treats the main HTTP API as a single trust domain; per-tenant
+  isolation lives on control sockets) and documents three options
+  if a future feature forces it.
+- `TODO` audit: retired completed entries that still presented as
+  open or in-progress (Rootless containers — shipped through 1.0.0;
+  Hub scheduling — shipped 0.8.40 + 0.8.43; `crate update --pkg-only`
+  — shipped 0.8.41), backfilled the Done list from 0.8.21/0.8.37 to
+  cover the 1.1.10–1.1.15 arrivals, and split off "full base-system
+  update" as its own honest open entry.
+
+### Series complete
+
+`docs/trust-model.{md,uk.md}` Applies-to bumped from `1.1.15` to
+`1.1.16`. The 1.1.12 → 1.1.15 per-tenant gate series remains the
+substantive content; this release is the cleanup tail.
+
 ## [1.1.15] — 2026-06-07
 
 **Per-tenant authorization for `create_jail`'s `path` argument —
