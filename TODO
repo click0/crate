@@ -12,22 +12,17 @@ operational quality.)
 
 === Medium priority — operational quality ===
 
-* (feature, partial) `crate update TARGET --pkg-only` — in-place
-  pkg upgrade inside a running jail. *Shipped in 0.8.41.* Runs
-  `pkg upgrade [-n] [-y]` via jexec(8); jail keeps running.
-  Full base-system update remains open: it would need a
-  snapshot-and-rollback dance because /usr/lib, /usr/sbin, /lib
-  are in use by the jail's running processes. Tracked as a
-  separate larger item.
-
-* (feature) Hub scheduling — automatic container placement on the
-  least-loaded host. *Shipped end-to-end* — endpoint in 0.8.40
-  (`GET /api/v1/scheduling/least-loaded[?current=<name>]`),
-  CLI helper in 0.8.43 (`crate-hub schedule <jail> --from
-  <host:port> --from-token-file <p> --to-token-file <p>
-  [--current <name>] [--hub-url <url>] [--dry-run]`). Anti-flap
-  (within 10% of best -> keep current) on both the endpoint and
-  the CLI exit-early path.
+* (feature) Full base-system update inside a running jail.
+  `crate update --pkg-only` (shipped 0.8.41) covers packages only;
+  the base system (/usr/lib, /usr/sbin, /lib) is in use by the
+  jail's running processes, so an in-place freebsd-update is not
+  safe. Needs a snapshot-and-rollback dance:
+    1. zfs snapshot of the jail dataset
+    2. apply base update into a clone (or with the jail stopped)
+    3. verify boot/healthcheck, promote or roll back
+  Interacts with the warm-template cache (0.7.5) and the restart
+  policy (the jail must come back up under its own policy after
+  the swap). Design pass needed before implementation.
 
 === Out of scope (separate repository) ===
 
@@ -47,90 +42,6 @@ operational quality.)
 
 These items each represent multi-week / multi-release work. Not
 suitable for one-shot sprints; need their own design pass.
-
-* (feature, in progress on 0.9.x) Rootless containers — multi-week
-  refactor to remove the setuid root bit from `crate(1)` and
-  delegate privileged operations to a daemon (`crated`).
-  *0.9.0 landed the privileged-operations verb taxonomy
-  (`lib/privops_pure.{h,cpp}`): 14 verbs, per-verb request
-  structs, per-verb validators, 46 unit tests. Contract only —
-  no behaviour change. Subsequent 0.9.x releases ship the wire
-  format (0.9.1), one handler per release (0.9.2-0.9.7),
-  per-user namespacing (0.9.8), opt-out flag flip (0.9.9),
-  setuid bit removal in 1.0.0.*
-
-  Note on framing: the current setuid root model is NOT "leaky".
-  It has the expected hardening for a 2026 setuid binary —
-  env-sanitization at startup (CWE-426 + CWE-250 explicitly
-  cited in cli/main.cpp:42-69), absolute paths via CRATE_PATH_*
-  for every external binary, all execs go through execv with
-  explicit argv (no shell expansion, no system()/popen()
-  anywhere), pure-module validators on every operator-supplied
-  string (paths, iface names, datasets, ports, RCTL keys), and
-  audit logging of every mutating command. Single-tenant
-  homelab + single-tenant prod use cases are well-served.
-
-  Why rootless still matters:
-    - blast-radius reduction on hypothetical 3rd-party CVE
-      (yaml-cpp, libssl, tar) — exploit gets caller UID, not root
-    - multi-tenant safety — Alice can't `crate run` Bob's jail
-      (today the binary trusts whoever invokes it; filesystem
-      perms on /var/run/crate/ don't scope per-user)
-    - compliance "no setuid root binaries on host" policies
-
-  Foundations already in tree:
-    0.6.4   WebSocket console — separate listener (pattern for
-            replacing cpp-httplib with a hand-rolled accept loop)
-    0.7.11  Control sockets with getpeereid + per-group access
-            (per-operator unix sockets exist; multi-tenant gate
-            for control plane works today)
-    0.7.14  Capsicum sandbox (per-fd cap_rights_limit)
-    0.8.19  Filesystem-perm gate on main socket
-            (listen.unix_owner / unix_group / unix_mode)
-    0.8.21  Spec registry {name -> abs-path} so daemon knows
-            what to start without operator re-supplying -f
-    0.8.23  DrmSession::probeDevice via libseat — rootless DRM
-            access foundation
-    0.8.24  cap_syslog dual-write — audit resilient to a future
-            cap_enter() of crated
-
-  What the refactor needs:
-    - Privileged daemon protocol: extend control sockets for
-      the full operation set (create_jail, mount, set_rctl,
-      attach_zfs, configure_iface, add_pf_rule, add_ipfw_rule).
-      Per-verb argv validation on the daemon side — never trust
-      caller input. ~3-5 days.
-    - lib/run.cpp split (~1700 LOC currently) into "needs root"
-      → IPC to crated, and "doesn't" → inline. Big refactor;
-      ~1 week.
-    - Per-user resource namespacing:
-        * jail name prefix: <user>-<jailname>
-        * ZFS dataset prefix: per-user via crated.conf ACL
-        * Network pool sub-CIDR per user
-          (alice: 10.66.1.0/24, bob: 10.66.2.0/24, …)
-        * RCTL accounting groups per UID
-        * /var/run/crate/<uid>/ for per-user lease + log files
-      ~1 week.
-    - Setuid bit removal in Makefile install target
-      (-m 0755 instead of 04755). Migration path for legacy
-      setuid deployments — operator runs crated and switches
-      gradually.
-    - Documentation: docs/rootless-migration.md, crated.8 update,
-      multi-tenant operator config example. ~3-5 days.
-    - Tests for security boundaries (alice can't see bob's jails;
-      ZFS dataset escape attempts; pool-exhaustion DoS;
-      per-user audit filtering). ~1 week.
-
-  Estimated total: 4-6 weeks of focused work, splittable into
-  ~10 point releases (0.9.0 through 0.9.9, 1.0.0 to remove the
-  setuid bit by default). NOT a one-shot sprint.
-
-  Trigger: tracked. Not a current priority. Becomes urgent when
-  one of:
-    - a real multi-tenant operator request lands
-    - a compliance audit requires "no setuid root binaries"
-    - a high-severity CVE in a linked library makes the
-      blast-radius story acute
 
 * (feature) Layered images — ZFS-based layering through clones
   instead of monolithic .crate archives. Touches `crate create`,
@@ -325,3 +236,40 @@ Items completed and removed from this file:
 - Spec registry + control-plane PostStart (0.8.21).
 - 0.8.21 dead-code audit closure — see CHANGELOG entries for 0.8.22
   through 0.8.37.
+- `crate update TARGET --pkg-only` — in-place pkg upgrade inside a
+  running jail via jexec(8); jail keeps running (0.8.41). The full
+  base-system update remains open — see the Medium-priority entry.
+- Hub scheduling — automatic container placement on the least-loaded
+  host. Endpoint in 0.8.40 (`GET /api/v1/scheduling/least-loaded
+  [?current=<name>]`), CLI helper in 0.8.43 (`crate-hub schedule`).
+  Anti-flap (within 10% of best -> keep current) on both the endpoint
+  and the CLI exit-early path.
+- Rootless containers — the full multi-release refactor shipped as
+  planned: verb taxonomy (0.9.0), libnv wire format (0.9.1), one
+  handler per release (0.9.2-0.9.7), per-user namespacing (0.9.8 —
+  lib/per_user_*, lib/runtime_paths_pure), opt-out flag flip (0.9.9),
+  setuid bit removal (1.0.0 — Makefile installs crate(1) -m 0755;
+  privileged ops delegate to crated(8) over the group-gated libnv
+  privops socket). docs/rootless-migration.md documents the
+  migration. Extended in 1.1.12-1.1.15 with authorize-before-dispatch
+  per-tenant gates: dataset/loginclass (1.1.12), jid/name via the
+  jid->owner registry (1.1.13 — lib/jid_owner_registry*), path-scoped
+  mount/devfs verbs (1.1.14), create_jail path-prefix (1.1.15).
+  Every privops verb that carries an operator-controlled ownership
+  signal is now gated; see docs/trust-model.md for what is and is
+  not a tenant boundary.
+- Wayland compositor inside a jail — `gui.mode: compositor` with
+  headless (wayvnc, loopback-bound by default via gui.vnc_bind) and
+  drm (seatd) backends; operator-supplied compositor command
+  (1.1.12 — lib/compositor_pure.* + lib/run_gui.cpp). Built-in
+  wayvnc auth remains a tracked follow-up (PR #210 body).
+- Graceful jail stop via signal_jail privops verb (1.1.11) and
+  devfs ruleset/unhide verbs (1.1.10) — closed the rootless
+  regressions in `crate stop` and terminal/GUI devfs isolation.
+- On-hardware validation runbook + driver script for the
+  1.1.10-1.1.15 features (scripts/on-hardware-validation.sh +
+  docs/on-hardware-validation.md).
+- FreeBSD link fix + PR-CI hardening — -lnv for the base nvpair
+  API consumed by nv_protocol/privops; freebsd-build-lite now also
+  links crate(1) so missing-library bugs surface in PR CI instead
+  of only in the (currently broken) full workflow.
