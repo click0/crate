@@ -62,7 +62,7 @@ surface; 1.0.0 removed the setuid bit (`Makefile`, comment at the
 operator and delegates privileged operations to crated(8)"*).
 
 The single-trust-domain property did **not** disappear — it relocated.
-Reasoning about isolation on 1.1.15 means reasoning about who can reach
+Reasoning about isolation on 1.1.16 means reasoning about who can reach
 **privops**, not who can run `crate(1)`.
 
 ---

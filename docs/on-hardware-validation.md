@@ -8,7 +8,7 @@ near-static checks; this doc covers the genuinely-manual end-to-end ones
 (GUI viewing, foreign-tenant `403`s through the privops socket).
 
 Audience: operator with root on a FreeBSD 14.2+ host, a ZFS pool, and a
-`crate(1)` / `crated(8)` from `main` ≥ 1.1.15.
+`crate(1)` / `crated(8)` from `main` ≥ 1.1.16.
 
 ---
 
@@ -21,7 +21,7 @@ sysrc crated_enable=YES
 service crated start
 
 # 0.2 verify version
-crate --version           # expect 1.1.15+
+crate --version           # expect 1.1.16+
 crated --version 2>&1     # same
 
 # 0.3 (optional, enables the 1.1.15 gate) — pick a pool root for tenants
