@@ -46,7 +46,10 @@ jobs:
           echo "Building tag=$TAG version=$VERSION for FreeBSD ${{ matrix.freebsd-version }}"
 
       - name: Build on FreeBSD
-        uses: cross-platform-actions/action@v0.32.0
+        # 2026-06: v0.32.0 -> v1.2.0 — Node 24 readiness (GitHub
+        # вимикає Node 20 на раннерах з 16 червня 2026). Деталі —
+        # коментар у freebsd-build.yml.
+        uses: cross-platform-actions/action@v1.2.0
         timeout-minutes: 45
         with:
           operating_system: freebsd

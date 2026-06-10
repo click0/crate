@@ -1,18 +1,17 @@
 name: FreeBSD Build (lite)
 
-# Швидкий компайл-чек + юніт-тести.
-# Запускається на push у будь-яку гілку, окрім main,
-# щоб давати швидкий зворотній зв'язок під час розробки.
-# Повний build (make + ci-verify) живе в freebsd-build.yml.
+# Швидкий компайл-чек + юніт-тести: boot + pkg + компіляція + лінк
+# crate(1) + юніт-сюїта (~3-5 хв, стабільно зелений).
 #
-# 2026-06: ignore-список вказував на `master`, але дефолтна гілка —
-# `main`; тож lite дублювався на main-пушах, а full (чиї push-тригери
-# теж дивились на master) не бігав узагалі. Тепер: lite — feature-
-# гілки, full — main. Виправлено разом із freebsd-build.yml.
+# Це ЄДИНЕ авто-FreeBSD-покриття: бігає на КОЖЕН пуш (включно з main).
+# Повна збірка (функціональні тести + ci-verify) у freebsd-build.yml
+# стала manual-only 2026-06 — GitHub-hosted QEMU-раннери для неї
+# непридатні (per-boot SSH/DNS-флейк + >90 хв на ci-verify); деталі
+# в шапці freebsd-build.yml. Доки full не повернеться (self-hosted
+# раннер), lite gate'ить усе, тож тут НЕ можна ignore'ити main.
 
 on:
   push:
-    branches-ignore: [main]
     paths-ignore:
       - '**.md'
       - 'docs/**'
@@ -39,7 +38,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Compile + unit tests on FreeBSD
-        uses: cross-platform-actions/action@v0.32.0
+        # 2026-06: v0.32.0 -> v1.2.0 — Node 24 readiness (GitHub
+        # вимикає Node 20 на раннерах з 16 червня 2026). Деталі —
+        # коментар у freebsd-build.yml.
+        uses: cross-platform-actions/action@v1.2.0
         # Bumped from 20m to 30m: the per-test Makefile rule recompiles
         # every TEST_LINK_SRCS for each test binary (~30 files × ~40
         # tests = ~1200 compiles), so each new pure-test adds ~1m to

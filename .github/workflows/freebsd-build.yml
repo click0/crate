@@ -1,44 +1,30 @@
 name: FreeBSD Build (full)
 
 # Повна збірка через `gmake`, всі kyua-тести і ci-verify.sh.
-# Запускається на:
-#   * push у main         (gate'ить mainline);
-#   * pull_request → main (gate'ить злиття);
-#   * щотижневий cron     (ловить bit-rot із новими версіями FreeBSD);
-#   * workflow_dispatch   (ручний запуск).
 #
-# Швидкий смок-чек на feature-гілках живе в freebsd-build-lite.yml.
+# ⚠️ MANUAL-ONLY (workflow_dispatch). Авто-тригери (push / pull_request
+# / cron) свідомо ВИМКНЕНО 2026-06 — GitHub-hosted FreeBSD-раннери
+# (QEMU-VM через cross-platform-actions) для цього пайплайна
+# непридатні з ДВОХ незалежних причин, підтверджених на ~7 прогонах:
 #
-# 2026-06: push/PR-тригери вказували на `master`, але дефолтна гілка
-# репо — `main`, тож вони були мертві: full бігав ЛИШЕ за щотижневим
-# cron'ом. Саме тому -lnv-промах у лінку crate(1) жив у main тижнями
-# (lite не лінкував бінарники до 2026-06; weekly-прогони падали ще на
-# SSH-фазі до VM). Виправлено на `main`.
+#   1. Per-boot SSH/DNS-флейк: ~4 з 5 бутів VM зависають — slirp-DNS
+#      усередині гостя мертвий, host-side ssh висне до step-таймауту
+#      (console: ntpd 45+ хв "Name does not resolve").
+#   2. Навіть здоровий бут НЕ ВСТИГАЄ: 29 секцій ci-verify.sh
+#      (runtime-тести на реальних jail'ах) на 2-vCPU QEMU-VM з'їдають
+#      >90 хв — спостережений прогін пройшов SSH і вмер на T10/29.
+#
+# Тобто full не може надійно нічого gate'ити. FreeBSD-покриття на
+# кожен пуш дає freebsd-build-lite.yml (boot + pkg + компіляція +
+# лінк crate(1) + юніт-сюїта, ~3-5 хв, стабільно зелений). Цей
+# workflow лишається для ручної глибокої валідації (функціональні
+# тести + ci-verify) — запускай вручну і ретрай до здорової VM.
+#
+# Повернути в авто-CI можна лише після переходу на self-hosted
+# FreeBSD-раннер (нативна збірка ~3-5 хв) АБО якщо upstream
+# cross-platform-actions полагодить slirp-флейк.
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE'
-      - 'TODO'
-      - 'CHANGELOG.md'
-      - 'completions/**'
-      - 'examples/**'
-      - 'templates/**'
-      - 'crate.5'
-      - '.github/workflows/freebsd-build-lite.yml'
-  pull_request:
-    branches: [main]
-  schedule:
-    # 1-го числа щомісяця о 04:00 UTC — ловить bit-rot від оновлень
-    # pkg / нових версій FreeBSD. Було щотижня; зменшено до щомісяця,
-    # щоб не ганяти важкі FreeBSD-VM даремно: тепер, коли push у main
-    # тригерить full (тригери полагоджено 2026-06), кожен merge і так
-    # отримує повну збірку — cron лишається тільки страховкою для
-    # тихих періодів без комітів.
-    - cron: '0 4 1 * *'
   workflow_dispatch:
 
 concurrency:
@@ -48,7 +34,11 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    # Manual-only: щедрий ліміт, щоб ручний прогін на здоровій VM
+    # встиг дофінішувати ci-verify (>90 хв на 2-vCPU QEMU). Якщо
+    # попався флейковий бут — оператор просто перезапускає; марно
+    # горіти 6 год не даємо.
+    timeout-minutes: 200
     strategy:
       fail-fast: false
       matrix:
@@ -57,17 +47,43 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Чому цей workflow manual-only — повна історія розсліду
+      # 2026-06 (щоб наступний maintainer не починав з нуля):
+      #
+      # 8 травня (#160) у workflow додали `memory: 6G`/`cpu_count: 3`.
+      # З 11.05 по 08.06 — 6 поспіль weekly cron'ів падали на SSH-фазі:
+      # VM бутиться до `login:`, ntpd 45 хв спамить "Name does not
+      # resolve" (slirp-DNS мертвий усередині VM), host-ssh висне до
+      # step-timeout. 10.06 фікс мертвих тригерів (master->main, #216)
+      # розкрив справжню частоту: ~4 з 5 бутів обох VM зависають —
+      # дефолтні ресурси і бамп екшена v1.2.0 не лікують, бо це
+      # per-boot infra-флейк у пулі QEMU-VM, не наш конфіг. А єдиний
+      # бут, що пройшов SSH, уперся в ДРУГУ ваду: 29 секцій ci-verify
+      # на реальних jail'ах не влазять у 90 хв (вмер на T10/29).
+      #
+      # Дві незалежні вади => full не може надійно gate'ити CI =>
+      # workflow_dispatch only. Авто-покриття дає lite. Повернення в
+      # авто-CI = self-hosted FreeBSD-раннер (нативна збірка ~3-5 хв)
+      # або upstream-фікс slirp-флейку.
       - name: Build + test on FreeBSD
-        uses: cross-platform-actions/action@v0.32.0
-        timeout-minutes: 45
+        uses: cross-platform-actions/action@v1.2.0
+        # Manual-режим: щедрий step-ліміт під здоровий повний прогін.
+        timeout-minutes: 190
         with:
           operating_system: freebsd
           version: ${{ matrix.freebsd-version }}
           shell: sh
-          # Стримуємо ресурси VM, щоб уникнути OOM на CI-runner'і.
-          # cross-platform-actions за замовчуванням дає ~6GB / 4 vCPU.
-          memory: 6G
-          cpu_count: 3
+          # 2026-06: прибрано явні memory: 6G / cpu_count: 3.
+          # Емпірика: lite-джоба (без overrides, дефолти екшена —
+          # 6G / 2 vCPU у v1.x) проходить SSH-фазу стабільно; full із
+          # цими overrides повисала на SSH у КОЖНОМУ спостереженому
+          # прогоні (6 тижневих cron'ів + 2 прогони 2026-06-10, на
+          # v0.32.0 і v1.2.0 однаково): VM бутиться, DNS у slirp
+          # мертвий, host-ssh висить до 45-хв таймауту. Єдина
+          # конфіг-різниця між робочою lite і висячою full — саме ці
+          # два рядки, тож вирівнюємо з known-good. Коментар про
+          # "default ~6GB / 4 vCPU" був застарілий: у v1.x дефолт
+          # cpu_count = 2, тобто 3 його ПІДВИЩУВАВ, а не стримував.
           run: |
             set -ex
 
