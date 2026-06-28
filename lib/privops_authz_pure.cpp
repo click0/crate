@@ -66,6 +66,20 @@ Decision checkOwnedPath(const std::string &path,
   return o.uid == env.uid ? Decision::Allow : Decision::DenyForeignPath;
 }
 
+// 1.1.17: a mount_nullfs SOURCE is "foreign" when it lies inside the
+// per-user tenant root (env.pathMasterPrefix) but NOT inside the
+// caller's own slice (env.pathPrefix). Host paths and GUI runtime
+// sockets (/tmp/.X11-unix, the host Wayland/PulseAudio sockets, …)
+// fall outside the tenant root entirely and are allowed — privops is
+// a single trust domain w.r.t. the host; this gate only enforces
+// tenant-vs-tenant isolation. Unconfigured deployment (empty
+// pathMasterPrefix) -> nothing to gate.
+bool sourceForeign(const std::string &source, const PerUserEnvPure::Env &env) {
+  if (env.pathMasterPrefix.empty()) return false;       // opt-in
+  return pathOwned(source, env.pathMasterPrefix)        // under the tenant root
+      && !pathOwned(source, env.pathPrefix);            // but not the caller's
+}
+
 } // namespace
 
 Decision authorize(PrivOpsPure::Verb v,
@@ -90,18 +104,28 @@ Decision authorize(PrivOpsPure::Verb v,
                  : Decision::DenyForeignLoginclass;
 
     // jid-scoped verbs gated against the registry (1.1.13).
+    // 1.1.17: configure_iface joins the group — it carries a `jid` and
+    // jexec's ifconfig INSIDE that jail + moves a host iface into its
+    // vnet, so naming a foreign jid is a cross-tenant operation, not a
+    // host-global one (it was wrongly in the default Allow arm).
     case V::SetRctl:
     case V::ClearRctl:
     case V::SetJailCpuset:
     case V::QueryJailRctl:
     case V::SignalJail:
+    case V::ConfigureIface:
       return checkOwnedJid(req.jid, env, lookup);
 
     // Name-scoped verb. The jail name itself is brand-new and there's
     // nothing in the registry to compare against on create; the gate
     // for create_jail is below (path-prefix). destroy_jail gates on
     // the name — it must be one this caller created.
+    // 1.1.17: reclaim_iface_from_vnet joins the name-scoped group — it
+    // names a jail (`jail_name`) and pulls an iface OUT of that jail's
+    // vnet, so naming a foreign jail steals/DoSes its networking. Was
+    // wrongly in the default Allow arm.
     case V::DestroyJail:
+    case V::ReclaimIfaceFromVnet:
       return checkOwnedName(req.jailName, env, lookup);
 
     // 1.1.15: create_jail's brand-new path must fall inside the
@@ -124,18 +148,31 @@ Decision authorize(PrivOpsPure::Verb v,
     // An unknown path (no registry hit) is allowed — same bootstrap
     // concession as the jid/name gate (jails predating 1.1.13 aren't
     // in the registry).
-    case V::MountNullfs:
     case V::UnmountNullfs:
     case V::ApplyDevfsRuleset:
     case V::AddDevfsUnhideRule:
       return checkOwnedPath(req.path, env, lookup);
 
+    // 1.1.17: mount_nullfs gates BOTH ends — the target (must be inside
+    // an owned jail, like 1.1.14) AND the source (must not reach into
+    // another tenant's space). Previously only the target was checked,
+    // so an operator could bind-mount another tenant's prefix into
+    // their own jail and read it.
+    case V::MountNullfs: {
+      Decision td = checkOwnedPath(req.path, env, lookup);
+      if (td != Decision::Allow) return td;
+      return sourceForeign(req.source, env)
+                 ? Decision::DenyForeignSource
+                 : Decision::Allow;
+    }
+
     default:
-      // Remaining host-global verbs (interface / pf / ipfw / nat /
-      // epair) cannot be pool-scoped — they touch shared host state
-      // and stay host-wide by design. create_jail's path argument
-      // still needs validation against a per-user path prefix —
-      // tracked as the next open item once Env grows pathPrefix.
+      // Remaining host-global verbs (teardown_iface, set_iface_up,
+      // bridge_*, add_pf_rule, add_ipfw_rule, configure_ipfw_nat,
+      // create_epair, …) operate on shared host state with no
+      // tenant-specific target, so they cannot be pool-scoped and stay
+      // host-wide by design — consistent with privops being a single
+      // trust domain for the host.
       return Decision::Allow;
   }
 }
@@ -166,6 +203,8 @@ const char *decisionReason(Decision d) {
       return "path lies inside a jail owned by a different operator";
     case Decision::DenyForeignCreatePath:
       return "create_jail path is outside the caller's per-user path prefix";
+    case Decision::DenyForeignSource:
+      return "mount source lies inside another operator's per-user path prefix";
   }
   return "deny";
 }

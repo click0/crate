@@ -18,10 +18,11 @@ namespace {
 // An Env scoped to uid 1000 with a per-user ZFS split configured.
 PerUserEnvPure::Env env1000() {
   PerUserEnvPure::Env e;
-  e.uid        = 1000;
-  e.zfsPrefix  = "zroot/crate-tenants/1000";
-  e.pathPrefix = "/jails-tenants/1000";    // 1.1.15
-  e.loginclass = "crate-1000";
+  e.uid              = 1000;
+  e.zfsPrefix        = "zroot/crate-tenants/1000";
+  e.pathMasterPrefix = "/jails-tenants";        // 1.1.17
+  e.pathPrefix       = "/jails-tenants/1000";   // 1.1.15
+  e.loginclass       = "crate-1000";
   return e;
 }
 
@@ -408,6 +409,90 @@ ATF_TEST_CASE_BODY(authorize_create_jail_unconfigured_split_allows) {
               == Decision::Allow);
 }
 
+// --- 1.1.17: mount_nullfs source / configure_iface / reclaim gates ---
+
+namespace {
+Request reqMount(std::string target, std::string source) {
+  Request r; r.path = std::move(target); r.source = std::move(source); return r;
+}
+} // namespace
+
+ATF_TEST_CASE_WITHOUT_HEAD(mount_source_own_and_host_allowed);
+ATF_TEST_CASE_BODY(mount_source_own_and_host_allowed) {
+  auto e = env1000();
+  // owner of jid/name/path 1000; target path owned -> Allow, then source.
+  auto l = fixedOwner(77, "web", 1000, "/jails-tenants/1000/web");
+  // own source (inside caller prefix)
+  ATF_REQUIRE(authorize(Verb::MountNullfs,
+                reqMount("/jails-tenants/1000/web/data", "/jails-tenants/1000/share"),
+                e, l) == Decision::Allow);
+  // host path outside the tenant root — privops is single-trust-domain for host
+  ATF_REQUIRE(authorize(Verb::MountNullfs,
+                reqMount("/jails-tenants/1000/web/data", "/etc"), e, l) == Decision::Allow);
+  // GUI runtime socket — not under any tenant prefix
+  ATF_REQUIRE(authorize(Verb::MountNullfs,
+                reqMount("/jails-tenants/1000/web/data", "/tmp/.X11-unix"), e, l)
+              == Decision::Allow);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(mount_source_foreign_tenant_denied);
+ATF_TEST_CASE_BODY(mount_source_foreign_tenant_denied) {
+  auto e = env1000();
+  auto l = fixedOwner(77, "web", 1000, "/jails-tenants/1000/web");
+  // source reaches into uid 1001's prefix -> deny
+  ATF_REQUIRE(authorize(Verb::MountNullfs,
+                reqMount("/jails-tenants/1000/web/x", "/jails-tenants/1001/secret"),
+                e, l) == Decision::DenyForeignSource);
+  // foreign TARGET still takes precedence over the source check
+  auto l2 = fixedOwner(77, "web", 1001, "/jails-tenants/1001/web");
+  ATF_REQUIRE(authorize(Verb::MountNullfs,
+                reqMount("/jails-tenants/1001/web/x", "/etc"), e, l2)
+              == Decision::DenyForeignPath);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(mount_source_unconfigured_allows);
+ATF_TEST_CASE_BODY(mount_source_unconfigured_allows) {
+  // No pathMasterPrefix -> source gate is opt-in, off.
+  PerUserEnvPure::Env e; e.uid = 1000;
+  ATF_REQUIRE(authorize(Verb::MountNullfs,
+                reqMount("/anything", "/jails-tenants/1001/secret"), e,
+                PrivOpsAuthzPure::nullLookup())
+              == Decision::Allow);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(configure_iface_jid_scoped);
+ATF_TEST_CASE_BODY(configure_iface_jid_scoped) {
+  auto e = env1000();
+  ATF_REQUIRE(authorize(Verb::ConfigureIface, reqJid(77), e, fixedOwner(77,"web",1000))
+              == Decision::Allow);                              // own jid
+  ATF_REQUIRE(authorize(Verb::ConfigureIface, reqJid(77), e, fixedOwner(77,"web",1001))
+              == Decision::DenyForeignJid);                     // foreign jid
+  ATF_REQUIRE(authorize(Verb::ConfigureIface, reqJid(999), e, fixedOwner(77,"web",1000))
+              == Decision::Allow);                              // unknown -> bootstrap
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(reclaim_iface_name_scoped);
+ATF_TEST_CASE_BODY(reclaim_iface_name_scoped) {
+  auto e = env1000();
+  ATF_REQUIRE(authorize(Verb::ReclaimIfaceFromVnet, reqName("web"), e, fixedOwner(77,"web",1000))
+              == Decision::Allow);                              // own jail
+  ATF_REQUIRE(authorize(Verb::ReclaimIfaceFromVnet, reqName("web"), e, fixedOwner(77,"web",1001))
+              == Decision::DenyForeignJailName);                // foreign jail
+  ATF_REQUIRE(authorize(Verb::ReclaimIfaceFromVnet, reqName("other"), e, fixedOwner(77,"web",1000))
+              == Decision::Allow);                              // unknown -> bootstrap
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(host_global_verbs_still_allowed);
+ATF_TEST_CASE_BODY(host_global_verbs_still_allowed) {
+  auto e = env1000();
+  auto foreign = fixedOwner(77, "web", 1001);   // someone else owns everything
+  // genuinely host-global verbs are unaffected by the 1.1.17 tightening
+  for (Verb v : {Verb::TeardownIface, Verb::AddPfRule, Verb::AddIpfwRule,
+                 Verb::SetIfaceUp, Verb::BridgeAddMember, Verb::CreateEpair}) {
+    ATF_REQUIRE(authorize(v, Request{}, e, foreign) == Decision::Allow);
+  }
+}
+
 // --- decisionReason ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(decision_reason_non_empty);
@@ -419,6 +504,7 @@ ATF_TEST_CASE_BODY(decision_reason_non_empty) {
   ATF_REQUIRE(!std::string(decisionReason(Decision::DenyForeignJailName)).empty());
   ATF_REQUIRE(!std::string(decisionReason(Decision::DenyForeignPath)).empty());
   ATF_REQUIRE(!std::string(decisionReason(Decision::DenyForeignCreatePath)).empty());
+  ATF_REQUIRE(!std::string(decisionReason(Decision::DenyForeignSource)).empty());
 }
 
 ATF_INIT_TEST_CASES(tcs) {
@@ -451,5 +537,11 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, authorize_create_jail_inside_own_prefix);
   ATF_ADD_TEST_CASE(tcs, authorize_create_jail_outside_prefix_denied);
   ATF_ADD_TEST_CASE(tcs, authorize_create_jail_unconfigured_split_allows);
+  ATF_ADD_TEST_CASE(tcs, mount_source_own_and_host_allowed);
+  ATF_ADD_TEST_CASE(tcs, mount_source_foreign_tenant_denied);
+  ATF_ADD_TEST_CASE(tcs, mount_source_unconfigured_allows);
+  ATF_ADD_TEST_CASE(tcs, configure_iface_jid_scoped);
+  ATF_ADD_TEST_CASE(tcs, reclaim_iface_name_scoped);
+  ATF_ADD_TEST_CASE(tcs, host_global_verbs_still_allowed);
   ATF_ADD_TEST_CASE(tcs, decision_reason_non_empty);
 }

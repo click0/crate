@@ -6,6 +6,70 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.17] — 2026-06-10
+
+**Security: close three cross-tenant holes in the privops authz gate.**
+A self-audit of the 1.1.12 → 1.1.15 per-tenant gate series found three
+verbs whose ownership check was incomplete or missing. In the strict
+multi-tenant (rootless + `path_master_prefix`) model these let one
+operator reach another tenant's resources. (In the single-trust-domain
+model — privops access = root-equivalent — these are gate-completeness
+fixes, not new escalation; but they were holes in gates documented as
+closed.)
+
+### Fixed
+
+- **`mount_nullfs` source was unchecked.** 1.1.14 gated the mount
+  `target` (must be inside an owned jail) but never the `source`. An
+  operator could bind-mount **another tenant's** path prefix into their
+  own jail and read it. Now the source is gated cross-tenant: a source
+  inside `path_master_prefix/<other-uid>` is denied `403`
+  (`DenyForeignSource`). Host paths (`/etc`, …) and GUI runtime sockets
+  (`/tmp/.X11-unix`, the host Wayland/PulseAudio sockets) fall outside
+  every tenant prefix and stay allowed — privops is a single trust
+  domain w.r.t. the host; the gate only enforces tenant-vs-tenant.
+- **`configure_iface` was in the host-global Allow arm** despite
+  carrying a `jid` and `jexec`-ing `ifconfig` **inside** that jail (plus
+  moving a host iface into its vnet). Naming a foreign `jid` was a
+  cross-tenant operation. Now gated by `jid` against the jid→owner
+  registry (like `signal_jail`).
+- **`reclaim_iface_from_vnet` was ungated** despite naming a jail
+  (`jail_name`) and pulling an iface out of its vnet — a foreign name
+  could steal/DoS another tenant's networking. Now gated by `jail_name`
+  (like `destroy_jail`).
+
+### Mechanism
+
+- `PerUserEnvPure::Env` gains `pathMasterPrefix` (the bare tenant root,
+  no uid) so the authz layer can distinguish "inside another tenant's
+  space" from "a host path".
+- `PrivOpsAuthzPure`: new `Decision::DenyForeignSource`,
+  `Request::source`, a `sourceForeign()` helper, and the three verbs
+  moved to their correct gated groups.
+- Dispatcher fills `req.source` (from `source`) for `mount_nullfs` and
+  `req.jailName` (from `jail_name`) for `reclaim_iface_from_vnet`.
+
+### Safety / compatibility
+
+The gate only **denies on a confirmed-foreign target**; own and
+registry-unknown targets always Allow (the bootstrap concession), so
+legitimate `crate run` flows — which operate on the operator's own
+freshly-created (and registered) jail — are unaffected regardless of
+operation ordering. Deployments that didn't configure
+`path_master_prefix` get the unchanged opt-in behavior (source gate
+off). New `privops_authz_pure_test` cases cover own/host/GUI-socket
+Allow, foreign-tenant Deny, foreign-target precedence, unconfigured
+opt-in, the two interface verbs' own/foreign/unknown cases, and a
+host-global-verbs-still-allowed regression. `per_user_env_pure_test`
+asserts `pathMasterPrefix` composition.
+
+### Still by design
+
+Genuinely host-global verbs (`teardown_iface`, `set_iface_up`,
+`bridge_*`, `add_pf_rule`, `add_ipfw_rule`, `configure_ipfw_nat`,
+`create_epair`) remain ungated — they act on shared host state with no
+tenant-specific target. See `docs/trust-model.md`.
+
 ## [1.1.16] — 2026-06-10
 
 **Hygiene release: CI, build, and process fixes after the 1.1.12 →

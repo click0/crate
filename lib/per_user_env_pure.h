@@ -64,8 +64,15 @@ struct Env {
   // ZFS dataset prefix. Empty if `cfg.zfsMasterPrefix` was empty.
   std::string zfsPrefix;
 
-  // 1.1.15: jail-path prefix. Empty if `cfg.pathMasterPrefix` was empty.
+  // 1.1.15: jail-path prefix `<master>/<uid>`. Empty if
+  // `cfg.pathMasterPrefix` was empty.
   std::string pathPrefix;
+
+  // 1.1.17: the bare master jail-path prefix (no uid), carried so the
+  // authz layer can tell "inside ANOTHER tenant's space" from "a host
+  // path". Empty if `cfg.pathMasterPrefix` was empty. Trailing slash
+  // stripped, same as pathPrefix composition.
+  std::string pathMasterPrefix;
 
   // Network sub-CIDRs. Empty if the corresponding master CIDR was
   // empty in the config.

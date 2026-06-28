@@ -34,7 +34,8 @@ ATF_TEST_CASE_BODY(compose_full_config) {
   // ZFS
   ATF_REQUIRE_EQ(r.env.zfsPrefix,   std::string("zroot/jails/1000"));
   // 1.1.15: jail path prefix
-  ATF_REQUIRE_EQ(r.env.pathPrefix,  std::string("/jails-tenants/1000"));
+  ATF_REQUIRE_EQ(r.env.pathPrefix,       std::string("/jails-tenants/1000"));
+  ATF_REQUIRE_EQ(r.env.pathMasterPrefix, std::string("/jails-tenants"));   // 1.1.17
   // Network
   ATF_REQUIRE_EQ(r.env.ipv4SubCidr, std::string("10.66.232.0/24"));
   ATF_REQUIRE_EQ(r.env.ipv6SubCidr,
@@ -55,7 +56,8 @@ ATF_TEST_CASE_BODY(compose_empty_config_legacy_shape) {
   ATF_REQUIRE_EQ(r.env.runtimeRoot, std::string("/var/run/crate/1000"));
   ATF_REQUIRE_EQ(r.env.loginclass,  std::string("crate-1000"));
   ATF_REQUIRE_EQ(r.env.zfsPrefix,   std::string());
-  ATF_REQUIRE_EQ(r.env.pathPrefix,  std::string());   // 1.1.15: opt-in
+  ATF_REQUIRE_EQ(r.env.pathPrefix,       std::string());   // 1.1.15: opt-in
+  ATF_REQUIRE_EQ(r.env.pathMasterPrefix, std::string());   // 1.1.17: opt-in
   ATF_REQUIRE_EQ(r.env.ipv4SubCidr, std::string());
   ATF_REQUIRE_EQ(r.env.ipv6SubCidr, std::string());
 }
@@ -65,7 +67,8 @@ ATF_TEST_CASE_BODY(path_prefix_strips_trailing_slash) {
   // Operators may type "/jails/" or "/jails" — both compose the same.
   Config c;  c.pathMasterPrefix = "/jails/";
   auto r = composeForUid(c, 1000);
-  ATF_REQUIRE_EQ(r.env.pathPrefix, std::string("/jails/1000"));
+  ATF_REQUIRE_EQ(r.env.pathPrefix,       std::string("/jails/1000"));
+  ATF_REQUIRE_EQ(r.env.pathMasterPrefix, std::string("/jails"));   // 1.1.17: slash stripped
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(path_prefix_with_different_uids);
