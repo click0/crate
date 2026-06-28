@@ -4,7 +4,7 @@
 operators on one machine) and contributors extending the privileged
 surface.
 
-**Applies to:** 1.1.16 (rootless model + per-tenant authz series 1.1.12 →
+**Applies to:** 1.1.17 (rootless model + per-tenant authz series 1.1.12 →
 1.1.15 covering every privops verb that carries an operator-controlled
 ownership signal). For the ≤ 0.9.x setuid model and the migration, see
 [`rootless-migration.md`](rootless-migration.md).
@@ -62,7 +62,7 @@ surface; 1.0.0 removed the setuid bit (`Makefile`, comment at the
 operator and delegates privileged operations to crated(8)"*).
 
 The single-trust-domain property did **not** disappear — it relocated.
-Reasoning about isolation on 1.1.16 means reasoning about who can reach
+Reasoning about isolation on 1.1.17 means reasoning about who can reach
 **privops**, not who can run `crate(1)`.
 
 ---
@@ -119,25 +119,37 @@ differs by transport:
   narrow item: `create_jail`'s brand-new `path` argument is matched
   against the caller's per-user `pathPrefix` (composed from
   `path_master_prefix:` in crated.conf); a foreign target is denied
-  `403` (`DenyForeignCreatePath`).
+  `403` (`DenyForeignCreatePath`). 1.1.17 closes the last cross-tenant
+  holes: `mount_nullfs`'s **source** end (a source inside another
+  tenant's `path_master_prefix/<uid>` is denied `403`
+  `DenyForeignSource`; host paths and GUI runtime sockets stay
+  allowed), and the two interface verbs that operate on a *specific*
+  jail rather than shared host state — `configure_iface` (it `jexec`s
+  into the named `jid` and moves an iface into its vnet → gated by
+  `jid`) and `reclaim_iface_from_vnet` (pulls an iface out of a named
+  jail → gated by `jail_name`).
 
-The remaining verbs still pass the gate: **host-global** verbs
-(iface/pf/ipfw/nat/epair) cannot be pool-scoped and stay host-wide by
-design. With 1.1.12+1.1.13+1.1.14+1.1.15 the per-tenant gate covers
-**every** privops verb that carries an operator-controlled ownership
-signal in its request. The per-verb handlers remain uid-blind; the
-gate runs ahead of them.
+The remaining verbs still pass the gate: **genuinely host-global**
+verbs (`teardown_iface`, `set_iface_up`, `bridge_*`, `add_pf_rule`,
+`add_ipfw_rule`, `configure_ipfw_nat`, `create_epair`) act on shared
+host state with no tenant-specific target, so they cannot be
+pool-scoped and stay host-wide by design. With
+1.1.12+1.1.13+1.1.14+1.1.15+1.1.17 the per-tenant gate covers **every**
+privops verb that carries an operator-controlled ownership signal in
+its request. The per-verb handlers remain uid-blind; the gate runs
+ahead of them.
 
 > Consequence: whoever can reach privops — an `admin` bearer token, or
 > membership in the privops socket's group — still has host-wide control
-> over the **un-gated** surface (firewall, interfaces, other host-global
-> verbs that touch shared state). The 1.1.12 + 1.1.13 + 1.1.14 + 1.1.15
-> gates close cross-tenant ZFS-dataset, RCTL-umbrella, jid-, name-,
-> path-scoped, and create-jail-path access on the libnv path — every
-> verb that carries an operator-controlled ownership signal in its
-> request is now gated. The shared host-global verbs remain, by design,
-> a single trust domain — handing an operator privops access is still
-> close to handing them the old setuid `crate(1)` for those.
+> over the **un-gated** surface (firewall, host interface plumbing,
+> other host-global verbs that touch shared state). The
+> 1.1.12 → 1.1.17 gates close cross-tenant ZFS-dataset, RCTL-umbrella,
+> jid-, name-, path-scoped, create-jail-path, mount-source, and
+> per-jail interface access on the libnv path — every verb that carries
+> an operator-controlled ownership signal in its request is now gated.
+> The shared host-global verbs remain, by design, a single trust
+> domain — handing an operator privops access is still close to handing
+> them the old setuid `crate(1)` for those.
 
 ### Per-user namespacing is convenience, not a boundary
 

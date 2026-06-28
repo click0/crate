@@ -45,7 +45,8 @@ Result composeForUid(const Config &cfg, uint32_t uid) {
   if (!cfg.pathMasterPrefix.empty()) {
     std::string base = cfg.pathMasterPrefix;
     if (base.back() == '/') base.pop_back();
-    r.env.pathPrefix = base + "/" + std::to_string(uid);
+    r.env.pathMasterPrefix = base;                          // 1.1.17
+    r.env.pathPrefix        = base + "/" + std::to_string(uid);
   }
 
   // IPv4 sub-CIDR — opt-in via non-empty master.

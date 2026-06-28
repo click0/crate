@@ -1025,6 +1025,9 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
     // path arg — checkOwnedPath then short-circuits to Allow.
     switch (v) {
       case Verb::MountNullfs:
+        req.path   = field("target");
+        req.source = field("source");   // 1.1.17: gate the source end too
+        break;
       case Verb::UnmountNullfs:        req.path = field("target");     break;
       case Verb::ApplyDevfsRuleset:
       case Verb::AddDevfsUnhideRule:   req.path = field("mount_path"); break;
@@ -1032,6 +1035,9 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       // caller's per-user path prefix (env.pathPrefix); not a registry
       // lookup (the jail doesn't exist yet).
       case Verb::CreateJail:           req.path = field("path");       break;
+      // 1.1.17: reclaim_iface_from_vnet names its jail in "jail_name"
+      // (not "name"); it's gated by checkOwnedName like destroy_jail.
+      case Verb::ReclaimIfaceFromVnet: req.jailName = field("jail_name"); break;
       default:                                                          break;
     }
     PrivOpsAuthzPure::OwnerLookup lookup = g_jidOwnerRegistry

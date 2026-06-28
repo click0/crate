@@ -44,8 +44,12 @@
 // request: SignalJail, SetRctl, ClearRctl, SetJailCpuset,
 // QueryJailRctl, DestroyJail. An unknown jid/name is allowed (jails
 // pre-dating 1.1.13 aren't in the registry); a *known* jid/name with
-// the wrong owner is denied 403. Path-scoped verbs (devfs, mount) and
-// create_jail path validation remain in the open gap.
+// the wrong owner is denied 403. 1.1.14 added path-scoped verbs
+// (mount/devfs target), 1.1.15 the create_jail path-prefix, and 1.1.17
+// closed the last cross-tenant holes: mount_nullfs's *source* end,
+// configure_iface (jid → jexec into a jail), and reclaim_iface_from_vnet
+// (named jail). The only ungated verbs left are genuinely host-global
+// (iface/pf/ipfw/nat/epair on shared host state).
 //
 
 #include <functional>
@@ -64,6 +68,7 @@ enum class Decision {
   DenyForeignJailName,   // jail name is in the registry and owned by another uid
   DenyForeignPath,       // path lies inside a registry-tracked jail owned by another uid
   DenyForeignCreatePath, // create_jail path is outside the caller's per-user path prefix
+  DenyForeignSource,     // mount_nullfs source lies inside another tenant's path prefix
 };
 
 // Result of looking a target up in the daemon's jid->owner registry.
@@ -102,6 +107,12 @@ struct Request {
   // Dispatcher fills this from the right libnv field per verb; empty
   // when the verb doesn't carry a path argument.
   std::string path;
+  // 1.1.17: mount_nullfs *source* (the host path being bind-mounted).
+  // Gated cross-tenant: a source inside another operator's per-user
+  // path prefix is denied. Host paths and GUI runtime sockets (outside
+  // every tenant prefix) stay allowed — privops is a single trust
+  // domain for the host, the gate only enforces tenant isolation.
+  std::string source;
 };
 
 // True when `dataset` is the caller's prefix itself or a descendant
