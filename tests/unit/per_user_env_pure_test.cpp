@@ -13,7 +13,7 @@ static Config defaultCfg() {
   Config c;
   c.zfsMasterPrefix       = "zroot/jails";
   c.pathMasterPrefix      = "/jails-tenants";
-  c.networkMasterCidr4    = "10.66.0.0/16";
+  c.networkMasterCidr4    = "10.0.0.0/8";   // 1.1.18: /8 so uid 1000 fits the slot space
   c.networkSubPrefixLen4  = 24;
   c.networkMasterCidr6    = "fd00:dead::/48";
   c.networkSubPrefixLen6  = 64;
@@ -37,7 +37,7 @@ ATF_TEST_CASE_BODY(compose_full_config) {
   ATF_REQUIRE_EQ(r.env.pathPrefix,       std::string("/jails-tenants/1000"));
   ATF_REQUIRE_EQ(r.env.pathMasterPrefix, std::string("/jails-tenants"));   // 1.1.17
   // Network
-  ATF_REQUIRE_EQ(r.env.ipv4SubCidr, std::string("10.66.232.0/24"));
+  ATF_REQUIRE_EQ(r.env.ipv4SubCidr, std::string("10.3.232.0/24"));   // /8+/24, uid 1000
   ATF_REQUIRE_EQ(r.env.ipv6SubCidr,
                  std::string("fd00:dead:0:3e8:0:0:0:0/64"));
   // RCTL
@@ -83,7 +83,7 @@ ATF_TEST_CASE_BODY(path_prefix_with_different_uids) {
 ATF_TEST_CASE_WITHOUT_HEAD(compose_v4_only);
 ATF_TEST_CASE_BODY(compose_v4_only) {
   Config c;
-  c.networkMasterCidr4   = "10.0.0.0/16";
+  c.networkMasterCidr4   = "10.0.0.0/8";   // 1.1.18: /8 so uid 1000 fits
   c.networkSubPrefixLen4 = 24;
   // v6 left empty
   auto r = composeForUid(c, 1000);

@@ -6,6 +6,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.18] — 2026-06-10
+
+**Fix: per-user network sub-CIDR silently aliased colliding uids.**
+`PerUserNetPure::composeIpv4` / `composeIpv6` mapped a uid into its
+sub-CIDR slot with `uid & (slotCount - 1)` — a modulo wrap. Two uids
+that differ by a multiple of `2^slotBits` therefore received the
+**same** sub-CIDR, silently defeating the per-operator network
+separation the function exists to provide. With the example
+`10.66.0.0/16` → `/24` config (8 slot bits) every uid ≥ 256 aliased a
+lower one — e.g. uid 1000 and uid 1256 both got `10.66.232.0/24`.
+
+Now the functions **error** when a uid exceeds the slot space
+(`uid >= 2^slotBits`) instead of handing out a colliding range:
+`uid <N> exceeds the <B>-bit per-user slot space … widen the master
+CIDR or shrink the sub-prefix`. Per `docs/trust-model.md` the per-user
+network split is honest-operator convenience, not an adversarial
+boundary; this turns a silent isolation failure into a loud
+configuration error.
+
+### Operator impact
+
+Deployments that configured `network_master_cidr_v4` / `_v6` must size
+the slot space (`subPrefix − masterPrefix` bits) to their uid range. A
+`/16` master with `/24` subs only holds uids 0–255; real uids (≥ 1000)
+need a wider master (e.g. `/8` → `/24` = 16 slot bits, 65 536 slots) or
+a larger sub-prefix. Composition is opt-in (only when a network master
+CIDR is set), and the authz path doesn't compose network CIDRs, so the
+1.1.12 → 1.1.17 privops gates are unaffected. An over-tight config that
+previously *appeared* to work for a single operator now reports the
+limit at `crate run`.
+
+### Tests
+
+`per_user_net_pure_test` replaces the `uid 256 wraps back to slot 0`
+assertion (which encoded the bug) with overflow-error cases for both
+v4 and v6 (boundary uid OK, uid+1 errors, error names the uid) and
+re-bases the typical/adjacency/non-canonical cases on slot spaces that
+fit their uids. `per_user_env_pure_test` widens the example v4 master
+to `/8`.
+
 ## [1.1.17] — 2026-06-10
 
 **Security: close three cross-tenant holes in the privops authz gate.**

@@ -4,8 +4,8 @@
 operators on one machine) and contributors extending the privileged
 surface.
 
-**Applies to:** 1.1.17 (rootless model + per-tenant authz series 1.1.12 →
-1.1.15 covering every privops verb that carries an operator-controlled
+**Applies to:** 1.1.18 (rootless model + per-tenant authz series 1.1.12 →
+1.1.17 covering every privops verb that carries an operator-controlled
 ownership signal). For the ≤ 0.9.x setuid model and the migration, see
 [`rootless-migration.md`](rootless-migration.md).
 
@@ -62,7 +62,7 @@ surface; 1.0.0 removed the setuid bit (`Makefile`, comment at the
 operator and delegates privileged operations to crated(8)"*).
 
 The single-trust-domain property did **not** disappear — it relocated.
-Reasoning about isolation on 1.1.17 means reasoning about who can reach
+Reasoning about isolation on 1.1.18 means reasoning about who can reach
 **privops**, not who can run `crate(1)`.
 
 ---
@@ -159,6 +159,14 @@ sub-CIDRs and an RCTL umbrella class from the connecting operator's uid
 [`rootless-migration.md`](rootless-migration.md)). This cleanly
 separates **honest** operators — alice's and bob's `web` jails land in
 different ZFS subtrees and CIDRs.
+
+> Sizing note (1.1.18): the network sub-CIDR maps each uid into a slot
+> of `subPrefix − masterPrefix` bits. The master CIDR / sub-prefix must
+> be sized for the operator uid range — a `/16` master with `/24` subs
+> holds only uids 0–255, so realistic uids (≥ 1000) need a wider master
+> (e.g. `/8` → `/24` = 16 slot bits). An out-of-range uid now **errors**
+> at compose time rather than silently aliasing another operator's
+> sub-CIDR (pre-1.1.18 it wrapped, two honest operators could collide).
 
 It is **not** an adversarial boundary on the privops plane. The per-uid
 prefix is computed **client-side** (in `crate(1)`) and passed in the
