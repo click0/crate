@@ -189,8 +189,19 @@ Result composeIpv4(const std::string &masterCidr,
                           : (uint32_t)(0xffffffffULL << (32 - split.prefix));
   uint32_t base = addr & masterMask;
 
-  uint32_t slotCount = 1u << slotBits;
-  uint32_t slot = uid & (slotCount - 1);
+  // 1.1.18: refuse to silently wrap a uid that doesn't fit the slot
+  // space. Pre-1.1.18 this did `uid & (slotCount-1)`, so two uids that
+  // collide modulo 2^slotBits got the SAME sub-CIDR — defeating the
+  // per-operator network separation this function exists to provide.
+  // Error loudly so the operator sizes the master CIDR / sub-prefix to
+  // their uid range. (slotBits <= 24 here, so 1u<<slotBits is safe.)
+  if (uid >= (1u << slotBits))
+    return {"", "uid " + std::to_string(uid) + " exceeds the " +
+                std::to_string(slotBits) + "-bit per-user slot space "
+                "(max uid " + std::to_string((1u << slotBits) - 1) +
+                "); widen the master IPv4 CIDR or shrink the sub-prefix"};
+
+  uint32_t slot = uid;
   uint32_t slotShift = 32 - subPrefixLen;
   uint32_t subBase = base | (slot << slotShift);
 
@@ -227,8 +238,17 @@ Result composeIpv6(const std::string &masterCidr,
     bytes[bit / 8] &= (uint8_t)~(1u << (7 - (bit % 8)));
   }
 
+  // 1.1.18: same anti-collision guard as composeIpv4 — error rather
+  // than silently wrap a uid that exceeds the slot space. (slotBits <=
+  // 32; 1ULL<<32 is fine in uint64_t, and a uint32_t uid is always
+  // < 2^32, so a 32-bit slot space accepts every uid.)
+  if ((uint64_t)uid >= (1ULL << slotBits))
+    return {"", "uid " + std::to_string(uid) + " exceeds the " +
+                std::to_string(slotBits) + "-bit per-user slot space; "
+                "widen the master IPv6 CIDR or shrink the sub-prefix"};
+
   // Set slot bits at [masterPrefix .. subPrefixLen).
-  uint64_t slot = (uint64_t)uid & ((1ULL << slotBits) - 1);
+  uint64_t slot = (uint64_t)uid;
   for (unsigned i = 0; i < slotBits; i++) {
     unsigned bitFromTop = slotBits - 1 - i;     // MSB of slot first
     if ((slot >> bitFromTop) & 1ULL) {

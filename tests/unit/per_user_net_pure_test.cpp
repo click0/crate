@@ -10,43 +10,56 @@ using namespace PerUserNetPure;
 
 // --- IPv4 ---
 
-ATF_TEST_CASE_WITHOUT_HEAD(ipv4_typical_16_to_24);
-ATF_TEST_CASE_BODY(ipv4_typical_16_to_24) {
-  // /16 + /24 → 256 slots; uid 1000 % 256 = 232
-  auto r = composeIpv4("10.66.0.0/16", 24, 1000);
+ATF_TEST_CASE_WITHOUT_HEAD(ipv4_typical_8_to_24);
+ATF_TEST_CASE_BODY(ipv4_typical_8_to_24) {
+  // /8 + /24 → 16-bit slot space (65536 slots), so a real uid like
+  // 1000 fits without collision. uid 1000 = 0x03E8 -> 10.3.232.0/24.
+  auto r = composeIpv4("10.0.0.0/8", 24, 1000);
   ATF_REQUIRE_EQ(r.error, std::string());
-  ATF_REQUIRE_EQ(r.cidr, std::string("10.66.232.0/24"));
+  ATF_REQUIRE_EQ(r.cidr, std::string("10.3.232.0/24"));
 
   // uid 0 → slot 0
-  r = composeIpv4("10.66.0.0/16", 24, 0);
-  ATF_REQUIRE_EQ(r.cidr, std::string("10.66.0.0/24"));
+  r = composeIpv4("10.0.0.0/8", 24, 0);
+  ATF_REQUIRE_EQ(r.cidr, std::string("10.0.0.0/24"));
+}
 
-  // uid 256 wraps back to slot 0
-  r = composeIpv4("10.66.0.0/16", 24, 256);
-  ATF_REQUIRE_EQ(r.cidr, std::string("10.66.0.0/24"));
+ATF_TEST_CASE_WITHOUT_HEAD(ipv4_uid_overflowing_slot_space_errors);
+ATF_TEST_CASE_BODY(ipv4_uid_overflowing_slot_space_errors) {
+  // 1.1.18: an 8-bit slot space (/16 + /24) holds uids 0..255. The
+  // boundary uid 255 is fine; 256 and above must ERROR rather than
+  // silently wrap to an already-taken slot (pre-1.1.18 they collided).
+  ATF_REQUIRE_EQ(composeIpv4("10.66.0.0/16", 24, 255).error, std::string());
+  ATF_REQUIRE(!composeIpv4("10.66.0.0/16", 24, 256).error.empty());
+  ATF_REQUIRE(!composeIpv4("10.66.0.0/16", 24, 1000).error.empty());
+  // The error must mention the offending uid so operators can act.
+  ATF_REQUIRE(composeIpv4("10.66.0.0/16", 24, 256).error.find("256")
+              != std::string::npos);
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(ipv4_isolation_alice_vs_bob);
 ATF_TEST_CASE_BODY(ipv4_isolation_alice_vs_bob) {
   // Adjacent uids must land in adjacent (non-overlapping) sub-CIDRs.
-  auto alice = composeIpv4("10.66.0.0/16", 24, 1000);
-  auto bob   = composeIpv4("10.66.0.0/16", 24, 1001);
+  // Use a /8 master so realistic uids fit the slot space.
+  auto alice = composeIpv4("10.0.0.0/8", 24, 1000);
+  auto bob   = composeIpv4("10.0.0.0/8", 24, 1001);
   ATF_REQUIRE_EQ(alice.error, std::string());
   ATF_REQUIRE_EQ(bob.error, std::string());
   ATF_REQUIRE(alice.cidr != bob.cidr);
-  // Same /16 root
-  ATF_REQUIRE(alice.cidr.substr(0, 6) == std::string("10.66."));
-  ATF_REQUIRE(bob.cidr.substr(0, 6)   == std::string("10.66."));
+  // Same /8 root
+  ATF_REQUIRE(alice.cidr.substr(0, 3) == std::string("10."));
+  ATF_REQUIRE(bob.cidr.substr(0, 3)   == std::string("10."));
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(ipv4_master_low_bits_are_ignored);
 ATF_TEST_CASE_BODY(ipv4_master_low_bits_are_ignored) {
   // Operator wrote "10.66.5.7/16" — non-canonical. Compose must
   // mask off the low 16 bits and produce the same result as with
-  // "10.66.0.0/16".
-  auto canonical = composeIpv4("10.66.0.0/16", 24, 1000);
-  auto sloppy    = composeIpv4("10.66.5.7/16", 24, 1000);
+  // "10.66.0.0/16". (uid 5 fits the 8-bit slot space.)
+  auto canonical = composeIpv4("10.66.0.0/16", 24, 5);
+  auto sloppy    = composeIpv4("10.66.5.7/16", 24, 5);
+  ATF_REQUIRE_EQ(canonical.error, std::string());
   ATF_REQUIRE_EQ(canonical.cidr, sloppy.cidr);
+  ATF_REQUIRE_EQ(canonical.cidr, std::string("10.66.5.0/24"));
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(ipv4_28_subnet);
@@ -92,6 +105,15 @@ ATF_TEST_CASE_BODY(ipv6_typical_48_to_64) {
   ATF_REQUIRE_EQ(r.cidr, std::string("fd00:dead:0:0:0:0:0:0/64"));
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(ipv6_uid_overflowing_slot_space_errors);
+ATF_TEST_CASE_BODY(ipv6_uid_overflowing_slot_space_errors) {
+  // 1.1.18: an 8-bit slot space (/64 + /72) holds uids 0..255.
+  ATF_REQUIRE_EQ(composeIpv6("fd00::/64", 72, 255).error, std::string());
+  ATF_REQUIRE(!composeIpv6("fd00::/64", 72, 256).error.empty());
+  // A 16-bit slot space (/48 + /64) comfortably holds uid 1000.
+  ATF_REQUIRE_EQ(composeIpv6("fd00:dead::/48", 64, 1000).error, std::string());
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(ipv6_isolation_alice_vs_bob);
 ATF_TEST_CASE_BODY(ipv6_isolation_alice_vs_bob) {
   auto alice = composeIpv6("fd00:dead::/48", 64, 1000);
@@ -126,13 +148,15 @@ ATF_TEST_CASE_BODY(ipv6_rejects_sub_prefix_relations) {
 }
 
 ATF_INIT_TEST_CASES(tcs) {
-  ATF_ADD_TEST_CASE(tcs, ipv4_typical_16_to_24);
+  ATF_ADD_TEST_CASE(tcs, ipv4_typical_8_to_24);
+  ATF_ADD_TEST_CASE(tcs, ipv4_uid_overflowing_slot_space_errors);
   ATF_ADD_TEST_CASE(tcs, ipv4_isolation_alice_vs_bob);
   ATF_ADD_TEST_CASE(tcs, ipv4_master_low_bits_are_ignored);
   ATF_ADD_TEST_CASE(tcs, ipv4_28_subnet);
   ATF_ADD_TEST_CASE(tcs, ipv4_rejects_bad_master);
   ATF_ADD_TEST_CASE(tcs, ipv4_rejects_sub_prefix_relations);
   ATF_ADD_TEST_CASE(tcs, ipv6_typical_48_to_64);
+  ATF_ADD_TEST_CASE(tcs, ipv6_uid_overflowing_slot_space_errors);
   ATF_ADD_TEST_CASE(tcs, ipv6_isolation_alice_vs_bob);
   ATF_ADD_TEST_CASE(tcs, ipv6_master_low_bits_are_ignored);
   ATF_ADD_TEST_CASE(tcs, ipv6_rejects_bad_master);
