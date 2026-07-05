@@ -6,6 +6,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.19] — 2026-06-10
+
+**Security: fail closed when `getpeereid` fails on the privops libnv
+socket.** `daemon/privops_listener.cpp` left `peerUid = 0` on a
+`getpeereid` failure and proceeded to dispatch. With
+`rootless_per_user` enabled the authorize-before-dispatch gate keys on
+`operatorUid > 0`, so `peerUid = 0` was treated as the admin/host-wide
+path and **every** per-tenant gate was skipped — a fail-open on
+identity loss (e.g. the peer exiting between `accept` and `getpeereid`).
+
+The listener now rejects such a connection with `403` when per-user
+enforcement is on, rather than running the verb unauthenticated. When
+`rootless_per_user` is off there is nothing to gate (`peerUid` only fed
+the audit trail), so a failure there is harmless and the connection
+proceeds unchanged. A root operator whose `getpeereid` *succeeds* with
+uid 0 is unaffected — that path is still the intended admin treatment;
+only a genuine `getpeereid` *failure* is rejected. Closes the
+"fail closed on identity loss" guardrail in `docs/trust-model.md`.
+
 ## [1.1.18] — 2026-06-10
 
 **Fix: per-user network sub-CIDR silently aliased colliding uids.**
