@@ -57,7 +57,11 @@ jobs:
             set -ex
 
             echo "::group::Install dependencies"
-            sudo pkg install -y pkgconf yaml-cpp rang kyua gmake
+            # cpp-httplib is header-only and only needed to LINK crated
+            # (daemon/*.cpp #include <httplib.h>); ssl/crypto ship in
+            # FreeBSD base. Added 1.1.21 so the daemon link is covered
+            # in PR CI — see the "Link daemon binaries" step below.
+            sudo pkg install -y pkgconf yaml-cpp rang kyua gmake cpp-httplib
             echo "::endgroup::"
 
             echo "::group::System info"
@@ -87,6 +91,19 @@ jobs:
             # the actual extra cost is the ar + link, ~1-2s.
             gmake -j"$NCPU" crate
             ls -la crate
+            echo "::endgroup::"
+
+            echo "::group::Link daemon binaries crated + crate-snmpd"
+            # 1.1.21: lite previously linked only crate(1), so a
+            # daemon-only change (e.g. the 1.1.19 getpeereid fail-closed
+            # fix in daemon/privops_listener.cpp) shipped with NO compile
+            # coverage — the full FreeBSD workflow that builds crated is
+            # manual (workflow_dispatch). Build both daemon binaries here
+            # so every PR gets a crated/crate-snmpd compile+link gate.
+            # crated needs cpp-httplib (installed above) + ssl/crypto
+            # (base); crate-snmpd needs only base libs.
+            gmake -j"$NCPU" crated crate-snmpd
+            ls -la crated crate-snmpd
             echo "::endgroup::"
 
             echo "::group::Build unit tests"
