@@ -12,6 +12,20 @@ namespace Ip6AllocPure {
 
 namespace {
 
+// 1.1.20: mirror of IpAllocPure's v4 lease-name check (alnum + . _ -,
+// 1..64 chars). Duplicated here rather than exported so the two lease
+// modules stay decoupled; the rule must stay in sync with the v4 twin.
+bool leaseNameLooksValid(const std::string &n) {
+  if (n.empty() || n.size() > 64) return false;
+  for (char c : n) {
+    bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+           || (c >= '0' && c <= '9')
+           || c == '.' || c == '_' || c == '-';
+    if (!ok) return false;
+  }
+  return true;
+}
+
 bool isHexChar(char c) {
   return (c >= '0' && c <= '9')
       || (c >= 'a' && c <= 'f')
@@ -249,7 +263,15 @@ std::string parseLeaseLine6(const std::string &line, Lease6 &out) {
   if (sp == std::string::npos) return "no space separator";
   auto name = line.substr(0, sp);
   auto ip   = line.substr(sp + 1);
-  if (name.empty()) return "empty name";
+  // 1.1.20: validate the jail name charset, matching the v4 twin
+  // (IpAllocPure::parseLeaseLine -> nameLooksValid). Before this, a
+  // hand-edited or corrupt IPv6 lease line whose name held control
+  // chars, embedded whitespace, or `..`/`/` path-traversal parsed as
+  // VALID and flowed downstream (the v4 path already rejected these).
+  if (ip.find_first_of(" \t\r\n") != std::string::npos)
+    return "ip has internal whitespace";
+  if (!leaseNameLooksValid(name))
+    return "invalid jail name '" + name + "'";
   Addr6 a{};
   if (auto e = parseIp6(ip, a); !e.empty())
     return "ip parse: " + e;
