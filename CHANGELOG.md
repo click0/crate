@@ -6,6 +6,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.20] — 2026-07-05
+
+**Fix: IPv6 lease parser didn't validate the jail-name charset.**
+`Ip6AllocPure::parseLeaseLine6` only rejected an empty name, while its
+IPv4 twin (`IpAllocPure::parseLeaseLine` → `nameLooksValid`) restricts
+the name to `[A-Za-z0-9._-]`, 1–64 chars. A hand-edited or corrupt
+IPv6 lease line whose name held control characters, embedded
+whitespace, or `..` / `/` path-traversal parsed as **valid** on the v6
+path and flowed downstream — an asymmetry with the v4 path that already
+rejected them.
+
+`parseLeaseLine6` now applies the same charset check (a local
+`leaseNameLooksValid` mirroring the v4 rule) and rejects trailing
+whitespace in the address, closing the v4/v6 gap. Found in the
+project-wide pure-module audit.
+
+New `ip6_alloc_pure_test` case rejects traversal / slash / shell-meta /
+tab / oversized names and confirms a clean name still round-trips.
+
 ## [1.1.19] — 2026-06-10
 
 **Security: fail closed when `getpeereid` fails on the privops libnv

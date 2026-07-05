@@ -220,6 +220,22 @@ ATF_TEST_CASE_BODY(lease_parse_rejects_garbage) {
   ATF_REQUIRE(!parseLeaseLine6("name not-an-ip", out).empty());
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(lease_parse_rejects_bad_name);
+ATF_TEST_CASE_BODY(lease_parse_rejects_bad_name) {
+  // 1.1.20: the jail-name charset is now validated (matching the v4
+  // twin). Names with path-traversal, control chars, or shell-ish
+  // punctuation must be rejected even though the IP is well-formed.
+  Lease6 out;
+  ATF_REQUIRE(!parseLeaseLine6("../../etc fd00::5",     out).empty()); // traversal
+  ATF_REQUIRE(!parseLeaseLine6("a/b fd00::5",           out).empty()); // slash
+  ATF_REQUIRE(!parseLeaseLine6("na$me fd00::5",         out).empty()); // shell meta
+  ATF_REQUIRE(!parseLeaseLine6(std::string("na\tme fd00::5"), out).empty()); // tab in name
+  ATF_REQUIRE(!parseLeaseLine6(std::string(65, 'x') + " fd00::5", out).empty()); // >64
+  // A clean name with a well-formed address still round-trips.
+  ATF_REQUIRE_EQ(parseLeaseLine6("web-1.app_2 fd00::5", out), std::string());
+  ATF_REQUIRE_EQ(out.name, std::string("web-1.app_2"));
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, parseIp6_full_form);
   ATF_ADD_TEST_CASE(tcs, parseIp6_shorthand_middle);
@@ -239,4 +255,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, inPool_predicate);
   ATF_ADD_TEST_CASE(tcs, lease_round_trip);
   ATF_ADD_TEST_CASE(tcs, lease_parse_rejects_garbage);
+  ATF_ADD_TEST_CASE(tcs, lease_parse_rejects_bad_name);
 }
