@@ -3,7 +3,44 @@ not yet fixed. Items are grouped by priority for production readiness.
 
 === Known bugs ===
 
-(none currently — bug#239590 host-LAN-loopback rejection FIXED in 0.8.39)
+(no functional bugs blocking use — bug#239590 host-LAN-loopback
+rejection FIXED in 0.8.39.)
+
+Deferred from the 2026-07 project-wide security/correctness audit
+(the audit's clear, testable findings shipped as 1.1.17–1.1.20;
+these two remain because they need on-hardware validation the pure
+unit suite can't provide, so they are NOT being fixed blind):
+
+* (correctness, FreeBSD-only) lib/run.cpp exception-path teardown
+  order diverges from the success path. The happy path tears down
+  in an explicit `doNow()` order (jail → mounts → net → fw-slot,
+  ~lines 1942-1984). On an ERR()/throw before that block, cleanup
+  falls to RunAtEnd destructors firing in reverse-DECLARATION order:
+  the network teardowns (declared ~1051-1068) run BEFORE destroyJail
+  (declared 958), `mounts` unmount last (Mount dtor at function
+  scope exit), and removeMacRules (declared 669) runs AFTER
+  destroyJail — i.e. against an already-recycled jid. Impact is
+  cleanup-quality on an already-failing run (possibly-orphaned
+  epair/bridge left until reboot, busy-unmount warnings, MAC rules
+  removed against a dead jid), not happy-path correctness. Fix shape:
+  route both success and exception through one ordered teardown
+  (try/catch around the body calling the same sequence, or a
+  commit-flag scope guard) — a delicate ~1500-line refactor of
+  run.cpp that must be validated on a real FreeBSD host
+  (docs/on-hardware-validation.md), since neither lite nor Linux CI
+  exercises the runtime teardown. Do NOT ship blind.
+
+* (security, low-probability) jid→owner registry forget-by-name +
+  jid-reuse window. handleDestroyJail forgets the entry by jail
+  NAME (lib/jid_owner_registry.cpp forgetByName removes the first
+  name match); recordCreate is keyed by jid and overwrites, so the
+  common jid-reuse case self-corrects, but the forget path would be
+  unambiguous if destroy resolved name→jid (JailQuery) BEFORE the
+  jail is removed and forgot by jid. Best-effort/fail-soft today
+  (errors are logged, not fatal). Low real-world risk given
+  host-unique jail names; worth tightening to forget-by-jid when the
+  daemon path gets on-hardware test coverage. Both need the manual
+  full FreeBSD workflow (or a self-hosted runner) to validate.
 
 === High priority — blocking production use ===
 
