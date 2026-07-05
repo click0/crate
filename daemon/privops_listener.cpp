@@ -84,21 +84,41 @@ void writeErrorResponse(int fd, int status, const std::string &body) {
 void handleConnection(int connFd, bool rootlessPerUser) {
   // getpeereid (unix-socket peer credentials).
   uint32_t peerUid = 0;
+  bool havePeerUid = false;
+  int peerErrno = 0;
   {
     uid_t uid = (uid_t)-1;
     gid_t gid = (gid_t)-1;
     if (::getpeereid(connFd, &uid, &gid) == 0) {
       peerUid = (uint32_t)uid;
+      havePeerUid = true;
+    } else {
+      peerErrno = errno;   // capture before applyConnectionRights clobbers it
     }
-    // Failure leaves peerUid = 0 — audit hook is no-op, dispatch
-    // still works, but the operator gets no per-user trail. This
-    // is the correct degradation: getpeereid only fails on
-    // non-AF_UNIX sockets which we don't accept.
   }
 
   // Capsicum: limit fd to recv/send/shutdown. Same rationale as
   // control_socket plane (0.7.14).
   Sandbox::applyConnectionRights(connFd);
+
+  // Fail closed on identity loss. When per-user enforcement is on, the
+  // authorize-before-dispatch gate keys on peerUid; a getpeereid
+  // failure (peer exited between accept and getpeereid, a kernel edge)
+  // must NOT degrade to peerUid = 0, because the dispatcher treats
+  // uid 0 as the admin/host-wide path and skips EVERY per-tenant gate.
+  // Reject rather than silently authorize. (When per-user enforcement
+  // is off there is nothing to gate — peerUid only fed the audit
+  // trail — so a failure there is harmless and we proceed.)
+  if (rootlessPerUser && !havePeerUid) {
+    std::cerr << "privops_listener: getpeereid failed on a rootless "
+                 "per-user connection — rejecting (fail closed): "
+              << std::strerror(peerErrno) << std::endl;
+    writeErrorResponse(connFd, 403,
+        "{\"error\":\"forbidden: could not determine peer uid "
+        "(getpeereid failed); refusing to run unauthenticated\"}");
+    ::close(connFd);
+    return;
+  }
 
   nvlist_t *req = nvlist_recv(connFd, 0);
   if (!req) {

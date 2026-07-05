@@ -4,7 +4,7 @@
 operators on one machine) and contributors extending the privileged
 surface.
 
-**Applies to:** 1.1.18 (rootless model + per-tenant authz series 1.1.12 →
+**Applies to:** 1.1.19 (rootless model + per-tenant authz series 1.1.12 →
 1.1.17 covering every privops verb that carries an operator-controlled
 ownership signal). For the ≤ 0.9.x setuid model and the migration, see
 [`rootless-migration.md`](rootless-migration.md).
@@ -62,7 +62,7 @@ surface; 1.0.0 removed the setuid bit (`Makefile`, comment at the
 operator and delegates privileged operations to crated(8)"*).
 
 The single-trust-domain property did **not** disappear — it relocated.
-Reasoning about isolation on 1.1.18 means reasoning about who can reach
+Reasoning about isolation on 1.1.19 means reasoning about who can reach
 **privops**, not who can run `crate(1)`.
 
 ---
@@ -329,9 +329,13 @@ security boundary:
    against `env.pathPrefix`).
 
 3. **Fail closed on identity loss.** On any path that authorizes, a
-   `getpeereid` failure must deny. It may degrade to a no-op only for
-   identity-tagged side effects that are not access decisions (e.g. the
-   audit tail — its current behavior).
+   `getpeereid` failure must deny. *Done (1.1.19):* the libnv listener
+   rejects a connection with `403` when `getpeereid` fails and
+   `rootless_per_user` is on, instead of degrading to `peerUid = 0`
+   (which the dispatcher would treat as the admin/host-wide path and
+   skip every per-tenant gate). It degrades to a no-op only when
+   per-user enforcement is off — there `peerUid` fed only the audit
+   trail, not an access decision.
 
 The path-scoped verbs in (1) remain host-wide for now. A multi-tenant
 deployment that exposes them to operators directly still needs a
