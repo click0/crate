@@ -6,6 +6,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.23] — 2026-07-07
+
+**Security: decide daemon auth locality from the accepting socket, not
+a client-supplyable `REMOTE_ADDR` header.**
+
+`crated` grants full trust (bypassing the bearer token AND the pool
+ACL) to "Unix-socket peers", and detected them with
+`req.get_header_value("REMOTE_ADDR").empty()`. cpp-httplib stores
+request headers in a multimap and `get_header_value` returns the first
+match, so a remote client on the TCP listener that sent its own empty
+`REMOTE_ADDR:` header could shadow the server-set value and be mistaken
+for a local socket peer — a potential complete bypass of the token
+layer (including `POST /api/v1/privops/:verb`, uid=0) when the TCP
+listener is enabled. The same header keyed the rate-limit bucket, so a
+client could also rotate its own bucket key.
+
+The daemon already runs two separate `httplib::Server` instances (TCP
+and Unix socket). `registerRoutes` now takes an `isUnixListener` flag
+and installs a pre-routing handler that, on every request, **erases any
+client-supplied `X-Crated-Listener` header and stamps the authoritative
+value** (`unix` / `tcp`) from the server instance that accepted the
+connection. `isUnixSocketPeer` reads that marker instead of
+`REMOTE_ADDR`; `getClientId` keys the rate limiter on the marker plus
+`req.remote_addr` (the address httplib fills from the accepted socket,
+not a header). A missing marker reads as untrusted TCP — fail-closed.
+
+This is a structural change on the httplib-coupled auth path (no pure
+unit surface); it is compile-gated by the FreeBSD build and warrants a
+runtime check against a live TCP+UDS daemon.
+
 ## [1.1.22] — 2026-07-07
 
 **Security & robustness: four fixes from a fresh project-wide audit.**
