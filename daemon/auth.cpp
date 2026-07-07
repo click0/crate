@@ -30,17 +30,25 @@ static std::string sha256hex(const std::string &input) {
   return "sha256:" + ss.str();
 }
 
-// Check if request comes from a Unix socket. cpp-httplib leaves
-// REMOTE_ADDR empty for unix-socket peers; that's our signal.
+// Check if the request arrived on the Unix-socket listener (local,
+// trusted) rather than the TCP listener (remote, token-gated).
 //
-// Tightening to actually verify the peer's uid/gid via
-// getpeereid(2) requires the connection's underlying fd, which
-// httplib doesn't expose. Until we fork that code path, the unix
-// socket file's mode (default 0660 owned by root:wheel) is the
-// effective access control.
+// 1.1.23: this is decided from the `X-Crated-Listener` marker that
+// registerRoutes' pre-routing handler stamps from the accepting server
+// instance — AFTER erasing any client-supplied copy — so it is
+// authoritative. The previous check keyed on `REMOTE_ADDR.empty()`,
+// which a remote TCP client could shadow by sending its own empty
+// `REMOTE_ADDR:` header (cpp-httplib stores request headers in a
+// multimap; get_header_value returns the first match, the client's).
+// A missing marker (pre-routing handler somehow skipped) reads as NOT a
+// socket peer → token required → fail-closed.
+//
+// The unix socket file's mode (default 0660 owned by root:wheel)
+// remains the access control for who may reach that listener; a
+// getpeereid(2) uid/gid check would need the connection fd, which
+// httplib doesn't expose (see the libnv privops socket for that).
 static bool isUnixSocketPeer(const httplib::Request &req) {
-  auto remoteAddr = req.get_header_value("REMOTE_ADDR");
-  return remoteAddr.empty();
+  return req.get_header_value("X-Crated-Listener") == "unix";
 }
 
 bool isAuthorized(const httplib::Request &req, const Config &config,

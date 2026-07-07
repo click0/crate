@@ -11,6 +11,13 @@ namespace httplib { class Server; }
 
 namespace Crated {
 
-void registerRoutes(httplib::Server &srv, const Config &config);
+// 1.1.23: isUnixListener says which server instance this is — the
+// Unix-socket listener (local, trusted) or the TCP listener (remote,
+// token-gated). It is stamped onto every request as a non-spoofable
+// marker so auth locality is decided from the accepting socket, not a
+// client-supplyable REMOTE_ADDR header. Defaults to false (fail-closed:
+// an un-flagged caller is treated as untrusted TCP).
+void registerRoutes(httplib::Server &srv, const Config &config,
+                    bool isUnixListener = false);
 
 }

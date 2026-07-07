@@ -73,8 +73,14 @@ static bool checkRateLimit(const std::string &clientId, const std::string &endpo
 }
 
 static std::string getClientId(const httplib::Request &req) {
-  auto addr = req.get_header_value("REMOTE_ADDR");
-  return addr.empty() ? "unix" : addr;
+  // 1.1.23: key the rate-limit bucket on trustworthy signals, not a
+  // client-supplyable REMOTE_ADDR header (which let a client rotate its
+  // own bucket key). Unix-socket peers share one "unix" bucket; TCP
+  // peers key on req.remote_addr — the authoritative address httplib
+  // fills from the accepted socket, which a client cannot spoof.
+  if (req.get_header_value("X-Crated-Listener") == "unix")
+    return "unix";
+  return req.remote_addr.empty() ? "tcp" : req.remote_addr;
 }
 
 // Cap constants live in daemon/rate_limit.h since 0.7.15.
@@ -1023,7 +1029,26 @@ static void handlePrivOp(const httplib::Request &req, httplib::Response &res,
 
 // --- Route registration ---
 
-void registerRoutes(httplib::Server &srv, const Config &config) {
+void registerRoutes(httplib::Server &srv, const Config &config,
+                    bool isUnixListener) {
+  // 1.1.23: stamp a non-spoofable listener marker on EVERY request
+  // before it reaches a handler. Trust locality — "this peer arrived on
+  // the root-owned Unix socket, treat as local admin" — must be decided
+  // from which server instance accepted the connection, never from a
+  // client-supplyable REMOTE_ADDR header (a remote TCP client could send
+  // its own empty REMOTE_ADDR and be mistaken for a socket peer). We
+  // erase any client-sent copy of the marker first, then set the
+  // authoritative value; auth (isUnixSocketPeer) and getClientId read
+  // it. If the pre-routing handler ever fails to run, the marker is
+  // absent → treated as untrusted TCP → fail-closed.
+  srv.set_pre_routing_handler(
+    [isUnixListener](const httplib::Request &req, httplib::Response &) {
+      auto &headers = const_cast<httplib::Request &>(req).headers;
+      headers.erase("X-Crated-Listener");
+      headers.emplace("X-Crated-Listener", isUnixListener ? "unix" : "tcp");
+      return httplib::Server::HandlerResponse::Unhandled;
+    });
+
   // Health check (no rate limit)
   srv.Get("/healthz", [](const httplib::Request &, httplib::Response &res) {
     res.set_content("{\"status\":\"ok\"}", "application/json");

@@ -41,8 +41,9 @@ Server::Server(const Config &config)
     impl_->httpSrv = std::make_unique<httplib::Server>();
   }
 
-  // Register all REST routes
-  registerRoutes(*impl_->httpSrv, config_);
+  // Register all REST routes. This is the TCP listener (remote,
+  // token-gated) — isUnixListener = false.
+  registerRoutes(*impl_->httpSrv, config_, /*isUnixListener=*/false);
 }
 
 Server::~Server() {
@@ -66,7 +67,9 @@ void Server::start() {
 
     impl_->unixThread = std::thread([this]() {
       httplib::Server udsSrv;
-      registerRoutes(udsSrv, config_);
+      // This is the Unix-socket listener (local, root-owned socket) —
+      // isUnixListener = true, so its peers are treated as trusted.
+      registerRoutes(udsSrv, config_, /*isUnixListener=*/true);
       udsSrv.set_address_family(AF_UNIX);
       udsSrv.listen(config_.unixSocket, 0);
     });

@@ -4,7 +4,7 @@
 operators on one machine) and contributors extending the privileged
 surface.
 
-**Applies to:** 1.1.22 (rootless model + per-tenant authz series 1.1.12 →
+**Applies to:** 1.1.23 (rootless model + per-tenant authz series 1.1.12 →
 1.1.17 covering every privops verb that carries an operator-controlled
 ownership signal). For the ≤ 0.9.x setuid model and the migration, see
 [`rootless-migration.md`](rootless-migration.md).
@@ -62,7 +62,7 @@ surface; 1.0.0 removed the setuid bit (`Makefile`, comment at the
 operator and delegates privileged operations to crated(8)"*).
 
 The single-trust-domain property did **not** disappear — it relocated.
-Reasoning about isolation on 1.1.22 means reasoning about who can reach
+Reasoning about isolation on 1.1.23 means reasoning about who can reach
 **privops**, not who can run `crate(1)`.
 
 ---
