@@ -3,6 +3,7 @@
 #include "list_pure.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <iomanip>
 #include <ostream>
 #include <sstream>
@@ -10,18 +11,47 @@
 
 namespace ListPure {
 
+// 1.1.22: JSON-escape string fields before interpolating them into the
+// output. name/hostname/path/ip come from the kernel's jail state (not
+// crate's own validators), so a jail created by another tool with a `"`
+// or control byte in its hostname/path would otherwise produce
+// malformed or injectable JSON. Same shape as DoctorPure::jsonEscape.
+static std::string jsonEscape(const std::string &s) {
+  std::ostringstream o;
+  for (unsigned char c : s) {
+    switch (c) {
+    case '"':  o << "\\\""; break;
+    case '\\': o << "\\\\"; break;
+    case '\n': o << "\\n";  break;
+    case '\r': o << "\\r";  break;
+    case '\t': o << "\\t";  break;
+    case '\b': o << "\\b";  break;
+    case '\f': o << "\\f";  break;
+    default:
+      if (c < 0x20) {
+        char buf[8];
+        std::snprintf(buf, sizeof(buf), "\\u%04x", (int)c);
+        o << buf;
+      } else {
+        o << (char)c;
+      }
+    }
+  }
+  return o.str();
+}
+
 void renderJson(std::ostream &out, const std::vector<Entry> &entries) {
   out << "[\n";
   for (size_t i = 0; i < entries.size(); i++) {
     auto &e = entries[i];
     out << "  {"
         << "\"jid\":" << e.jid
-        << ",\"name\":\"" << e.name << "\""
-        << ",\"hostname\":\"" << e.hostname << "\""
-        << ",\"ip\":\"" << e.ip << "\""
-        << ",\"path\":\"" << e.path << "\""
-        << ",\"ports\":\"" << e.ports << "\""
-        << ",\"mounts\":\"" << e.mounts << "\""
+        << ",\"name\":\"" << jsonEscape(e.name) << "\""
+        << ",\"hostname\":\"" << jsonEscape(e.hostname) << "\""
+        << ",\"ip\":\"" << jsonEscape(e.ip) << "\""
+        << ",\"path\":\"" << jsonEscape(e.path) << "\""
+        << ",\"ports\":\"" << jsonEscape(e.ports) << "\""
+        << ",\"mounts\":\"" << jsonEscape(e.mounts) << "\""
         << ",\"healthcheck\":" << (e.hasHealthcheck ? "true" : "false")
         << "}";
     if (i + 1 < entries.size()) out << ",";

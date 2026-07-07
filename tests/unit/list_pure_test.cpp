@@ -65,6 +65,25 @@ ATF_TEST_CASE_BODY(json_healthcheck_false)
 	ATF_REQUIRE(out.find("\"healthcheck\":false") != std::string::npos);
 }
 
+// 1.1.22: hostname/path come from the kernel's jail state, not crate's
+// validators. A `"` / control byte must be JSON-escaped, not emitted raw
+// (which would break out of the string or inject a key).
+ATF_TEST_CASE_WITHOUT_HEAD(json_escapes_quote_and_control);
+ATF_TEST_CASE_BODY(json_escapes_quote_and_control)
+{
+	auto e = mkEntry(1, "web");
+	e.hostname = "a\",\"evil\":\"x";   // tries to inject a JSON key
+	e.path = "line1\nline2\ttab";
+	auto out = renderJsonStr({e});
+	// The raw injection string must NOT appear verbatim.
+	ATF_REQUIRE(out.find("\"evil\"") == std::string::npos);
+	// The quote and control bytes are escaped.
+	ATF_REQUIRE(out.find("a\\\",\\\"evil") != std::string::npos);
+	ATF_REQUIRE(out.find("line1\\nline2\\ttab") != std::string::npos);
+	// No literal newline/tab leaked into the output.
+	ATF_REQUIRE(out.find("line1\nline2") == std::string::npos);
+}
+
 // ===================================================================
 // Table
 // ===================================================================
@@ -129,6 +148,7 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, json_one_entry);
 	ATF_ADD_TEST_CASE(tcs, json_separator_between_entries);
 	ATF_ADD_TEST_CASE(tcs, json_healthcheck_false);
+	ATF_ADD_TEST_CASE(tcs, json_escapes_quote_and_control);
 	ATF_ADD_TEST_CASE(tcs, table_empty);
 	ATF_ADD_TEST_CASE(tcs, table_header_present);
 	ATF_ADD_TEST_CASE(tcs, table_singular_plural);

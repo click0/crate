@@ -21,4 +21,18 @@ unsigned envOrDefault(const char *name, unsigned def) {
   try { return Util::toUInt(val); } catch (...) { return def; }
 }
 
+std::string validateCronUser(const std::string &user) {
+  if (user.empty()) return "";  // unchanged: caller's default handling
+  if (user.size() > 32) return "cron user is longer than 32 chars";
+  if (user.front() == '-') return "cron user must not start with '-'";
+  for (char c : user) {
+    bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+           || (c >= '0' && c <= '9') || c == '_' || c == '-';
+    if (!ok)
+      return "cron user contains an invalid character "
+             "(allowed: [A-Za-z0-9_-])";
+  }
+  return "";
+}
+
 }

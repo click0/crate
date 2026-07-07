@@ -71,6 +71,13 @@ std::string validateNmdm(int n);
 // in WrapSpec; deriveRulesetNum() never returns 0).
 std::string validateRulesetNum(unsigned n);
 
+// 1.1.22: jail path emitted verbatim into `path = "<jailPath>";` in the
+// jail.conf fragment that `jail -c -f` runs as root. Empty is allowed
+// (defaults to "/"). A non-empty value must be an absolute path with no
+// double-quote (would close the quoted value) and no control byte
+// (a newline injects its own jail.conf directive). Length 1..1024.
+std::string validateJailPath(const std::string &p);
+
 // One-shot: walk the WrapSpec and return the first failure or "".
 std::string validateSpec(const WrapSpec &s);
 

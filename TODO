@@ -42,6 +42,54 @@ unit suite can't provide, so they are NOT being fixed blind):
   daemon path gets on-hardware test coverage. Both need the manual
   full FreeBSD workflow (or a self-hosted runner) to validate.
 
+Deferred from the 2026-07 second-pass audit (its four clear, testable
+findings shipped as 1.1.22; these three remain because they touch the
+auth and concurrency paths and want on-hardware validation before
+shipping — do NOT fix blind):
+
+* (security, HIGH if TCP listener enabled) daemon/auth.cpp decides
+  connection locality — and thus full trust — from a header-map
+  lookup, `req.get_header_value("REMOTE_ADDR").empty()`, instead of
+  the connection itself. A UDS peer is treated as unauthenticated-but-
+  fully-trusted (bypasses bearer token AND pool ACL); the empty-string
+  signal is what a remote TCP client could shadow by sending its own
+  empty `REMOTE_ADDR:` header (cpp-httplib stores request headers in a
+  multimap; get_header_value returns the first match, which may be the
+  client's). Exploitability depends on the pkg-vendored cpp-httplib
+  version's handling of client-supplied reserved headers, which is not
+  in-repo. The daemon already runs SEPARATE TCP and UDS `httplib::Server`
+  instances (daemon/server.cpp), so the robust fix is to thread an
+  explicit `isUnixListener` flag into the auth path (or read the
+  non-spoofable `req.remote_addr` struct field), never a header lookup.
+  Also fix getClientId() (daemon/routes.cpp) which keys the rate-limit
+  bucket on the same header. Touches the auth path — validate against a
+  live TCP+UDS daemon before shipping.
+
+* (correctness/security, MED) lib/network_lease.cpp + network_lease6.cpp
+  take the exclusive flock on the lease FILE's inode (openLocked opens
+  effectivePath() and locks that fd), but writeAllAtomic publishes by
+  renaming a FRESH inode over the path. A second waiter that open()ed
+  the path before the rename ends up holding its lock on the stale,
+  now-unlinked inode and reads pre-update contents → two concurrent
+  `crate run` invocations by the same user can allocate the SAME IPv4/
+  IPv6 address and drop one lease row. Scoped to one tenant (per-user
+  lease file), not cross-tenant. Fix: hold the lock on a stable, never-
+  renamed lock file (e.g. `<path>.lock`), or re-open+re-stat after
+  acquiring and retry if the inode changed. Concurrency correctness is
+  not exercised by the pure unit suite — validate with a real
+  multi-process race on a FreeBSD host.
+
+* (security, MED) lib/run_services.cpp socket_proxy: the `share` loop
+  runs each socket path through Util::safePath, but the `proxy` loop
+  does not — `entry.jail` flows into `create_directories(J(jailParent))`
+  and a `UNIX-LISTEN:J(entry.jail)` socat bind, and `entry.host` into
+  `UNIX-CONNECT:`. A `..`-bearing jail path escapes the jail tree for a
+  root-owned dir/socket. The correct guard needs care: safePath("/") as
+  used by the share loop is itself weak (it canonicalizes but the prefix
+  check never rejects, and the return value is discarded), so this wants
+  an explicit `..`/traversal rejection reviewed against how J() prefixes
+  the path — not a blind copy of the share-loop call.
+
 === High priority — blocking production use ===
 
 (High-priority items above are now complete; the next batch is

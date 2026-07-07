@@ -18,4 +18,13 @@ std::string argsToString(int argc, char **argv);
 // missing or unparseable value.
 unsigned envOrDefault(const char *name, unsigned def);
 
+// 1.1.22: validate a `cron/user` spec field before it is used to build
+// the crontab path (`/var/cron/tabs/<user>`) and a `sh -c "chmod ...
+// <user>"` string. Both are root-run in the setuid build, so an
+// unvalidated value gives path traversal (`../../etc/cron.d/pwn`) and
+// shell injection. Constrain to a POSIX-ish username: [A-Za-z0-9_-],
+// 1..32 chars, no leading '-'. Empty is accepted unchanged (caller's
+// existing default handling). Returns "" on success.
+std::string validateCronUser(const std::string &user);
+
 }

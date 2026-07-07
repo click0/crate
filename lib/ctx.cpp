@@ -75,7 +75,12 @@ void FwUsers::add(pid_t pid) {
 void FwUsers::del(pid_t pid) {
   if (!inMemory)
     readIntoMemory();
-  pids.erase(pids.find(pid));
+  // 1.1.22: erase by key, not by iterator. pids.erase(pids.find(pid))
+  // is undefined behavior when pid is absent (find returns end()) —
+  // reachable on a stale/truncated context file or a double teardown.
+  // std::set::erase(key) is a safe no-op for a missing key (matches
+  // FwSlots::release which already uses erase(pid)).
+  pids.erase(int(pid));
   changed = true;
 }
 
