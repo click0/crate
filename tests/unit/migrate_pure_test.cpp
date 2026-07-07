@@ -15,6 +15,7 @@ using MigratePure::describeStep;
 using MigratePure::normalizeBaseUrl;
 using MigratePure::redactToken;
 using MigratePure::validateBearerToken;
+using MigratePure::validateArtifactFile;
 using MigratePure::validateContainerName;
 using MigratePure::validateEndpoint;
 
@@ -81,6 +82,30 @@ ATF_TEST_CASE_BODY(name_invalid_rejected) {
   ATF_REQUIRE(!validateContainerName("foo/bar").empty());
   ATF_REQUIRE(!validateContainerName("foo bar").empty());
   ATF_REQUIRE(!validateContainerName("foo;rm").empty());
+}
+
+// --- 1.1.21: validateArtifactFile (remote-controlled filename) ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(artifact_file_typical_accepted);
+ATF_TEST_CASE_BODY(artifact_file_typical_accepted) {
+  ATF_REQUIRE_EQ(validateArtifactFile("web01-20260707.crate"), std::string());
+  ATF_REQUIRE_EQ(validateArtifactFile("export_1.tar.zst"), std::string());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(artifact_file_traversal_rejected);
+ATF_TEST_CASE_BODY(artifact_file_traversal_rejected) {
+  // A hostile/compromised source server returns these; they must be
+  // refused before they become a `curl -o` / `unlink()` path.
+  ATF_REQUIRE(!validateArtifactFile("").empty());
+  ATF_REQUIRE(!validateArtifactFile(".").empty());
+  ATF_REQUIRE(!validateArtifactFile("..").empty());
+  ATF_REQUIRE(!validateArtifactFile("../../etc/cron.d/pwn").empty());
+  ATF_REQUIRE(!validateArtifactFile("sub/dir/file").empty());
+  ATF_REQUIRE(!validateArtifactFile("/etc/passwd").empty());
+  ATF_REQUIRE(!validateArtifactFile("a..b").empty());   // any ".." substring
+  ATF_REQUIRE(!validateArtifactFile("bad\nname").empty());
+  ATF_REQUIRE(!validateArtifactFile("bad\tname").empty());
+  ATF_REQUIRE(!validateArtifactFile(std::string(256, 'a')).empty());
 }
 
 // --- normalizeBaseUrl ---
@@ -204,6 +229,8 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, token_invalid_rejected);
   ATF_ADD_TEST_CASE(tcs, name_typical_accepted);
   ATF_ADD_TEST_CASE(tcs, name_invalid_rejected);
+  ATF_ADD_TEST_CASE(tcs, artifact_file_typical_accepted);
+  ATF_ADD_TEST_CASE(tcs, artifact_file_traversal_rejected);
   ATF_ADD_TEST_CASE(tcs, normalize_adds_https_when_missing);
   ATF_ADD_TEST_CASE(tcs, normalize_preserves_existing_scheme);
   ATF_ADD_TEST_CASE(tcs, build_export_step_shape);

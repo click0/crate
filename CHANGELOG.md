@@ -6,6 +6,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.21] — 2026-07-07
+
+**Security: reject control-char / path-traversal injection in
+config free-text fields (WireGuard, IPsec, migrate).**
+
+The pure-module audit found three sinks where a less-trusted string was
+emitted verbatim into a generated config or used as a filesystem path
+without a control-character / traversal check:
+
+- `WireguardPure::validateConfig` validated keys, CIDRs, ports and
+  endpoints but never the free-text `FwMark`, `DNS`, `MTU`, and peer
+  `description` fields. Each is written straight into the wg-quick
+  `.conf`; an embedded newline escapes the line and injects its own
+  directive — most dangerously `PostUp = <cmd>`, which wg-quick runs as
+  **root**. A new `hasControlChar` helper now rejects any byte `< 0x20`
+  or `== 0x7f` (incl. `\n`/`\r`) in those fields.
+
+- `IpsecPure::validateConfig` likewise never checked `leftid`,
+  `rightid`, or `description`, all emitted into `ipsec.conf`
+  (`leftid=…` / `rightid=…` / `# …`). A newline injects an arbitrary
+  conn option (e.g. `rightsubnet=0.0.0.0/0`, silently widening the
+  tunnel policy). Control bytes in those three fields are now rejected.
+
+- `MigratePure` gained `validateArtifactFile`: the artifact filename in
+  the migrate flow comes from the **source server's** `/export` JSON
+  (`extractFileField`) and is concatenated into `workDir + "/" + name`,
+  then used both as a `curl -o` target and an `unlink()` target. A
+  hostile or compromised source returning `"../../../etc/cron.d/pwn"`
+  got arbitrary file write **and** delete on the migrating host. The
+  filename is now validated as a single safe path component (no `/`, no
+  `..`, no control bytes, ≤ 255 chars) in `lib/migrate.cpp` before use.
+
+New `wireguard_pure_test`, `ipsec_pure_test`, and `migrate_pure_test`
+cases cover each rejection (newline / traversal / slash / control byte)
+and confirm clean values still validate.
+
 ## [1.1.20] — 2026-07-05
 
 **Fix: IPv6 lease parser didn't validate the jail-name charset.**

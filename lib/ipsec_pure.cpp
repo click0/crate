@@ -225,6 +225,20 @@ std::string validateConfig(const std::vector<ConnSpec> &conns) {
     if (!c.autoStart.empty())
       if (auto e = validateAuto(c.autoStart); !e.empty())
         return prefixed(i, e);
+    // 1.1.21: leftid/rightid/description are emitted verbatim into
+    // ipsec.conf (as `leftid=…` / `rightid=…` / `# …`). A newline
+    // escapes the line and injects an arbitrary conn option (e.g.
+    // `rightsubnet=0.0.0.0/0`, silently widening the tunnel policy).
+    // validateConfig validated left/right but never these free-text
+    // fields.
+    for (auto &pr : {std::pair<const char*, const std::string&>{"leftid",  c.leftId},
+                     std::pair<const char*, const std::string&>{"rightid", c.rightId},
+                     std::pair<const char*, const std::string&>{"description", c.description}}) {
+      for (char ch : pr.second)
+        if (static_cast<unsigned char>(ch) < 0x20 ||
+            static_cast<unsigned char>(ch) == 0x7f)
+          return prefixed(i, std::string(pr.first) + " contains a control character");
+    }
   }
   return "";
 }

@@ -178,6 +178,51 @@ ATF_TEST_CASE_BODY(config_peer_index_in_error) {
   ATF_REQUIRE(err.find("peer #2") != std::string::npos);
 }
 
+// --- 1.1.21: injection hardening (control byte in free-text fields) ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(config_iface_fwmark_newline_rejected);
+ATF_TEST_CASE_BODY(config_iface_fwmark_newline_rejected) {
+  auto i = goodIface();
+  i.fwmark = "0x1\nPostUp = touch /tmp/pwn";
+  auto err = validateConfig(i, {goodPeer()});
+  ATF_REQUIRE(err.find("FwMark") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(config_iface_dns_newline_rejected);
+ATF_TEST_CASE_BODY(config_iface_dns_newline_rejected) {
+  auto i = goodIface();
+  i.dns = {"1.1.1.1", "9.9.9.9\nPostUp = id"};
+  auto err = validateConfig(i, {goodPeer()});
+  ATF_REQUIRE(err.find("DNS") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(config_iface_mtu_newline_rejected);
+ATF_TEST_CASE_BODY(config_iface_mtu_newline_rejected) {
+  auto i = goodIface();
+  i.mtu = {"1420\nPostUp = id"};
+  auto err = validateConfig(i, {goodPeer()});
+  ATF_REQUIRE(err.find("MTU") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(config_peer_description_newline_rejected);
+ATF_TEST_CASE_BODY(config_peer_description_newline_rejected) {
+  auto p = goodPeer();
+  p.description = "edge\nPostUp = touch /tmp/pwn";
+  auto err = validateConfig(goodIface(), {p});
+  ATF_REQUIRE(err.find("description") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(config_clean_free_text_accepted);
+ATF_TEST_CASE_BODY(config_clean_free_text_accepted) {
+  auto i = goodIface();
+  i.fwmark = "0x1";
+  i.dns = {"1.1.1.1"};
+  i.mtu = {"1420"};
+  auto p = goodPeer();
+  p.description = "edge router (site B)";
+  ATF_REQUIRE_EQ(validateConfig(i, {p}), std::string());
+}
+
 // --- renderConf ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(render_emits_interface_section);
@@ -273,6 +318,11 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, config_no_peers_rejected);
   ATF_ADD_TEST_CASE(tcs, config_no_addresses_rejected);
   ATF_ADD_TEST_CASE(tcs, config_peer_index_in_error);
+  ATF_ADD_TEST_CASE(tcs, config_iface_fwmark_newline_rejected);
+  ATF_ADD_TEST_CASE(tcs, config_iface_dns_newline_rejected);
+  ATF_ADD_TEST_CASE(tcs, config_iface_mtu_newline_rejected);
+  ATF_ADD_TEST_CASE(tcs, config_peer_description_newline_rejected);
+  ATF_ADD_TEST_CASE(tcs, config_clean_free_text_accepted);
   ATF_ADD_TEST_CASE(tcs, render_emits_interface_section);
   ATF_ADD_TEST_CASE(tcs, render_csv_joins_addresses);
   ATF_ADD_TEST_CASE(tcs, render_omits_optional_listenport);

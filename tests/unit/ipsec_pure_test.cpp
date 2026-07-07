@@ -164,6 +164,41 @@ ATF_TEST_CASE_BODY(config_conn_index_in_error) {
   ATF_REQUIRE(err.find("conn #2") != std::string::npos);
 }
 
+// --- 1.1.21: injection hardening (control byte in id/description) ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(config_leftid_newline_rejected);
+ATF_TEST_CASE_BODY(config_leftid_newline_rejected) {
+  auto c = goodConn();
+  c.leftId = "@vpn.example.com\n    rightsubnet=0.0.0.0/0";
+  auto err = validateConfig({c});
+  ATF_REQUIRE(err.find("leftid") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(config_rightid_newline_rejected);
+ATF_TEST_CASE_BODY(config_rightid_newline_rejected) {
+  auto c = goodConn();
+  c.rightId = "peer\n    auto=start";
+  auto err = validateConfig({c});
+  ATF_REQUIRE(err.find("rightid") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(config_description_newline_rejected);
+ATF_TEST_CASE_BODY(config_description_newline_rejected) {
+  auto c = goodConn();
+  c.description = "tunnel\nconn evil";
+  auto err = validateConfig({c});
+  ATF_REQUIRE(err.find("description") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(config_clean_id_and_description_accepted);
+ATF_TEST_CASE_BODY(config_clean_id_and_description_accepted) {
+  auto c = goodConn();
+  c.leftId = "@vpn.example.com";
+  c.rightId = "C=UA, O=Example, CN=peer";
+  c.description = "DC1 to DC2";
+  ATF_REQUIRE_EQ(validateConfig({c}), std::string());
+}
+
 // --- renderConf ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(render_emits_setup_and_conn);
@@ -244,6 +279,10 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, config_no_conns_rejected);
   ATF_ADD_TEST_CASE(tcs, config_keyexchange_invalid_rejected);
   ATF_ADD_TEST_CASE(tcs, config_conn_index_in_error);
+  ATF_ADD_TEST_CASE(tcs, config_leftid_newline_rejected);
+  ATF_ADD_TEST_CASE(tcs, config_rightid_newline_rejected);
+  ATF_ADD_TEST_CASE(tcs, config_description_newline_rejected);
+  ATF_ADD_TEST_CASE(tcs, config_clean_id_and_description_accepted);
   ATF_ADD_TEST_CASE(tcs, render_emits_setup_and_conn);
   ATF_ADD_TEST_CASE(tcs, render_csv_joins_subnets);
   ATF_ADD_TEST_CASE(tcs, render_omits_optional_fields_when_empty);
