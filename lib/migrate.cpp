@@ -164,6 +164,10 @@ bool migrateCommand(const Args &args) {
     r.artifactFile = extractFileField(exportBody);
     if (r.artifactFile.empty())
       ERR("export response did not include a 'file' field")
+    // 1.1.21: the filename is remote-controlled — validate before it is
+    // used as a `curl -o` / `unlink()` path (path-traversal guard).
+    if (auto e = MigratePure::validateArtifactFile(r.artifactFile); !e.empty())
+      ERR("export response 'file' field rejected: " << e)
 
     // Steps 2..5.
     for (auto &s : MigratePure::buildRemainingSteps(r))

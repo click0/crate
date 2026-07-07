@@ -177,6 +177,30 @@ std::string validateContainerName(const std::string &name) {
   return "";
 }
 
+// 1.1.21: the artifact filename comes from the SOURCE server's export
+// JSON (`extractFileField`), i.e. a remote, less-trusted input. It is
+// concatenated into `workDir + "/" + artifactFile` and used both as a
+// `curl -o` target and an `unlink()` target. Without validation a
+// hostile/compromised source could return `"../../../etc/cron.d/pwn"`
+// and get arbitrary file write AND delete on the migrating host. Treat
+// it as a single path COMPONENT: a plain filename, no slash, no `..`,
+// no control bytes.
+std::string validateArtifactFile(const std::string &name) {
+  if (name.empty()) return "artifact filename is empty";
+  if (name.size() > 255) return "artifact filename longer than 255 chars";
+  if (name == "." || name == "..") return "artifact filename is reserved";
+  for (char c : name) {
+    if (c == '/')
+      return "artifact filename must not contain '/' (path traversal)";
+    if (static_cast<unsigned char>(c) < 0x20 ||
+        static_cast<unsigned char>(c) == 0x7f)
+      return "artifact filename contains a control character";
+  }
+  if (name.find("..") != std::string::npos)
+    return "artifact filename must not contain '..'";
+  return "";
+}
+
 std::string normalizeBaseUrl(const std::string &endpoint) {
   bool hasScheme = false;
   auto rest = stripScheme(endpoint, &hasScheme);

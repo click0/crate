@@ -13,6 +13,18 @@ bool isBase64Char(char c) {
       || (c >= '0' && c <= '9') || c == '+' || c == '/';
 }
 
+// 1.1.21: a free-text field (DNS, FwMark, MTU, peer description) is
+// emitted verbatim into the wg-quick .conf. A newline would let it
+// inject its own directives — most dangerously `PostUp = <cmd>`, which
+// wg-quick runs as root. Reject any control byte (incl. \n/\r) and DEL.
+bool hasControlChar(const std::string &s) {
+  for (char c : s)
+    if (static_cast<unsigned char>(c) < 0x20 ||
+        static_cast<unsigned char>(c) == 0x7f)
+      return true;
+  return false;
+}
+
 bool isAlnum(char c) {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
       || (c >= '0' && c <= '9');
@@ -180,6 +192,16 @@ std::string validateConfig(const InterfaceSpec &iface,
   if (!iface.listenPort.empty())
     if (auto e = validatePort(iface.listenPort); !e.empty())
       return "interface ListenPort: " + e;
+  // 1.1.21: fields emitted verbatim into the .conf must not carry a
+  // newline/control byte (would inject wg-quick directives like PostUp,
+  // which runs as root). validateConfig previously skipped these.
+  if (hasControlChar(iface.fwmark))
+    return "interface FwMark contains a control character";
+  for (auto &d : iface.dns)
+    if (hasControlChar(d))
+      return "interface DNS entry '" + d + "' contains a control character";
+  if (!iface.mtu.empty() && hasControlChar(iface.mtu.front()))
+    return "interface MTU contains a control character";
 
   // Peers
   if (peers.empty())
@@ -204,6 +226,12 @@ std::string validateConfig(const InterfaceSpec &iface,
         if (c < '0' || c > '9')
           return "peer #" + std::to_string(i + 1) + " PersistentKeepalive must be numeric";
     }
+    // 1.1.21: the peer description is rendered as a `# <description>`
+    // comment line — a newline escapes the comment and injects a
+    // directive into the [Interface]/[Peer] scope.
+    if (hasControlChar(p.description))
+      return "peer #" + std::to_string(i + 1) +
+             " description contains a control character";
   }
   return "";
 }

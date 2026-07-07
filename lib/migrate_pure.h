@@ -50,6 +50,12 @@ std::string validateBearerToken(const std::string &token);
 // matches what a client can put in a URL path segment.
 std::string validateContainerName(const std::string &name);
 
+// 1.1.21: validate the artifact filename returned by the source
+// server's /export (a remote-controlled value) before it is used as a
+// filesystem path. Rejects empty, `/`, `..`, control bytes, > 255
+// chars — a single safe path component.
+std::string validateArtifactFile(const std::string &name);
+
 // --- Plan ---
 
 enum class StepKind {
