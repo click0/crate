@@ -6,6 +6,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.22] — 2026-07-07
+
+**Security & robustness: four fixes from a fresh project-wide audit.**
+
+A second-pass audit (shell-out surfaces, the root daemon, the
+allocation/registry layer, and the remaining pure modules) surfaced
+four cheap, unambiguous defects, fixed here:
+
+- **`cron/user` injection (`lib/run.cpp`).** The crontab user from a
+  `.crate` spec was emitted, unvalidated, into a root-run file path
+  (`/var/cron/tabs/<user>`) and a `sh -c "chmod … <user>"` string. In
+  the legacy setuid build that gave an unprivileged spec author path
+  traversal (`../../etc/cron.d/pwn` → host root) and shell injection.
+  New `RunPure::validateCronUser` constrains it to a POSIX-ish username
+  (`[A-Za-z0-9_-]`, ≤32, no leading `-`) before use.
+
+- **Unescaped JSON in `crate list --json` (`lib/list_pure.cpp`).**
+  `renderJson` interpolated `name`/`hostname`/`ip`/`path`/`ports`/
+  `mounts` without escaping, while the sibling `DoctorPure::renderJson`
+  routes every string through `jsonEscape`. Those fields come from the
+  kernel's jail state, so a jail created by another tool with a `"` in
+  its hostname produced malformed/injectable JSON. Now escaped.
+
+- **Undefined behavior in `FwUsers::del` (`lib/ctx.cpp`).**
+  `pids.erase(pids.find(pid))` is UB when the pid is absent
+  (`erase(end())`) — reachable on a stale/truncated context file or a
+  double teardown. Switched to `erase(key)`, a safe no-op for a missing
+  key (matching `FwSlots::release`).
+
+- **Unvalidated `jailPath` in vm-wrap (`lib/vmwrap_pure.cpp`).**
+  `validateSpec` checked every field except `jailPath`, which is
+  emitted verbatim into `path = "…";` in the jail.conf fragment that
+  `jail -c -f` runs as root. New `validateJailPath` requires an absolute
+  path and rejects a double-quote or control byte (which would close the
+  value or inject a directive).
+
+New `run_pure_test`, `list_pure_test`, and `vmwrap_pure_test` cases
+cover each. Three higher-touch items from the same audit — the auth
+locality signal keyed on a client-supplied `REMOTE_ADDR` header
+(`daemon/auth.cpp`), the lease-file `flock`-on-renamed-inode race
+(`lib/network_lease*.cpp`), and the `socket_proxy/proxy` path confinement
+gap (`lib/run_services.cpp`) — are recorded for a follow-up as they touch
+the auth and concurrency paths and want on-hardware validation.
+
 ## [1.1.21] — 2026-07-07
 
 **Security: reject control-char / path-traversal injection in

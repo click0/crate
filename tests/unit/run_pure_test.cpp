@@ -76,6 +76,33 @@ ATF_TEST_CASE_BODY(envOrDefault_overflow_returns_default)
 	::unsetenv("CRATE_TEST_ENV_BIG");
 }
 
+// --- 1.1.22: validateCronUser ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(cron_user_typical_accepted);
+ATF_TEST_CASE_BODY(cron_user_typical_accepted)
+{
+	ATF_REQUIRE_EQ(RunPure::validateCronUser("root"), "");
+	ATF_REQUIRE_EQ(RunPure::validateCronUser("www-data"), "");
+	ATF_REQUIRE_EQ(RunPure::validateCronUser("user_1"), "");
+	ATF_REQUIRE_EQ(RunPure::validateCronUser(""), "");  // empty unchanged
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(cron_user_injection_rejected);
+ATF_TEST_CASE_BODY(cron_user_injection_rejected)
+{
+	// Path traversal into the host crontab dir.
+	ATF_REQUIRE(!RunPure::validateCronUser("../../etc/cron.d/pwn").empty());
+	ATF_REQUIRE(!RunPure::validateCronUser("a/b").empty());
+	ATF_REQUIRE(!RunPure::validateCronUser("..").empty());   // '.' not allowed
+	// Shell metacharacters (the value also lands in a `sh -c` string).
+	ATF_REQUIRE(!RunPure::validateCronUser("x; rm -rf /").empty());
+	ATF_REQUIRE(!RunPure::validateCronUser("x`id`").empty());
+	ATF_REQUIRE(!RunPure::validateCronUser("x$(id)").empty());
+	ATF_REQUIRE(!RunPure::validateCronUser("x y").empty());
+	ATF_REQUIRE(!RunPure::validateCronUser("-rf").empty());  // leading dash
+	ATF_REQUIRE(!RunPure::validateCronUser(std::string(33, 'a')).empty());
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
 	ATF_ADD_TEST_CASE(tcs, argsToString_empty);
@@ -86,4 +113,6 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, envOrDefault_set_garbage_returns_default);
 	ATF_ADD_TEST_CASE(tcs, envOrDefault_set_empty_returns_default);
 	ATF_ADD_TEST_CASE(tcs, envOrDefault_overflow_returns_default);
+	ATF_ADD_TEST_CASE(tcs, cron_user_typical_accepted);
+	ATF_ADD_TEST_CASE(tcs, cron_user_injection_rejected);
 }

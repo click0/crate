@@ -78,12 +78,27 @@ std::string validateRulesetNum(unsigned n) {
   return "";
 }
 
+std::string validateJailPath(const std::string &p) {
+  if (p.empty()) return "";  // empty -> defaultJailPath() ("/")
+  if (p.size() > 1024) return "jail path is longer than 1024 chars";
+  if (p.front() != '/') return "jail path must be absolute (start with '/')";
+  for (char c : p) {
+    if (c == '"')
+      return "jail path must not contain a double-quote";
+    if (static_cast<unsigned char>(c) < 0x20 ||
+        static_cast<unsigned char>(c) == 0x7f)
+      return "jail path contains a control character";
+  }
+  return "";
+}
+
 std::string validateSpec(const WrapSpec &s) {
   if (auto e = validateVmName(s.vmName);   !e.empty()) return e;
   if (auto e = validateJailName(s.jailName); !e.empty()) return e;
   if (auto e = validateDataset(s.dataset); !e.empty()) return e;
   if (auto e = validateTap(s.tap);         !e.empty()) return e;
   if (auto e = validateNmdm(s.nmdm);       !e.empty()) return e;
+  if (auto e = validateJailPath(s.jailPath); !e.empty()) return e;
   if (s.rulesetNum != 0)
     if (auto e = validateRulesetNum(s.rulesetNum); !e.empty()) return e;
   return "";

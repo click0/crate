@@ -114,6 +114,38 @@ ATF_TEST_CASE_BODY(spec_validation_short_circuits) {
   ATF_REQUIRE(!validateSpec(bad).empty());
 }
 
+// 1.1.22: jailPath is emitted verbatim into `path = "..."` in the
+// jail.conf fragment run by `jail -c -f` as root. validateSpec must
+// reject a quote (closes the value) or a control byte (injects a
+// directive), and require an absolute path.
+ATF_TEST_CASE_WITHOUT_HEAD(spec_validates_jail_path);
+ATF_TEST_CASE_BODY(spec_validates_jail_path) {
+  WrapSpec good;
+  good.vmName = "alpine"; good.jailName = "alpine-cage";
+
+  // Empty (default "/") and a clean absolute path are accepted.
+  ATF_REQUIRE_EQ(validateSpec(good), std::string());
+  WrapSpec ok = good; ok.jailPath = "/usr/jails/alpine-cage";
+  ATF_REQUIRE_EQ(validateSpec(ok), std::string());
+
+  // Quote-injection: escape the quoted value and inject directives.
+  WrapSpec inj = good;
+  inj.jailPath = "/j\";\n    allow.mount;\n    path=\"/";
+  ATF_REQUIRE(!validateSpec(inj).empty());
+
+  // Bare quote alone.
+  WrapSpec q = good; q.jailPath = "/tmp/a\"b";
+  ATF_REQUIRE(!validateSpec(q).empty());
+
+  // Newline alone.
+  WrapSpec nl = good; nl.jailPath = "/tmp/a\nallow.mount";
+  ATF_REQUIRE(!validateSpec(nl).empty());
+
+  // Non-absolute.
+  WrapSpec rel = good; rel.jailPath = "relative/path";
+  ATF_REQUIRE(!validateSpec(rel).empty());
+}
+
 // --- Derivations ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(ruleset_derivation_in_range);
@@ -284,6 +316,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, tap_and_nmdm_ranges);
   ATF_ADD_TEST_CASE(tcs, ruleset_num_range);
   ATF_ADD_TEST_CASE(tcs, spec_validation_short_circuits);
+  ATF_ADD_TEST_CASE(tcs, spec_validates_jail_path);
   ATF_ADD_TEST_CASE(tcs, ruleset_derivation_in_range);
   ATF_ADD_TEST_CASE(tcs, ruleset_derivation_deterministic);
   ATF_ADD_TEST_CASE(tcs, default_jail_path_is_root);
