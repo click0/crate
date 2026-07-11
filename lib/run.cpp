@@ -1651,6 +1651,15 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       std::string extraIface; // jail-side interface for this extra
 
       if (ex.mode == Spec::NetOptDetails::Mode::Bridge) {
+        // 1.1.24: validate the extra-interface bridge name like the
+        // primary bridge path (run.cpp ~1081). Without this, ex.bridgeIface
+        // flows straight into `ifconfig <bridge> addm <member>` — a
+        // leading-'-' value is taken as an ifconfig option (argument
+        // injection). The primary path validated; this loop did not.
+        if (auto reason = BridgePure::validateBridgeName(ex.bridgeIface);
+            !reason.empty())
+          ERR("extra[" << i << "] bridge mode: " << reason
+              << " (got '" << ex.bridgeIface << "')")
         RunNet::ensureBridgeModule();
         auto bi = RunNet::createBridgeEpair(jid, jidStr, ex.bridgeIface, execInJail);
         extraIface = bi.ifaceB;

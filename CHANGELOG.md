@@ -6,6 +6,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.24] — 2026-07-07
+
+**Robustness: two low-severity fixes from the second-pass audit that
+don't need on-hardware validation (compile-gated by the FreeBSD build).**
+
+- **Null-pointer dereference in `getIfaceIp4Addresses` (`lib/net.cpp`).**
+  The IPv4 interface loop dereferenced `a->ifa_addr->sa_family` without
+  a NULL check, while the IPv6 sibling (`getIfaceIp6Addresses`) already
+  guards `ifa_addr == nullptr`. `getifaddrs(3)` can return entries with
+  a NULL `ifa_addr` (an interface with no address — e.g. a freshly
+  created epair before configuration), so the IPv4 path could crash
+  (local DoS). The loop now mirrors the IPv6 one: it skips NULL
+  `ifa_addr`, non-AF_INET, name mismatches, and NULL `ifa_netmask`.
+
+- **Extra-interface bridge name not validated (`lib/run.cpp`).** The
+  primary bridge path runs `optionNet->bridgeIface` through
+  `BridgePure::validateBridgeName`, but the extra-interfaces loop passed
+  `ex.bridgeIface` straight into `RunNet::createBridgeEpair` →
+  `ifconfig <bridge> addm <member>`. A leading-`-` value is taken as an
+  `ifconfig(8)` option (argument injection; no shell involved). The loop
+  now validates the name the same way as the primary path.
+
+`BridgePure::validateBridgeName` (which rejects the leading dash, shell
+metacharacters, `..`, and over-length names) is already covered by
+`bridge_pure_test`; the `net.cpp` change is runtime-only (no pure unit
+surface).
+
 ## [1.1.23] — 2026-07-07
 
 **Security: decide daemon auth locality from the accepting socket, not
