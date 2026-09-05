@@ -43,10 +43,11 @@ unit suite can't provide, so they are NOT being fixed blind):
   full FreeBSD workflow (or a self-hosted runner) to validate.
 
 Deferred from the 2026-07 second-pass audit (its four clear, testable
-findings shipped as 1.1.22; the auth-locality finding was fixed in
-1.1.23 — see below; these two remain because they touch the
-concurrency/confinement paths and want on-hardware validation before
-shipping — do NOT fix blind):
+findings shipped as 1.1.22; auth-locality fixed in 1.1.23 and
+socket_proxy confinement in 1.1.25 — see below; ONE item remains
+because it is a concurrency race the pure unit suite cannot exercise
+and wants a real multi-process test on a FreeBSD host — do NOT fix
+blind):
 
   [FIXED in 1.1.23] daemon/auth.cpp connection-locality decided from a
   client-supplyable REMOTE_ADDR header. Replaced with a non-spoofable
@@ -70,16 +71,34 @@ shipping — do NOT fix blind):
   not exercised by the pure unit suite — validate with a real
   multi-process race on a FreeBSD host.
 
-* (security, MED) lib/run_services.cpp socket_proxy: the `share` loop
-  runs each socket path through Util::safePath, but the `proxy` loop
-  does not — `entry.jail` flows into `create_directories(J(jailParent))`
-  and a `UNIX-LISTEN:J(entry.jail)` socat bind, and `entry.host` into
-  `UNIX-CONNECT:`. A `..`-bearing jail path escapes the jail tree for a
-  root-owned dir/socket. The correct guard needs care: safePath("/") as
-  used by the share loop is itself weak (it canonicalizes but the prefix
-  check never rejects, and the return value is discarded), so this wants
-  an explicit `..`/traversal rejection reviewed against how J() prefixes
-  the path — not a blind copy of the share-loop call.
+  [FIXED in 1.1.25] lib/run_services.cpp socket_proxy confinement. The
+  earlier note here mis-diagnosed safePath("/"): it did not "never
+  reject" — a trailing-slash boundary bug in util_pure.cpp made it
+  reject EVERY real path (so `share` was unusable), while its canonical
+  return value was discarded anyway (so it could not have confined the
+  raw ".." path that still reached J()). Both loops now validate the
+  concatenated jail-side path stays under jailPath, exactly as run.cpp
+  does for dirsShare; safePath's trailing-slash bug is fixed and
+  unit-tested.
+
+Recorded from the 2026-07 third-pass audit — LATENT, no caller today,
+harden BEFORE wiring this code up:
+
+* (security, HIGH-if-reachable) lib/vm_spec.cpp:97-184
+  generateDomainXml embeds `name`, `opts.disk`, `opts.sharedBridge`,
+  `vol.hostPath`, `vol.tag` unescaped into the libvirt domain XML
+  handed to virDomainCreateXML as root (vm_run.cpp:89, bhyve:///system).
+  A value containing `'/>…` injects arbitrary <disk>/<filesystem>
+  devices (e.g. mount host `/` into the guest). vm_run.cpp:250-388
+  (configureVmDns / generateCloudInitFor9p) and vm_stack.cpp:88
+  (registerVmInStack) likewise build root-written paths and an
+  /etc/hosts line from `vmName` / `vol.tag` with no traversal or
+  newline check. `createVm` / `parseVmOptions` / `generateDomainXml` /
+  `configureVmDns` / `registerVmInStack` have NO callers in the tree —
+  dead code — so not exploitable today. XML-escape every field (or
+  validate to a tight charset) and reuse StackPure::validateStackName
+  for vmName/vol.tag before any of this gets a caller. memoryToKiB
+  (vm_spec.cpp:84) also has an unchecked `val*1024*1024` overflow.
 
 === High priority — blocking production use ===
 

@@ -119,9 +119,19 @@ std::string safePath(const std::string &path, const std::string &requiredPrefix,
   // Require both: prefix match AND a path-separator immediately after.
   // Without the separator check, prefix "/foo" would wrongly accept the
   // unrelated path "/foobar/x".
+  //
+  // 1.1.25: when the prefix ALREADY ends in '/' (the root prefix "/" is
+  // the degenerate case), the separator has been consumed by the prefix
+  // itself, so canonical[prefix.size()] is the first char of a filename,
+  // not a separator. The old unconditional check therefore rejected
+  // every real path under "/" except "/" itself — which silently broke
+  // socketProxy.share (run_services.cpp calls safePath(sock, "/", …)).
+  // Only demand the separator when the prefix doesn't supply it.
+  bool prefixEndsWithSep = !requiredPrefix.empty() && requiredPrefix.back() == '/';
   if (canonical.size() < requiredPrefix.size() ||
       canonical.compare(0, requiredPrefix.size(), requiredPrefix) != 0 ||
-      (canonical.size() > requiredPrefix.size() &&
+      (!prefixEndsWithSep &&
+       canonical.size() > requiredPrefix.size() &&
        canonical[requiredPrefix.size()] != '/'))
     ERR2("path validation", "'" << what << "' path '" << path << "' resolves to '"
          << canonical << "' which is outside required prefix '" << requiredPrefix << "'")

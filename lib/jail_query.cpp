@@ -194,14 +194,20 @@ std::vector<JailInfo> getAllJails(bool crateOnly) {
     info.ip4      = ps.getString(5);
     info.dying    = (ps.getString(6) == "true" || ps.getString(6) == "1");
 
+    // 1.1.25: advance the lastjid cursor BEFORE the crateOnly filter.
+    // The advance used to sit after the filter, so a non-crate jail
+    // hit `continue` without moving the cursor and the next
+    // jailparam_get returned the very same jail forever — a 100%-CPU
+    // infinite loop the moment any foreign jail (bastille/pot/plain
+    // jail(8)) coexisted with crate. That wedged every crateOnly
+    // caller, including the crated control-socket jail listing.
+    auto nextJid = std::to_string(info.jid);
+    jailparam_import(&ps.params[0], nextJid.c_str());
+
     if (crateOnly && info.path.find(cratePrefix) != 0)
       continue;
 
     result.push_back(info);
-
-    // Advance lastjid for next iteration
-    auto nextJid = std::to_string(info.jid);
-    jailparam_import(&ps.params[0], nextJid.c_str());
   }
 
   return result;

@@ -72,7 +72,16 @@ RunAtEnd setupSocketProxy(const Spec &spec, const std::string &jailPath, bool lo
   auto J = [&jailPath](auto subdir) { return STR(jailPath << subdir); };
 
   for (auto &sockPath : spec.socketProxy->share) {
-    Util::safePath(sockPath, "/", "shared socket");
+    // 1.1.25: confine the JAIL-SIDE path — validate that jailPath +
+    // sockPath, once canonicalized, still lives under jailPath (the
+    // same guard run.cpp applies to dirsShare/filesShare). The old
+    // safePath(sockPath, "/", …) could not confine anything: prefix "/"
+    // matches every absolute path, and its canonical return value was
+    // discarded while the raw (possibly "..") sockPath still went into
+    // J(). (It also over-rejected every path due to the trailing-slash
+    // bug fixed in util_pure.cpp this release — so the feature was
+    // simultaneously unusable AND unguarded.)
+    Util::safePath(J(sockPath), jailPath, "shared socket (jail side)");
     auto parentDir = sockPath.substr(0, sockPath.rfind('/'));
     std::filesystem::create_directories(J(parentDir));
     Util::Fs::writeFile("", J(sockPath));
@@ -83,6 +92,13 @@ RunAtEnd setupSocketProxy(const Spec &spec, const std::string &jailPath, bool lo
 
   std::vector<pid_t> socatPids;
   for (auto &entry : spec.socketProxy->proxy) {
+    // 1.1.25: the proxy loop had NO confinement at all — entry.jail
+    // reached create_directories(J(jailParent)) and a
+    // UNIX-LISTEN:J(entry.jail) socat bind unchecked, so a ".."-bearing
+    // value planted a root-owned dir/socket outside the jail tree. Same
+    // jail-side guard as `share`. (entry.host is the operator's own
+    // host-side connect target and is deliberately not jail-confined.)
+    Util::safePath(J(entry.jail), jailPath, "socket proxy (jail side)");
     if (logProgress)
       std::cerr << rang::fg::gray << "starting socket proxy: " << entry.host << " <-> " << entry.jail << rang::style::reset << std::endl;
     auto jailParent = entry.jail.substr(0, entry.jail.rfind('/'));

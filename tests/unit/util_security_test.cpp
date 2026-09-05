@@ -62,6 +62,37 @@ ATF_TEST_CASE_BODY(safePath_sibling_rejected)
 	ATF_REQUIRE_THROW(Exception, Util::safePath(bad, dir, "spec"));
 }
 
+// 1.1.25: a prefix that already ends in '/' (the root prefix "/" is the
+// degenerate case) must accept ordinary absolute paths beneath it. The
+// old separator check demanded canonical[prefix.size()] == '/', which
+// for prefix "/" is the first filename character — so every real path
+// was rejected and socketProxy.share always aborted.
+ATF_TEST_CASE_WITHOUT_HEAD(safePath_root_prefix_accepts_absolute);
+ATF_TEST_CASE_BODY(safePath_root_prefix_accepts_absolute)
+{
+	auto dir = makeTempDir("rootprefix");
+	auto sock = dir + "/app.sock";
+	// Prefix "/" — must NOT throw, and must return the canonical path.
+	auto out = Util::safePath(sock, "/", "shared socket");
+	ATF_REQUIRE(!out.empty());
+	ATF_REQUIRE_EQ(out.front(), '/');
+	// "/" itself is still accepted.
+	ATF_REQUIRE_EQ(Util::safePath("/", "/", "root"), std::string("/"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(safePath_trailing_slash_prefix_still_rejects_sibling);
+ATF_TEST_CASE_BODY(safePath_trailing_slash_prefix_still_rejects_sibling)
+{
+	// With a trailing-slash prefix the sibling guard must still hold:
+	// prefix "<dir>/" accepts "<dir>/x" but rejects "<dir>_neighbour/y",
+	// because the prefix compare itself already covers the separator.
+	auto dir = makeTempDir("tslash");
+	auto ok = Util::safePath(dir + "/x", dir + "/", "t");
+	ATF_REQUIRE(ok.compare(0, dir.size(), dir) == 0);
+	ATF_REQUIRE_THROW(Exception,
+	                  Util::safePath(dir + "_neighbour/y", dir + "/", "t"));
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(safePath_absolute_outside_rejected);
 ATF_TEST_CASE_BODY(safePath_absolute_outside_rejected)
 {
@@ -176,6 +207,8 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, safePath_dot_segments_normalized);
 	ATF_ADD_TEST_CASE(tcs, safePath_symlink_escape_rejected);
 	ATF_ADD_TEST_CASE(tcs, safePath_returns_canonical);
+	ATF_ADD_TEST_CASE(tcs, safePath_root_prefix_accepts_absolute);
+	ATF_ADD_TEST_CASE(tcs, safePath_trailing_slash_prefix_still_rejects_sibling);
 
 	// shellQuote
 	ATF_ADD_TEST_CASE(tcs, shellQuote_neutralizes_command_substitution);
