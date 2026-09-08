@@ -91,20 +91,27 @@ jobs:
             # Hard build deps — these MUST install or the job is dead.
             sudo pkg install -y pkgconf yaml-cpp rang gmake cpp-httplib
 
-            # kyua + ATF. `atf` also provides atf-sh, the interpreter for
-            # our functional test scripts (#!/usr/bin/env atf-sh) — it is
-            # NOT a kyua dependency, hence the explicit name; without it
+            # ATF: HARD dep, on its own line. It provides (a) the LINKABLE
+            # /usr/local/lib/libatf-c{,++}.so the Makefile's `-latf-c++
+            # -latf-c` needs — base only ships PRIVATE copies
+            # (/usr/lib/private/libprivateatf-*) the linker cannot resolve,
+            # which is exactly where run 34233361523 died after compiling
+            # everything — and (b) atf-sh, the interpreter for our
+            # functional test scripts (#!/usr/bin/env atf-sh); without it
             # kyua reports "Invalid header for test case list; got ''".
-            # FreeBSD 14.x ships kyua, libatf-c{,++}, atf-c++.hpp AND
-            # atf-sh in BASE (/usr/bin, /usr/lib, /usr/include), and
-            # `env atf-sh` resolves /usr/bin/atf-sh, so base suffices.
-            # 2026-09: the devel/kyua package vanished from the 14.2 pkg
-            # catalogue ("No packages available to install matching
-            # 'kyua'") and broke lite CI at this exact step (PR #228) —
-            # same resilient install as freebsd-build-lite.yml: try pkg,
-            # fall back to base, preflight with diagnostics.
-            sudo pkg install -y kyua atf 2>/dev/null \
-              || echo "kyua/atf not in the pkg repo — relying on FreeBSD base"
+            # devel/atf is alive (0.23, quarterly). Separate line on
+            # purpose: bundling it with the dead kyua package made pkg
+            # abort the whole transaction and atf silently never installed.
+            sudo pkg install -y atf
+
+            # kyua: the devel/kyua port was DELETED 2026-05-07 ("part of
+            # the base in all supported versions — Kyua's evolution
+            # happens in the base", D47473) — the original PR #228 break
+            # ("No packages available to install matching 'kyua'").
+            # FreeBSD 14.x ships /usr/bin/kyua. pkg tried only for older
+            # images; base is the real source.
+            sudo pkg install -y kyua 2>/dev/null \
+              || echo "kyua pkg gone (deleted 2026-05, lives in base) — using /usr/bin/kyua"
             echo "--- kyua/ATF preflight ---"
             command -v kyua || true
             command -v atf-sh || true
@@ -122,6 +129,13 @@ jobs:
             fi
             if [ ! -f /usr/include/atf-c++.hpp ] && [ ! -f /usr/local/include/atf-c++.hpp ]; then
               echo "::error::atf-c++.hpp not found in base or pkg"
+              exit 1
+            fi
+            # A header alone is not enough — the LINKABLE lib must exist
+            # (the check that would have caught run 34233361523 up front).
+            ls -la /usr/local/lib/libatf-c++.so /usr/lib/libatf-c++.so 2>/dev/null || true
+            if [ ! -e /usr/local/lib/libatf-c++.so ] && [ ! -e /usr/lib/libatf-c++.so ]; then
+              echo "::error::linkable libatf-c++.so not found — devel/atf must be installed (base only has private copies)"
               exit 1
             fi
             echo "::endgroup::"
