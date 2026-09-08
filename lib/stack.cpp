@@ -78,6 +78,12 @@ static std::vector<StackNetwork> parseNetworks(const YAML::Node &top) {
   for (auto n : top["networks"]) {
     StackNetwork net;
     net.name = n.first.as<std::string>();
+    // 1.1.25: the network name becomes the `dns-<name>` config directory
+    // that startStackDns create_directories/writes and stopStackDns
+    // remove_all's as root — reject '/' and '..' (path traversal) and
+    // shell/quote chars before it goes anywhere.
+    if (auto e = StackPure::validateStackName(net.name); !e.empty())
+      ERR("networks/" << net.name << ": " << e)
     if (!n.second.IsMap())
       ERR("networks/" << net.name << " must be a map")
     if (n.second["bridge"])
@@ -86,8 +92,13 @@ static std::vector<StackNetwork> parseNetworks(const YAML::Node &top) {
       ERR("networks/" << net.name << " requires 'bridge' field")
     if (n.second["subnet"])
       net.subnet = n.second["subnet"].as<std::string>();
-    if (n.second["gateway"])
+    if (n.second["gateway"]) {
       net.gateway = n.second["gateway"].as<std::string>();
+      // 1.1.25: the gateway is interpolated into a `printf 'nameserver …'`
+      // shell fragment run as root — must be a bare IP literal.
+      if (auto e = StackPure::validateStackIp(net.gateway); !e.empty())
+        ERR("networks/" << net.name << "/gateway: " << e)
+    }
     if (n.second["dns"])
       net.dns = n.second["dns"].as<bool>();
     if (n.second["ip_range"])
@@ -531,6 +542,11 @@ static ParsedStack parseStackFile(const std::string &fname, const std::map<std::
   for (auto c : top["containers"]) {
     StackEntry entry;
     entry.name = c.first.as<std::string>();
+    // 1.1.25: the container name is interpolated into a `printf '…' >>
+    // /etc/hosts` shell fragment run via `sh -c` as root — reject
+    // quotes/metachars/newlines before it can close the quote.
+    if (auto e = StackPure::validateStackName(entry.name); !e.empty())
+      ERR("containers/" << entry.name << ": " << e)
 
     if (!c.second.IsMap())
       ERR("containers/" << entry.name << " must be a map")
@@ -867,11 +883,20 @@ bool stackCommand(const Args &args) {
 
         // Inject /etc/hosts entries for inter-container DNS (§26)
         if (!hostsEntries.empty()) {
-          // Build a shell command that appends all container mappings to /etc/hosts
+          // Build a shell command that appends all container mappings to /etc/hosts.
+          // 1.1.25: sink-guard — every name/IP is re-validated right here,
+          // at the point it enters a `sh -c` string, so nothing that could
+          // close the single quote reaches the shell no matter where the
+          // value originated (stack file, member spec, IP-pool allocator).
           std::ostringstream hostsCmd;
           hostsCmd << "printf '\\n# crate stack containers\\n";
-          for (auto &kv : containerIPs)
+          for (auto &kv : containerIPs) {
+            if (auto err = StackPure::validateStackName(kv.first); !err.empty())
+              ERR("stack hosts: container '" << kv.first << "': " << err)
+            if (auto err = StackPure::validateStackIp(kv.second); !err.empty())
+              ERR("stack hosts: container '" << kv.first << "' address: " << err)
             hostsCmd << kv.second << " " << kv.first << "\\n";
+          }
           hostsCmd << "' >> /etc/hosts";
           spec.scripts["run:before-start-services"]["__crate_stack_hosts"] = hostsCmd.str();
         }
@@ -879,6 +904,9 @@ bool stackCommand(const Args &args) {
         // Inject DNS resolver pointing to stack DNS service
         for (auto &net : networks) {
           if (net.dns && !net.gateway.empty()) {
+            // 1.1.25: sink-guard (gateway was validated at parse time too).
+            if (auto err = StackPure::validateStackIp(net.gateway); !err.empty())
+              ERR("stack dns: network '" << net.name << "' gateway: " << err)
             std::ostringstream dnsCmd;
             dnsCmd << "printf 'nameserver " << net.gateway << "\\n' > /etc/resolv.conf";
             spec.scripts["run:before-start-services"]["__crate_stack_dns"] = dnsCmd.str();

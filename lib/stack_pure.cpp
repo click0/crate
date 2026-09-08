@@ -68,6 +68,38 @@ std::string buildHostsEntries(const std::map<std::string, std::string> &nameToIp
   return ss.str();
 }
 
+std::string validateStackName(const std::string &name) {
+  if (name.empty()) return "name is empty";
+  if (name.size() > 64) return "name is longer than 64 chars";
+  if (name == "." || name == "..") return "name is reserved";
+  if (name.front() == '-') return "name must not start with '-'";
+  for (char c : name) {
+    bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+           || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+    if (!ok)
+      return "name contains an invalid character (allowed: [A-Za-z0-9._-])";
+  }
+  return "";
+}
+
+std::string validateStackIp(const std::string &ip) {
+  if (ip.empty()) return "address is empty";
+  // Charset gate first: this is what makes the value inert inside the
+  // single-quoted shell fragment regardless of what inet_pton thinks.
+  for (char c : ip) {
+    bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
+           || (c >= 'A' && c <= 'F') || c == '.' || c == ':' || c == '/';
+    if (!ok)
+      return "address contains an invalid character";
+  }
+  auto bare = ipFromCidr(ip);
+  struct in_addr a4;
+  struct in6_addr a6;
+  if (::inet_pton(AF_INET, bare.c_str(), &a4) == 1) return "";
+  if (::inet_pton(AF_INET6, bare.c_str(), &a6) == 1) return "";
+  return "address is neither a valid IPv4 nor IPv6 literal";
+}
+
 // topoSort is templated and lives in stack_pure.h.
 
 }

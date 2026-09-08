@@ -61,7 +61,54 @@ jobs:
             # (daemon/*.cpp #include <httplib.h>); ssl/crypto ship in
             # FreeBSD base. Added 1.1.21 so the daemon link is covered
             # in PR CI — see the "Link daemon binaries" step below.
-            sudo pkg install -y pkgconf yaml-cpp rang kyua gmake cpp-httplib
+            #
+            # Hard build deps — these MUST install or the job is dead.
+            sudo pkg install -y pkgconf yaml-cpp rang gmake cpp-httplib
+
+            # ATF link libraries. The Makefile links every unit test with
+            # `-L/usr/local/lib -latf-c++ -latf-c`. FreeBSD 14.x base ships
+            # the HEADER (/usr/include/atf-c++.hpp) and kyua, but its ATF
+            # libraries are PRIVATE (/usr/lib/private/libprivateatf-*) and
+            # cannot be resolved as -latf-c++ — run 34233361523 compiled
+            # everything and then died at exactly that link step. So
+            # devel/atf (alive: 0.23 on quarterly) is a HARD dep, on its
+            # OWN line: bundling it with the dead kyua package made pkg
+            # abort the whole transaction and atf silently never installed.
+            sudo pkg install -y atf
+
+            # kyua: the devel/kyua port was DELETED 2026-05-07 ("part of
+            # the base in all supported versions — Kyua's evolution
+            # happens in the base", D47473), which is what first broke
+            # this job (PR #228: "No packages available to install
+            # matching 'kyua'"). FreeBSD 14.x ships /usr/bin/kyua — verified
+            # present in this image. pkg is tried only for older images.
+            sudo pkg install -y kyua 2>/dev/null \
+              || echo "kyua pkg gone (deleted 2026-05, lives in base) — using /usr/bin/kyua"
+            echo "--- kyua/ATF preflight ---"
+            command -v kyua || true
+            ls -la /usr/bin/kyua /usr/local/bin/kyua 2>/dev/null || true
+            ls -la /usr/include/atf-c++.hpp /usr/local/include/atf-c++.hpp 2>/dev/null || true
+            ls -la /usr/lib/libatf-c++* /usr/local/lib/libatf-c++* 2>/dev/null || true
+            # If neither base nor pkg has them, show what pkg DOES offer
+            # (a rename shows up here) and fail with a clear error.
+            if ! command -v kyua >/dev/null 2>&1; then
+              echo "pkg search for kyua/atf (to catch a package rename):"
+              pkg search -q kyua 2>/dev/null || true
+              pkg search -q atf 2>/dev/null || true
+              echo "::error::kyua not found in base or pkg — see search output above"
+              exit 1
+            fi
+            if [ ! -f /usr/include/atf-c++.hpp ] && [ ! -f /usr/local/include/atf-c++.hpp ]; then
+              echo "::error::atf-c++.hpp not found in base or pkg"
+              exit 1
+            fi
+            # The check that would have caught run 34233361523 up front:
+            # a header alone is not enough, the LINKABLE lib must exist.
+            ls -la /usr/local/lib/libatf-c++.so /usr/lib/libatf-c++.so 2>/dev/null || true
+            if [ ! -e /usr/local/lib/libatf-c++.so ] && [ ! -e /usr/lib/libatf-c++.so ]; then
+              echo "::error::linkable libatf-c++.so not found — devel/atf must be installed (base only has private copies)"
+              exit 1
+            fi
             echo "::endgroup::"
 
             echo "::group::System info"

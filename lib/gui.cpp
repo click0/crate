@@ -13,6 +13,10 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -337,9 +341,26 @@ static bool guiScreenshot(const Args &args) {
       isPnmOutput = true;
   }
 
+  // 1.1.25: scratch files go into a private mkdtemp(3) directory — mode
+  // 0700, random name — instead of the old predictable
+  // /tmp/crate-screenshot-<displayNum>.{ppm,xwd}. displayNum is small
+  // and guessable (allocation starts at 10) and this command runs with
+  // root's EUID (the GUI registry is root-only), so a local user could
+  // pre-plant a symlink at that name and have root truncate/overwrite an
+  // arbitrary file via fopen/`xwd -out` (CWE-59). Nobody else can write
+  // into our 0700 dir, so no link can be planted inside it. The dir and
+  // whatever is left in it are removed on every exit path.
+  char tmpDirTemplate[] = "/tmp/crate-screenshot-XXXXXX";
+  if (::mkdtemp(tmpDirTemplate) == nullptr)
+    ERR("screenshot: cannot create scratch directory: " << std::strerror(errno))
+  const std::string tmpDir = tmpDirTemplate;
+  RunAtEnd removeTmpDir([tmpDir]() {
+    std::error_code ec;
+    std::filesystem::remove_all(tmpDir, ec);
+  });
+
   if (X11Ops::available()) {
-    auto pnmTmp = isPnmOutput ? outFile :
-                  STR("/tmp/crate-screenshot-" << e.displayNum << ".ppm");
+    auto pnmTmp = isPnmOutput ? outFile : (tmpDir + "/screenshot.ppm");
     if (!X11Ops::screenshot(dispStr, pnmTmp)) {
       // Fall through to the xwd pipeline below; libX11 is linked
       // but the display may not be reachable from this process
@@ -369,7 +390,7 @@ static bool guiScreenshot(const Args &args) {
   }
 
   // Fallback: xwd + xwdtopnm + pnmtopng pipeline (pre-0.8.36 path).
-  auto xwdFile = STR("/tmp/crate-screenshot-" << e.displayNum << ".xwd");
+  auto xwdFile = tmpDir + "/screenshot.xwd";
   try {
     Util::execCommand(
       {CRATE_PATH_XWD, "-root", "-display", dispStr, "-out", xwdFile},

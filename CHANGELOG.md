@@ -6,6 +6,84 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.25] — 2026-07-11
+
+**Security & robustness: five fixes from a third-pass audit of the
+modules no earlier pass had covered (GUI/session, VM stack, lifecycle/
+runtime, audit/util/parsers).**
+
+- **Infinite loop in `getAllJails(crateOnly=true)` — `lib/jail_query.cpp`
+  (HIGH, DoS).** The `lastjid` cursor advance sat *after* the crateOnly
+  filter, so a non-crate jail hit `continue` without moving the cursor
+  and the next `jailparam_get` returned the very same jail forever —
+  100% CPU the moment any foreign jail (bastille/pot/plain `jail(8)`)
+  coexisted with crate. That wedged every crateOnly caller — `crate
+  top/clean/doctor/info/list/console/stack` — **and the crated
+  control-socket jail listing**. No attacker input needed. The cursor
+  now advances before the filter.
+
+- **Command injection into a root `sh -c` via stack-file fields —
+  `lib/stack.cpp` (HIGH).** The container name, its static IP, and a
+  network's `gateway` were interpolated unescaped into `printf '…' >>
+  /etc/hosts` / `printf 'nameserver …' > /etc/resolv.conf` shell
+  fragments stored in `run:before-start-services` and executed by
+  `/bin/sh -c` as root. A container keyed `x';touch /tmp/pwned;'` ran
+  arbitrary commands as root on `crate stack up`. New
+  `StackPure::validateStackName` (`[A-Za-z0-9._-]`, ≤64, no leading `-`)
+  and `validateStackIp` (charset-gated `inet_pton`, CIDR tolerated) are
+  applied at parse time **and** re-applied as a sink-guard right where
+  each value enters the shell string.
+
+- **Path traversal via stack network name → root write + delete —
+  `lib/stack.cpp` (HIGH).** `confDir = dnsBaseDir()/dns-<network.name>`
+  was `create_directories`'d, written (`unbound.conf`), passed to
+  `unbound -c`, and `remove_all`'d as root with an unvalidated YAML key.
+  A name of `../../../etc/cron.d` let root write a config under an
+  attacker-chosen path and recursively delete an attacker-chosen tree.
+  Closed by the same `validateStackName` (no `/`, no `..`).
+
+- **Predictable `/tmp` screenshot files → symlink attack —
+  `lib/gui.cpp` (HIGH when run as root).**
+  `/tmp/crate-screenshot-<displayNum>.{ppm,xwd}` (displayNum guessable,
+  allocation starts at 10) was opened via `fopen`/`xwd -out` with no
+  `O_EXCL`/`O_NOFOLLOW` in world-writable `/tmp`; `gui screenshot` runs
+  with root's EUID (the registry is root-only), so a local user could
+  pre-plant a symlink and have root truncate/overwrite an arbitrary
+  file (CWE-59). Scratch files now live in a private `mkdtemp(3)`
+  directory (0700, random name) removed on every exit path.
+
+- **`Util::safePath` over-rejected every path when the prefix ends in
+  `/` — `lib/util_pure.cpp` (MED, correctness).** The separator check
+  demanded `canonical[prefix.size()] == '/'`, but a prefix that already
+  ends in `/` (the root prefix `"/"` being the degenerate case) has
+  consumed that separator, so the index points at a filename char and
+  the check always failed. Only the separator is now demanded when the
+  prefix does not supply it. This silently made `socketProxy.share`
+  abort on every real socket path.
+
+- **`socketProxy` jail-side confinement — `lib/run_services.cpp`.** With
+  `safePath` fixed, the `share` loop's `safePath(sock, "/", …)` would
+  have passed everything (prefix `/` cannot confine, and its return was
+  discarded while the raw `..`-bearing path still reached `J()`), and
+  the `proxy` loop had no guard at all. Both now validate the
+  **concatenated** jail-side path stays under `jailPath` — the same
+  guard `run.cpp` applies to `dirsShare`. This closes the socket_proxy
+  item deferred in 1.1.22. (`proxy.host` is the operator's host-side
+  connect target and is deliberately not jail-confined.)
+
+New `stack_test` cases (name/IP injection + traversal rejection, clean
+values accepted) and `util_security_test` cases (root prefix accepts,
+trailing-slash prefix still rejects siblings). The `jail_query`,
+`gui`, and `run_services` changes are runtime-only, compile-gated by
+the FreeBSD build.
+
+Also noted, not changed: `lib/vm_spec.cpp` / `vm_run.cpp` / `vm_stack.cpp`
+carry libvirt-XML injection and path-traversal sinks (`vmName`,
+`vol.tag`, `disk`, `sharedBridge`) that would be HIGH if reachable —
+but `createVm`/`parseVmOptions`/`generateDomainXml` have no callers
+today. Recorded in `TODO` so they are hardened before that code is
+ever wired up.
+
 ## [1.1.24] — 2026-07-07
 
 **Robustness: two low-severity fixes from the second-pass audit that

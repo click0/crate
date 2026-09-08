@@ -27,6 +27,25 @@ bool        isIpv6Address(const std::string &addr);
 std::string ipFromCidr(const std::string &cidr);
 std::string buildHostsEntries(const std::map<std::string, std::string> &nameToIp);
 
+// 1.1.25: validators for stack-file fields that reach a root-run sink.
+//
+// validateStackName — container and network names. Both are YAML map
+// keys that used to flow unvalidated into (a) a `printf '…' >>
+// /etc/hosts` shell fragment run via `sh -c` as root and (b) the
+// `dns-<network>` config-directory path that is create_directories'd,
+// written, and remove_all'd as root. Constrain to [A-Za-z0-9._-],
+// 1..64 chars, not "."/"..", no leading '-': that excludes quotes,
+// backslashes, newlines, and '/' — so the value is inert inside the
+// single-quoted printf and is a single safe path component.
+std::string validateStackName(const std::string &name);
+
+// validateStackIp — container static IPs and network gateways, which
+// reach the same `sh -c` fragments. Accepts an IPv4/IPv6 literal with
+// an optional /prefix; rejects any byte outside [0-9a-fA-F.:/] first,
+// then requires inet_pton to accept the address part. Returns "" on
+// success.
+std::string validateStackIp(const std::string &ip);
+
 // Lightweight stack-entry view used by the tests.
 struct StackEntry {
   std::string name;

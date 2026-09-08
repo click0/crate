@@ -13,6 +13,8 @@
 using StackPure::ipFromCidr;
 using StackPure::buildHostsEntries;
 using StackPure::topoSort;
+using StackPure::validateStackName;
+using StackPure::validateStackIp;
 using StackEntry = StackPure::StackEntry;
 
 static int indexOf(const std::vector<StackEntry> &v, const std::string &name) {
@@ -71,6 +73,62 @@ ATF_TEST_CASE_BODY(buildHosts_sorted_by_name)
 		"10.0.0.10 app\n"
 		"10.0.0.20 db\n"
 		"10.0.0.30 web\n");
+}
+
+// ===================================================================
+// 1.1.25: validateStackName / validateStackIp — the fields that reach a
+// root-run `sh -c` fragment (hosts/resolv.conf injection) and the
+// `dns-<network>` root-managed config dir.
+// ===================================================================
+
+ATF_TEST_CASE_WITHOUT_HEAD(validateStackName_typical_accepted);
+ATF_TEST_CASE_BODY(validateStackName_typical_accepted)
+{
+	ATF_REQUIRE_EQ(validateStackName("web"), "");
+	ATF_REQUIRE_EQ(validateStackName("db-primary"), "");
+	ATF_REQUIRE_EQ(validateStackName("app.internal_1"), "");
+	ATF_REQUIRE_EQ(validateStackName("a..b"), "");   // one component, no '/'
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(validateStackName_injection_rejected);
+ATF_TEST_CASE_BODY(validateStackName_injection_rejected)
+{
+	// Closes the single-quoted printf and runs a command as root.
+	ATF_REQUIRE(!validateStackName("x';touch /tmp/pwned;'").empty());
+	ATF_REQUIRE(!validateStackName("x\"y").empty());
+	ATF_REQUIRE(!validateStackName("x`id`").empty());
+	ATF_REQUIRE(!validateStackName("x$(id)").empty());
+	ATF_REQUIRE(!validateStackName("x\\y").empty());
+	ATF_REQUIRE(!validateStackName("x\ny").empty());
+	ATF_REQUIRE(!validateStackName("x y").empty());
+	// Path traversal out of the dns-<name> config dir.
+	ATF_REQUIRE(!validateStackName("../../../etc/cron.d").empty());
+	ATF_REQUIRE(!validateStackName("a/b").empty());
+	ATF_REQUIRE(!validateStackName("..").empty());
+	ATF_REQUIRE(!validateStackName(".").empty());
+	ATF_REQUIRE(!validateStackName("").empty());
+	ATF_REQUIRE(!validateStackName("-leading").empty());
+	ATF_REQUIRE(!validateStackName(std::string(65, 'a')).empty());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(validateStackIp_typical_accepted);
+ATF_TEST_CASE_BODY(validateStackIp_typical_accepted)
+{
+	ATF_REQUIRE_EQ(validateStackIp("10.0.0.5"), "");
+	ATF_REQUIRE_EQ(validateStackIp("10.0.0.5/24"), "");      // CIDR tolerated
+	ATF_REQUIRE_EQ(validateStackIp("fd00::1"), "");
+	ATF_REQUIRE_EQ(validateStackIp("fd00::1/64"), "");
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(validateStackIp_injection_rejected);
+ATF_TEST_CASE_BODY(validateStackIp_injection_rejected)
+{
+	ATF_REQUIRE(!validateStackIp("1.1.1.1'; reboot;'").empty());
+	ATF_REQUIRE(!validateStackIp("1.1.1.1\n").empty());
+	ATF_REQUIRE(!validateStackIp("1.1.1.1 evil").empty());
+	ATF_REQUIRE(!validateStackIp("256.0.0.1").empty());   // charset ok, inet_pton fails
+	ATF_REQUIRE(!validateStackIp("not-an-ip").empty());
+	ATF_REQUIRE(!validateStackIp("").empty());
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(topoSort_empty);
@@ -199,4 +257,8 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, topoSort_duplicate_name_throws);
 	ATF_ADD_TEST_CASE(tcs, topoSort_three_node_cycle_throws);
 	ATF_ADD_TEST_CASE(tcs, topoSort_disconnected_components);
+	ATF_ADD_TEST_CASE(tcs, validateStackName_typical_accepted);
+	ATF_ADD_TEST_CASE(tcs, validateStackName_injection_rejected);
+	ATF_ADD_TEST_CASE(tcs, validateStackIp_typical_accepted);
+	ATF_ADD_TEST_CASE(tcs, validateStackIp_injection_rejected);
 }
