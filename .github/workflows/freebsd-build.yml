@@ -88,12 +88,42 @@ jobs:
             set -ex
 
             echo "::group::Install dependencies"
-            # `atf` ships /usr/local/bin/atf-sh, the interpreter for our
-            # functional test scripts (#!/usr/bin/env atf-sh). It is NOT
-            # pulled in as a kyua dependency, so an explicit install
-            # avoids the "Invalid header for test case list; got ''"
-            # broken result.
-            sudo pkg install -y pkgconf yaml-cpp rang kyua atf gmake cpp-httplib
+            # Hard build deps — these MUST install or the job is dead.
+            sudo pkg install -y pkgconf yaml-cpp rang gmake cpp-httplib
+
+            # kyua + ATF. `atf` also provides atf-sh, the interpreter for
+            # our functional test scripts (#!/usr/bin/env atf-sh) — it is
+            # NOT a kyua dependency, hence the explicit name; without it
+            # kyua reports "Invalid header for test case list; got ''".
+            # FreeBSD 14.x ships kyua, libatf-c{,++}, atf-c++.hpp AND
+            # atf-sh in BASE (/usr/bin, /usr/lib, /usr/include), and
+            # `env atf-sh` resolves /usr/bin/atf-sh, so base suffices.
+            # 2026-09: the devel/kyua package vanished from the 14.2 pkg
+            # catalogue ("No packages available to install matching
+            # 'kyua'") and broke lite CI at this exact step (PR #228) —
+            # same resilient install as freebsd-build-lite.yml: try pkg,
+            # fall back to base, preflight with diagnostics.
+            sudo pkg install -y kyua atf 2>/dev/null \
+              || echo "kyua/atf not in the pkg repo — relying on FreeBSD base"
+            echo "--- kyua/ATF preflight ---"
+            command -v kyua || true
+            command -v atf-sh || true
+            ls -la /usr/include/atf-c++.hpp /usr/local/include/atf-c++.hpp 2>/dev/null || true
+            if ! command -v kyua >/dev/null 2>&1; then
+              echo "pkg search for kyua/atf (to catch a package rename):"
+              pkg search -q kyua 2>/dev/null || true
+              pkg search -q atf 2>/dev/null || true
+              echo "::error::kyua not found in base or pkg — see search output above"
+              exit 1
+            fi
+            if ! command -v atf-sh >/dev/null 2>&1; then
+              echo "::error::atf-sh not found in base or pkg (functional tests need it)"
+              exit 1
+            fi
+            if [ ! -f /usr/include/atf-c++.hpp ] && [ ! -f /usr/local/include/atf-c++.hpp ]; then
+              echo "::error::atf-c++.hpp not found in base or pkg"
+              exit 1
+            fi
             echo "::endgroup::"
 
             echo "::group::System info"
