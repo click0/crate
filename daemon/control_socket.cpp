@@ -559,7 +559,11 @@ struct SocketRuntime {
 // printed but the bind continues.
 int bindSocketOrThrow(const ControlSocketPure::ControlSocketSpec &spec,
                       long expectedGid) {
-  int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  // 1.1.26: SOCK_CLOEXEC — this listener must not be inherited by the
+  // long-lived `crate run` children handleStart forks (they held the
+  // LISTEN fd → EADDRINUSE on `service crated restart`, and the jail
+  // supervisor carried the host daemon's control socket).
+  int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (fd < 0)
     throw std::runtime_error(std::string("socket(AF_UNIX): ") + std::strerror(errno));
 

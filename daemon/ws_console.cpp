@@ -11,6 +11,7 @@
 
 #include <openssl/evp.h>
 
+#include <cerrno>
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -209,9 +210,25 @@ void runJailSession(int wsFd, int jid) {
     }
   }
 
-  // Best-effort: terminate the shell, reap the zombie.
+  // Terminate the shell and reap it HERE, synchronously. 1.1.26: this
+  // used to rely on a process-wide `signal(SIGCHLD, SIG_IGN)` set in
+  // WsConsole::start — which on FreeBSD sets PS_NOCLDWAIT and makes
+  // EVERY waitpid() in the daemon fail with ECHILD, so every
+  // Util::execCommand* (privops verbs, stats, export, ...) threw
+  // "waitpid failed" the moment console.port was enabled. Grace period
+  // on SIGTERM, then SIGKILL — which cannot be ignored — so the final
+  // blocking wait is guaranteed to return.
   ::kill(pid, SIGTERM);
-  ::waitpid(pid, nullptr, WNOHANG);
+  bool reaped = false;
+  for (int i = 0; i < 20 && !reaped; i++) {          // ~2s grace
+    pid_t r = ::waitpid(pid, nullptr, WNOHANG);
+    if (r == pid || (r == -1 && errno == ECHILD)) reaped = true;
+    else ::usleep(100000);
+  }
+  if (!reaped) {
+    ::kill(pid, SIGKILL);
+    ::waitpid(pid, nullptr, 0);
+  }
   ::close(master);
 }
 
@@ -316,7 +333,12 @@ int openListenSocket(const std::string &host, unsigned port) {
   addrinfo *pick = ipv6 ? ipv6 : ipv4;
   if (!pick) { ::freeaddrinfo(res); return -1; }
 
-  int fd = ::socket(pick->ai_family, pick->ai_socktype, pick->ai_protocol);
+  // 1.1.26: SOCK_CLOEXEC so the listening socket is not inherited by
+  // the long-lived children crated forks (jexec shells, `crate run`).
+  // An inherited LISTEN fd made `service crated restart` fail with
+  // EADDRINUSE while any such child lived, and let a jailed shell hold
+  // the host daemon's listener.
+  int fd = ::socket(pick->ai_family, pick->ai_socktype | SOCK_CLOEXEC, pick->ai_protocol);
   if (fd < 0) { ::freeaddrinfo(res); return -1; }
   int one = 1;
   ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
@@ -339,7 +361,13 @@ bool WsConsole::start(const Config &config) {
   int fd = openListenSocket(config.consoleWsBind, config.consoleWsPort);
   if (fd < 0) return false;
 
-  ::signal(SIGCHLD, SIG_IGN); // auto-reap session children
+  // 1.1.26: do NOT set SIGCHLD to SIG_IGN here. It is process-wide: on
+  // FreeBSD it flags PS_NOCLDWAIT, children are auto-reaped by the
+  // kernel and waitpid() returns -1/ECHILD for ALL of crated's children
+  // — every Util::execCommand*/execPipeline call (privops verbs, stats,
+  // export/import, control-socket ops) then threw "waitpid failed" even
+  // when the child succeeded, and JailExec decoded an uninitialized
+  // status. Session shells are now reaped explicitly in runSession().
   g_listenFd = fd;
   g_running.store(true);
   g_thread = std::thread(acceptLoop, config, fd);

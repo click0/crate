@@ -226,7 +226,13 @@ static std::string generateUnboundConf(
   conf << "server:\n";
   conf << "  interface: " << listenIp << "\n";
   conf << "  port: 53\n";
-  conf << "  do-daemonize: yes\n";
+  // 1.1.26: run in the foreground. With `do-daemonize: yes` the process
+  // we fork()ed was only the short-lived launcher: it exited within ms,
+  // so the 200ms liveness check in startStackDns saw "exited
+  // immediately" on SUCCESS, the returned pid never pointed at unbound,
+  // and nothing could stop it. Now our child IS unbound (setsid'd in
+  // startStackDns); `down` stops it via the pidfile below.
+  conf << "  do-daemonize: no\n";
   // Use per-stack pidfile to avoid clashes when multiple stacks run DNS
   if (!networkName.empty())
     conf << "  pidfile: \"" << dnsBaseDir() << "/dns-" << networkName << "/unbound.pid\"\n";
@@ -281,6 +287,10 @@ static pid_t startStackDns(
 
   pid_t pid = ::fork();
   if (pid == 0) {
+    // 1.1.26: own session so unbound (now foreground, see the conf)
+    // survives `crate stack up` exiting / the terminal hanging up. It
+    // logs to syslog and never uses stdio, so stdio is left as-is.
+    ::setsid();
     ::execl(CRATE_PATH_UNBOUND, "unbound", "-c", confPath.c_str(), nullptr);
     ::_exit(127);
   }
@@ -303,13 +313,29 @@ static pid_t startStackDns(
 
 // Stop the per-stack unbound DNS service
 static void stopStackDns(const std::string &networkName, pid_t unboundPid) {
-  if (unboundPid > 0) {
-    ::kill(unboundPid, SIGTERM);
+  auto confDir = STR(dnsBaseDir() << "/dns-" << networkName);
+  // 1.1.26: `stack down` runs in a DIFFERENT process from `stack up`, so
+  // the pid `up` got from fork() is unavailable here (the caller passes
+  // -1) — and under the old `do-daemonize: yes` that pid was the
+  // short-lived launcher anyway, never unbound itself. Net effect: DNS
+  // was NEVER stopped; an orphan unbound stayed bound to <gateway>:53
+  // and the next `up` failed to bind ("exited immediately"). Read the
+  // pidfile unbound writes into confDir (set in generateUnboundConf)
+  // and signal that; fall back to the passed pid.
+  pid_t target = -1;
+  {
+    std::ifstream pf(confDir + "/unbound.pid");
+    long v = 0;
+    if ((pf >> v) && v > 1) target = static_cast<pid_t>(v);
+  }
+  if (target <= 1) target = unboundPid;
+  if (target > 1) {
+    ::kill(target, SIGTERM);
+    // Not our child when called from `down` — reap only if it is.
     int status;
-    ::waitpid(unboundPid, &status, 0);
+    ::waitpid(target, &status, WNOHANG);
   }
   // Clean up config directory
-  auto confDir = STR(dnsBaseDir() << "/dns-" << networkName);
   std::filesystem::remove_all(confDir);
 }
 

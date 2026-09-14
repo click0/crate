@@ -17,6 +17,7 @@ extern "C" {
 #include <jail.h>
 
 #include <errno.h>
+#include <fcntl.h>      // 1.1.26: O_CLOEXEC for pipe2()
 #include <grp.h>
 #include <pwd.h>
 #include <signal.h>
@@ -330,7 +331,10 @@ std::string execInJailGetOutput(int jid, const std::vector<std::string> &argv,
                                 const std::string &user, const std::string &what) {
   // For output capture, use pipe
   int pipefd[2];
-  if (::pipe(pipefd) == -1)
+  // 1.1.26: O_CLOEXEC — the write end must not leak into unrelated
+  // children forked concurrently on other daemon threads, or the read
+  // loop below waits for an EOF that never comes (see Util::execCommandGetOutput).
+  if (::pipe2(pipefd, O_CLOEXEC) == -1)
     ERR("pipe failed: " << strerror(errno))
 
   pid_t pid = ::fork();

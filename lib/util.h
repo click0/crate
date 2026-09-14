@@ -125,6 +125,10 @@ std::string tmSecMs();
 std::string filePathToBareName(const std::string &path);
 std::string filePathToFileName(const std::string &path);
 int getSysctlInt(const char *name);
+// 1.1.26: for CTLTYPE_ULONG/U64 nodes (e.g. hw.physmem, 8 bytes on
+// 64-bit). getSysctlInt's 4-byte buffer makes sysctlbyname fail with
+// ENOMEM on those, which turned GET /api/v1/host into a permanent 500.
+unsigned long long getSysctlUInt64(const char *name);
 void setSysctlInt(const char *name, int value);
 std::string getSysctlString(const char *name);
 void ensureKernelModuleIsLoaded(const char *name);

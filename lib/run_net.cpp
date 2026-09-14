@@ -219,13 +219,19 @@ GatewayInfo detectGateway() {
   GatewayInfo gw;
 
   // determine host's gateway interface
+  // 1.1.26: restrict to the inet table (`-f inet`). Without it netstat
+  // also prints the inet6 table, so any host with an IPv6 default route
+  // (SLAAC/RA is common) produced TWO `default` lines → 8 tokens → the
+  // strict `!= 4` check below failed and every NAT-mode `crate run`
+  // died with "Unable to determine host's gateway". The IPv6 query in
+  // run.cpp already passes `-f inet6` and tolerates >= 4; mirror that.
   auto elts = Util::splitString(
     Util::execPipelineGetOutput(
-      {{CRATE_PATH_NETSTAT, "-rn"}, {CRATE_PATH_GREP, "^default"}, {CRATE_PATH_SED, "s| *| |"}},
+      {{CRATE_PATH_NETSTAT, "-rn", "-f", "inet"}, {CRATE_PATH_GREP, "^default"}, {CRATE_PATH_SED, "s| *| |"}},
       "determine host's gateway interface"),
     " "
   );
-  if (elts.size() != 4)
+  if (elts.size() < 4)
     ERR("Unable to determine host's gateway IP and interface");
   elts[3] = Util::stripTrailingSpace(elts[3]);
   gw.iface = elts[3];
