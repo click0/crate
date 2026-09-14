@@ -83,6 +83,36 @@ static std::string getClientId(const httplib::Request &req) {
   return req.remote_addr.empty() ? "tcp" : req.remote_addr;
 }
 
+// 1.1.26: start a container by spawning `crate run` as its OWN process
+// (fork + setsid + exec) — exactly what the control-socket start path
+// already does. The previous code called runCrate() IN-PROCESS on the
+// httplib worker thread, which:
+//   (a) blocked that worker for the jail's whole lifetime — a
+//       service-only container never returns, and after ~8 starts the
+//       entire HTTP API, /healthz included, stopped responding;
+//   (b) installed runCrate's SIGINT/SIGTERM handlers process-wide, so
+//       `service crated stop` hung until SIGKILL;
+//   (c) keyed jailXname / FwSlots / FwUsers on getpid(), so every
+//       daemon-started jail shared ONE key — a later start overwrote the
+//       first jail's firewall slot and the first teardown removed the
+//       shared NAT rule while other jails still ran.
+// A child process has its own pid, signal handlers and lifetime.
+// Returns the child pid, or -1 on fork failure.
+static pid_t spawnCrateRun(const std::string &crateFile) {
+  pid_t pid = ::fork();
+  if (pid < 0) return -1;
+  if (pid == 0) {
+    ::setsid();                       // no controlling tty; survives crated teardown
+    ::close(0); ::close(1); ::close(2);
+    ::open("/dev/null", O_RDONLY);
+    ::open("/dev/null", O_WRONLY);
+    ::open("/dev/null", O_WRONLY);
+    ::execl(CRATE_PATH_CRATE, "crate", "run", "-f", crateFile.c_str(), nullptr);
+    ::_exit(127);
+  }
+  return pid;
+}
+
 // Cap constants live in daemon/rate_limit.h since 0.7.15.
 // (Pre-0.8.8 this file had local constexpr aliases; removed in
 // the routes.cpp rate-limit refactor.)
@@ -149,7 +179,10 @@ static void handleHostInfo(const httplib::Response &, httplib::Response &res) {
     auto hostname = Util::getSysctlString("kern.hostname");
     auto machine = Util::getSysctlString("hw.machine");
     auto ncpu = Util::getSysctlInt("hw.ncpu");
-    auto physmem = Util::getSysctlInt("hw.physmem");
+    // 1.1.26: hw.physmem is CTLTYPE_ULONG (8 bytes on amd64/arm64);
+    // reading it through the 4-byte getSysctlInt made sysctlbyname
+    // fail with ENOMEM, so this endpoint was a permanent 500 on 64-bit.
+    auto physmem = Util::getSysctlUInt64("hw.physmem");
 
     std::ostringstream ss;
     ss << "{\"hostname\":\"" << hostname << "\""
@@ -298,19 +331,16 @@ static void handleContainerStart(const httplib::Request &req, httplib::Response 
     return;
   }
 
-  try {
-    Args runArgs;
-    runArgs.cmd = CmdRun;
-    runArgs.runCrateFile = crateFile;
-    int returnCode = 0;
-    if (runCrate(runArgs, 0, nullptr, returnCode)) {
-      jsonOk(res, "{\"started\":true,\"name\":\"" + name + "\"}");
-    } else {
-      jsonError(res, 500, "failed to start container");
-    }
-  } catch (const std::exception &e) {
-    jsonError(res, 500, e.what());
+  pid_t pid = spawnCrateRun(crateFile);
+  if (pid < 0) {
+    jsonError(res, 500, "failed to start container: fork failed");
+    return;
   }
+  // The child is the jail's foreground supervisor and outlives this
+  // request: "started" now means "spawned". Poll
+  // GET /api/v1/containers/:name for the running state.
+  jsonOk(res, "{\"started\":true,\"async\":true,\"pid\":" + std::to_string(pid)
+              + ",\"name\":\"" + name + "\"}");
 }
 
 // --- F2: DELETE /api/v1/containers/:name ---
@@ -608,19 +638,13 @@ static void handleContainerRestart(const httplib::Request &req, httplib::Respons
     jsonError(res, 404, "no saved .crate file for '" + name + "'; container stopped but cannot restart");
     return;
   }
-  try {
-    Args runArgs;
-    runArgs.cmd = CmdRun;
-    runArgs.runCrateFile = crateFile;
-    int returnCode = 0;
-    if (runCrate(runArgs, 0, nullptr, returnCode)) {
-      jsonOk(res, "{\"restarted\":true,\"name\":\"" + name + "\"}");
-    } else {
-      jsonError(res, 500, "failed to start container after stop");
-    }
-  } catch (const std::exception &e) {
-    jsonError(res, 500, e.what());
+  pid_t pid = spawnCrateRun(crateFile);
+  if (pid < 0) {
+    jsonError(res, 500, "failed to start container after stop: fork failed");
+    return;
   }
+  jsonOk(res, "{\"restarted\":true,\"async\":true,\"pid\":" + std::to_string(pid)
+              + ",\"name\":\"" + name + "\"}");
 }
 
 // --- Snapshot helpers ---

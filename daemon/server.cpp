@@ -24,7 +24,13 @@
 namespace Crated {
 
 struct Server::Impl {
-  std::unique_ptr<httplib::Server> httpSrv;
+  std::unique_ptr<httplib::Server> httpSrv;   // TCP (optionally TLS) listener
+  // 1.1.26: the Unix-socket server is a member, not a lambda-local.
+  // It used to live only inside unixThread's closure, so stop() could
+  // never call its stop(), listen() never returned, and ~Impl destroyed
+  // a still-joinable std::thread → std::terminate (SIGABRT) on every
+  // clean shutdown with the default unixSocket configured.
+  std::unique_ptr<httplib::Server> udsSrv;
   std::thread tcpThread;
   std::thread unixThread;
 };
@@ -65,13 +71,14 @@ void Server::start() {
     // Remove stale socket
     ::unlink(config_.unixSocket.c_str());
 
+    // This is the Unix-socket listener (local, root-owned socket) —
+    // isUnixListener = true, so its peers are treated as trusted.
+    // Built here (not inside the thread) so stop() can reach it.
+    impl_->udsSrv = std::make_unique<httplib::Server>();
+    registerRoutes(*impl_->udsSrv, config_, /*isUnixListener=*/true);
+    impl_->udsSrv->set_address_family(AF_UNIX);
     impl_->unixThread = std::thread([this]() {
-      httplib::Server udsSrv;
-      // This is the Unix-socket listener (local, root-owned socket) —
-      // isUnixListener = true, so its peers are treated as trusted.
-      registerRoutes(udsSrv, config_, /*isUnixListener=*/true);
-      udsSrv.set_address_family(AF_UNIX);
-      udsSrv.listen(config_.unixSocket, 0);
+      impl_->udsSrv->listen(config_.unixSocket, 0);
     });
 
     // 0.8.19: enforce post-bind filesystem perms.
@@ -157,7 +164,14 @@ void Server::stop() {
     impl_->httpSrv->stop();
   if (impl_->tcpThread.joinable())
     impl_->tcpThread.join();
-  // Unix socket thread will exit when server stops
+  // 1.1.26: stop the Unix-socket server too and JOIN its thread. The
+  // old comment "Unix socket thread will exit when server stops" was
+  // false — nothing ever stopped that server, and destroying the
+  // joinable thread aborted the process.
+  if (impl_->udsSrv)
+    impl_->udsSrv->stop();
+  if (impl_->unixThread.joinable())
+    impl_->unixThread.join();
   if (!config_.unixSocket.empty())
     ::unlink(config_.unixSocket.c_str());
 }

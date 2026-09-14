@@ -178,7 +178,9 @@ void acceptLoop(Runtime *rt) {
 #ifdef __FreeBSD__
 int openListener(const std::string &path, const std::string &group,
                  unsigned mode) {
-  int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  // 1.1.26: SOCK_CLOEXEC so forked children never inherit the privops
+  // listener (see control_socket.cpp bindSocketOrThrow).
+  int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (fd < 0) {
     throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
   }

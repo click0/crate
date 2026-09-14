@@ -6,6 +6,86 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.26] — 2026-09-14
+
+**Correctness: seven daemon/runtime fixes from a correctness-lens audit
+(exception safety, process/fd hygiene, threading) — "the daemon works".**
+
+- **`crated` shut down with SIGABRT on every clean stop — `daemon/server.cpp`
+  (HIGH).** The Unix-socket `httplib::Server` lived only inside its
+  thread's lambda, so `Server::stop()` could never stop it, `listen()`
+  never returned, and `~Impl` destroyed a still-joinable `std::thread` →
+  `std::terminate`. With the default `unixSocket` configured this hit
+  every `service crated stop`. The UDS server is now an `Impl` member;
+  `stop()` stops it and joins its thread.
+
+- **Enabling `console.port` broke every exec in the daemon —
+  `daemon/ws_console.cpp` (HIGH).** `WsConsole::start` set
+  `signal(SIGCHLD, SIG_IGN)` process-wide. On FreeBSD that flags
+  `PS_NOCLDWAIT`: children are auto-reaped and `waitpid()` returns
+  `ECHILD` for **all** of crated's children, so every
+  `Util::execCommand*`/`execPipeline*` (privops verbs, stats, export/
+  import, control-socket ops) threw "waitpid failed" even on success, and
+  `JailExec` decoded an uninitialized status. The SIG_IGN is gone;
+  session shells are reaped explicitly (SIGTERM, ~2s grace, then SIGKILL
+  + blocking wait).
+
+- **`POST …/start` and `…/restart` ran the container in-process —
+  `daemon/routes.cpp` (HIGH).** Both called `runCrate()` on the httplib
+  worker thread: (a) the worker blocked for the jail's lifetime — a
+  service-only container never returned, and after ~8 starts the whole
+  HTTP API incl. `/healthz` stopped responding; (b) `runCrate` installed
+  SIGINT/SIGTERM handlers process-wide, so `service crated stop` hung;
+  (c) `jailXname`/`FwSlots`/`FwUsers` are keyed on `getpid()`, so every
+  daemon-started jail shared one key — a later start overwrote the first
+  jail's firewall slot and the first teardown removed the shared NAT rule
+  while other jails still ran. Both routes now fork+setsid+exec
+  `crate run -f <file>` as its own process (the control-socket start
+  path already did this). **API note:** the response is now async —
+  `{"started":true,"async":true,"pid":N,…}` is returned as soon as the
+  child is spawned; poll `GET /api/v1/containers/:name` for state.
+
+- **fds leaked into long-lived children — `lib/util.cpp`,
+  `lib/jail_query.cpp`, `daemon/{control_socket,privops_listener,ws_console}.cpp`
+  (HIGH).** Capture pipes were created without `O_CLOEXEC`, so a pipe's
+  write end leaked into any child forked concurrently on another daemon
+  thread (the control-socket `crate run` supervisor, ws-console shells —
+  both long-lived), and the reading request thread waited for an EOF that
+  only came when *that* child exited. Listening sockets leaked the same
+  way (→ `EADDRINUSE` on `service crated restart`; a jailed shell holding
+  the host daemon's listener). Pipes now use `pipe2(O_CLOEXEC)` (dup2
+  clears it on the intended child's stdio) and the three hand-rolled
+  listeners use `SOCK_CLOEXEC`. Not yet covered: httplib's own TCP
+  listener and `accept()`ed connection fds — recorded in `TODO`.
+
+- **NAT-mode `crate run` failed on any host with an IPv6 default route —
+  `lib/run_net.cpp` (MED).** `detectGateway` ran `netstat -rn` without
+  `-f inet`, so the inet6 table's `default` line doubled the token count
+  and the strict `!= 4` check threw "Unable to determine host's gateway".
+  Now `-f inet` and `>= 4`, mirroring the IPv6 query.
+
+- **Stack DNS was never stopped — `lib/stack.cpp` (MED).** unbound ran
+  with `do-daemonize: yes`, so the pid `startStackDns` returned was the
+  short-lived launcher (its 200ms liveness check then reported "exited
+  immediately" on *success*), and `stack down` passed `-1` because it is
+  a different process anyway → an orphan unbound stayed bound to
+  `<gateway>:53` and the next `up` failed to bind. unbound now runs in the
+  foreground under `setsid`, and `stopStackDns` signals the pid from the
+  per-network `unbound.pid` file.
+
+- **`GET /api/v1/host` was a permanent 500 on 64-bit — `daemon/routes.cpp`,
+  `lib/util.cpp` (MED).** `hw.physmem` is `CTLTYPE_ULONG` (8 bytes) but
+  was read through the 4-byte `getSysctlInt` → `ENOMEM`. New
+  `Util::getSysctlUInt64`.
+
+All seven are runtime-only (daemon / FreeBSD runtime; no pure unit
+surface) and are compile-gated by the FreeBSD lite build. Exercising
+them on a live host is recommended, especially the async start/restart
+semantics. The remaining correctness-audit items (fd hygiene for
+httplib/accept fds, teardown-after-throw leaks in `run.cpp`, `FwUsers`
+dead-pid GC, listener read timeouts, and a LOW batch) are listed in
+`TODO`.
+
 ## [1.1.25] — 2026-07-11
 
 **Security & robustness: five fixes from a third-pass audit of the

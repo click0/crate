@@ -100,6 +100,69 @@ harden BEFORE wiring this code up:
   for vmName/vol.tag before any of this gets a caller. memoryToKiB
   (vm_spec.cpp:84) also has an unchecked `val*1024*1024` overflow.
 
+Remaining from the 2026-09 correctness-lens audit (its seven HIGH/MED
+daemon items shipped as 1.1.26; these are what is left, all runtime-only
+and best validated on a live FreeBSD host):
+
+* (correctness, MED) lib/stack.cpp `stack up` still calls runCrate()
+  IN-PROCESS and sequentially per container (the same defect 1.1.26
+  fixed for the daemon's HTTP start/restart): a service-only first
+  container never returns, so the second is never started. Spawn each
+  `crate run` as its own process like daemon/routes.cpp spawnCrateRun.
+
+* (correctness, MED) fd hygiene, part 2: 1.1.26 put O_CLOEXEC on the
+  capture pipes and SOCK_CLOEXEC on the three hand-rolled listeners.
+  Still inherited by forked children: httplib's own TCP listener
+  (server.cpp — needs httplib::Server::set_socket_options or an
+  fcntl(FD_CLOEXEC) after bind) and every accept()ed connection fd in
+  control_socket.cpp / privops_listener.cpp / ws_console.cpp (use
+  accept4(SOCK_CLOEXEC)). Consequence today: a long-lived child can
+  pin another client's connection open.
+
+* (correctness, MED) lib/run.cpp registers several teardown handlers
+  AFTER the operations that can throw, so the error path leaks host
+  resources (distinct from the documented teardown-ORDER item above):
+  NetworkLease::allocateFor succeeds (~:1153) but configureStaticIp/
+  copyFile throws before releaseLeaseAtEnd is set → the lease row for
+  the unique jail-<name>-<hex> stays in network-leases.txt forever
+  (nothing reclaims it; clean.cpp does not touch leases); same for
+  IPv6 (~:1184). Bridge auto-created (~:1090) then setUp/
+  createBridgeEpair throws before destroyBridgeEpairAtEnd.reset
+  (~:1115) → bridge + epair leak; run_net.cpp createBridgeEpair /
+  the extras loop (~:1664) leak an epairN pair per failed attempt.
+  Fix shape: register the RunAtEnd immediately after each successful
+  acquisition, before the next fallible step.
+
+* (correctness, MED) lib/ctx.cpp FwUsers has no dead-pid garbage
+  collection (FwSlots does, ctx.cpp:~200) and lib/clean.cpp:~120
+  claims to GC it but only locks/unlocks. A `crate run` killed without
+  teardown (SIGKILL/OOM/panic) leaves its pid in ctx-fw-users, so
+  FwUsers::isEmpty() is never true again and the shared NAT rule 50000
+  + net.inet.ip.forwarding are never restored (run_net.cpp:~488). Add
+  kill(pid,0)-based GC mirroring FwSlots and make clean.cpp call it.
+
+* (robustness, MED/LOW) daemon/privops_listener.cpp nvlist_recv and
+  daemon/control_socket.cpp read() block forever with no timeout, and
+  both accept loops spawn one detached thread per connection with no
+  cap — an idle client pins a thread + fd; N of them exhaust the
+  daemon. Add a recv timeout (SO_RCVTIMEO) and a concurrency cap.
+
+* (LOW batch) daemon/routes.cpp import tmp file is <name>.crate.tmp.<pid>
+  — constant across threads, so two concurrent imports of one name
+  interleave writes; no fsync before rename. lib/util.cpp writeFile(data,
+  fd) closes the CALLER's fd on error (ctx.cpp then double-closes).
+  execPipelineImpl: fork() failure for child i>0 throws without reaping
+  children 0..i-1 (zombies). Capture loops treat read()==-1 as EOF
+  (EINTR) and jail_query.cpp ignores waitpid failure / decodes an
+  uninitialized status. lib/util.cpp ~:631/662 test `st_mode & S_IFREG/
+  S_IFDIR` instead of S_ISREG/S_ISDIR (a socket matches S_IFDIR →
+  directory_iterator throws out of findElfFiles). daemon/routes.cpp
+  gmtime() (static buffer) in worker threads. ws_console.cpp select()
+  with fds >= FD_SETSIZE. run.cpp hcThread joinable while execInJail
+  can throw on fork EAGAIN → std::terminate skips every RunAtEnd.
+  run_services.cpp ignores fork() failure for socat. stack.cpp
+  inet_pton results unchecked for ip_range.
+
 === High priority — blocking production use ===
 
 (High-priority items above are now complete; the next batch is

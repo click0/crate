@@ -176,7 +176,14 @@ std::string execCommandGetOutput(const std::vector<std::string> &argv, const std
   if (argv.empty())
     ERR2("exec command", "empty argv for: " << what)
   int pipefd[2];
-  if (::pipe(pipefd) == -1)
+  // 1.1.26: O_CLOEXEC. Without it the pipe's WRITE end leaked into every
+  // other child crated forked concurrently on another thread (the
+  // control-socket `crate run` supervisor, ws-console shells — both
+  // long-lived), so the read loop below waited for an EOF that only
+  // arrived when THAT unrelated child exited: request threads hung for
+  // the lifetime of a jail. dup2() below clears CLOEXEC on the target
+  // fd, so the intended child still gets its stdout.
+  if (::pipe2(pipefd, O_CLOEXEC) == -1)
     ERR2("exec command", "pipe failed for '" << what << "': " << strerror(errno))
   UniqueFd pipeRead(pipefd[0]), pipeWrite(pipefd[1]);
   auto cargv = toExecArgv(argv);
@@ -222,7 +229,7 @@ static std::string execPipelineImpl(const std::vector<std::vector<std::string>> 
   // Create n-1 pipes
   std::vector<int> pipefds(2 * (n - 1));
   for (int i = 0; i < n - 1; i++) {
-    if (::pipe(&pipefds[2*i]) == -1) {
+    if (::pipe2(&pipefds[2*i], O_CLOEXEC) == -1) {   // 1.1.26: CLOEXEC, see execCommandGetOutput
       // Close already-created pipes on failure
       for (int j = 0; j < 2*i; j++) ::close(pipefds[j]);
       ERR2("exec pipeline", "pipe() failed for '" << what << "': " << strerror(errno))
@@ -232,7 +239,7 @@ static std::string execPipelineImpl(const std::vector<std::vector<std::string>> 
   // Capture pipe for last process stdout (when capture=true)
   int capturePipe[2] = {-1, -1};
   if (capture) {
-    if (::pipe(capturePipe) == -1) {
+    if (::pipe2(capturePipe, O_CLOEXEC) == -1) {     // 1.1.26: CLOEXEC
       for (auto fd : pipefds) ::close(fd);
       ERR2("exec pipeline", "pipe() failed for capture: " << strerror(errno))
     }
@@ -364,6 +371,17 @@ int getSysctlInt(const char *name) {
   size_t size = sizeof(value);
 
   SYSCALL(::sysctlbyname(name, &value, &size, nullptr, 0), "sysctlbyname (get int)", name);
+
+  return value;
+}
+
+unsigned long long getSysctlUInt64(const char *name) {
+  // Zero-initialised so a 4-byte node (e.g. hw.physmem on i386) fills
+  // only the low bytes and the high bytes stay 0 (little-endian).
+  unsigned long long value = 0;
+  size_t size = sizeof(value);
+
+  SYSCALL(::sysctlbyname(name, &value, &size, nullptr, 0), "sysctlbyname (get u64)", name);
 
   return value;
 }
