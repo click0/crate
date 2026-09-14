@@ -1,7 +1,7 @@
 name: FreeBSD Build (lite)
 
 # Швидкий компайл-чек + юніт-тести: boot + pkg + компіляція + лінк
-# crate(1) + юніт-сюїта (~3-5 хв, стабільно зелений).
+# crate(1)/crated/crate-snmpd + юніт-сюїта (~4 хв, стабільно зелений).
 #
 # Це ЄДИНЕ авто-FreeBSD-покриття: бігає на КОЖЕН пуш (включно з main).
 # Повна збірка (функціональні тести + ci-verify) у freebsd-build.yml
@@ -9,6 +9,13 @@ name: FreeBSD Build (lite)
 # непридатні (per-boot SSH/DNS-флейк + >90 хв на ci-verify); деталі
 # в шапці freebsd-build.yml. Доки full не повернеться (self-hosted
 # раннер), lite gate'ить усе, тож тут НЕ можна ignore'ити main.
+#
+# 1.1.28: мігровано з deprecated `run:`-input екшена на custom shell
+# `shell: cpa.sh {0}` (upstream: "The run parameter is deprecated. Use
+# the custom shell on subsequent steps"). Кожен крок нижче — окрема
+# ssh-сесія у VM: справжні межі кроків у UI, час на крок, і без
+# 130-рядкового heredoc. Env між кроками НЕ переноситься (свіжий shell
+# щоразу) — тому NCPU обчислюється там, де потрібен.
 
 on:
   push:
@@ -37,131 +44,131 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compile + unit tests on FreeBSD
+      - name: Boot FreeBSD 14.2 VM
         # 2026-06: v0.32.0 -> v1.2.0 — Node 24 readiness (GitHub
         # вимикає Node 20 на раннерах з 16 червня 2026). Деталі —
         # коментар у freebsd-build.yml.
+        # Boot + rsync ~30-60 с; 10 хв — з великим запасом на флейк
+        # завантаження образу (GitHub Releases віддавав 500, run
+        # 34883815954). Загальний ліміт джоби — 35 хв вище.
         uses: cross-platform-actions/action@v1.2.0
-        # Bumped from 20m to 30m: the per-test Makefile rule recompiles
-        # every TEST_LINK_SRCS for each test binary (~30 files × ~40
-        # tests = ~1200 compiles), so each new pure-test adds ~1m to
-        # the FreeBSD VM build. Run 159 (0.7.9) was the first to
-        # timeout. A proper Makefile refactor (compile TEST_LINK_SRCS
-        # to .o once, link tests against them) is tracked separately.
-        timeout-minutes: 30
+        timeout-minutes: 10
         with:
           operating_system: freebsd
           version: '14.2'
           shell: sh
-          run: |
-            set -ex
 
-            echo "::group::Install dependencies"
-            # cpp-httplib is header-only and only needed to LINK crated
-            # (daemon/*.cpp #include <httplib.h>); ssl/crypto ship in
-            # FreeBSD base. Added 1.1.21 so the daemon link is covered
-            # in PR CI — see the "Link daemon binaries" step below.
-            #
-            # Hard build deps — these MUST install or the job is dead.
-            sudo pkg install -y pkgconf yaml-cpp rang gmake cpp-httplib
+      - name: Install dependencies
+        shell: cpa.sh {0}
+        run: |
+          set -ex
+          # cpp-httplib is header-only and only needed to LINK crated
+          # (daemon/*.cpp #include <httplib.h>); ssl/crypto ship in
+          # FreeBSD base. Added 1.1.21 so the daemon link is covered
+          # in PR CI — see the "Link daemon binaries" step below.
+          #
+          # Hard build deps — these MUST install or the job is dead.
+          sudo pkg install -y pkgconf yaml-cpp rang gmake cpp-httplib
 
-            # ATF link libraries. The Makefile links every unit test with
-            # `-L/usr/local/lib -latf-c++ -latf-c`. FreeBSD 14.x base ships
-            # the HEADER (/usr/include/atf-c++.hpp) and kyua, but its ATF
-            # libraries are PRIVATE (/usr/lib/private/libprivateatf-*) and
-            # cannot be resolved as -latf-c++ — run 34233361523 compiled
-            # everything and then died at exactly that link step. So
-            # devel/atf (alive: 0.23 on quarterly) is a HARD dep, on its
-            # OWN line: bundling it with the dead kyua package made pkg
-            # abort the whole transaction and atf silently never installed.
-            sudo pkg install -y atf
+          # ATF link libraries. The Makefile links every unit test with
+          # `-L/usr/local/lib -latf-c++ -latf-c`. FreeBSD 14.x base ships
+          # the HEADER (/usr/include/atf-c++.hpp) and kyua, but its ATF
+          # libraries are PRIVATE (/usr/lib/private/libprivateatf-*) and
+          # cannot be resolved as -latf-c++ — run 34233361523 compiled
+          # everything and then died at exactly that link step. So
+          # devel/atf (alive: 0.23 on quarterly) is a HARD dep, on its
+          # OWN line: bundling it with the dead kyua package made pkg
+          # abort the whole transaction and atf silently never installed.
+          sudo pkg install -y atf
 
-            # kyua: the devel/kyua port was DELETED 2026-05-07 ("part of
-            # the base in all supported versions — Kyua's evolution
-            # happens in the base", D47473), which is what first broke
-            # this job (PR #228: "No packages available to install
-            # matching 'kyua'"). FreeBSD 14.x ships /usr/bin/kyua — verified
-            # present in this image. pkg is tried only for older images.
-            sudo pkg install -y kyua 2>/dev/null \
-              || echo "kyua pkg gone (deleted 2026-05, lives in base) — using /usr/bin/kyua"
-            echo "--- kyua/ATF preflight ---"
-            command -v kyua || true
-            ls -la /usr/bin/kyua /usr/local/bin/kyua 2>/dev/null || true
-            ls -la /usr/include/atf-c++.hpp /usr/local/include/atf-c++.hpp 2>/dev/null || true
-            ls -la /usr/lib/libatf-c++* /usr/local/lib/libatf-c++* 2>/dev/null || true
-            # If neither base nor pkg has them, show what pkg DOES offer
-            # (a rename shows up here) and fail with a clear error.
-            if ! command -v kyua >/dev/null 2>&1; then
-              echo "pkg search for kyua/atf (to catch a package rename):"
-              pkg search -q kyua 2>/dev/null || true
-              pkg search -q atf 2>/dev/null || true
-              echo "::error::kyua not found in base or pkg — see search output above"
-              exit 1
-            fi
-            if [ ! -f /usr/include/atf-c++.hpp ] && [ ! -f /usr/local/include/atf-c++.hpp ]; then
-              echo "::error::atf-c++.hpp not found in base or pkg"
-              exit 1
-            fi
-            # The check that would have caught run 34233361523 up front:
-            # a header alone is not enough, the LINKABLE lib must exist.
-            ls -la /usr/local/lib/libatf-c++.so /usr/lib/libatf-c++.so 2>/dev/null || true
-            if [ ! -e /usr/local/lib/libatf-c++.so ] && [ ! -e /usr/lib/libatf-c++.so ]; then
-              echo "::error::linkable libatf-c++.so not found — devel/atf must be installed (base only has private copies)"
-              exit 1
-            fi
-            echo "::endgroup::"
+          # kyua: the devel/kyua port was DELETED 2026-05-07 ("part of
+          # the base in all supported versions — Kyua's evolution
+          # happens in the base", D47473), which is what first broke
+          # this job (PR #228: "No packages available to install
+          # matching 'kyua'"). FreeBSD 14.x ships /usr/bin/kyua — verified
+          # present in this image. pkg is tried only for older images.
+          sudo pkg install -y kyua 2>/dev/null \
+            || echo "kyua pkg gone (deleted 2026-05, lives in base) — using /usr/bin/kyua"
+          echo "--- kyua/ATF preflight ---"
+          command -v kyua || true
+          ls -la /usr/bin/kyua /usr/local/bin/kyua 2>/dev/null || true
+          ls -la /usr/include/atf-c++.hpp /usr/local/include/atf-c++.hpp 2>/dev/null || true
+          ls -la /usr/lib/libatf-c++* /usr/local/lib/libatf-c++* 2>/dev/null || true
+          # If neither base nor pkg has them, show what pkg DOES offer
+          # (a rename shows up here) and fail with a clear error.
+          if ! command -v kyua >/dev/null 2>&1; then
+            echo "pkg search for kyua/atf (to catch a package rename):"
+            pkg search -q kyua 2>/dev/null || true
+            pkg search -q atf 2>/dev/null || true
+            echo "::error::kyua not found in base or pkg — see search output above"
+            exit 1
+          fi
+          if [ ! -f /usr/include/atf-c++.hpp ] && [ ! -f /usr/local/include/atf-c++.hpp ]; then
+            echo "::error::atf-c++.hpp not found in base or pkg"
+            exit 1
+          fi
+          # The check that would have caught run 34233361523 up front:
+          # a header alone is not enough, the LINKABLE lib must exist.
+          ls -la /usr/local/lib/libatf-c++.so /usr/lib/libatf-c++.so 2>/dev/null || true
+          if [ ! -e /usr/local/lib/libatf-c++.so ] && [ ! -e /usr/lib/libatf-c++.so ]; then
+            echo "::error::linkable libatf-c++.so not found — devel/atf must be installed (base only has private copies)"
+            exit 1
+          fi
 
-            echo "::group::System info"
-            uname -a
-            c++ --version
-            NCPU=$(sysctl -n hw.ncpu)
-            echo "ncpu=$NCPU"
-            echo "::endgroup::"
+      - name: System info
+        shell: cpa.sh {0}
+        run: |
+          uname -a
+          c++ --version
+          echo "ncpu=$(sysctl -n hw.ncpu)"
 
-            echo "::group::Compile changed components (smoke)"
-            CXXFLAGS="-Wall -std=c++17 -Ilib $(pkg-config --cflags yaml-cpp)"
-            for f in lib/run.cpp lib/util.cpp lib/create.cpp lib/locs.cpp lib/mount.cpp; do
-              echo "  Compiling $f ..."
-              c++ $CXXFLAGS -c "$f" -o "${f%.cpp}.o"
-            done
-            echo "::endgroup::"
+      # 1.1.28: the old "compile changed components (smoke)" step is gone —
+      # it compiled five files that `gmake crate` compiles anyway, with a
+      # narrower include set, and bought nothing.
+      - name: Link crate(1) binary
+        shell: cpa.sh {0}
+        run: |
+          set -ex
+          # 1.1.15-followup: the lite workflow previously skipped the
+          # final crate binary link, so missing-library bugs (e.g. the
+          # 2026-06 -lnv miss for the FreeBSD nvpair API) slipped past
+          # PR review and only fired in the full freebsd-build.yml.
+          # Building the binary here closes that gap.
+          gmake -j"$(sysctl -n hw.ncpu)" crate
+          ls -la crate
 
-            echo "::group::Link crate(1) binary (catches missing -lxxx in PR CI)"
-            # 1.1.15-followup: the lite workflow previously skipped the
-            # final crate binary link, so missing-library bugs (e.g. the
-            # 2026-06 -lnv miss for the FreeBSD nvpair API) slipped past
-            # PR review and only fired in the full freebsd-build.yml — a
-            # path that has been blocked on a broken SSH runner for the
-            # past several weeks. Building the binary here closes that
-            # gap with one extra link step; the .o for libcrate.a is
-            # already produced as a side effect of build-unit-tests, so
-            # the actual extra cost is the ar + link, ~1-2s.
-            gmake -j"$NCPU" crate
-            ls -la crate
-            echo "::endgroup::"
+      - name: Link daemon binaries crated + crate-snmpd
+        shell: cpa.sh {0}
+        run: |
+          set -ex
+          # 1.1.21: lite previously linked only crate(1), so a
+          # daemon-only change (e.g. the 1.1.19 getpeereid fail-closed
+          # fix in daemon/privops_listener.cpp) shipped with NO compile
+          # coverage — the full FreeBSD workflow that builds crated is
+          # manual (workflow_dispatch). Build both daemon binaries here
+          # so every PR gets a crated/crate-snmpd compile+link gate.
+          # crated needs cpp-httplib (installed above) + ssl/crypto
+          # (base); crate-snmpd needs only base libs.
+          gmake -j"$(sysctl -n hw.ncpu)" crated crate-snmpd
+          ls -la crated crate-snmpd
 
-            echo "::group::Link daemon binaries crated + crate-snmpd"
-            # 1.1.21: lite previously linked only crate(1), so a
-            # daemon-only change (e.g. the 1.1.19 getpeereid fail-closed
-            # fix in daemon/privops_listener.cpp) shipped with NO compile
-            # coverage — the full FreeBSD workflow that builds crated is
-            # manual (workflow_dispatch). Build both daemon binaries here
-            # so every PR gets a crated/crate-snmpd compile+link gate.
-            # crated needs cpp-httplib (installed above) + ssl/crypto
-            # (base); crate-snmpd needs only base libs.
-            gmake -j"$NCPU" crated crate-snmpd
-            ls -la crated crate-snmpd
-            echo "::endgroup::"
+      - name: Build unit tests
+        shell: cpa.sh {0}
+        run: |
+          set -ex
+          # Drive via gmake so the test list lives in one place
+          # (Makefile's UNIT_TESTS variable). Adding a new test requires
+          # only one edit (UNIT_TESTS in the Makefile).
+          # TEST_LINK_SRCS are compiled ONCE into tests/unit/.test-objs/
+          # (Makefile, since 0.7.12) — the old "~1200 compiles, +1 min
+          # per new test" note here was stale.
+          gmake -j"$(sysctl -n hw.ncpu)" build-unit-tests
 
-            echo "::group::Build unit tests"
-            # Drive via gmake so the test list lives in one place
-            # (Makefile's UNIT_TESTS variable). Adding a new test requires
-            # only one edit (UNIT_TESTS in the Makefile).
-            gmake -j"$NCPU" build-unit-tests
-            echo "::endgroup::"
-
-            echo "::group::Run kyua unit tests"
-            # Без `|| true` — провал юніт-тесту має валити CI.
-            cd tests && sudo kyua test unit
-            sudo kyua report --verbose
-            echo "::endgroup::"
+      - name: Run kyua unit tests
+        shell: cpa.sh {0}
+        run: |
+          set -ex
+          # Без `|| true` — провал юніт-тесту має валити CI.
+          # 1.1.28: `-v parallelism=N` — 1400+ кейсів раніше бігли серійно.
+          cd tests && sudo kyua -v parallelism="$(sysctl -n hw.ncpu)" test unit
+          sudo kyua report --verbose

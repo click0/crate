@@ -6,6 +6,56 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.28] — 2026-09-14
+
+**CI & build hygiene: a dead PR trigger, functional tests that never
+ran, sanitizers, warnings-as-errors, parallel kyua, and a workflow
+migration.**
+
+- **Linux unit tests never ran on pull requests — `linux-unit.yml`.**
+  The trigger said `pull_request: branches: [master]` while the default
+  branch is `main`, so the fastest gate in the repo ran on `push` only
+  and PR checks from forks got nothing. Now `[main]`.
+
+- **The full FreeBSD workflow silently skipped every functional test —
+  `freebsd-build.yml`.** `tests/functional/crate_info_test` does
+  `atf_skip "crate binary not installed"` unless `/usr/local/bin/crate`
+  exists, and nothing ever installed it. `sudo gmake install` now runs
+  before kyua.
+
+- **New Linux ASan + UBSan job — `linux-unit.yml`.** The pure modules
+  are platform-independent, so `-fsanitize=address,undefined` on Linux
+  is cheap and catches exactly the class the 1.1.22 `ctx.cpp`
+  `erase(end())` UB belonged to. Built through the Makefile's existing
+  `COVERAGE_CXXFLAGS`/`COVERAGE_LDFLAGS` hooks; the 1400+ ATF cases are
+  run directly (`prog -l` / `prog <case>`) because kyua scrubs the test
+  environment and `ASAN_OPTIONS`/`UBSAN_OPTIONS` would never reach it.
+
+- **Warnings on the test build, `-Werror` on Linux — `Makefile`.** The
+  two test rules had no warning flags at all (the production build has
+  `-Wall`). New `TEST_CXXWARN ?= -Wall -Wextra`; Linux CI passes
+  `-Werror` (gcc and FreeBSD clang disagree on enough diagnostics that a
+  global `-Werror` would be brittle). The four real warnings that
+  surfaced are fixed: an unused lambda parameter in `util.h`
+  (`ckSyscallError` default), the dead `skipWs` (`privops_wire_pure.cpp`)
+  and `isZero` (`ip6_alloc_pure.cpp`) helpers, and a `//` comment ending
+  in `\` in `retune_pure.h` (`-Wcomment`).
+
+- **Parallel kyua — `Makefile`, all three workflows.** New `KYUA_FLAGS`
+  variable; CI runs `kyua -v parallelism=<ncpu>` instead of the previous
+  fully serial run of ~1400 cases.
+
+- **`freebsd-build-lite.yml` migrated off the action's deprecated `run:`
+  input** to the `shell: cpa.sh {0}` custom shell (upstream: "The run
+  parameter is deprecated. Use the custom shell on subsequent steps").
+  Each phase is now a real step with its own timing; the redundant
+  "compile changed components (smoke)" step (five files `gmake crate`
+  compiles anyway) is gone; the stale "~1200 compiles / +1 min per test"
+  comment (fixed in the Makefile since 0.7.12) is corrected. The full
+  workflow keeps `run:` until the migrated lite has proven the syntax on
+  a few pushes — it is manual-only, so a breakage there would go
+  unnoticed.
+
 ## [1.1.27] — 2026-09-14
 
 **Regressions introduced by the 1.1.21–1.1.25 hardening, found by an

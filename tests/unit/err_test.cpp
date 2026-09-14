@@ -2,9 +2,10 @@
 //
 // Uses the real Exception type linked from lib/err.cpp + lib/util_pure.cpp.
 //
-// Build:
-//   c++ -std=c++17 -Ilib -o tests/unit/err_test \
-//       tests/unit/err_test.cpp lib/util_pure.cpp lib/err.cpp \
+// Build (one command, wrapped — no trailing backslashes: in a `//`
+// comment they splice the next line into the comment, -Wcomment):
+//   c++ -std=c++17 -Ilib -o tests/unit/err_test
+//       tests/unit/err_test.cpp lib/util_pure.cpp lib/err.cpp
 //       -L/usr/local/lib -latf-c++ -latf-c
 //
 // Run:

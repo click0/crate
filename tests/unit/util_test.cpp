@@ -2,9 +2,9 @@
 //
 // Uses real Util:: symbols from lib/util_pure.cpp.
 //
-// Build:
-//   c++ -std=c++17 -Ilib -o tests/unit/util_test \
-//       tests/unit/util_test.cpp lib/util_pure.cpp lib/err.cpp \
+// Build (one command, wrapped — no trailing backslashes, -Wcomment):
+//   c++ -std=c++17 -Ilib -o tests/unit/util_test
+//       tests/unit/util_test.cpp lib/util_pure.cpp lib/err.cpp
 //       -L/usr/local/lib -latf-c++ -latf-c
 //
 // Run:
