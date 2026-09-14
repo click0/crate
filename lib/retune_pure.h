@@ -8,12 +8,12 @@
 // container (a torrent client suddenly sucking all the disk
 // throughput) without losing its in-memory state.
 //
-// Usage on the runtime side:
+// Usage on the runtime side (one line; shown wrapped for width — no
+// trailing backslashes, which in a `//` comment splice the next line
+// into the comment and trip -Wcomment):
 //
-//   crate retune myjail \
-//       --rctl pcpu=20 \
-//       --rctl writebps=1M \
-//       --rctl readiops=500
+//   crate retune myjail --rctl pcpu=20 --rctl writebps=1M
+//                       --rctl readiops=500
 //
 // Each --rctl flag becomes one `rctl -a jail:<jid>:<key>:deny=<val>`
 // invocation. The pure module owns:

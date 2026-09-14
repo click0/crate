@@ -12,15 +12,8 @@ const char *const kPresent = "PRESENT";
 
 namespace {
 
-// Skip whitespace at `i`, advancing `i` past it. Returns true if
-// at least one character was consumed.
-bool skipWs(const std::string &s, size_t &i) {
-  size_t start = i;
-  while (i < s.size()
-         && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r'))
-    i++;
-  return i > start;
-}
+// (1.1.28: a `skipWs` helper used to live here — it had no callers and
+// tripped -Wunused-function once the test build got warning flags.)
 
 // Position `i` at the value following `"fieldName":`. Returns:
 //   "absent"        if the field is not in the body
