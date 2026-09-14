@@ -104,6 +104,10 @@ RunAtEnd setupSocketProxy(const Spec &spec, const std::string &jailPath, bool lo
     auto jailParent = entry.jail.substr(0, entry.jail.rfind('/'));
     std::filesystem::create_directories(J(jailParent));
     pid_t pid = ::fork();
+    // 1.1.27: a fork() failure was silently dropped (pid < 0 fell through
+    // to "not started") — the proxy simply never existed, with no error.
+    if (pid < 0)
+      ERR("fork failed for socat socket proxy '" << entry.jail << "'")
     if (pid == 0) {
       ::execl(CRATE_PATH_SOCAT, "socat",
               STR("UNIX-LISTEN:" << J(entry.jail) << ",fork").c_str(),

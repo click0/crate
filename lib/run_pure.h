@@ -22,9 +22,11 @@ unsigned envOrDefault(const char *name, unsigned def);
 // the crontab path (`/var/cron/tabs/<user>`) and a `sh -c "chmod ...
 // <user>"` string. Both are root-run in the setuid build, so an
 // unvalidated value gives path traversal (`../../etc/cron.d/pwn`) and
-// shell injection. Constrain to a POSIX-ish username: [A-Za-z0-9_-],
-// 1..32 chars, no leading '-'. Empty is accepted unchanged (caller's
-// existing default handling). Returns "" on success.
+// shell injection. Constrain to a POSIX-ish username: [A-Za-z0-9._-]
+// (1.1.27: '.' allowed, as FreeBSD pw(8) does), 1..32 chars, no leading
+// '-', not "."/"..". Empty is REJECTED (1.1.27) — the caller maps an
+// empty spec value to the documented default "root" before calling.
+// Returns "" on success.
 std::string validateCronUser(const std::string &user);
 
 }

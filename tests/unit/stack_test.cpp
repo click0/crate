@@ -129,6 +129,17 @@ ATF_TEST_CASE_BODY(validateStackIp_injection_rejected)
 	ATF_REQUIRE(!validateStackIp("256.0.0.1").empty());   // charset ok, inet_pton fails
 	ATF_REQUIRE(!validateStackIp("not-an-ip").empty());
 	ATF_REQUIRE(!validateStackIp("").empty());
+	// 1.1.27: the CIDR suffix is validated too — 1.1.25 only checked the
+	// address part, so these all passed (shell-inert, but garbage for
+	// /etc/hosts).
+	ATF_REQUIRE(!validateStackIp("10.0.0.5/999").empty());
+	ATF_REQUIRE(!validateStackIp("10.0.0.5/33").empty());
+	ATF_REQUIRE(!validateStackIp("10.0.0.5/abc").empty());
+	ATF_REQUIRE(!validateStackIp("10.0.0.5/").empty());
+	ATF_REQUIRE(!validateStackIp("fd00::1/129").empty());
+	ATF_REQUIRE_EQ(validateStackIp("10.0.0.5/32"), "");
+	ATF_REQUIRE_EQ(validateStackIp("10.0.0.5/0"), "");
+	ATF_REQUIRE_EQ(validateStackIp("fd00::1/128"), "");
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(topoSort_empty);

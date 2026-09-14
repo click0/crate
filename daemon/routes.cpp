@@ -417,11 +417,21 @@ static void handleContainerLogs(const httplib::Request &req, httplib::Response &
       std::ostringstream ss;
       ss << "{\"name\":\"" << jail->name << "\",\"log\":\"";
       for (char c : output) {
+        unsigned char uc = static_cast<unsigned char>(c);
         if (c == '"') ss << "\\\"";
         else if (c == '\\') ss << "\\\\";
         else if (c == '\n') ss << "\\n";
         else if (c == '\r') ss << "\\r";
         else if (c == '\t') ss << "\\t";
+        else if (c == '\b') ss << "\\b";
+        else if (c == '\f') ss << "\\f";
+        else if (uc < 0x20) {
+          // 1.1.27: any other control byte in a log line (ESC from
+          // colour codes, NUL, …) was emitted raw → invalid JSON.
+          char buf[8];
+          std::snprintf(buf, sizeof(buf), "\\u%04x", (int)uc);
+          ss << buf;
+        }
         else ss << c;
       }
       ss << "\"}";
@@ -723,7 +733,11 @@ static void handleCreateSnapshot(const httplib::Request &req, httplib::Response 
     // Generate a timestamp-based name.
     auto t = ::time(nullptr);
     char buf[32];
-    std::strftime(buf, sizeof(buf), "auto_%Y-%m-%d_%H%M%S", ::gmtime(&t));
+    // 1.1.27: gmtime_r — gmtime() returns a static buffer shared by all
+    // threads; two concurrent snapshot POSTs garbled each other's name.
+    struct tm tmv{};
+    ::gmtime_r(&t, &tmv);
+    std::strftime(buf, sizeof(buf), "auto_%Y-%m-%d_%H%M%S", &tmv);
     snapName = buf;
   }
   auto reason = RoutesPure::validateSnapshotName(snapName);

@@ -19,8 +19,17 @@ std::string jsonQuote(const std::string &s) {
   std::ostringstream os;
   os << '"';
   for (char c : s) {
+    unsigned char uc = static_cast<unsigned char>(c);
     if (c == '"' || c == '\\') os << '\\' << c;
-    else if (c < 0x20)         os << "\\u" << std::hex << (int)(unsigned char)c;
+    else if (uc < 0x20) {
+      // 1.1.27: was `"\\u" << std::hex << (int)c` — no width/fill, so
+      // byte 0x01 became `\u1` (invalid JSON) and the stream was left in
+      // hex mode for everything after it. Also compare as unsigned:
+      // signed `char < 0x20` was true for every UTF-8 byte ≥ 0x80.
+      char buf[8];
+      std::snprintf(buf, sizeof(buf), "\\u%04x", (int)uc);
+      os << buf;
+    }
     else                       os << c;
   }
   os << '"';

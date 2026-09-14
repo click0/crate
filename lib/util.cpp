@@ -518,13 +518,15 @@ size_t getFileSize(int fd) {
 }
 
 void writeFile(const std::string &data, int fd) {
+  // 1.1.27: do NOT close the caller's fd on error. Callers (FwUsers /
+  // FwSlots / GuiRegistry::unlock) pass their flock'd context fd and
+  // close it themselves; closing it here meant a double close — EBADF
+  // at best, and in the multithreaded daemon closing an fd number
+  // another thread had just been handed.
   auto res = ::write(fd, data.c_str(), data.size());
   if (res == -1) {
-    auto err = STR("failed to write file: " << strerror(errno));
-    (void)::close(fd);
-    ERR2("write file", err)
+    ERR2("write file", "failed to write file: " << strerror(errno))
   } else if (res != (int)data.size()) {
-    (void)::close(fd);
     ERR2("write file", "short write in file, attempted to write " << data.size() << " bytes, actually wrote only " << res << " bytes")
   }
 }
@@ -646,7 +648,7 @@ bool isXzArchive(const char *file) {
   if (res == -1)
     return false; // can't stat: can't be an XZ archive file
 
-  if (sb.st_mode & S_IFREG && sb.st_size > 0x100) { // the XZ archive file can't be too small
+  if (S_ISREG(sb.st_mode) && sb.st_size > 0x100) { // the XZ archive file can't be too small (1.1.27: S_ISREG, not a bitmask test)
     uint8_t signature[5];
     // read the signature
     int fd = ::open(file, O_RDONLY);
@@ -676,15 +678,18 @@ char isElfFileOrDir(const std::string &file) { // find if the file is a regular 
     return 'N'; // ? what else to do after the above
   }
 
-  // directory?
-  if (sb.st_mode & S_IFDIR)
+  // directory? 1.1.27: S_ISDIR, not `& S_IFDIR` — S_IFDIR (0040000) is a
+  // subset of S_IFSOCK's bits (0140000), so a UNIX socket under the
+  // chroot matched as a directory and directory_iterator then threw a
+  // filesystem_error out of findElfFiles, aborting `crate create`.
+  if (S_ISDIR(sb.st_mode))
     return 'D';
 
   // object files aren't dynamic ELFs
   if (file.size() > 2 && file[file.size()-1] == 'o' && file[file.size()-2] == '.')
     return 'N';
 
-  if (sb.st_mode & S_IFREG /*&& sb.st_mode & S_IXUSR*/ && sb.st_size > 0x80) { // this reference claims that ELF can be as small as 142 bytes: http://timelessname.com/elfbin/
+  if (S_ISREG(sb.st_mode) /*&& sb.st_mode & S_IXUSR*/ && sb.st_size > 0x80) { // this reference claims that ELF can be as small as 142 bytes: http://timelessname.com/elfbin/
     // x-bit is disabled above: some .so files have no exec bit, particularly /usr/lib/pam_*.so
     uint8_t signature[4];
     // read the signature

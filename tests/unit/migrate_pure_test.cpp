@@ -102,7 +102,11 @@ ATF_TEST_CASE_BODY(artifact_file_traversal_rejected) {
   ATF_REQUIRE(!validateArtifactFile("../../etc/cron.d/pwn").empty());
   ATF_REQUIRE(!validateArtifactFile("sub/dir/file").empty());
   ATF_REQUIRE(!validateArtifactFile("/etc/passwd").empty());
-  ATF_REQUIRE(!validateArtifactFile("a..b").empty());   // any ".." substring
+  // 1.1.27: an embedded ".." is a legal filename character sequence —
+  // the server-side validators accept `app..v2`, and with '/' excluded
+  // a single component cannot traverse. Only the exact "."/".." are
+  // reserved (asserted above).
+  ATF_REQUIRE_EQ(validateArtifactFile("app..v2-1700000000.crate"), std::string());
   ATF_REQUIRE(!validateArtifactFile("bad\nname").empty());
   ATF_REQUIRE(!validateArtifactFile("bad\tname").empty());
   ATF_REQUIRE(!validateArtifactFile(std::string(256, 'a')).empty());
