@@ -84,7 +84,10 @@ ATF_TEST_CASE_BODY(cron_user_typical_accepted)
 	ATF_REQUIRE_EQ(RunPure::validateCronUser("root"), "");
 	ATF_REQUIRE_EQ(RunPure::validateCronUser("www-data"), "");
 	ATF_REQUIRE_EQ(RunPure::validateCronUser("user_1"), "");
-	ATF_REQUIRE_EQ(RunPure::validateCronUser(""), "");  // empty unchanged
+	// 1.1.27: '.' is legal in FreeBSD login names (pw(8)); 1.1.22 wrongly
+	// rejected first.last-style users.
+	ATF_REQUIRE_EQ(RunPure::validateCronUser("john.doe"), "");
+	ATF_REQUIRE_EQ(RunPure::validateCronUser("svc.backup-2"), "");
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(cron_user_injection_rejected);
@@ -93,7 +96,11 @@ ATF_TEST_CASE_BODY(cron_user_injection_rejected)
 	// Path traversal into the host crontab dir.
 	ATF_REQUIRE(!RunPure::validateCronUser("../../etc/cron.d/pwn").empty());
 	ATF_REQUIRE(!RunPure::validateCronUser("a/b").empty());
-	ATF_REQUIRE(!RunPure::validateCronUser("..").empty());   // '.' not allowed
+	ATF_REQUIRE(!RunPure::validateCronUser("..").empty());   // reserved
+	ATF_REQUIRE(!RunPure::validateCronUser(".").empty());    // reserved
+	// 1.1.27: empty is rejected by the validator; run.cpp maps an empty
+	// spec value to the documented default "root" BEFORE validating.
+	ATF_REQUIRE(!RunPure::validateCronUser("").empty());
 	// Shell metacharacters (the value also lands in a `sh -c` string).
 	ATF_REQUIRE(!RunPure::validateCronUser("x; rm -rf /").empty());
 	ATF_REQUIRE(!RunPure::validateCronUser("x`id`").empty());

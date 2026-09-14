@@ -120,10 +120,15 @@ bool cleanCrates(const Args &args) {
     // FwUsers: remove dead PIDs
     try {
       auto fwUsers = Ctx::FwUsers::lock();
-      // FwUsers internally does garbage collection on dead PIDs
-      if (!dryRun)
+      // 1.1.27: the old comment claimed "FwUsers internally does garbage
+      // collection" — it did not; this block only locked and unlocked,
+      // so stale pids from SIGKILLed runs kept the shared NAT rule alive
+      // forever. Now an explicit GC (lock() reads lazily, so this is
+      // what actually loads, prunes, and marks the file dirty).
+      if (!dryRun) {
+        fwUsers->garbageCollect();
         fwUsers->unlock();
-      else {
+      } else {
         std::cout << "  [dry-run] would clean stale firewall user entries" << std::endl;
         fwUsers->unlock();
       }

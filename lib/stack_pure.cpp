@@ -92,12 +92,30 @@ std::string validateStackIp(const std::string &ip) {
     if (!ok)
       return "address contains an invalid character";
   }
-  auto bare = ipFromCidr(ip);
+  auto slash = ip.find('/');
+  auto bare = (slash == std::string::npos) ? ip : ip.substr(0, slash);
   struct in_addr a4;
   struct in6_addr a6;
-  if (::inet_pton(AF_INET, bare.c_str(), &a4) == 1) return "";
-  if (::inet_pton(AF_INET6, bare.c_str(), &a6) == 1) return "";
-  return "address is neither a valid IPv4 nor IPv6 literal";
+  long maxPrefix;
+  if (::inet_pton(AF_INET, bare.c_str(), &a4) == 1)       maxPrefix = 32;
+  else if (::inet_pton(AF_INET6, bare.c_str(), &a6) == 1) maxPrefix = 128;
+  else return "address is neither a valid IPv4 nor IPv6 literal";
+  // 1.1.27: the 1.1.25 version validated only the address part, so
+  // `10.0.0.5/999`, `10.0.0.5/abc` and `10.0.0.5/` all passed (the
+  // charset gate admits '/' and hex letters). Shell-inert, but garbage
+  // for /etc/hosts. Require a bare decimal prefix within the family's
+  // range when a '/' is present.
+  if (slash != std::string::npos) {
+    auto suffix = ip.substr(slash + 1);
+    if (suffix.empty() || suffix.size() > 3) return "CIDR prefix is malformed";
+    long p = 0;
+    for (char c : suffix) {
+      if (c < '0' || c > '9') return "CIDR prefix must be numeric";
+      p = p * 10 + (c - '0');
+    }
+    if (p > maxPrefix) return "CIDR prefix is out of range for the address family";
+  }
+  return "";
 }
 
 // topoSort is templated and lives in stack_pure.h.

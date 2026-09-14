@@ -6,6 +6,82 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.27] — 2026-09-14
+
+**Regressions introduced by the 1.1.21–1.1.25 hardening, found by an
+adversarial self-review, plus two invalid-JSON emitters, the `FwUsers`
+GC gap, and a small correctness batch.**
+
+Regressions of our own fixes:
+
+- **`cron/user` rejected legitimate dotted usernames — `lib/run_pure.cpp`
+  (MED).** 1.1.22's `validateCronUser` allowed `[A-Za-z0-9_-]` only, but
+  FreeBSD `pw(8)` accepts `.` in login names — a spec with
+  `user: john.doe` (common on first.last hosts) aborted `crate run`. `.`
+  is now allowed (shell-inert; `/` excluded and `.`/`..` reserved, so no
+  traversal). The 1.1.22 comment "empty is accepted unchanged (caller's
+  default handling)" was also **false** — no such handling existed (the
+  `root` default lives in the Spec struct initializer), so an explicit
+  `user: ""` reached `/var/cron/tabs/` (a directory). `run.cpp` now maps
+  empty → `root` before validating; the validator rejects empty.
+
+- **`validateStackIp` never checked the CIDR suffix — `lib/stack_pure.cpp`
+  (LOW-MED).** 1.1.25 validated only the address part, so `10.0.0.5/999`,
+  `10.0.0.5/abc` and `10.0.0.5/` all passed (the charset admits `/` and
+  hex letters). Shell-inert, but garbage for `/etc/hosts`. A `/` now
+  requires a bare decimal prefix within the family's range.
+
+- **`crate migrate` refused artifacts its own server produced —
+  `lib/migrate_pure.cpp` (LOW).** 1.1.21's `validateArtifactFile` rejected
+  any `..` substring, stricter than the daemon's `validateArtifactName`
+  and the jail-name validators, which allow `.` freely — a container
+  named `app..v2` exported fine and then failed to migrate. With `/`
+  excluded a single component cannot traverse, so the check bought
+  nothing; dropped (exact `.`/`..` stay reserved).
+
+- **Trailing-slash prefix in `datasetOwned`/`pathOwned` —
+  `lib/privops_authz_pure.cpp` (LOW, latent).** Same bug class fixed in
+  `Util::safePath` in 1.1.25: a prefix already ending in `/` made the
+  separator check look at the child's first char and reject every
+  descendant. Both now share one guarded helper.
+
+- CHANGELOG correction: the 1.1.25 entry said `validateStackName`
+  enforces "no `..`" — it reserves only the exact `.`/`..`; `a..b` is a
+  legal single component (and is asserted so by `stack_test`).
+
+Other fixes:
+
+- **Two invalid-JSON emitters.** `hub/scheduling_pure.cpp` `jsonQuote`
+  wrote `"\u" << std::hex << c` with no width/fill (byte 0x01 → `\u1`,
+  and the stream stayed in hex mode), and compared a signed `char` so
+  every UTF-8 byte ≥ 0x80 was "escaped". `daemon/routes.cpp`'s container
+  log endpoint escaped only `" \ \n \r \t`, so an ESC from a colour code
+  went out raw. Both now emit `\u00XX` for all control bytes.
+
+- **`FwUsers` had no dead-pid garbage collection — `lib/ctx.cpp`,
+  `lib/clean.cpp` (MED).** `FwSlots` always GC'd; `FwUsers` did not, and
+  `crate clean`'s comment claimed it did while only locking/unlocking. A
+  `crate run` killed without teardown (SIGKILL/OOM/panic) left its pid
+  in `ctx-fw-users`, `isEmpty()` was never true again, and the shared NAT
+  rule + `net.inet.ip.forwarding` were never restored. New
+  `FwUsers::garbageCollect` (mirrors `FwSlots`), called from `del()` so
+  the teardown's `isEmpty()` sees only live users, and explicitly from
+  `crate clean`.
+
+- **Small correctness batch.** `Util::Fs::writeFile(data, fd)` no longer
+  closes the *caller's* fd on error (callers pass their flock'd context
+  fd and close it themselves → double close). `S_ISREG`/`S_ISDIR` instead
+  of `st_mode & S_IF*` (S_IFDIR's bits are a subset of S_IFSOCK's, so a
+  UNIX socket under the chroot matched as a directory and
+  `directory_iterator` threw out of `findElfFiles`, aborting
+  `crate create`). `gmtime_r` instead of `gmtime` in the snapshot route
+  (static buffer shared across worker threads). `socat` proxy `fork()`
+  failure now errors instead of silently not starting the proxy.
+
+Tests updated/added in `run_pure_test`, `stack_test`, `migrate_pure_test`,
+`privops_authz_pure_test`. The `ctx`/`clean`/`util`/`routes` changes are
+runtime-only, compile-gated by the FreeBSD lite build.
+
 ## [1.1.26] — 2026-09-14
 
 **Correctness: seven daemon/runtime fixes from a correctness-lens audit

@@ -133,13 +133,11 @@ and best validated on a live FreeBSD host):
   Fix shape: register the RunAtEnd immediately after each successful
   acquisition, before the next fallible step.
 
-* (correctness, MED) lib/ctx.cpp FwUsers has no dead-pid garbage
-  collection (FwSlots does, ctx.cpp:~200) and lib/clean.cpp:~120
-  claims to GC it but only locks/unlocks. A `crate run` killed without
-  teardown (SIGKILL/OOM/panic) leaves its pid in ctx-fw-users, so
-  FwUsers::isEmpty() is never true again and the shared NAT rule 50000
-  + net.inet.ip.forwarding are never restored (run_net.cpp:~488). Add
-  kill(pid,0)-based GC mirroring FwSlots and make clean.cpp call it.
+  [FIXED in 1.1.27] lib/ctx.cpp FwUsers dead-pid garbage collection:
+  FwUsers::garbageCollect (mirrors FwSlots), called from del() so the
+  teardown's isEmpty() sees only live NAT-rule users, and explicitly
+  from `crate clean` (which previously only locked/unlocked despite its
+  comment).
 
 * (robustness, MED/LOW) daemon/privops_listener.cpp nvlist_recv and
   daemon/control_socket.cpp read() block forever with no timeout, and
@@ -147,21 +145,18 @@ and best validated on a live FreeBSD host):
   cap — an idle client pins a thread + fd; N of them exhaust the
   daemon. Add a recv timeout (SO_RCVTIMEO) and a concurrency cap.
 
-* (LOW batch) daemon/routes.cpp import tmp file is <name>.crate.tmp.<pid>
-  — constant across threads, so two concurrent imports of one name
-  interleave writes; no fsync before rename. lib/util.cpp writeFile(data,
-  fd) closes the CALLER's fd on error (ctx.cpp then double-closes).
-  execPipelineImpl: fork() failure for child i>0 throws without reaping
-  children 0..i-1 (zombies). Capture loops treat read()==-1 as EOF
-  (EINTR) and jail_query.cpp ignores waitpid failure / decodes an
-  uninitialized status. lib/util.cpp ~:631/662 test `st_mode & S_IFREG/
-  S_IFDIR` instead of S_ISREG/S_ISDIR (a socket matches S_IFDIR →
-  directory_iterator throws out of findElfFiles). daemon/routes.cpp
-  gmtime() (static buffer) in worker threads. ws_console.cpp select()
-  with fds >= FD_SETSIZE. run.cpp hcThread joinable while execInJail
-  can throw on fork EAGAIN → std::terminate skips every RunAtEnd.
-  run_services.cpp ignores fork() failure for socat. stack.cpp
-  inet_pton results unchecked for ip_range.
+* (LOW batch — what is left after 1.1.27 fixed writeFile(fd) double-
+  close, S_ISREG/S_ISDIR, gmtime_r, and the socat fork check)
+  daemon/routes.cpp import tmp file is <name>.crate.tmp.<pid> —
+  constant across threads, so two concurrent imports of one name
+  interleave writes; no fsync before rename. execPipelineImpl: fork()
+  failure for child i>0 throws without reaping children 0..i-1
+  (zombies). Capture loops treat read()==-1 as EOF (EINTR) and
+  jail_query.cpp ignores waitpid failure / decodes an uninitialized
+  status. ws_console.cpp select() with fds >= FD_SETSIZE. run.cpp
+  hcThread joinable while execInJail can throw on fork EAGAIN →
+  std::terminate skips every RunAtEnd. stack.cpp inet_pton results
+  unchecked for ip_range.
 
 === High priority — blocking production use ===
 

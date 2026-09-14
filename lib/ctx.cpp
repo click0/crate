@@ -73,8 +73,9 @@ void FwUsers::add(pid_t pid) {
 }
 
 void FwUsers::del(pid_t pid) {
-  if (!inMemory)
-    readIntoMemory();
+  // 1.1.27: load + GC dead pids first, so the isEmpty() the caller
+  // checks right after this reflects only LIVE users of the NAT rule.
+  garbageCollect();
   // 1.1.22: erase by key, not by iterator. pids.erase(pids.find(pid))
   // is undefined behavior when pid is absent (find returns end()) —
   // reachable on a stale/truncated context file or a double teardown.
@@ -101,6 +102,22 @@ void FwUsers::readIntoMemory() {
     }
   }
   inMemory = true;
+}
+
+void FwUsers::garbageCollect() {
+  if (!inMemory)
+    readIntoMemory();
+  // Mirror of FwSlots::garbageCollect: a pid that no longer exists
+  // cannot be using the NAT rule, whatever the file says.
+  auto it = pids.begin();
+  while (it != pids.end()) {
+    if (::kill(*it, 0) == -1 && errno == ESRCH) {
+      it = pids.erase(it);
+      changed = true;
+    } else {
+      ++it;
+    }
+  }
 }
 
 void FwUsers::writeToFile() const {

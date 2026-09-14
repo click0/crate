@@ -25,6 +25,13 @@ public:
   bool isEmpty() const;
   void add(pid_t pid);
   void del(pid_t pid);
+  // 1.1.27: drop entries whose pid no longer exists (kill(pid,0) →
+  // ESRCH). FwSlots always had this; FwUsers did not, so a `crate run`
+  // killed without teardown (SIGKILL/OOM/panic) left its pid here
+  // forever, isEmpty() was never true again, and the shared NAT rule +
+  // net.inet.ip.forwarding were never restored. Loads the file first if
+  // needed; marks the file dirty only when something was removed.
+  void garbageCollect();
 private:
   static std::string file();
   void readIntoMemory();

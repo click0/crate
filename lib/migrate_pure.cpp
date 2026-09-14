@@ -183,8 +183,17 @@ std::string validateContainerName(const std::string &name) {
 // `curl -o` target and an `unlink()` target. Without validation a
 // hostile/compromised source could return `"../../../etc/cron.d/pwn"`
 // and get arbitrary file write AND delete on the migrating host. Treat
-// it as a single path COMPONENT: a plain filename, no slash, no `..`,
-// no control bytes.
+// it as a single path COMPONENT: a plain filename — no slash, not the
+// reserved "."/"..", no control bytes.
+//
+// 1.1.27: the 1.1.21 version also rejected ANY ".." substring. That was
+// stricter than the server that produces the name (TransferPure::
+// validateArtifactName and the jail-name validators allow '.' freely,
+// only the exact "."/".." are reserved), so a container legitimately
+// named e.g. `app..v2` exported fine server-side and then `crate migrate`
+// refused its own artifact. With '/' excluded a single component cannot
+// traverse whatever dots it contains, so the substring check bought
+// nothing. Dropped.
 std::string validateArtifactFile(const std::string &name) {
   if (name.empty()) return "artifact filename is empty";
   if (name.size() > 255) return "artifact filename longer than 255 chars";
@@ -196,8 +205,6 @@ std::string validateArtifactFile(const std::string &name) {
         static_cast<unsigned char>(c) == 0x7f)
       return "artifact filename contains a control character";
   }
-  if (name.find("..") != std::string::npos)
-    return "artifact filename must not contain '..'";
   return "";
 }
 

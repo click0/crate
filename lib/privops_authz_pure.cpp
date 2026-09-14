@@ -4,27 +4,38 @@
 
 namespace PrivOpsAuthzPure {
 
+namespace {
+
+// Shared body for datasetOwned / pathOwned: `value` is the prefix root
+// itself, or a slash-anchored descendant "<prefix>/...". Slash-anchored
+// so "<prefix>extra" does not pass as "<prefix>".
+//
+// 1.1.27: when the prefix ALREADY ends in '/', that separator has been
+// consumed by the prefix itself, so value[prefix.size()] is the first
+// char of the child name, not a '/'. The old unconditional check then
+// rejected every descendant — the same trailing-slash bug fixed in
+// Util::safePath in 1.1.25. Demand the separator only when the prefix
+// does not supply it.
+bool ownedUnder(const std::string &value, const std::string &prefix) {
+  if (prefix.empty()) return true;   // no per-user split → nothing to gate
+  if (value == prefix) return true;  // the prefix root itself
+  bool prefixEndsWithSep = prefix.back() == '/';
+  return value.size() > prefix.size()
+      && value.compare(0, prefix.size(), prefix) == 0
+      && (prefixEndsWithSep || value[prefix.size()] == '/');
+}
+
+} // anon
+
 bool datasetOwned(const std::string &dataset, const std::string &zfsPrefix) {
-  if (zfsPrefix.empty())
-    return true;                 // no per-user ZFS split → nothing to gate
-  if (dataset == zfsPrefix)
-    return true;                 // the prefix root itself
-  // Descendant: "<prefix>/...". Slash-anchored so "<prefix>extra"
-  // does not pass as "<prefix>".
-  return dataset.size() > zfsPrefix.size()
-      && dataset.compare(0, zfsPrefix.size(), zfsPrefix) == 0
-      && dataset[zfsPrefix.size()] == '/';
+  return ownedUnder(dataset, zfsPrefix);
 }
 
 bool pathOwned(const std::string &path, const std::string &pathPrefix) {
-  // Identical shape to datasetOwned — kept as a separate helper so each
-  // call-site reads as "is this PATH inside the per-user path prefix"
-  // rather than reusing the dataset spelling.
-  if (pathPrefix.empty())  return true;
-  if (path == pathPrefix)  return true;
-  return path.size() > pathPrefix.size()
-      && path.compare(0, pathPrefix.size(), pathPrefix) == 0
-      && path[pathPrefix.size()] == '/';
+  // Kept as a separate helper so each call-site reads as "is this PATH
+  // inside the per-user path prefix" rather than reusing the dataset
+  // spelling.
+  return ownedUnder(path, pathPrefix);
 }
 
 OwnerLookup nullLookup() {

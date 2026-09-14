@@ -56,6 +56,23 @@ ATF_TEST_CASE_BODY(dataset_owned_empty_prefix_allows_all) {
   ATF_REQUIRE(datasetOwned("", ""));
 }
 
+// 1.1.27: a prefix that already ends in '/' must still accept its
+// descendants (the separator is consumed by the prefix itself) and must
+// still reject siblings — the trailing-slash bug class fixed in
+// Util::safePath in 1.1.25.
+ATF_TEST_CASE_WITHOUT_HEAD(owned_trailing_slash_prefix);
+ATF_TEST_CASE_BODY(owned_trailing_slash_prefix) {
+  const std::string p = "zroot/crate-tenants/1000/";
+  ATF_REQUIRE(datasetOwned("zroot/crate-tenants/1000/web", p));
+  ATF_REQUIRE(datasetOwned("zroot/crate-tenants/1000/web/data", p));
+  ATF_REQUIRE(datasetOwned(p, p));
+  ATF_REQUIRE(!datasetOwned("zroot/crate-tenants/10001/web", p));
+  ATF_REQUIRE(!datasetOwned("zroot/crate-tenants/1001/web", p));
+  const std::string pp = "/var/run/crate/1000/";
+  ATF_REQUIRE(pathOwned("/var/run/crate/1000/jail-a", pp));
+  ATF_REQUIRE(!pathOwned("/var/run/crate/10001/jail-a", pp));
+}
+
 // --- authorize: dataset verbs ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(authorize_attach_zfs_own_dataset);
@@ -508,6 +525,7 @@ ATF_TEST_CASE_BODY(decision_reason_non_empty) {
 }
 
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, owned_trailing_slash_prefix);
   ATF_ADD_TEST_CASE(tcs, dataset_owned_prefix_and_descendants);
   ATF_ADD_TEST_CASE(tcs, dataset_owned_rejects_foreign_and_substring);
   ATF_ADD_TEST_CASE(tcs, dataset_owned_empty_prefix_allows_all);

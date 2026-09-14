@@ -1809,6 +1809,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       crontab << job.schedule << "\t" << job.command << std::endl;
     // Write crontab for the specified user (default: root)
     auto cronUser = spec.cronJobs[0].user; // use first job's user for the crontab file
+    // 1.1.27: an explicit `user: ""` in the spec used to reach
+    // `/var/cron/tabs/` (a directory) — the "root" default only lives in
+    // the Spec struct initializer. Apply the documented default here.
+    if (cronUser.empty()) cronUser = "root";
     // 1.1.22: cronUser is a spec field that flows into a root-run file
     // path AND a `sh -c` string below — validate it as a username so it
     // can't traverse (`../../etc/cron.d/pwn`) or inject shell metachars.
