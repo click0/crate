@@ -1,6 +1,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "audit_per_user_pure.h"
+#include "json_pure.h"
 
 #include <sstream>
 
@@ -8,25 +9,12 @@ namespace AuditPerUserPure {
 
 namespace {
 
-// Conservative JSON-string escape — matches what other crate
-// hand-rolled JSON does (privops_wire_pure, audit_pure). We
-// stay strict on control chars: backslash + quote get escaped,
-// newline / tab / CR become \\n \\t \\r. The verb token is
-// constrained by parseVerb's snake_case alphabet so escapes
-// never fire there in practice; defence in depth for future
-// fields with looser charsets.
-std::string escape(const std::string &s) {
-  std::string out;
-  out.reserve(s.size() + 4);
-  for (char c : s) {
-    if (c == '\\' || c == '"') { out += '\\'; out += c; continue; }
-    if (c == '\n') { out += "\\n"; continue; }
-    if (c == '\r') { out += "\\r"; continue; }
-    if (c == '\t') { out += "\\t"; continue; }
-    out += c;
-  }
-  return out;
-}
+// JSON-string escape. The verb token is constrained by parseVerb's
+// snake_case alphabet so escapes never fire there in practice; defence
+// in depth for future fields with looser charsets. 1.1.29: delegates to
+// the shared escaper — the former copy passed every control byte other
+// than \n \r \t through RAW (invalid JSON); now all are escaped.
+std::string escape(const std::string &s) { return JsonPure::escape(s); }
 
 } // anon
 

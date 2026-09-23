@@ -1,6 +1,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "inspect_pure.h"
+#include "json_pure.h"
 
 #include <cstdio>
 #include <iomanip>
@@ -8,29 +9,9 @@
 
 namespace InspectPure {
 
-std::string escapeJsonString(const std::string &in) {
-  std::ostringstream o;
-  for (unsigned char c : in) {
-    switch (c) {
-      case '"':  o << "\\\""; break;
-      case '\\': o << "\\\\"; break;
-      case '\b': o << "\\b";  break;
-      case '\f': o << "\\f";  break;
-      case '\n': o << "\\n";  break;
-      case '\r': o << "\\r";  break;
-      case '\t': o << "\\t";  break;
-      default:
-        if (c < 0x20) {
-          char buf[8];
-          std::snprintf(buf, sizeof(buf), "\\u%04x", (unsigned)c);
-          o << buf;
-        } else {
-          o << static_cast<char>(c);
-        }
-    }
-  }
-  return o.str();
-}
+// 1.1.29: public alias kept for existing callers/tests; the escaping
+// itself now lives once, in JsonPure::escape.
+std::string escapeJsonString(const std::string &in) { return JsonPure::escape(in); }
 
 namespace {
 

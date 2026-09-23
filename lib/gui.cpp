@@ -2,6 +2,7 @@
 
 #include "args.h"
 #include "gui_registry.h"
+#include "json_pure.h"
 #include "pathnames.h"
 #include "util.h"
 #include "x11_ops.h"
@@ -28,29 +29,9 @@
 
 // --- gui list ---
 
-// Escape a string for JSON output (handles \, ", and control characters)
-static std::string jsonEscape(const std::string &s) {
-  std::string out;
-  out.reserve(s.size());
-  for (char c : s) {
-    switch (c) {
-    case '\\': out += "\\\\"; break;
-    case '"':  out += "\\\""; break;
-    case '\n': out += "\\n";  break;
-    case '\r': out += "\\r";  break;
-    case '\t': out += "\\t";  break;
-    default:
-      if (static_cast<unsigned char>(c) < 0x20) {
-        char buf[8];
-        snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
-        out += buf;
-      } else {
-        out += c;
-      }
-    }
-  }
-  return out;
-}
+// Escape a string for JSON output. 1.1.29: delegates to the shared
+// escaper (the private copy lacked the \b / \f short forms).
+static std::string jsonEscape(const std::string &s) { return JsonPure::escape(s); }
 
 static void guiListJson(const std::vector<Ctx::GuiEntry> &entries) {
   std::cout << "[" << std::endl;

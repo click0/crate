@@ -6,6 +6,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.29] — 2026-09-23
+
+**Refactor: one JSON escaper, and a test-build dependency cliff removed
+(plus a latent stale-object bug in the production build).**
+
+- **One JSON string escaper — new `lib/json_pure.{h,cpp}`.** Ten
+  hand-written copies lived in `doctor_pure`, `list_pure`, `inspect_pure`,
+  `gui`, `audit_pure`, `audit_per_user_pure`, `control_socket_pure`,
+  `routes_pure`, `hub/ha_pure` and `hub/scheduling_pure` — each comment
+  saying "same shape as audit_pure", and two of them had already drifted
+  into emitting invalid JSON (fixed in 1.1.27). Every one now delegates to
+  `JsonPure::escape` / `JsonPure::quote`; each keeps its name and
+  signature, so no caller or public API changes (`InspectPure::
+  escapeJsonString`, `DoctorPure::jsonEscape` stay). Net −182 lines.
+  Output is byte-identical for five of them; `gui`, `routes_pure` and
+  `hub/scheduling_pure` now use the `\b`/`\f`/`\n`/`\r`/`\t` short forms
+  where they emitted `\u00XX` (both valid JSON); `audit_per_user_pure`
+  now escapes every control byte instead of passing all but `\n\r\t`
+  through raw (latent invalid JSON). The module is dependency-free, so
+  pure modules don't pull in `util.h`'s fan-in. New `json_pure_test`.
+  Deliberately **not** converted: `privops_wire_pure`'s escaper — it is
+  half of the crate↔crated wire protocol whose hand-rolled decoder does
+  not understand `\u` escapes, so changing the encoder alone would break
+  round-tripping. Recorded in `TODO`.
+
+- **Test-build dependency cliff — `Makefile`.** The generated
+  `lib/lst-all-script-sections.h` was a prerequisite of the generic
+  test-object rule *and* the test link rule, and was regenerated
+  unconditionally, so touching any `run*.cpp` recompiled **all 70** test
+  objects and relinked **all 79** test binaries. It is now a prerequisite
+  only of the one object that includes it (`spec_pure.o`), and generation
+  is content-stable (`.tmp` + `cmp`): an edit that doesn't add or remove
+  a `runScript()` section causes **zero** rebuilds (measured); adding one
+  recompiles exactly `spec_pure.o`.
+
+- **Latent stale-object bug in the production build — `Makefile`.** The
+  generator also ran `touch lib/spec.cpp` (mutating a tracked source's
+  mtime) plus a `lib/spec.cpp: <header>` edge, which forced only `spec.o`
+  to rebuild. But `lib/spec_pure.cpp` includes the header too, and the
+  main build has no `.d` tracking — so after adding a new `runScript()`
+  section the production `spec_pure.o` kept a **stale**
+  `allScriptSections` set. Both `lib/spec.o` and `lib/spec_pure.o` now
+  depend on the header directly; the source-touching hack is gone.
+
+Verified locally with the real toolchain: 1430/1430 unit cases pass
+under `-Wall -Wextra -Werror`, and 1430/1430 under ASan + UBSan.
+
 ## [1.1.28] — 2026-09-14
 
 **CI & build hygiene: a dead PR trigger, functional tests that never

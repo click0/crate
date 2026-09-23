@@ -2,6 +2,7 @@
 
 #include "audit_pure.h"
 #include "args.h"
+#include "json_pure.h"
 #include "util.h"
 
 #include <ctime>
@@ -11,30 +12,9 @@
 
 namespace AuditPure {
 
-// JSON-escape a string. Handles ", \, control chars (\b \f \n \r \t)
-// and falls back to \u00XX for the rest of [0..0x1f]. UTF-8 above
-// 0x7f is passed through unchanged.
-static std::string escape(const std::string &s) {
-  std::ostringstream o;
-  for (unsigned char c : s) {
-    switch (c) {
-    case '"':  o << "\\\""; break;
-    case '\\': o << "\\\\"; break;
-    case '\b': o << "\\b"; break;
-    case '\f': o << "\\f"; break;
-    case '\n': o << "\\n"; break;
-    case '\r': o << "\\r"; break;
-    case '\t': o << "\\t"; break;
-    default:
-      if (c < 0x20)
-        o << "\\u00" << std::hex << std::setw(2) << std::setfill('0') << (int)c
-          << std::dec << std::setw(0);
-      else
-        o << static_cast<char>(c);
-    }
-  }
-  return o.str();
-}
+// JSON-escape a string. 1.1.29: delegates to the shared escaper
+// (byte-identical output to the former private copy).
+static std::string escape(const std::string &s) { return JsonPure::escape(s); }
 
 std::string renderJson(const Event &ev) {
   std::ostringstream o;

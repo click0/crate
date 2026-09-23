@@ -1,6 +1,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "ha_pure.h"
+#include "../lib/json_pure.h"
 
 #include <set>
 #include <sstream>
@@ -29,26 +30,9 @@ bool isValidName(const std::string &s) {
   return true;
 }
 
+// 1.1.29: delegates to the shared escaper.
 void appendJsonEscaped(std::ostringstream &os, const std::string &s) {
-  for (unsigned char c : s) {
-    switch (c) {
-      case '"':  os << "\\\""; break;
-      case '\\': os << "\\\\"; break;
-      case '\b': os << "\\b"; break;
-      case '\f': os << "\\f"; break;
-      case '\n': os << "\\n"; break;
-      case '\r': os << "\\r"; break;
-      case '\t': os << "\\t"; break;
-      default:
-        if (c < 0x20) {
-          char buf[8];
-          std::snprintf(buf, sizeof(buf), "\\u%04x", (unsigned)c);
-          os << buf;
-        } else {
-          os << static_cast<char>(c);
-        }
-    }
-  }
+  os << JsonPure::escape(s);
 }
 
 } // anon
