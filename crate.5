@@ -305,14 +305,76 @@ fields).
 .It Sy services/auto_start
 Auto-start on container run.
 .El
+.Ss Scheduled jobs
+.Bl -tag -width "cron/schedule"
+.It Sy cron
+List of periodic jobs run by
+.Xr cron 8
+inside the container.
+Each entry is a map with the fields below;
+.Sy schedule
+and
+.Sy command
+are required.
+When at least one entry is present,
+.Nm
+writes the crontab and sets
+.Ql cron_enable="YES"
+in the container's
+.Pa /etc/rc.conf .
+.It Sy cron/schedule
+A
+.Xr crontab 5
+time specification, e.g.\&
+.Ql 0 3 * * * .
+.It Sy cron/command
+The command line to run.
+.It Sy cron/user
+User whose crontab receives the jobs; default
+.Ql root .
+Must be 1\(en32 characters from
+.Ql [A-Za-z0-9._-] ,
+must not start with
+.Ql - ,
+and must not be
+.Ql \&.
+or
+.Ql .. ;
+anything else is rejected before the container starts
+.Pq the value becomes a file name under Pa /var/cron/tabs/ .
+.Pp
+Note: all entries are written to a
+.Em single
+crontab owned by the
+.Sy user
+of the
+.Em first
+entry.
+A different
+.Sy user
+on a later entry is currently ignored \(em those jobs also run as the
+first entry's user.
+Put jobs for different users in separate containers until per-user
+crontabs are supported.
+.El
 .Ss Socket proxying
 .Bl -tag -width "proxy"
 .It Sy socket_proxy/share
 Host socket paths to share via nullfs.
+Each path is mirrored at the same path inside the container, and that
+container-side path must resolve inside the container's root \(em a
+value that escapes it
+.Pq e.g.\& with Ql ..
+is rejected.
 .It Sy socket_proxy/proxy
 List of proxy entries with
 .Sy host , jail , direction
 fields.
+The
+.Sy jail
+path must likewise resolve inside the container's root;
+.Sy host
+is a host-side path chosen by the operator and is not confined.
 .El
 .Ss Terminal
 .Bl -tag -width "allow_raw_tty"

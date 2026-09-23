@@ -6,6 +6,68 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.31] — 2026-09-23
+
+**Docs: bring the security model, man pages and code comments in line
+with what the code does today.** No behaviour change (one `crate
+doctor` message is reworded).
+
+- **`docs/trust-model.md` (+ `.uk.md`) described the pre-1.1.23 locality
+  model.** §2d said Unix-socket peers are recognised from an empty
+  `REMOTE_ADDR` and never mentioned the per-listener
+  `X-Crated-Listener` marker that replaced it. It now explains the
+  mechanism (two `httplib::Server` instances, a pre-routing handler that
+  erases any client-supplied marker and stamps the authoritative one,
+  fail-closed when absent) and why the old heuristic was a token bypass.
+
+- **All 22 line-number references in the trust model were stale** —
+  e.g. `privops_listener.cpp:90` now pointed at `uid_t uid = …` rather
+  than the `getpeereid` call, `ws_console.cpp:231` at a bare `}`. They
+  are replaced by symbol references (`handlePrivOp()`,
+  `daemon/routes.cpp`), which do not rot on every edit. Every cited
+  symbol was checked to exist in the named file.
+
+- **The trust model's closing paragraph contradicted itself, differently
+  in each language.** EN said "the path-scoped verbs remain host-wide"
+  (gated since 1.1.14); UK said "until the jid-scoped verbs are gated"
+  (gated since 1.1.13). Both now state what actually remains host-wide
+  *by design*: the host-global verbs, the `admin`-only HTTP transport,
+  and the registry's bootstrap concession. EN/UK code-token content is
+  now identical (two unformatted `403`s in EN also fixed).
+
+- **`crated.8`.** `.Xr crate 8` (no such page) → `crate 5`; the NAME
+  line no longer says `crate(8)`; "three independent endpoints" → up to
+  five, adding the control sockets and the privops socket (which
+  crate(1) has used for all privileged work since 1.0.0); CAVEATS notes
+  that a TCP client cannot reach the Unix listener's trust level (1.1.23)
+  and names the `listen.unix_*` settings. `mandoc -Tlint`: 17 → 15
+  messages, no new warnings.
+
+- **`crate.5`: `cron` was accepted by the parser but not documented at
+  all.** New "Scheduled jobs" section: `schedule`, `command`, `user`,
+  including the `cron/user` character rule enforced since 1.1.22/1.1.27
+  — and an honest note that all entries go into a **single** crontab
+  owned by the *first* entry's user, so a different `user` on a later
+  entry is currently ignored (recorded in `TODO` as a bug to fix).
+  `socket_proxy/share` and `/proxy` now state the jail-side confinement
+  enforced since 1.1.25.
+
+- **"crate is a setuid binary" (present tense) in code comments and the
+  README** — false since 1.0.0 (crate(1) is 0755 and delegates to
+  crated). Reworded in `lib/run.cpp`, `lib/pathnames.h`,
+  `lib/doctor.cpp`, `lib/gui.cpp`, `lib/audit_pure.h`,
+  `daemon/control_socket.cpp` and `README.md`, keeping the rationale
+  (absolute paths, `getpwuid`, euid auditing still matter: crated runs as
+  root and the legacy `crate.x` build is setuid). Comments that already
+  said "legacy setuid mode" were left alone. The `crate doctor`
+  libseat message no longer says "matters once rootless containers ship".
+
+- **`docs/container-interactions.md`** claimed "Host → VM ✅ Implemented
+  (bhyve/libvirt API)". In fact `crate vm-wrap` only renders a jail
+  enclosure for an operator-run bhyve, and the libvirt lifecycle code
+  (`lib/vm_*`, `WITH_LIBVIRT`) has no caller. Now "⚠️ partial" with that
+  explanation.
+
 ## [1.1.30] — 2026-09-23
 
 **Refactor: shared IP/hostname predicates — and an IPv6 validation bug

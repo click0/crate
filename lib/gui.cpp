@@ -168,7 +168,8 @@ static bool guiAttach(const Args &args) {
   std::cout << "Connecting VNC viewer to :" << e.displayNum
             << " (port " << e.vncPort << ")..." << std::endl;
 
-  // Try known absolute paths for VNC viewers (CWE-426: no PATH search in setuid binary)
+  // Try known absolute paths for VNC viewers (CWE-426: no PATH search in a
+  // privileged process — this command runs as root, the GUI registry is root-only)
   auto host = STR("localhost:" << e.vncPort);
   struct stat st;
   const char *viewers[] = {

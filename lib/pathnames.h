@@ -7,7 +7,9 @@
 // Follows the same pattern as FreeBSD <paths.h> which defines _PATH_IFCONFIG,
 // _PATH_MOUNT, etc. for base system utilities.
 //
-// Security: crate is a setuid root binary. Using absolute paths prevents
+// Security: crate's privileged code runs as root — inside crated(8), and
+// setuid-root in the legacy `crate.x` build (crate(1) itself has been an
+// unprivileged 0755 binary since 1.0.0). Using absolute paths prevents
 // CWE-426 (Untrusted Search Path) attacks where an attacker manipulates PATH
 // to execute arbitrary code as root. See docs/security-command-paths.md.
 

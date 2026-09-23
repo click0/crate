@@ -4,7 +4,7 @@
 operators on one machine) and contributors extending the privileged
 surface.
 
-**Applies to:** 1.1.30 (rootless model + per-tenant authz series 1.1.12 →
+**Applies to:** 1.1.31 (rootless model + per-tenant authz series 1.1.12 →
 1.1.17 covering every privops verb that carries an operator-controlled
 ownership signal). For the ≤ 0.9.x setuid model and the migration, see
 [`rootless-migration.md`](rootless-migration.md).
@@ -62,7 +62,7 @@ surface; 1.0.0 removed the setuid bit (`Makefile`, comment at the
 operator and delegates privileged operations to crated(8)"*).
 
 The single-trust-domain property did **not** disappear — it relocated.
-Reasoning about isolation on 1.1.30 means reasoning about who can reach
+Reasoning about isolation on 1.1.31 means reasoning about who can reach
 **privops**, not who can run `crate(1)`.
 
 ---
@@ -77,18 +77,18 @@ verbs** (`create_jail`, `destroy_jail`, `attach_zfs`, `set_rctl`,
 … — `lib/privops_pure.h`). Two transports reach it:
 
 - **HTTP — `POST /api/v1/privops/<verb>`.** Gated **admin-only**:
-  `isAuthorized(req, config, "admin")` (`daemon/routes.cpp:1007`). The
+  `isAuthorized(req, config, "admin")` (`handlePrivOp()`, `daemon/routes.cpp`). The
   handler comment states the design intent explicitly — *"Privops
   touch host-wide state … so per-container scope from the F2 surface
-  doesn't apply"* (`daemon/routes.cpp:997-999`). On this path the
+  doesn't apply"* (`handlePrivOp()`, `daemon/routes.cpp`). On this path the
   operator uid stays `0` (cpp-httplib doesn't expose the connection fd
   for `getpeereid`), so per-user audit is a no-op
-  (`daemon/routes.cpp:1013-1019`).
+  (`handlePrivOp()`, `daemon/routes.cpp`).
 - **libnv `AF_UNIX` socket (0.9.14).** Group-gated: the listener
   `chmod`s the socket to its mode and `chown`s it `root:<group>`
-  (`daemon/privops_listener.cpp:179,188`; default mode `0660`,
-  `daemon/config.h:117-119`). `getpeereid(2)` extracts the peer uid
-  (`daemon/privops_listener.cpp:90`) and feeds both the per-user audit /
+  (`openListener()`, `daemon/privops_listener.cpp`; default mode `0660`,
+  `Config::privopsSocketMode`, `daemon/config.h`). `getpeereid(2)` extracts the peer uid
+  (`handleConnection()`, `daemon/privops_listener.cpp`) and feeds both the per-user audit /
   namespacing hook **and** the authorize-before-dispatch gate below.
 
 Verb dispatch is `parse → validate → handle` (`dispatchPrivOp` /
@@ -96,7 +96,7 @@ Verb dispatch is `parse → validate → handle` (`dispatchPrivOp` /
 differs by transport:
 
 - **HTTP:** no per-resource check — `admin`-only and host-wide by
-  design (`daemon/routes.cpp:997-999`).
+  design (`handlePrivOp()`, `daemon/routes.cpp`).
 - **libnv (real peer uid):** as of 1.1.12 an authorize-before-dispatch
   gate (`dispatchPrivOpFromMap` → `PrivOpsAuthzPure::authorize`,
   `lib/privops_authz_pure.cpp`) enforces per-user ownership for the
@@ -193,17 +193,17 @@ layers of defense:
 
 1. **Filesystem perms (kernel).** Socket `chmod`'d to the spec mode and
    `chown`'d `root:<group>` so only group members can `connect(2)` —
-   `daemon/control_socket.cpp:582,586`.
+   `bindSocketOrThrow()`, `daemon/control_socket.cpp`.
 2. **`getpeereid(2)` gid re-check.** Even if the mode is loosened, the
    peer's gid must equal the socket's expected gid —
-   `daemon/control_socket.cpp:395` feeding `ControlSocketPure::authorize`
-   (`daemon/control_socket_pure.cpp:277`, `Decision::DenyGidMismatch`).
+   `handleConnection()`, `daemon/control_socket.cpp` feeding `ControlSocketPure::authorize`
+   (`ControlSocketPure::authorize()`, `daemon/control_socket_pure.cpp`, `Decision::DenyGidMismatch`).
 3. **Pool ACL.** For per-container actions the container's pool
-   (`PoolPure::inferPool`, `daemon/control_socket_pure.cpp:292`) must be
+   (`PoolPure::inferPool`, `ControlSocketPure::authorize()`) must be
    visible on the socket's `pools` list — `poolVisibleOnSocket`
-   (`:293`, defined `:406`). Mutating actions (`PATCH resources`,
+   (`authorize()`, defined `daemon/control_socket_pure.cpp`). Mutating actions (`PATCH resources`,
    `POST start`/`stop`/`restart`) additionally require the `admin` role
-   (`:282`, 0.8.13).
+   (`authorize()` → `DenyRoleMismatch`, 0.8.13).
 
 Result: alice's socket (`pools: ["alice"]`) cannot observe, patch, or
 start/stop a jail in bob's pool. This is the mechanism a multi-tenant
@@ -214,13 +214,13 @@ privops (Plane 1).
 ### 2b. Remote bearer tokens (0.7.1 scope, 0.7.4 pools) — isolated
 
 HTTP API clients authenticate with a bearer token carrying expiry
-(`daemon/config.h:21`; `0` == never), scope path-globs
-(`daemon/config.h:26`; matched by `AuthPure::pathInScope`,
-`lib/auth_pure.cpp:81`), a role, and a pool ACL (`daemon/config.h:31`).
+(`AuthToken::expiresAt`, `daemon/config.h`; `0` == never), scope path-globs
+(`AuthToken::scope`, `daemon/config.h`; matched by `AuthPure::pathInScope`,
+`lib/auth_pure.cpp`), a role, and a pool ACL (`AuthToken::pools`, `daemon/config.h`).
 `checkBearerAuthFull` gates expiry + scope + role
-(`lib/auth_pure.cpp:101`); the per-container pool gate is
+(`lib/auth_pure.cpp`); the per-container pool gate is
 `isAuthorizedForContainer` → `PoolPure::tokenAllowsContainer`
-(`daemon/auth.cpp:83-84`).
+(`daemon/auth.cpp`).
 
 > Caveat: an **`admin`** bearer token also unlocks the privops HTTP
 > plane (2a above is role-gated, privops is `admin`-gated). An admin
@@ -231,9 +231,9 @@ HTTP API clients authenticate with a bearer token carrying expiry
 
 The websocket console grants an interactive `jexec` shell inside a
 jail, so its gate is load-bearing. It requires an `admin` bearer token
-(`daemon/ws_console.cpp:231`) **and** that the jail's pool be allowed by
+(`handleClient()`, `daemon/ws_console.cpp`) **and** that the jail's pool be allowed by
 the token (`PoolPure::inferPool` / `tokenAllowsContainer`,
-`daemon/ws_console.cpp:254-255`).
+`handleClient()`, `daemon/ws_console.cpp`).
 
 ### 2d. Local Unix-socket access to the main HTTP API — NOT isolated
 
@@ -242,15 +242,29 @@ On that path cpp-httplib does not expose the peer fd, so `getpeereid(2)`
 is not wired in. **Unix-socket peers are trusted wholesale:**
 
 - `isAuthorized` returns `true` immediately for Unix peers, bypassing
-  bearer auth — `daemon/auth.cpp:48-49`.
+  bearer auth — `isAuthorized()`, `daemon/auth.cpp`.
 - `isAuthorizedForContainer` likewise bypasses the pool ACL for Unix
-  peers — `daemon/auth.cpp:74-75`.
+  peers — `isAuthorizedForContainer()`, `daemon/auth.cpp`.
 
-The socket file mode (default `0660 root:wheel`) is the *only* gate —
-`daemon/auth.cpp:36-40`. So local access to the main API is, like
-privops, a **single trust domain**. `getpeereid`-based auth here is
-still future work (roadmap §5.3). Only the dedicated control sockets
-(2a) carry per-pool identity locally.
+**How "Unix peer" is decided (1.1.23).** `crated` runs two separate
+`httplib::Server` instances — one on TCP, one on the Unix socket
+(`Server::start()`, `daemon/server.cpp`). `registerRoutes()` is told
+which one it is wiring and installs a pre-routing handler that, on every
+request, **erases any client-supplied `X-Crated-Listener` header and
+stamps the authoritative value** (`unix` / `tcp`) for the accepting
+server (`registerRoutes()`, `daemon/routes.cpp`). `isUnixSocketPeer()`
+reads only that marker. A TCP client therefore cannot impersonate a
+socket peer, and a missing marker reads as untrusted TCP (fail-closed).
+Before 1.1.23 locality was inferred from an empty `REMOTE_ADDR` header —
+which a TCP client could shadow with its own empty header, a potential
+token bypass whenever the TCP listener was enabled.
+
+The socket file mode (default `0660 root:wheel`,
+`Config::unixSocketMode`, `daemon/config.h`) is therefore the *only*
+gate on who may reach the trusted listener. So local access to the main
+API is, like privops, a **single trust domain**. `getpeereid`-based auth
+here is still future work (roadmap §5.3). Only the dedicated control
+sockets (2a) carry per-pool identity locally.
 
 ---
 
@@ -297,7 +311,7 @@ security boundary:
    daemon-owned **jid→owner registry** (`lib/jid_owner_registry.*`,
    persisted at `/var/db/crate/jid_owners.tsv`) records the operator
    uid at `create_jail` time; subsequent jid/name-scoped verbs from a
-   different operator are denied 403 before the handler runs. Jails
+   different operator are denied `403` before the handler runs. Jails
    that pre-date 1.1.13 are not in the registry — the gate's
    bootstrap concession allows them through to preserve the upgrade
    path.
@@ -305,7 +319,7 @@ security boundary:
    `unmount_nullfs` (gated by `target`) and `apply_devfs_ruleset` /
    `add_devfs_unhide_rule` (gated by `mount_path`). The registry now
    exposes a longest-prefix `byPath` lookup; a path inside a tracked
-   jail owned by another uid is denied 403 (`DenyForeignPath`); paths
+   jail owned by another uid is denied `403` (`DenyForeignPath`); paths
    outside every registered jail fall through under the same
    bootstrap concession.
    *Done (1.1.15):* the last narrow item — the `create_jail` `path`
@@ -337,9 +351,15 @@ security boundary:
    per-user enforcement is off — there `peerUid` fed only the audit
    trail, not an access decision.
 
-The path-scoped verbs in (1) remain host-wide for now. A multi-tenant
-deployment that exposes them to operators directly still needs a
-trusted broker rather than handing operators raw privops-socket access.
+What still remains host-wide after (1)–(3) is **by design**, not a
+pending gate: the genuinely host-global verbs (`teardown_iface`,
+`set_iface_up`, `bridge_*`, `add_pf_rule`, `add_ipfw_rule`,
+`configure_ipfw_nat`, `create_epair` — shared host state with no tenant
+target), the `admin`-only HTTP transport (no peer uid), and the
+bootstrap concession that lets resources absent from the registry
+through. A multi-tenant deployment that must keep operators off that
+surface still needs a trusted broker rather than handing them raw
+privops-socket access.
 
 ---
 
