@@ -249,14 +249,18 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              zfs_dataset_pure_test hub_scheduling_pure_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
+# 1.1.28: extra kyua flags, e.g. `make test-unit KYUA_FLAGS="-v parallelism=8"`
+# to run the 1400+ unit cases in parallel (CI does). Empty by default.
+KYUA_FLAGS ?=
+
 test: $(UNIT_TEST_BINS)
-	cd tests && kyua test
+	cd tests && kyua $(KYUA_FLAGS) test
 
 # test-unit: run only the unit test suite (no functional tests).
 # Handy for local development on Linux where functional/crate_info_test
 # requires a FreeBSD jail and will otherwise be reported as broken.
 test-unit: $(UNIT_TEST_BINS)
-	cd tests && kyua test unit
+	cd tests && kyua $(KYUA_FLAGS) test unit
 
 # build-unit-tests: build every unit test binary without running anything.
 # Useful in CI where the build runs as a regular user but kyua must run
@@ -271,6 +275,12 @@ build-unit-tests: $(UNIT_TEST_BINS)
 # their own dir so they don't collide with the main lib/*.o build
 # (which uses different CXXFLAGS for the production crate binary).
 TEST_OBJ_DIR = tests/unit/.test-objs
+# 1.1.28: warning flags for the test build. The two test rules below had
+# NO warning flags at all (the production build has -Wall). Default is
+# warn-only; Linux CI overrides with `TEST_CXXWARN="-Wall -Wextra -Werror"`.
+# Not -Werror by default: gcc and FreeBSD clang disagree on enough
+# diagnostics that a global -Werror would be brittle.
+TEST_CXXWARN ?= -Wall -Wextra -Wno-missing-field-initializers
 TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
                  lib/spec_pure.cpp lib/stack_pure.cpp \
                  lib/lifecycle_pure.cpp lib/import_pure.cpp \
@@ -341,7 +351,7 @@ TEST_INCLUDES = -Ilib -Icli -Idaemon -Isnmpd -Ihub
 
 $(TEST_OBJ_DIR)/%.o: %.cpp lib/lst-all-script-sections.h
 	@mkdir -p $(@D)
-	$(CXX) -std=c++17 $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -MMD -MP -c $< -o $@
+	$(CXX) -std=c++17 $(TEST_CXXWARN) $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -MMD -MP -c $< -o $@
 
 # Test binary: compile its own .cpp inline (one source -> one
 # binary), link against the cached TEST_LINK_OBJS + stub. The .cpp
@@ -349,7 +359,7 @@ $(TEST_OBJ_DIR)/%.o: %.cpp lib/lst-all-script-sections.h
 # dependencies for that compile are NOT tracked by .d (no separate
 # .o), but tests/unit/*.cpp is small per file and fast to recompile.
 tests/unit/%: tests/unit/%.cpp $(TEST_LINK_OBJS) $(TEST_STUB_OBJ) lib/lst-all-script-sections.h
-	$(CXX) -std=c++17 $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -o $@ $< $(TEST_LINK_OBJS) $(TEST_STUB_OBJ) $(COVERAGE_LDFLAGS) -L/usr/local/lib -latf-c++ -latf-c
+	$(CXX) -std=c++17 $(TEST_CXXWARN) $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -o $@ $< $(TEST_LINK_OBJS) $(TEST_STUB_OBJ) $(COVERAGE_LDFLAGS) -L/usr/local/lib -latf-c++ -latf-c
 
 # Auto-generated header dependency files. The leading `-` makes make
 # tolerate them not yet existing (first build); after the first

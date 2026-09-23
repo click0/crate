@@ -157,6 +157,16 @@ jobs:
             file crate || true
             echo "::endgroup::"
 
+            echo "::group::Install crate(1) so the functional tests can run"
+            # 1.1.28: tests/functional/crate_info_test does
+            # `atf_skip "crate binary not installed"` unless
+            # /usr/local/bin/crate exists — and nothing here ever installed
+            # it, so even a healthy manual full run silently SKIPPED every
+            # functional test. Install (binary + man page) before kyua.
+            sudo gmake install
+            ls -la /usr/local/bin/crate
+            echo "::endgroup::"
+
             echo "::group::Build unit tests"
             # Drive via gmake so the test list lives in one place
             # (Makefile UNIT_TESTS). Adding a new test requires only
@@ -172,7 +182,9 @@ jobs:
             # Без `|| true`. Провал тесту = провал CI.
             # `set +e` локально — щоб встигнути зібрати report навіть при провалі.
             set +e
-            ( cd tests && sudo kyua test )
+            # 1.1.28: unit cases in parallel; functional cases touch real
+            # jails and stay serial by kyua's own per-test isolation.
+            ( cd tests && sudo kyua -v parallelism="$NCPU" test )
             KYUA_RC=$?
             ( cd tests && sudo kyua report --verbose )
             ( cd tests && sudo kyua report-html --output=../kyua-html ) || true

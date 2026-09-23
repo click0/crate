@@ -68,11 +68,8 @@ void maskPrefix(Addr6 &a, unsigned prefixLen) {
   }
 }
 
-// Returns true if a == zero address.
-bool isZero(const Addr6 &a) {
-  for (auto b : a) if (b != 0) return false;
-  return true;
-}
+// (1.1.28: an `isZero(Addr6)` helper used to live here — no callers,
+// removed when the test build gained -Wall -Wextra.)
 
 // In-place increment of a 128-bit big-endian byte array. Returns
 // true on success; false if it overflows (hits all-ones and wraps).

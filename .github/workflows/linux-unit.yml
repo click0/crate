@@ -6,9 +6,10 @@ name: Linux Unit Tests
 # kyua + libatf from Ubuntu universe.
 #
 # This is a *complement* to the FreeBSD workflows, not a replacement:
-#   * Linux unit tests: ~30 seconds, every push.
-#   * FreeBSD lite: ~10 minutes, feature branches.
-#   * FreeBSD full: ~25 minutes, master / PRs / weekly cron.
+#   * Linux unit tests: ~30 seconds, every push and every PR.
+#   * Linux ASan+UBSan: ~2 minutes, same triggers (1.1.28).
+#   * FreeBSD lite: ~4 minutes, every push (compile + link + unit suite).
+#   * FreeBSD full: manual-only (workflow_dispatch) — see freebsd-build.yml.
 #
 # Functional tests (tests/functional/*) require a FreeBSD jail and are
 # scoped out here via `kyua test unit`.
@@ -28,7 +29,10 @@ on:
       - '.github/workflows/freebsd-build.yml'
       - '.github/workflows/freebsd-build-lite.yml'
   pull_request:
-    branches: [master]
+    # 1.1.28: was `[master]` — the repository's default branch is `main`,
+    # so this trigger NEVER fired and the fastest gate in the repo ran on
+    # push only, never as a PR check (fork PRs got nothing at all).
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -63,7 +67,18 @@ jobs:
           # only one edit (UNIT_TESTS in the Makefile).
           # -L/usr/local/lib is harmless on Linux; libatf-c++ resolves
           # via the default loader search path.
-          make -j"$(nproc)" test-unit
+          #
+          # 1.1.28: -Werror on Linux only (gcc and FreeBSD clang differ
+          # enough that a global -Werror would be brittle); the Makefile
+          # default is -Wall -Wextra without -Werror. KYUA_FLAGS runs the
+          # 1400+ test cases in parallel instead of serially.
+          # -Wno-missing-field-initializers: the tests aggregate-initialise
+          # config structs with only the fields under test (e.g.
+          # AuthToken{hash, role}); -Wextra's complaint about the rest is
+          # noise, not a defect.
+          make -j"$(nproc)" test-unit \
+            TEST_CXXWARN="-Wall -Wextra -Wno-missing-field-initializers -Werror" \
+            KYUA_FLAGS="-v parallelism=$(nproc)"
 
       - name: Kyua report on failure
         if: failure()
@@ -79,3 +94,58 @@ jobs:
           path: kyua-html
           if-no-files-found: ignore
           retention-days: 7
+
+  # 1.1.28: the pure modules are platform-independent, so AddressSanitizer
+  # + UndefinedBehaviorSanitizer on Linux are cheap and catch exactly the
+  # class the 1.1.22 ctx.cpp `erase(end())` UB belonged to. The Makefile
+  # already threads COVERAGE_CXXFLAGS/COVERAGE_LDFLAGS into both test
+  # rules, so no Makefile change is needed to instrument the build.
+  sanitizers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    name: Linux unit tests under ASan + UBSan
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libatf + compiler
+        run: |
+          set -ex
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            g++ make libatf-dev kyua
+          g++ --version | head -1
+
+      - name: Build unit tests with -fsanitize=address,undefined
+        run: |
+          set -ex
+          make -j"$(nproc)" build-unit-tests \
+            COVERAGE_CXXFLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g -O1" \
+            COVERAGE_LDFLAGS="-fsanitize=address,undefined"
+
+      - name: Run every ATF test case directly
+        run: |
+          set -e
+          # kyua scrubs the environment of the test process, so the
+          # ASAN_OPTIONS / UBSAN_OPTIONS below would never reach it. Run
+          # the ATF programs directly instead: `prog -l` lists the cases,
+          # `prog <case>` runs one (exit 0 = passed/skipped, 1 = failed).
+          # -fno-sanitize-recover=all above makes UBSan abort on the
+          # first report regardless of the environment — belt and braces.
+          export ASAN_OPTIONS=detect_leaks=0:abort_on_error=1
+          export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+          cd tests/unit
+          failed=0
+          total=0
+          for prog in *_test; do
+            [ -x "$prog" ] || continue
+            for tc in $(./"$prog" -l | sed -n 's/^ident: //p'); do
+              total=$((total + 1))
+              if ! out=$(./"$prog" "$tc" 2>&1); then
+                echo "::error::$prog:$tc"
+                echo "$out"
+                failed=$((failed + 1))
+              fi
+            done
+          done
+          echo "ran $total test cases under ASan+UBSan, $failed failed"
+          test "$failed" -eq 0

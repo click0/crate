@@ -7,9 +7,9 @@
 // suite (versus the previous "duplicate the function into the test"
 // pattern, which only checked a frozen copy).
 //
-// Build:
-//   c++ -std=c++17 -Ilib -o tests/unit/util_security_test \
-//       tests/unit/util_security_test.cpp lib/util_pure.cpp lib/err.cpp \
+// Build (one command, wrapped — no trailing backslashes, -Wcomment):
+//   c++ -std=c++17 -Ilib -o tests/unit/util_security_test
+//       tests/unit/util_security_test.cpp lib/util_pure.cpp lib/err.cpp
 //       -L/usr/local/lib -latf-c++ -latf-c
 //
 // Run:

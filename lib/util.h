@@ -120,7 +120,7 @@ void execPipeline(const std::vector<std::vector<std::string>> &cmds, const std::
                   const std::string &stdinFile = "", const std::string &stdoutFile = "");
 std::string execPipelineGetOutput(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
                                   const std::string &stdinFile = "");
-void ckSyscallError(int res, const char *syscall, const char *arg, const std::function<bool(int)> whiteWash = [](int err) {return false;});
+void ckSyscallError(int res, const char *syscall, const char *arg, const std::function<bool(int)> whiteWash = [](int /*err*/) {return false;});
 std::string tmSecMs();
 std::string filePathToBareName(const std::string &path);
 std::string filePathToFileName(const std::string &path);
