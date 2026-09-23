@@ -113,7 +113,8 @@ void checkKernelModules(Report &r) {
 
 // --- check: required commands in PATH ---
 //
-// We don't trust $PATH in setuid context, so we hardcode the absolute
+// We don't trust $PATH in a privileged context (crated runs as root; the
+// legacy `crate.x` build is setuid-root), so we hardcode the absolute
 // paths used by the rest of crate (matching pathnames.h conventions).
 struct CommandSpec {
   const char *path;
@@ -168,10 +169,12 @@ void checkOneDirectory(Report &r, const std::string &path,
     return;
   }
   // Writable test: root always passes mode bits, so check effective
-  // access via access(2) honouring the real-uid path. crate runs
-  // setuid root in CLI mode and as root in daemon, so this should
-  // pass. If it doesn't, the dir probably has noexec/nosuid mount
-  // flags.
+  // access via access(2) honouring the real-uid path. Run as root —
+  // inside crated, or via the legacy setuid `crate.x` build — this
+  // should pass; if it doesn't, the dir probably has noexec/nosuid
+  // mount flags. (crate(1) itself is unprivileged since 1.0.0, so an
+  // operator running `crate doctor` without root may see it fail for
+  // plain permission reasons.)
   if (::access(path.c_str(), W_OK) != 0) {
     r.checks.push_back(failCheck("filesystem", path,
       "exists but not writable by crated"));
@@ -576,8 +579,9 @@ void checkDrmSession(Report &r) {
   if (!DrmSession::available()) {
     r.checks.push_back(passCheck("gui", "drm-session-libseat",
       "crate built without WITH_LIBSEAT — DRM device acquisition "
-      "uses direct open(O_RDWR). Fine for the setuid-root crate "
-      "today; matters once rootless containers ship."));
+      "uses direct open(O_RDWR). Fine while the GUI session is "
+      "started by root (crated, or the legacy setuid crate.x); "
+      "libseat is needed for a fully unprivileged session."));
     return;
   }
   struct stat st{};
