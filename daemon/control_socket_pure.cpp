@@ -1,6 +1,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "control_socket_pure.h"
+#include "../lib/json_pure.h"
 #include "../lib/pool_pure.h"
 
 #include <algorithm>
@@ -47,30 +48,8 @@ std::string trim(const std::string &s) {
   return s.substr(a, b - a);
 }
 
-// JSON-escape a string (same shape as audit_pure::escape).
-std::string jsonEscape(const std::string &s) {
-  std::ostringstream o;
-  for (unsigned char c : s) {
-    switch (c) {
-    case '"':  o << "\\\""; break;
-    case '\\': o << "\\\\"; break;
-    case '\n': o << "\\n";  break;
-    case '\r': o << "\\r";  break;
-    case '\t': o << "\\t";  break;
-    case '\b': o << "\\b";  break;
-    case '\f': o << "\\f";  break;
-    default:
-      if (c < 0x20) {
-        char buf[8];
-        std::snprintf(buf, sizeof(buf), "\\u%04x", (int)c);
-        o << buf;
-      } else {
-        o << (char)c;
-      }
-    }
-  }
-  return o.str();
-}
+// JSON-escape a string. 1.1.29: delegates to the shared escaper.
+std::string jsonEscape(const std::string &s) { return JsonPure::escape(s); }
 
 // Minimal flat-JSON-object parser sufficient for ResourcesPatch:
 // accepts {"k":"v","k2":"v2"} with quoted strings as both keys and

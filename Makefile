@@ -1,7 +1,7 @@
 
 # --- Source files ---
 
-LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/create.cpp lib/run.cpp \
+LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/json_pure.cpp lib/create.cpp lib/run.cpp \
            lib/list.cpp lib/info.cpp lib/clean.cpp lib/console.cpp \
            lib/export.cpp lib/import.cpp lib/import_pure.cpp \
            lib/gui.cpp lib/run_net.cpp lib/run_jail.cpp lib/run_gui.cpp \
@@ -246,7 +246,8 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              ipsec_runtime_pure_test net_detect_pure_test \
              vmwrap_pure_test socket_perms_pure_test \
              ip6_alloc_pure_test spec_registry_pure_test \
-             zfs_dataset_pure_test hub_scheduling_pure_test
+             zfs_dataset_pure_test hub_scheduling_pure_test \
+             json_pure_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 # 1.1.28: extra kyua flags, e.g. `make test-unit KYUA_FLAGS="-v parallelism=8"`
@@ -281,7 +282,7 @@ TEST_OBJ_DIR = tests/unit/.test-objs
 # Not -Werror by default: gcc and FreeBSD clang disagree on enough
 # diagnostics that a global -Werror would be brittle.
 TEST_CXXWARN ?= -Wall -Wextra -Wno-missing-field-initializers
-TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp \
+TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp lib/json_pure.cpp \
                  lib/spec_pure.cpp lib/stack_pure.cpp \
                  lib/lifecycle_pure.cpp lib/import_pure.cpp \
                  lib/scripts_pure.cpp lib/validate_pure.cpp \
@@ -349,16 +350,24 @@ TEST_INCLUDES = -Ilib -Icli -Idaemon -Isnmpd -Ihub
 # older Args layout.
 .SECONDARY: $(TEST_LINK_OBJS) $(TEST_STUB_OBJ)
 
-$(TEST_OBJ_DIR)/%.o: %.cpp lib/lst-all-script-sections.h
+$(TEST_OBJ_DIR)/%.o: %.cpp
 	@mkdir -p $(@D)
 	$(CXX) -std=c++17 $(TEST_CXXWARN) $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -MMD -MP -c $< -o $@
+
+# 1.1.29: the generated header is a prerequisite of the ONE test object
+# that includes it. It used to sit on the generic rule above (and on the
+# link rule below), so touching any run*.cpp regenerated it and forced
+# ALL 70 test objects to recompile and all 79 binaries to relink. The
+# explicit edge is still needed on a clean build, before spec_pure.o's
+# .d file exists to record it.
+$(TEST_OBJ_DIR)/lib/spec_pure.o: lib/lst-all-script-sections.h
 
 # Test binary: compile its own .cpp inline (one source -> one
 # binary), link against the cached TEST_LINK_OBJS + stub. The .cpp
 # is compiled at link time here (single -o $@ $< ...). Header
 # dependencies for that compile are NOT tracked by .d (no separate
 # .o), but tests/unit/*.cpp is small per file and fast to recompile.
-tests/unit/%: tests/unit/%.cpp $(TEST_LINK_OBJS) $(TEST_STUB_OBJ) lib/lst-all-script-sections.h
+tests/unit/%: tests/unit/%.cpp $(TEST_LINK_OBJS) $(TEST_STUB_OBJ)
 	$(CXX) -std=c++17 $(TEST_CXXWARN) $(TEST_INCLUDES) $(COVERAGE_CXXFLAGS) -o $@ $< $(TEST_LINK_OBJS) $(TEST_STUB_OBJ) $(COVERAGE_LDFLAGS) -L/usr/local/lib -latf-c++ -latf-c
 
 # Auto-generated header dependency files. The leading `-` makes make
@@ -412,18 +421,31 @@ clean-tests:
 	rm -rf $(TEST_OBJ_DIR)
 
 clean: clean-tests coverage-clean
-	rm -f $(LIB_OBJS) $(CLI_OBJS) $(DAEMON_OBJS) $(SNMPD_OBJS) libcrate.a crate crated crate-snmpd lib/lst-all-script-sections.h
+	rm -f $(LIB_OBJS) $(CLI_OBJS) $(DAEMON_OBJS) $(SNMPD_OBJS) libcrate.a crate crated crate-snmpd lib/lst-all-script-sections.h lib/lst-all-script-sections.h.tmp
 
 # --- Generated sources ---
 
+# 1.1.29: content-stable generation. The header is rebuilt into a .tmp
+# and only replaces the real file when its CONTENT changed, so an edit
+# to run.cpp that doesn't add/remove a runScript() section no longer
+# bumps the header's mtime and triggers downstream rebuilds. (The
+# recipe itself — one grep — re-runs cheaply whenever a source is newer.)
 lib/lst-all-script-sections.h: lib/create.cpp lib/run.cpp lib/run_net.cpp lib/run_jail.cpp lib/run_gui.cpp lib/run_services.cpp
 	@(echo "static std::set<std::string> allScriptSections = {\"\"" && \
 	  grep -h "runScript(" lib/create.cpp lib/run.cpp lib/run_net.cpp lib/run_jail.cpp lib/run_gui.cpp lib/run_services.cpp | sed -e 's|.*runScript(|, |; s|);||' && \
 	  echo "};" \
-	 ) > $@
-	@touch lib/spec.cpp
-	@echo "generate $@"
-lib/spec.cpp: lib/lst-all-script-sections.h
+	 ) > $@.tmp
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; \
+	 else mv -f $@.tmp $@; echo "generate $@"; fi
+
+# 1.1.29: the two production objects that #include the header depend on
+# it directly. This replaces a hack that ran `touch lib/spec.cpp` (mutating
+# a TRACKED source's mtime) plus a `lib/spec.cpp: <header>` edge — which
+# forced only spec.o to rebuild. lib/spec_pure.cpp includes the header
+# too, and the main build has no .d tracking, so after adding a new
+# runScript() section the production spec_pure.o silently kept a STALE
+# allScriptSections set.
+lib/spec.o lib/spec_pure.o: lib/lst-all-script-sections.h
 
 # --- Shortcuts ---
 a: all

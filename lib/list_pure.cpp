@@ -1,6 +1,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "list_pure.h"
+#include "json_pure.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -15,30 +16,8 @@ namespace ListPure {
 // output. name/hostname/path/ip come from the kernel's jail state (not
 // crate's own validators), so a jail created by another tool with a `"`
 // or control byte in its hostname/path would otherwise produce
-// malformed or injectable JSON. Same shape as DoctorPure::jsonEscape.
-static std::string jsonEscape(const std::string &s) {
-  std::ostringstream o;
-  for (unsigned char c : s) {
-    switch (c) {
-    case '"':  o << "\\\""; break;
-    case '\\': o << "\\\\"; break;
-    case '\n': o << "\\n";  break;
-    case '\r': o << "\\r";  break;
-    case '\t': o << "\\t";  break;
-    case '\b': o << "\\b";  break;
-    case '\f': o << "\\f";  break;
-    default:
-      if (c < 0x20) {
-        char buf[8];
-        std::snprintf(buf, sizeof(buf), "\\u%04x", (int)c);
-        o << buf;
-      } else {
-        o << (char)c;
-      }
-    }
-  }
-  return o.str();
-}
+// malformed or injectable JSON. 1.1.29: delegates to the shared escaper.
+static std::string jsonEscape(const std::string &s) { return JsonPure::escape(s); }
 
 void renderJson(std::ostream &out, const std::vector<Entry> &entries) {
   out << "[\n";

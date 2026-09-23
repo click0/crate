@@ -100,6 +100,15 @@ harden BEFORE wiring this code up:
   for vmName/vol.tag before any of this gets a caller. memoryToKiB
   (vm_spec.cpp:84) also has an unchecked `val*1024*1024` overflow.
 
+* (correctness, LOW) lib/privops_wire_pure.cpp escape() is the one JSON
+  escaper NOT converted to JsonPure in 1.1.29: it escapes only `\ " \n
+  \r \t` and passes every other control byte through RAW (invalid JSON).
+  It cannot simply delegate, because its hand-rolled decoder (~:60)
+  unescapes \n \r \t \" \\ but NOT \uXXXX — switching the encoder alone
+  would break crate<->crated round-tripping of any error string holding
+  a control byte. Fix order: teach the decoder \uXXXX (with a
+  round-trip unit test), THEN point escape() at JsonPure::escape.
+
 Remaining from the 2026-09 correctness-lens audit (its seven HIGH/MED
 daemon items shipped as 1.1.26; these are what is left, all runtime-only
 and best validated on a live FreeBSD host):

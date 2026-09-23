@@ -1,6 +1,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "scheduling_pure.h"
+#include "../lib/json_pure.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -11,30 +12,10 @@ namespace SchedulingPure {
 
 namespace {
 
-// Build a JSON-quoted string. Escapes ", \, and control chars
-// minimally; no need for full-spec JSON since names/hosts come
-// from operator config and are validated upstream (jail name
-// alphabet, hostname:port shape).
-std::string jsonQuote(const std::string &s) {
-  std::ostringstream os;
-  os << '"';
-  for (char c : s) {
-    unsigned char uc = static_cast<unsigned char>(c);
-    if (c == '"' || c == '\\') os << '\\' << c;
-    else if (uc < 0x20) {
-      // 1.1.27: was `"\\u" << std::hex << (int)c` — no width/fill, so
-      // byte 0x01 became `\u1` (invalid JSON) and the stream was left in
-      // hex mode for everything after it. Also compare as unsigned:
-      // signed `char < 0x20` was true for every UTF-8 byte ≥ 0x80.
-      char buf[8];
-      std::snprintf(buf, sizeof(buf), "\\u%04x", (int)uc);
-      os << buf;
-    }
-    else                       os << c;
-  }
-  os << '"';
-  return os.str();
-}
+// Build a JSON-quoted string. 1.1.29: delegates to the shared
+// escaper (JsonPure::quote) — this copy was the one that emitted `\u1`
+// before its 1.1.27 fix.
+std::string jsonQuote(const std::string &s) { return JsonPure::quote(s); }
 
 } // anon
 

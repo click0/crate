@@ -1,6 +1,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "doctor_pure.h"
+#include "json_pure.h"
 
 #include <algorithm>
 #include <iomanip>
@@ -46,30 +47,8 @@ Check failCheck(const std::string &category, const std::string &name,
 
 namespace {
 
-// JSON-escape (same shape as audit_pure / control_socket_pure).
-std::string jsonEscape(const std::string &s) {
-  std::ostringstream o;
-  for (unsigned char c : s) {
-    switch (c) {
-    case '"':  o << "\\\""; break;
-    case '\\': o << "\\\\"; break;
-    case '\n': o << "\\n";  break;
-    case '\r': o << "\\r";  break;
-    case '\t': o << "\\t";  break;
-    case '\b': o << "\\b";  break;
-    case '\f': o << "\\f";  break;
-    default:
-      if (c < 0x20) {
-        char buf[8];
-        std::snprintf(buf, sizeof(buf), "\\u%04x", (int)c);
-        o << buf;
-      } else {
-        o << (char)c;
-      }
-    }
-  }
-  return o.str();
-}
+// 1.1.29: delegates to the shared escaper (was a private copy).
+std::string jsonEscape(const std::string &s) { return JsonPure::escape(s); }
 
 // Stable category order so `crate doctor` output diffs cleanly across
 // runs. Categories not in this list sort alphabetically after the
