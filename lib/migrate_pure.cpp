@@ -1,12 +1,19 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "migrate_pure.h"
+#include "netaddr_pure.h"
 
 #include <sstream>
 
 namespace MigratePure {
 
 namespace {
+
+// 1.1.30: shared, verified-identical predicates (lib/netaddr_pure.h).
+using NetAddrPure::isV4;
+using NetAddrPure::isV6;
+using NetAddrPure::looksLikeV4Shape;
+using NetAddrPure::isHostname;
 
 bool isAlnum(char c) {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
@@ -25,86 +32,6 @@ std::string stripScheme(const std::string &endpoint, bool *hasScheme = nullptr) 
     }
   }
   return endpoint;
-}
-
-bool isV4(const std::string &s) {
-  size_t pos = 0;
-  for (int i = 0; i < 4; i++) {
-    auto dot = s.find('.', pos);
-    auto end = (i == 3) ? s.size() : dot;
-    if (i < 3 && dot == std::string::npos) return false;
-    auto octet = s.substr(pos, end - pos);
-    if (octet.empty() || octet.size() > 3) return false;
-    int n = 0;
-    for (char c : octet) {
-      if (c < '0' || c > '9') return false;
-      n = n * 10 + (c - '0');
-    }
-    if (n > 255) return false;
-    pos = (i == 3) ? s.size() : (dot + 1);
-  }
-  return pos == s.size();
-}
-
-bool isV6(const std::string &s) {
-  if (s.empty()) return false;
-  bool sawDoubleColon = false;
-  size_t i = 0;
-  int groups = 0;
-  while (i < s.size()) {
-    if (i + 1 < s.size() && s[i] == ':' && s[i + 1] == ':') {
-      if (sawDoubleColon) return false;
-      sawDoubleColon = true;
-      i += 2;
-      continue;
-    }
-    if (s[i] == ':') {
-      if (groups == 0) return false;
-      i++;
-      continue;
-    }
-    int hexLen = 0;
-    while (i < s.size() && hexLen < 4 &&
-           ((s[i] >= '0' && s[i] <= '9') ||
-            (s[i] >= 'a' && s[i] <= 'f') ||
-            (s[i] >= 'A' && s[i] <= 'F'))) {
-      i++; hexLen++;
-    }
-    if (hexLen == 0) return false;
-    groups++;
-  }
-  if (sawDoubleColon) return groups <= 7;
-  return groups == 8;
-}
-
-// True iff `s` is a dotted-numeric string. Such strings must
-// validate as IPv4 — they are never legal RFC 1123 hostnames (a
-// label can't be all-digit) and accepting them as hostnames lets
-// out-of-range octets like 256.0.0.1 through silently.
-bool looksLikeV4Shape(const std::string &s) {
-  if (s.empty()) return false;
-  bool sawDot = false;
-  for (char c : s) {
-    if (c == '.') { sawDot = true; continue; }
-    if (c < '0' || c > '9') return false;
-  }
-  return sawDot;
-}
-
-bool isHostname(const std::string &s) {
-  if (s.empty() || s.size() > 253) return false;
-  size_t i = 0;
-  while (i < s.size()) {
-    size_t labelStart = i;
-    while (i < s.size() && s[i] != '.') i++;
-    auto label = s.substr(labelStart, i - labelStart);
-    if (label.empty() || label.size() > 63) return false;
-    if (!isAlnum(label.front()) || !isAlnum(label.back())) return false;
-    for (char c : label)
-      if (!isAlnum(c) && c != '-') return false;
-    if (i < s.size()) i++;
-  }
-  return true;
 }
 
 std::string validatePort(const std::string &port) {

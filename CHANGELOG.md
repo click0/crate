@@ -6,6 +6,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.30] — 2026-09-23
+
+**Refactor: shared IP/hostname predicates — and an IPv6 validation bug
+that all five former copies shared.**
+
+- **New `lib/netaddr_pure.{h,cpp}` (`NetAddrPure`).** `isV4Octet`,
+  `isV4`, `isV6`, `looksLikeV4Shape` and `isHostname` had private copies
+  in `wireguard_pure`, `ipsec_pure`, `migrate_pure`, `replicate_pure` and
+  `throttle_pure` (ipsec_pure even said so: "we duplicate the small ones
+  here for clarity"). Before consolidating, the copies were fingerprinted
+  and checked **semantically identical** (wireguard's `n >= 0 &&` in
+  `isV4Octet` is a no-op; migrate's `isV4` inlined the same octet check).
+  Each module now pulls the predicates in with `using` declarations
+  inside its anonymous namespace — zero call-site change, and every
+  validator keeps its own error messages. Net −263 lines across the five
+  modules. The header is dependency-free, which meets ipsec_pure's old
+  reason for copying. New `netaddr_pure_test`.
+
+- **Bug: `isV6` accepted digit runs with no `:` separator (LOW).** Found
+  by the new direct tests. The parser stopped a group after four hex
+  digits and silently began a *new* group on the next digit, so
+  `12345::1` parsed as groups `1234`,`5`,`1` — and 32 bare hex digits
+  passed as a complete IPv6 address. The same loop also accepted a
+  trailing single colon (`1:2:3:4:5:6:7:8:`) and a single colon directly
+  after `::` (`1:::2`). All three are invalid per RFC 4291 and are now
+  rejected; every well-formed spelling still passes. Not an injection
+  risk (the charset stays hex + `:`), but malformed endpoints/hosts no
+  longer reach generated wg-quick / ipsec.conf / migrate configs. The
+  wireguard, ipsec, migrate, replicate and throttle suites all still
+  pass — none depended on the lax acceptance.
+
+Verified locally: 1436/1436 unit cases pass under `-Wall -Wextra -Werror`.
+
 ## [1.1.29] — 2026-09-23
 
 **Refactor: one JSON escaper, and a test-build dependency cliff removed
