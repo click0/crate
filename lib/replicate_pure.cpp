@@ -1,6 +1,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "replicate_pure.h"
+#include "netaddr_pure.h"
 #include "backup_pure.h"
 
 #include <sstream>
@@ -9,55 +10,14 @@ namespace ReplicatePure {
 
 namespace {
 
+// 1.1.30: shared, verified-identical predicates (lib/netaddr_pure.h).
+using NetAddrPure::isV4;
+using NetAddrPure::isHostname;
+using NetAddrPure::looksLikeV4Shape;
+
 bool isAlnum(char c) {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
       || (c >= '0' && c <= '9');
-}
-
-bool isV4Octet(const std::string &s) {
-  if (s.empty() || s.size() > 3) return false;
-  for (char c : s) if (c < '0' || c > '9') return false;
-  int n = 0;
-  for (char c : s) n = n * 10 + (c - '0');
-  return n <= 255;
-}
-
-bool isV4(const std::string &s) {
-  size_t pos = 0;
-  for (int i = 0; i < 4; i++) {
-    auto dot = s.find('.', pos);
-    auto end = (i == 3) ? s.size() : dot;
-    if (i < 3 && dot == std::string::npos) return false;
-    if (!isV4Octet(s.substr(pos, end - pos))) return false;
-    pos = (i == 3) ? s.size() : (dot + 1);
-  }
-  return pos == s.size();
-}
-
-bool isHostname(const std::string &s) {
-  if (s.empty() || s.size() > 253) return false;
-  size_t i = 0;
-  while (i < s.size()) {
-    size_t labelStart = i;
-    while (i < s.size() && s[i] != '.') i++;
-    auto label = s.substr(labelStart, i - labelStart);
-    if (label.empty() || label.size() > 63) return false;
-    if (!isAlnum(label.front()) || !isAlnum(label.back())) return false;
-    for (char c : label)
-      if (!isAlnum(c) && c != '-') return false;
-    if (i < s.size()) i++;
-  }
-  return true;
-}
-
-bool looksLikeV4Shape(const std::string &s) {
-  if (s.empty()) return false;
-  bool sawDot = false;
-  for (char c : s) {
-    if (c == '.') { sawDot = true; continue; }
-    if (c < '0' || c > '9') return false;
-  }
-  return sawDot;
 }
 
 bool isValidUser(const std::string &u) {

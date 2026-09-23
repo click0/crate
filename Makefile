@@ -1,7 +1,7 @@
 
 # --- Source files ---
 
-LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/json_pure.cpp lib/create.cpp lib/run.cpp \
+LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/json_pure.cpp lib/netaddr_pure.cpp lib/create.cpp lib/run.cpp \
            lib/list.cpp lib/info.cpp lib/clean.cpp lib/console.cpp \
            lib/export.cpp lib/import.cpp lib/import_pure.cpp \
            lib/gui.cpp lib/run_net.cpp lib/run_jail.cpp lib/run_gui.cpp \
@@ -247,7 +247,7 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              vmwrap_pure_test socket_perms_pure_test \
              ip6_alloc_pure_test spec_registry_pure_test \
              zfs_dataset_pure_test hub_scheduling_pure_test \
-             json_pure_test
+             json_pure_test netaddr_pure_test
 UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 
 # 1.1.28: extra kyua flags, e.g. `make test-unit KYUA_FLAGS="-v parallelism=8"`
@@ -282,7 +282,7 @@ TEST_OBJ_DIR = tests/unit/.test-objs
 # Not -Werror by default: gcc and FreeBSD clang disagree on enough
 # diagnostics that a global -Werror would be brittle.
 TEST_CXXWARN ?= -Wall -Wextra -Wno-missing-field-initializers
-TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp lib/json_pure.cpp \
+TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp lib/json_pure.cpp lib/netaddr_pure.cpp \
                  lib/spec_pure.cpp lib/stack_pure.cpp \
                  lib/lifecycle_pure.cpp lib/import_pure.cpp \
                  lib/scripts_pure.cpp lib/validate_pure.cpp \

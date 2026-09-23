@@ -82,3 +82,4 @@ atf_test_program{name="spec_registry_pure_test"}
 atf_test_program{name="zfs_dataset_pure_test"}
 atf_test_program{name="hub_scheduling_pure_test"}
 atf_test_program{name="json_pure_test"}
+atf_test_program{name="netaddr_pure_test"}

@@ -1,6 +1,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "throttle_pure.h"
+#include "netaddr_pure.h"
 
 #include <sstream>
 
@@ -8,18 +9,13 @@ namespace ThrottlePure {
 
 namespace {
 
+// 1.1.30: shared, verified-identical predicates (lib/netaddr_pure.h).
+using NetAddrPure::isV4Octet;
+
 bool isAllDigits(const std::string &s) {
   if (s.empty()) return false;
   for (char c : s) if (c < '0' || c > '9') return false;
   return true;
-}
-
-bool isV4Octet(const std::string &s) {
-  if (s.empty() || s.size() > 3) return false;
-  for (char c : s) if (c < '0' || c > '9') return false;
-  int n = 0;
-  for (char c : s) n = n * 10 + (c - '0');
-  return n <= 255;
 }
 
 bool endsWith(const std::string &s, const std::string &suf) {
