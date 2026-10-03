@@ -1,6 +1,9 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "migrate_pure.h"
+#include "name_limits.h"
+
+#include <string>
 #include "netaddr_pure.h"
 
 #include <sstream>
@@ -91,7 +94,8 @@ std::string validateBearerToken(const std::string &t) {
 
 std::string validateContainerName(const std::string &name) {
   if (name.empty()) return "container name is empty";
-  if (name.size() > 64) return "container name longer than 64 chars";
+  if (name.size() > NameLimits::kJailName)
+    return "container name longer than " + std::to_string(NameLimits::kJailName) + " chars";
   if (name == "." || name == "..") return "container name is reserved";
   for (char c : name) {
     bool ok = isAlnum(c) || c == '.' || c == '_' || c == '-';
@@ -123,7 +127,8 @@ std::string validateContainerName(const std::string &name) {
 // nothing. Dropped.
 std::string validateArtifactFile(const std::string &name) {
   if (name.empty()) return "artifact filename is empty";
-  if (name.size() > 255) return "artifact filename longer than 255 chars";
+  if (name.size() > NameLimits::kArtifactFile)
+    return "artifact filename longer than " + std::to_string(NameLimits::kArtifactFile) + " chars";
   if (name == "." || name == "..") return "artifact filename is reserved";
   for (char c : name) {
     if (c == '/')

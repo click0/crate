@@ -28,7 +28,9 @@ ATF_TEST_CASE_BODY(name_reserved_dot_and_dotdot_rejected) {
 ATF_TEST_CASE_WITHOUT_HEAD(name_too_long_rejected);
 ATF_TEST_CASE_BODY(name_too_long_rejected) {
   ATF_REQUIRE_EQ(validateArtifactName(std::string(128, 'a')), std::string());
-  ATF_REQUIRE(!validateArtifactName(std::string(129, 'a')).empty());
+  // 1.1.32: NAME_MAX (NameLimits::kArtifactFile = 255), was 128.
+  ATF_REQUIRE_EQ(validateArtifactName(std::string(255, 'a')), std::string());
+  ATF_REQUIRE(!validateArtifactName(std::string(256, 'a')).empty());
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(name_path_traversal_rejected);

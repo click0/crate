@@ -84,6 +84,12 @@ blind):
 Recorded from the 2026-07 third-pass audit — LATENT, no caller today,
 harden BEFORE wiring this code up:
 
+  Decision (2026-10, maintainer): the libvirt VM track (lib/vm_spec.cpp,
+  vm_run.cpp, vm_stack.cpp + headers, ~819 lines, built only with
+  WITH_LIBVIRT / port option LIBVIRT) is KEPT as a roadmap item, not
+  deleted. It has no caller today (`crate vm-wrap` does not use it).
+  Whoever wires it up must first do the hardening below.
+
 * (security, HIGH-if-reachable) lib/vm_spec.cpp:97-184
   generateDomainXml embeds `name`, `opts.disk`, `opts.sharedBridge`,
   `vol.hostPath`, `vol.tag` unescaped into the libvirt domain XML
@@ -126,6 +132,22 @@ harden BEFORE wiring this code up:
   (StackPure::validateStackName / validateStackIp) are documented only
   in CHANGELOG. crated.8 SEE ALSO references crate-snmpd(8), which is
   not in the repo and not installed by the Makefile.
+
+* (correctness, LOW) cold-path jail names are not validated. 1.1.32
+  unified the jail-name limit (NameLimits::kJailName = 128) and sized the
+  lease key for it, but `crate run -f <file>.crate` (no --warm-base)
+  takes the name from the .crate file STEM (lib/run.cpp,
+  Util::filePathToBareName) without any check. A stem longer than 128
+  chars, or containing a byte outside [A-Za-z0-9._-] (space, '+', '@',
+  UTF-8…), still yields a lease key the lease parsers reject, which
+  breaks every later `crate run` that reads the lease file. Fix: run the
+  stem through WarmPure::validateJailName up front (as --name already
+  is) — a deliberate behaviour change for oddly-named .crate files, so
+  it wants a CHANGELOG note.
+
+* (consistency, LOW) hub/ha_pure isValidName still caps container and
+  node names at 64. The hub has no binary in this Makefile yet; switch
+  container names to NameLimits::kJailName when it gets one.
 
 Remaining from the 2026-09 correctness-lens audit (its seven HIGH/MED
 daemon items shipped as 1.1.26; these are what is left, all runtime-only

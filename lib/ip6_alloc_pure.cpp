@@ -1,6 +1,9 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "ip6_alloc_pure.h"
+#include "name_limits.h"
+
+#include <string>
 
 #include <algorithm>
 #include <cstdio>
@@ -13,10 +16,10 @@ namespace Ip6AllocPure {
 namespace {
 
 // 1.1.20: mirror of IpAllocPure's v4 lease-name check (alnum + . _ -,
-// 1..64 chars). Duplicated here rather than exported so the two lease
+// 1..NameLimits::kLeaseName chars). Duplicated here rather than exported so the two lease
 // modules stay decoupled; the rule must stay in sync with the v4 twin.
 bool leaseNameLooksValid(const std::string &n) {
-  if (n.empty() || n.size() > 64) return false;
+  if (n.empty() || n.size() > NameLimits::kLeaseName) return false;
   for (char c : n) {
     bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
            || (c >= '0' && c <= '9')

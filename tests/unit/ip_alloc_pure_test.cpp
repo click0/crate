@@ -196,7 +196,21 @@ ATF_TEST_CASE_BODY(lease_rejects_bad) {
   ATF_REQUIRE(!parseLeaseLine("name  10.0.0.1",              out).empty());  // double space
 }
 
+// 1.1.32: the lease key run.cpp writes is jail-<name>-<Util::randomHex(4)>.
+// With the cap at 64, any name over ~50 chars produced a line this parser
+// later refused, breaking every subsequent `crate run`. A max-length
+// (NameLimits::kJailName) name's key must round-trip.
+ATF_TEST_CASE_WITHOUT_HEAD(lease_key_for_max_length_jail_name);
+ATF_TEST_CASE_BODY(lease_key_for_max_length_jail_name) {
+  Lease out;
+  const std::string key = "jail-" + std::string(128, 'a') + "-deadbeef";   // 142
+  ATF_REQUIRE_EQ(parseLeaseLine(key + " 10.0.0.5", out), std::string());
+  ATF_REQUIRE_EQ(out.name, key);
+  ATF_REQUIRE(!parseLeaseLine(key + "x 10.0.0.5", out).empty());           // 143
+}
+
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, lease_key_for_max_length_jail_name);
   ATF_ADD_TEST_CASE(tcs, ip_round_trip);
   ATF_ADD_TEST_CASE(tcs, ip_parse_rejects_bad);
   ATF_ADD_TEST_CASE(tcs, cidr_typical);

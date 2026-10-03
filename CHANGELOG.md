@@ -6,6 +6,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.32] — 2026-10-03
+
+**One jail-name length limit (128), and the limits derived from it now
+actually fit — fixing a lease-file breakage for long names.**
+
+A "jail name" meant 64 characters in `crate warm`, `crate backup` and
+`crate migrate`, 63 in `crate vm-wrap --jail`, and 200 in the privops
+plane — so a jail `crate run` created could then be refused by backup,
+warm or migrate. The derived limits had never been checked against each
+other either.
+
+New `lib/name_limits.h` holds them in one place, with `static_assert`s
+so they cannot drift apart again:
+
+| Limit | Before | After |
+|---|---|---|
+| Jail / container name — warm, backup, migrate, vm-wrap `--jail` (`kJailName`) | 64 / 63 | **128** |
+| Network-lease key `jail-<name>-<8 hex>` — IPv4 and IPv6 lease parsers (`kLeaseName`) | 64 | **142** |
+| Export artifact `<kernel name>-<time>.crate` — daemon `validateArtifactName` (`kArtifactFile`) | 128 | **255** (`NAME_MAX`) |
+| Kernel jail name `<name>_pid<pid>` — privops (`kKernelJailName`) | 200 | 200 |
+| VM name in vm-wrap (names `/dev/vmm/<n>`) | 63 | 63 |
+
+- **Bug fixed by the lease-key limit.** `crate run` writes the network
+  lease under `jail-<name>-<randomHex(4)>`, but the IPv4/IPv6 lease
+  parsers capped names at 64 — so any jail name longer than ~50
+  characters produced a lease line the parser later refused, and every
+  subsequent `crate run` that read the lease file failed. The key for a
+  max-length name now round-trips (new `ip_alloc_pure_test` /
+  `ip6_alloc_pure_test` cases).
+- **Export artifacts.** With 128-character jail names the artifact name
+  `<name>_pid<pid>-<time>.crate` reaches ~155 characters, past the old
+  128 cap; it is now `NAME_MAX` (255), matching what `crate migrate`
+  already accepted on the client side.
+- The privops limit is unchanged on purpose: it validates the kernel name
+  *with* its `_pid<pid>` suffix, which a 128-character name still fits.
+- Every change except the first row only relaxes a check, so nothing
+  that worked before is now rejected.
+
+Left as recorded follow-ups in `TODO`: the cold path (`crate run -f
+x.crate`) still takes the name from the `.crate` file stem without
+validating it, and the not-yet-built hub keeps a 64 cap.
+
+Verified locally: 1438/1438 unit cases pass under `-Wall -Wextra
+-Werror`, and 1438/1438 under ASan + UBSan.
+
 ## [1.1.31] — 2026-09-23
 
 **Docs: bring the security model, man pages and code comments in line
