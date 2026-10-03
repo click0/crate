@@ -57,7 +57,8 @@ Crate containers contain everything needed to run the containerized software —
 * **Capsicum**: capability-based sandboxing
 * **pathnames.h**: absolute paths to all external commands (CWE-426 protection)
 * **Environment sanitization**: clean environ, restore only TERM/DISPLAY/LANG
-* **execv** (no PATH search) instead of execvp in setuid context
+* **execv** (no PATH search) instead of execvp in any privileged context
+  (crated runs as root; `crate(1)` itself is unprivileged since 1.0.0)
 * **lstat** for symlink validation (CWE-59 protection)
 * **JAIL_OWN_DESC**: race-free jail removal (FreeBSD 15+)
 * **Archive traversal protection**: validates paths before extraction
@@ -209,7 +210,7 @@ $ tail -1 /var/log/crate/audit.log | jq .
   "ts":      "2026-05-01T20:55:01Z",
   "pid":     12345,
   "uid":     1000,                          // real uid (the user)
-  "euid":    0,                             // effective uid (setuid root)
+  "euid":    0,                             // effective uid (root / sudo / legacy crate.x)
   "gid":     1000,
   "egid":    0,
   "user":    "alice",
@@ -227,7 +228,10 @@ Notes:
 - Mode 0640, append-only writes — fits the `auditd(8)` /
   `syslogd(8)` model. Rotate with `newsyslog(8)`.
 - Captures **both** real and effective uid/gid so reviewers see
-  "user X (uid=1000) acted via euid=0" — important for setuid binaries.
+  "user X (uid=1000) acted via euid=0" — relevant whenever crate runs with
+  elevated euid (sudo, or the legacy setuid `crate.x` build). Since 1.0.0
+  `crate(1)` is unprivileged and delegates privileged work to `crated(8)`,
+  which keeps its own per-user audit.
 - Pair `outcome: "started"` and `outcome: "ok"` records by `pid` to
   measure command duration; `failed: <msg>` records contain the
   exception message for post-mortem.

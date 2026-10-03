@@ -109,6 +109,24 @@ harden BEFORE wiring this code up:
   a control byte. Fix order: teach the decoder \uXXXX (with a
   round-trip unit test), THEN point escape() at JsonPure::escape.
 
+* (correctness, MED) cron: all `cron` entries are written into ONE
+  crontab, /var/cron/tabs/<user of the FIRST entry> (lib/run.cpp,
+  `spec.cronJobs[0].user`). A `user:` on any later entry is silently
+  ignored, so `{user: www, command: ...}` as the 2nd entry runs as the
+  1st entry's user (typically root). Documented as a known limitation
+  in crate.5 (1.1.31). Fix: group jobs by user and write one crontab
+  per user (each validated with RunPure::validateCronUser, each chmod
+  0600), then drop the crate.5 note.
+
+* (docs, LOW) crate.5 has no entry for several spec keys the parser
+  accepts: `healthcheck`, `restart_policy`, `scripts`, `depends`,
+  `base_container`, `zfs`, `limits` (see the isKey() list in
+  lib/spec.cpp parseSpecFromNode). Stack files (`crate stack`) have no
+  man-page section at all, so the 1.1.25 name/IP rules
+  (StackPure::validateStackName / validateStackIp) are documented only
+  in CHANGELOG. crated.8 SEE ALSO references crate-snmpd(8), which is
+  not in the repo and not installed by the Makefile.
+
 Remaining from the 2026-09 correctness-lens audit (its seven HIGH/MED
 daemon items shipped as 1.1.26; these are what is left, all runtime-only
 and best validated on a live FreeBSD host):

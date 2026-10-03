@@ -4,7 +4,7 @@
 (кілька операторів на одній машині), і контрибʼютори, які розширюють
 привілейовану поверхню.
 
-**Стосується:** 1.1.30 (rootless-модель + серія per-tenant authz 1.1.12 →
+**Стосується:** 1.1.31 (rootless-модель + серія per-tenant authz 1.1.12 →
 1.1.17 покриває кожен privops-верб з operator-controlled ownership-
 сигналом). Про ≤ 0.9.x setuid-модель і міграцію див.
 [`rootless-migration.md`](rootless-migration.md).
@@ -62,7 +62,7 @@ privops-сокета, ніколи admin-токен і ніколи Unix-сок�
 privileged operations to crated(8)»*).
 
 Властивість «єдиний домен довіри» **не зникла** — вона переїхала.
-Міркувати про ізоляцію на 1.1.30 — це міркувати про те, хто має доступ
+Міркувати про ізоляцію на 1.1.31 — це міркувати про те, хто має доступ
 до **privops**, а не хто може запустити `crate(1)`.
 
 ---
@@ -77,17 +77,17 @@ privileged operations to crated(8)»*).
 … — `lib/privops_pure.h`). До нього ведуть два транспорти:
 
 - **HTTP — `POST /api/v1/privops/<verb>`.** Gated **лише admin**:
-  `isAuthorized(req, config, "admin")` (`daemon/routes.cpp:1007`).
+  `isAuthorized(req, config, "admin")` (`handlePrivOp()`, `daemon/routes.cpp`).
   Коментар обробника прямо фіксує задум — *«Privops touch host-wide
   state … so per-container scope from the F2 surface doesn't apply»*
-  (`daemon/routes.cpp:997-999`). На цьому шляху uid оператора лишається
+  (`handlePrivOp()`, `daemon/routes.cpp`). На цьому шляху uid оператора лишається
   `0` (cpp-httplib не віддає fd зʼєднання для `getpeereid`), тож
-  per-user audit — no-op (`daemon/routes.cpp:1013-1019`).
+  per-user audit — no-op (`handlePrivOp()`, `daemon/routes.cpp`).
 - **libnv `AF_UNIX` сокет (0.9.14).** Gated по групі: лістенер робить
   `chmod` сокета до його mode і `chown` на `root:<group>`
-  (`daemon/privops_listener.cpp:179,188`; типовий mode `0660`,
-  `daemon/config.h:117-119`). `getpeereid(2)` дістає uid піра
-  (`daemon/privops_listener.cpp:90`) і живить як гачок per-user audit /
+  (`openListener()`, `daemon/privops_listener.cpp`; типовий mode `0660`,
+  `Config::privopsSocketMode`, `daemon/config.h`). `getpeereid(2)` дістає uid піра
+  (`handleConnection()`, `daemon/privops_listener.cpp`) і живить як гачок per-user audit /
   namespacing, **так і** authorize-before-dispatch гейт нижче.
 
 Диспетчеризація вербів — це `parse → validate → handle` (`dispatchPrivOp`
@@ -95,7 +95,7 @@ privileged operations to crated(8)»*).
 різна за транспортом:
 
 - **HTTP:** перевірки за ресурсом немає — лише `admin`, host-wide за
-  задумом (`daemon/routes.cpp:997-999`).
+  задумом (`handlePrivOp()`, `daemon/routes.cpp`).
 - **libnv (реальний uid піра):** з 1.1.12 діє authorize-before-dispatch
   гейт (`dispatchPrivOpFromMap` → `PrivOpsAuthzPure::authorize`,
   `lib/privops_authz_pure.cpp`), що enforce-ить пер-user власність для
@@ -189,17 +189,17 @@ Enforce-нута ворожостійка ізоляція живе на Пло�
 
 1. **Права ФС (ядро).** Сокет `chmod`-нуто до spec-mode і `chown`-нуто
    `root:<group>`, тож тільки члени групи можуть `connect(2)` —
-   `daemon/control_socket.cpp:582,586`.
+   `bindSocketOrThrow()`, `daemon/control_socket.cpp`.
 2. **`getpeereid(2)` re-check gid.** Навіть якщо mode послаблять, gid
    піра має дорівнювати очікуваному gid сокета —
-   `daemon/control_socket.cpp:395`, що живить `ControlSocketPure::authorize`
-   (`daemon/control_socket_pure.cpp:277`, `Decision::DenyGidMismatch`).
+   `handleConnection()`, `daemon/control_socket.cpp`, що живить `ControlSocketPure::authorize`
+   (`ControlSocketPure::authorize()`, `daemon/control_socket_pure.cpp`, `Decision::DenyGidMismatch`).
 3. **Pool ACL.** Для пер-контейнерних дій пул контейнера
-   (`PoolPure::inferPool`, `daemon/control_socket_pure.cpp:292`) має бути
-   видимим у списку `pools` сокета — `poolVisibleOnSocket` (`:293`,
-   визначено `:406`). Мутуючі дії (`PATCH resources`,
+   (`PoolPure::inferPool`, `ControlSocketPure::authorize()`) має бути
+   видимим у списку `pools` сокета — `poolVisibleOnSocket` (`authorize()`,
+   визначено `daemon/control_socket_pure.cpp`). Мутуючі дії (`PATCH resources`,
    `POST start`/`stop`/`restart`) додатково вимагають роль `admin`
-   (`:282`, 0.8.13).
+   (`authorize()` → `DenyRoleMismatch`, 0.8.13).
 
 Результат: сокет alice (`pools: ["alice"]`) не може спостерігати,
 патчити чи стартувати/спиняти jail у пулі bob. Це механізм, на який
@@ -210,13 +210,13 @@ Enforce-нута ворожостійка ізоляція живе на Пло�
 ### 2b. Віддалені bearer-токени (0.7.1 scope, 0.7.4 pools) — ізольовано
 
 HTTP-клієнти автентифікуються bearer-токеном, що несе термін дії
-(`daemon/config.h:21`; `0` == ніколи), scope-глоби шляхів
-(`daemon/config.h:26`; матчить `AuthPure::pathInScope`,
-`lib/auth_pure.cpp:81`), роль і pool ACL (`daemon/config.h:31`).
+(`AuthToken::expiresAt`, `daemon/config.h`; `0` == ніколи), scope-глоби шляхів
+(`AuthToken::scope`, `daemon/config.h`; матчить `AuthPure::pathInScope`,
+`lib/auth_pure.cpp`), роль і pool ACL (`AuthToken::pools`, `daemon/config.h`).
 `checkBearerAuthFull` гейтить термін + scope + роль
-(`lib/auth_pure.cpp:101`); пер-контейнерний pool-гейт —
+(`lib/auth_pure.cpp`); пер-контейнерний pool-гейт —
 `isAuthorizedForContainer` → `PoolPure::tokenAllowsContainer`
-(`daemon/auth.cpp:83-84`).
+(`daemon/auth.cpp`).
 
 > Застереження: **`admin`**-bearer-токен також відмикає privops HTTP-
 > площину (2a вище gated по ролі, privops gated по `admin`). Тож
@@ -227,9 +227,9 @@ HTTP-клієнти автентифікуються bearer-токеном, що
 
 Websocket-консоль дає інтерактивний `jexec`-шелл усередині jail, тож її
 гейт навантажений. Вона вимагає `admin` bearer-токен
-(`daemon/ws_console.cpp:231`) **і** щоб пул jail був дозволений токеном
+(`handleClient()`, `daemon/ws_console.cpp`) **і** щоб пул jail був дозволений токеном
 (`PoolPure::inferPool` / `tokenAllowsContainer`,
-`daemon/ws_console.cpp:254-255`).
+`handleClient()`, `daemon/ws_console.cpp`).
 
 ### 2d. Локальний Unix-сокет до головного HTTP API — НЕ ізольовано
 
@@ -238,15 +238,30 @@ Websocket-консоль дає інтерактивний `jexec`-шелл ус
 підключено. **Unix-сокет-пірам довіряють цілком:**
 
 - `isAuthorized` одразу повертає `true` для Unix-пірів, оминаючи
-  bearer-auth — `daemon/auth.cpp:48-49`.
+  bearer-auth — `isAuthorized()`, `daemon/auth.cpp`.
 - `isAuthorizedForContainer` так само оминає pool ACL для Unix-пірів —
-  `daemon/auth.cpp:74-75`.
+  `isAuthorizedForContainer()`, `daemon/auth.cpp`.
 
-Mode файлу сокета (типово `0660 root:wheel`) — *єдиний* гейт —
-`daemon/auth.cpp:36-40`. Тож локальний доступ до головного API — це,
-як і privops, **єдиний домен довіри**. Auth на основі `getpeereid` тут
-ще попереду (roadmap §5.3). Лише виділені control-сокети (2a) несуть
-пер-пул ідентичність локально.
+**Як визначається «Unix-пір» (1.1.23).** `crated` запускає два окремі
+екземпляри `httplib::Server` — один на TCP, другий на Unix-сокеті
+(`Server::start()`, `daemon/server.cpp`). `registerRoutes()` знає, який
+із них налаштовує, і встановлює pre-routing обробник, що на кожному
+запиті **стирає будь-який заголовок `X-Crated-Listener`, надісланий
+клієнтом, і проставляє авторитетне значення** (`unix` / `tcp`) для
+сервера, який прийняв з'єднання (`registerRoutes()`, `daemon/routes.cpp`).
+`isUnixSocketPeer()` читає лише цей маркер. Тож TCP-клієнт не може
+видати себе за сокет-пір, а відсутній маркер трактується як недовірений
+TCP (fail-closed). До 1.1.23 локальність виводилася з порожнього
+заголовка `REMOTE_ADDR` — TCP-клієнт міг перекрити його власним
+порожнім заголовком, що давало потенційний обхід токена за увімкненого
+TCP-слухача.
+
+Тому mode файлу сокета (типово `0660 root:wheel`,
+`Config::unixSocketMode`, `daemon/config.h`) — *єдиний* гейт на те, хто
+може дістатися довіреного слухача. Тож локальний доступ до головного
+API — це, як і privops, **єдиний домен довіри**. Auth на основі
+`getpeereid` тут ще попереду (roadmap §5.3). Лише виділені
+control-сокети (2a) несуть пер-пул ідентичність локально.
 
 ---
 
@@ -329,9 +344,14 @@ privops безпечним для **взаємно недовірливих** о
    enforcement вимкнено — там `peerUid` живив тільки audit-хвіст, не
    рішення доступу.
 
-Доки jid-scoped верби з (1) не гейтнуті, мультитенантне розгортання, де
-оператори мають самі створювати jail'и, має посередничати створення jail
-через довірений брокер, а не видавати операторам сирий доступ до
+Те, що лишається host-wide після (1)–(3), — це **задум**, а не
+відкладений гейт: справді host-глобальні верби (`teardown_iface`,
+`set_iface_up`, `bridge_*`, `add_pf_rule`, `add_ipfw_rule`,
+`configure_ipfw_nat`, `create_epair` — спільний стан хоста без
+тенант-цілі), `admin`-only HTTP-транспорт (без uid піра) і bootstrap-
+поступка, що пропускає ресурси, відсутні в реєстрі. Мультитенантне
+розгортання, яке має тримати операторів подалі від цієї поверхні, досі
+потребує довіреного брокера, а не видачі операторам сирого доступу до
 privops-сокета.
 
 ---

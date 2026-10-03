@@ -263,9 +263,10 @@ void handleStart(std::string &resBody, int &status, const std::string &name) {
   }
 
   // Fork + setsid + exec so the child outlives this request and
-  // runs as a session leader (no controlling tty). The exec target
-  // is /usr/local/bin/crate which is setuid root — works whether
-  // crated is started by an operator at the console or from
+  // runs as a session leader (no controlling tty). The exec target is
+  // /usr/local/bin/crate — mode 0755 since 1.0.0 (no longer setuid) —
+  // so the child simply inherits crated's own uid (root). That holds
+  // whether crated is started by an operator at the console or from
   // /etc/rc.d/crated.
   pid_t pid = ::fork();
   if (pid < 0) {

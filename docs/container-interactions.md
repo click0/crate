@@ -46,9 +46,9 @@ graph TB
     IPFW -->|"NAT rules"| J1
     PF -->|"anchor policy"| J2
 
-    %% Host → VM взаємодія (реалізовано)
-    CRATE -->|"bhyve/libvirt API"| VM1
-    CRATE -->|"bhyve/libvirt API"| VM2
+    %% Host → VM взаємодія (частково: див. легенду)
+    CRATE -.->|"vm-wrap: jail-огорожа ⚠️"| VM1
+    CRATE -.->|"libvirt: код є, не підключено ⚠️"| VM2
 
     %% Jail ↔ Jail (реалізовано)
     J1 <-->|"epair bridge ✅"| J2
@@ -73,7 +73,7 @@ graph TB
 |---------|--------|------|
 | Jail ↔ Jail | ✅ Реалізовано | epair bridge, shared volumes (nullfs), socat proxy |
 | Host → Jail | ✅ Реалізовано | jail_setv(), ZFS dataset, RCTL, ipfw/pf |
-| Host → VM | ✅ Реалізовано | bhyve/libvirt API |
+| Host → VM | ⚠️ Частково | `crate vm-wrap` генерує jail-огорожу (devfs ruleset + jail.conf) для bhyve, який оператор запускає сам. Керування життєвим циклом VM через libvirt (`lib/vm_spec.cpp`, `vm_run.cpp`, `vm_stack.cpp`, лише за `WITH_LIBVIRT`) написане, але жодна команда його не викликає |
 | Jail ↔ VM | ❌ Відсутнє | Повна ізоляція, немає спільного bridge |
 | VM ↔ VM | ❌ Відсутнє | Ізольовані, немає крос-комунікації |
 

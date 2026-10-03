@@ -10,12 +10,12 @@
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
 .\"
-.Dd May 3, 2026
+.Dd September 23, 2026
 .Dt CRATED 8
 .Os
 .Sh NAME
 .Nm crated
-.Nd REST API daemon for remote crate(8) management
+.Nd REST API and privileged-operations daemon for crate
 .Sh SYNOPSIS
 .Nm
 .Op Fl f
@@ -23,12 +23,22 @@
 .Sh DESCRIPTION
 .Nm
 exposes the read and write halves of the
-.Xr crate 8
+.Xr crate 5
 control surface over HTTP/HTTPS, so external tooling
 .Pq the hub web dashboard, CI runners, monitoring agents
 can drive container lifecycle without an interactive shell on the host.
+Since 1.0.0 it is also where
+.Xr crate 5 Ns 's
+privileged work runs:
+.Nm crate
+itself is an unprivileged binary that delegates root operations to
+.Nm
+over the privops socket described below.
 .Pp
-The daemon listens on three independent endpoints:
+The daemon listens on up to five independent endpoints, each enabled
+by its own
+.Pa crated.conf
+setting:
 .Bl -tag -width Ds
 .It Unix domain socket
 Local-only access, default
@@ -38,6 +48,9 @@ A connecting peer is currently treated as
 on the assumption that the socket file mode
 .Pq Pa root:wheel No 0660
 is the access control.
+Which listener accepted a request is decided per listener, not from
+any request header, so a TCP client cannot impersonate a socket peer
+.Pq since 1.1.23 .
 .It TCP listener
 TLS-capable. Default port 9800. Authentication via
 .Ar Authorization: Bearer <token>
@@ -52,6 +65,32 @@ proxies bytes between the WebSocket and a
 .Xr jexec 8 Ns 'd
 .Pa /bin/sh -i
 running inside the target jail.
+.It Control sockets
+Per-group Unix sockets under
+.Pa /var/run/crate/control/
+.Pq Ar control_sockets ,
+empty by default.
+Each socket is owned
+.Pa root:<group> ,
+re-checks the peer's gid with
+.Xr getpeereid 2 ,
+and only exposes containers in the pools listed for it \(em the
+mechanism for per-tenant local access.
+.It Privops socket
+The libnv
+.Dv AF_UNIX
+socket
+.Pq Ar privops_socket
+through which unprivileged
+.Nm crate
+clients request root operations
+.Pq create/destroy jail, ZFS, RCTL, interfaces, firewall .
+Group-gated; the peer uid from
+.Xr getpeereid 2
+drives per-user namespacing and the per-tenant authorization gate, and
+a failed
+.Xr getpeereid 2
+is refused when per-user mode is on.
 .El
 .Pp
 The options are as follows:
@@ -197,11 +236,19 @@ Default log file.
 .Sh CAVEATS
 .Bl -bullet
 .It
-Unix-socket peers are currently treated as admin without
-verifying their uid/gid via
+Peers of the main Unix-socket listener are currently treated as admin
+without verifying their uid/gid via
 .Xr getpeereid 2 .
-The unix-socket file mode is the only access control. A future
-release will tighten this.
+The unix-socket file mode
+.Pq Ar listen.unix_owner , listen.unix_group , listen.unix_mode
+is the only access control for it; a TCP client cannot reach that
+trust level, since locality is decided per listener
+.Pq 1.1.23 .
+The control sockets and the privops socket
+.Em do
+check the peer with
+.Xr getpeereid 2 .
+A future release will tighten the main listener too.
 .It
 The WebSocket console listener is disabled by default
 .Pq Ar console_ws.port = 0 .

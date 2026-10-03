@@ -11,7 +11,7 @@
 //     "ts":      "2026-05-01T20:55:01Z",        // UTC, ISO 8601
 //     "pid":     12345,
 //     "uid":     1000,                          // real uid (caller)
-//     "euid":    0,                             // effective uid (typically 0 — setuid)
+//     "euid":    0,                             // effective uid (0 under root / legacy setuid crate.x)
 //     "gid":     1000,
 //     "egid":    0,
 //     "user":    "alice",                       // passwd entry for uid (best-effort)
@@ -22,10 +22,13 @@
 //     "outcome": "started" | "ok" | "failed: <msg>"
 //   }
 //
-// Why: setuid-root binary on a multi-user host needs an audit trail
+// Why: a privileged tool on a multi-user host needs an audit trail
 // (which user did what, when). Per POSIX, getuid() returns the real
-// uid of the invoking user even though euid is 0; record both so a
-// reviewer sees "uid=1000 (alice) acted via euid=0".
+// uid of the invoking user even when euid is 0 (the legacy setuid
+// `crate.x` build, or sudo); record both so a reviewer sees
+// "uid=1000 (alice) acted via euid=0". For the unprivileged crate(1)
+// (1.0.0+) the two are equal and privileged actions are attributed in
+// crated's per-user audit instead.
 
 #pragma once
 

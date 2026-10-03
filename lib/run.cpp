@@ -82,7 +82,9 @@ static uid_t myuid = ::getuid();
 static gid_t mygid = ::getgid();
 
 // Use getpwuid(getuid()) for authoritative identity — immune to USER env spoofing.
-// This is critical because crate is a setuid binary.
+// Critical in the legacy setuid `crate.x` build (euid 0 with a caller-controlled
+// environment); kept everywhere so identity never depends on $USER. crate(1)
+// itself has been unprivileged (mode 0755) since 1.0.0.
 struct UserInfo {
   std::string name;
   std::string homeDir;
