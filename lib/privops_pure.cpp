@@ -1,6 +1,9 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "privops_pure.h"
+#include "name_limits.h"
+
+#include <string>
 
 #include "per_user_rctl_pure.h"
 #include "retune_pure.h"
@@ -152,7 +155,8 @@ std::string validateJailName(const std::string &name) {
   // pick 200 to leave 56 bytes of headroom for the pid suffix
   // and any future composition while staying clear of the
   // kernel limit.
-  if (name.size() > 200) return "jail name longer than 200 chars";
+  if (name.size() > NameLimits::kKernelJailName)
+    return "jail name longer than " + std::to_string(NameLimits::kKernelJailName) + " chars";
   if (name == "." || name == "..") return "jail name is reserved";
   for (char c : name) {
     bool ok = isAlnum(c) || c == '.' || c == '_' || c == '-';

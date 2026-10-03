@@ -1,6 +1,9 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "vmwrap_pure.h"
+#include "name_limits.h"
+
+#include <string>
 
 #include <cctype>
 #include <cstdint>
@@ -15,9 +18,10 @@ bool isAlnumDashUnderscore(char c) {
       || (c >= '0' && c <= '9') || c == '-' || c == '_';
 }
 
-std::string validateName(const std::string &n, const char *what) {
+std::string validateName(const std::string &n, const char *what, std::size_t maxLen) {
   if (n.empty()) return std::string(what) + " is empty";
-  if (n.size() > 63) return std::string(what) + " too long (>63 chars): '" + n + "'";
+  if (n.size() > maxLen)
+    return std::string(what) + " too long (>" + std::to_string(maxLen) + " chars): '" + n + "'";
   if (n[0] == '-' || n[0] == '.')
     return std::string(what) + " must not start with '-' or '.': '" + n + "'";
   for (char c : n)
@@ -40,8 +44,10 @@ bool segmentHasDotDot(const std::string &s) {
 
 } // anon
 
-std::string validateVmName(const std::string &n)   { return validateName(n, "VM name"); }
-std::string validateJailName(const std::string &n) { return validateName(n, "jail name"); }
+// 1.1.32: the VM name keeps its 63-char cap (it names /dev/vmm/<n>); the
+// enclosure JAIL name follows the shared jail-name limit.
+std::string validateVmName(const std::string &n)   { return validateName(n, "VM name", 63); }
+std::string validateJailName(const std::string &n) { return validateName(n, "jail name", NameLimits::kJailName); }
 
 std::string validateDataset(const std::string &d) {
   if (d.empty()) return "";

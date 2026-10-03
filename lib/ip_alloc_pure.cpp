@@ -1,6 +1,9 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "ip_alloc_pure.h"
+#include "name_limits.h"
+
+#include <string>
 
 #include <algorithm>
 #include <cstdio>
@@ -121,7 +124,9 @@ uint32_t allocateNext(const Network &pool, const std::vector<uint32_t> &taken) {
 namespace {
 
 bool nameLooksValid(const std::string &n) {
-  if (n.empty() || n.size() > 64) return false;
+  // 1.1.32: was 64 — the key is jail-<name>-<8 hex>, so names over ~50
+  // chars wrote a lease line this parser then refused.
+  if (n.empty() || n.size() > NameLimits::kLeaseName) return false;
   for (char c : n) {
     bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
            || (c >= '0' && c <= '9')

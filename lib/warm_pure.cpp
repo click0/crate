@@ -1,6 +1,9 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "warm_pure.h"
+#include "name_limits.h"
+
+#include <string>
 
 #include <ctime>
 #include <sstream>
@@ -95,7 +98,8 @@ std::vector<std::string> buildPromoteArgv(const std::string &templateDataset) {
 
 std::string validateJailName(const std::string &name) {
   if (name.empty()) return "jail name is empty";
-  if (name.size() > 64) return "jail name longer than 64 chars";
+  if (name.size() > NameLimits::kJailName)
+    return "jail name longer than " + std::to_string(NameLimits::kJailName) + " chars";
   if (name == "." || name == "..") return "jail name is reserved";
   for (char c : name) {
     bool ok = isAlnum(c) || c == '.' || c == '_' || c == '-';

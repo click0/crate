@@ -139,7 +139,9 @@ ATF_TEST_CASE_BODY(warm_base_jail_name_invalid) {
   ATF_REQUIRE(!validateJailName("foo bar").empty());  // space
   ATF_REQUIRE(!validateJailName("foo;rm").empty());   // shell meta
   ATF_REQUIRE(!validateJailName("foo`pwd`").empty()); // backtick
-  ATF_REQUIRE(!validateJailName(std::string(65, 'a')).empty());  // > 64 chars
+  // 1.1.32: shared jail-name limit (NameLimits::kJailName = 128).
+  ATF_REQUIRE_EQ(validateJailName(std::string(128, 'a')), std::string());
+  ATF_REQUIRE(!validateJailName(std::string(129, 'a')).empty());
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(warm_run_suffix_distinct_from_template_suffix);

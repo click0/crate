@@ -68,7 +68,9 @@ ATF_TEST_CASE_BODY(jail_name_invalid_rejected) {
   ATF_REQUIRE(!validateJailName("").empty());
   ATF_REQUIRE(!validateJailName(".").empty());
   ATF_REQUIRE(!validateJailName("..").empty());
-  ATF_REQUIRE(!validateJailName(std::string(65, 'a')).empty());
+  // 1.1.32: shared jail-name limit (NameLimits::kJailName = 128).
+  ATF_REQUIRE_EQ(validateJailName(std::string(128, 'a')), std::string());
+  ATF_REQUIRE(!validateJailName(std::string(129, 'a')).empty());
   ATF_REQUIRE(!validateJailName("foo/bar").empty());
   ATF_REQUIRE(!validateJailName("foo;rm").empty());
 }

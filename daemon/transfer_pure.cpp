@@ -1,6 +1,9 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "transfer_pure.h"
+#include "../lib/name_limits.h"
+
+#include <string>
 
 #include <cstdio>
 #include <sstream>
@@ -9,7 +12,10 @@ namespace TransferPure {
 
 std::string validateArtifactName(const std::string &name) {
   if (name.empty()) return "artifact name is empty";
-  if (name.size() > 128) return "artifact name is longer than 128 chars";
+  // 1.1.32: was 128 — too short for <kernel jail name>-<time>.crate once
+  // jail names may be 128 chars; NAME_MAX now, matching the migrate client.
+  if (name.size() > NameLimits::kArtifactFile)
+    return "artifact name is longer than " + std::to_string(NameLimits::kArtifactFile) + " chars";
   if (name == "." || name == "..") return "artifact name is reserved";
   for (auto c : name) {
     bool ok = (c >= 'a' && c <= 'z')

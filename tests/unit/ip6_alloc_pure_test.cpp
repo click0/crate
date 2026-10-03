@@ -230,13 +230,25 @@ ATF_TEST_CASE_BODY(lease_parse_rejects_bad_name) {
   ATF_REQUIRE(!parseLeaseLine6("a/b fd00::5",           out).empty()); // slash
   ATF_REQUIRE(!parseLeaseLine6("na$me fd00::5",         out).empty()); // shell meta
   ATF_REQUIRE(!parseLeaseLine6(std::string("na\tme fd00::5"), out).empty()); // tab in name
-  ATF_REQUIRE(!parseLeaseLine6(std::string(65, 'x') + " fd00::5", out).empty()); // >64
+  // 1.1.32: lease keys are jail-<name>-<8 hex>, so the cap is
+  // NameLimits::kLeaseName (142), not 64.
+  ATF_REQUIRE(!parseLeaseLine6(std::string(143, 'x') + " fd00::5", out).empty()); // > kLeaseName
   // A clean name with a well-formed address still round-trips.
   ATF_REQUIRE_EQ(parseLeaseLine6("web-1.app_2 fd00::5", out), std::string());
   ATF_REQUIRE_EQ(out.name, std::string("web-1.app_2"));
 }
 
+// 1.1.32: v6 twin of the v4 max-length lease-key round-trip.
+ATF_TEST_CASE_WITHOUT_HEAD(lease6_key_for_max_length_jail_name);
+ATF_TEST_CASE_BODY(lease6_key_for_max_length_jail_name) {
+  Lease6 out;
+  const std::string key = "jail-" + std::string(128, 'a') + "-deadbeef";   // 142
+  ATF_REQUIRE_EQ(parseLeaseLine6(key + " fd00::5", out), std::string());
+  ATF_REQUIRE(!parseLeaseLine6(key + "x fd00::5", out).empty());           // 143
+}
+
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, lease6_key_for_max_length_jail_name);
   ATF_ADD_TEST_CASE(tcs, parseIp6_full_form);
   ATF_ADD_TEST_CASE(tcs, parseIp6_shorthand_middle);
   ATF_ADD_TEST_CASE(tcs, parseIp6_shorthand_at_ends);
