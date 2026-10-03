@@ -303,6 +303,17 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     ? args.runName
     : Util::filePathToBareName(args.runCrateFile);
 
+  // 1.1.33: the name becomes the jail directory, the network-lease key and
+  // the kernel jail name, so it must obey one rule on BOTH paths — and be
+  // checked before anything below creates a directory or clones a dataset.
+  // The cold path used to take the .crate file stem unchecked.
+  if (warmBase) {
+    if (auto e = WarmPure::validateJailName(args.runName); !e.empty())
+      ERR("--name: " << e)
+  } else if (auto e = RunPure::validateCrateFileJailName(args.runCrateFile); !e.empty()) {
+    ERR(e)
+  }
+
   auto jailPath = STR(Locations::jailDirectoryPath << "/jail-" << nameComponent << "-" << runHex);
 
   // For warm-base we let ZFS create + mount the directory by setting
@@ -320,8 +331,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   if (warmBase) {
     if (auto e = WarmPure::validateTemplateDataset(args.runWarmBase); !e.empty())
       ERR("--warm-base: " << e)
-    if (auto e = WarmPure::validateJailName(args.runName); !e.empty())
-      ERR("--name: " << e)
+    // (--name is validated up front, right after nameComponent, since 1.1.33.)
 
     if (!Util::Fs::isOnZfs(Locations::jailDirectoryPath))
       ERR("--warm-base requires the jails directory to live on ZFS; "

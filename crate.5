@@ -54,6 +54,15 @@ Run a container.
 Arguments after
 .Fl -
 are passed to the containerized application.
+The jail is named after the file name up to its first
+.Ql \&. ,
+so that part must be 1\(en128 characters from
+.Ql [A-Za-z0-9._-]
+.Pq the same rule as Fl -name ;
+otherwise
+.Cm run
+refuses the file before creating anything
+.Pq e.g.\& rename Pa my app.crate No to Pa my-app.crate .
 .It Cm validate Fl s Ar spec.yml
 Validate a specification file for syntax and logical consistency.
 .It Cm snapshot Ar subcommand

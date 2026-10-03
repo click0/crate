@@ -110,6 +110,32 @@ ATF_TEST_CASE_BODY(cron_user_injection_rejected)
 	ATF_REQUIRE(!RunPure::validateCronUser(std::string(33, 'a')).empty());
 }
 
+// 1.1.33: `crate run -f x.crate` names the jail after the file stem;
+// it must obey the --name rule or the jail dir / lease key / kernel name
+// break downstream (an invalid stem used to wreck the lease file).
+ATF_TEST_CASE_WITHOUT_HEAD(crate_file_jail_name_valid);
+ATF_TEST_CASE_BODY(crate_file_jail_name_valid)
+{
+	ATF_REQUIRE_EQ(RunPure::validateCrateFileJailName("web.crate"), "");
+	ATF_REQUIRE_EQ(RunPure::validateCrateFileJailName("/srv/images/db-01_v2.crate"), "");
+	ATF_REQUIRE_EQ(RunPure::validateCrateFileJailName("./" + std::string(128, 'a') + ".crate"), "");
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(crate_file_jail_name_rejected);
+ATF_TEST_CASE_BODY(crate_file_jail_name_rejected)
+{
+	ATF_REQUIRE(!RunPure::validateCrateFileJailName("my app.crate").empty());     // space
+	ATF_REQUIRE(!RunPure::validateCrateFileJailName("a+b.crate").empty());
+	ATF_REQUIRE(!RunPure::validateCrateFileJailName("user@host.crate").empty());
+	ATF_REQUIRE(!RunPure::validateCrateFileJailName("\xd0\x9a\xd0\xb8.crate").empty()); // UTF-8
+	ATF_REQUIRE(!RunPure::validateCrateFileJailName(std::string(129, 'a') + ".crate").empty());
+	ATF_REQUIRE(!RunPure::validateCrateFileJailName(".crate").empty());         // empty stem
+	// The message names the derived jail name and tells the operator what to do.
+	auto e = RunPure::validateCrateFileJailName("/tmp/my app.crate");
+	ATF_REQUIRE(e.find("'my app'") != std::string::npos);
+	ATF_REQUIRE(e.find("rename the file") != std::string::npos);
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
 	ATF_ADD_TEST_CASE(tcs, argsToString_empty);
@@ -122,4 +148,6 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, envOrDefault_overflow_returns_default);
 	ATF_ADD_TEST_CASE(tcs, cron_user_typical_accepted);
 	ATF_ADD_TEST_CASE(tcs, cron_user_injection_rejected);
+	ATF_ADD_TEST_CASE(tcs, crate_file_jail_name_valid);
+	ATF_ADD_TEST_CASE(tcs, crate_file_jail_name_rejected);
 }

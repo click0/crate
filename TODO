@@ -133,17 +133,11 @@ harden BEFORE wiring this code up:
   in CHANGELOG. crated.8 SEE ALSO references crate-snmpd(8), which is
   not in the repo and not installed by the Makefile.
 
-* (correctness, LOW) cold-path jail names are not validated. 1.1.32
-  unified the jail-name limit (NameLimits::kJailName = 128) and sized the
-  lease key for it, but `crate run -f <file>.crate` (no --warm-base)
-  takes the name from the .crate file STEM (lib/run.cpp,
-  Util::filePathToBareName) without any check. A stem longer than 128
-  chars, or containing a byte outside [A-Za-z0-9._-] (space, '+', '@',
-  UTF-8…), still yields a lease key the lease parsers reject, which
-  breaks every later `crate run` that reads the lease file. Fix: run the
-  stem through WarmPure::validateJailName up front (as --name already
-  is) — a deliberate behaviour change for oddly-named .crate files, so
-  it wants a CHANGELOG note.
+  [FIXED in 1.1.33] cold-path jail names: `crate run -f <file>.crate` now
+  validates the file stem with the --name rule (RunPure::
+  validateCrateFileJailName -> WarmPure::validateJailName) before any
+  directory or dataset is created, and refuses non-conforming files with
+  a "rename the file" message.
 
 * (consistency, LOW) hub/ha_pure isValidName still caps container and
   node names at 64. The hub has no binary in this Makefile yet; switch
