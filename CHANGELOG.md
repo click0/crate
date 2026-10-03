@@ -6,6 +6,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.33] — 2026-10-03
+
+**`crate run -f` refuses a `.crate` file whose name is not a valid jail
+name.** ⚠️ Behaviour change for oddly-named files.
+
+`crate run -f <file>.crate` names the jail after the file name up to its
+first `.`. That name becomes the jail directory (`jail-<name>-<hex>`),
+the network-lease key and the kernel jail name — yet, unlike `--name`,
+it was never checked. A name longer than 128 characters, or containing a
+space, `+`, `@`, a UTF-8 byte or any other character outside
+`[A-Za-z0-9._-]`, produced a lease line the lease parser later refused,
+breaking **every** subsequent `crate run` that read the lease file.
+
+The file name now has to obey the same rule as `--name`
+(`WarmPure::validateJailName`: 1–128 chars from `[A-Za-z0-9._-]`, not
+`.`/`..`). The check runs **before** anything is created — no jail
+directory, no ZFS clone — and the error names the derived jail name and
+says how to fix it:
+
+```
+the jail is named after the .crate file name 'my app': invalid character ' '
+in jail name — rename the file to use only [A-Za-z0-9._-] (max 128 chars)
+before the first '.', or run it with --warm-base/--name
+```
+
+**If you are upgrading:** rename any `.crate` files whose names fall
+outside that rule (e.g. `my app.crate` → `my-app.crate`). The `--name`
+check for `--warm-base` moved to the same early point; its rule and
+message are unchanged. New `RunPure::validateCrateFileJailName` with
+`run_pure_test` cases; documented in `crate.5` under `run`.
+
+Verified locally: 1440/1440 unit cases under `-Wall -Wextra -Werror`
+and under ASan + UBSan.
+
 ## [1.1.32] — 2026-10-03
 
 **One jail-name length limit (128), and the limits derived from it now

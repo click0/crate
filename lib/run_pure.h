@@ -29,4 +29,15 @@ unsigned envOrDefault(const char *name, unsigned def);
 // Returns "" on success.
 std::string validateCronUser(const std::string &user);
 
+// 1.1.33: `crate run -f <file>.crate` names the jail after the file STEM
+// (Util::filePathToBareName). That name becomes the jail directory
+// `jail-<name>-<hex>`, the network-lease key, and the kernel jail name, so
+// it must obey the same rule as `--name` (WarmPure::validateJailName:
+// [A-Za-z0-9._-], 1..NameLimits::kJailName, not "."/".."). It used to be
+// taken unchecked: a stem over the limit or with a space / '+' / '@' /
+// UTF-8 byte wrote a lease line the lease parser then refused, breaking
+// every later `crate run`. Returns "" when the derived name is valid,
+// otherwise a message telling the operator to rename the file.
+std::string validateCrateFileJailName(const std::string &crateFile);
+
 }

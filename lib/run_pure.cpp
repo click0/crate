@@ -1,10 +1,13 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "run_pure.h"
-#include "util.h"   // Util::shellQuote, Util::toUInt
+#include "util.h"   // Util::shellQuote, Util::toUInt, Util::filePathToBareName
+#include "name_limits.h"
+#include "warm_pure.h"
 
 #include <cstdlib>
 #include <sstream>
+#include <string>
 
 namespace RunPure {
 
@@ -42,6 +45,16 @@ std::string validateCronUser(const std::string &user) {
       return "cron user contains an invalid character "
              "(allowed: [A-Za-z0-9._-])";
   }
+  return "";
+}
+
+std::string validateCrateFileJailName(const std::string &crateFile) {
+  auto name = Util::filePathToBareName(crateFile);
+  if (auto e = WarmPure::validateJailName(name); !e.empty())
+    return "the jail is named after the .crate file name '" + name + "': "
+           + e + " — rename the file to use only [A-Za-z0-9._-] (max "
+           + std::to_string(NameLimits::kJailName) + " chars) before the "
+           "first '.', or run it with --warm-base/--name";
   return "";
 }
 
