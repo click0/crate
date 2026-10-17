@@ -6,6 +6,61 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.36] — 2026-10-17
+
+**privops / HTTP authorization — the MED findings from `TODO` §2.**
+⚠️ `GET /api/v1/containers`, `/api/v1/containers/:name/gui` and
+`/api/v1/host` now require a token on the TCP listener.
+
+- **Read routes require a viewer token.** The three routes above had no
+  `isAuthorized()` call at all, so anyone who could reach the TCP
+  listener could list every tenant's jails (names, paths, IPs), read a
+  container's VNC/WS ports and read host facts. `crated.8`
+  AUTHENTICATION has always said read endpoints need a viewer or admin
+  token; now they do. Unix-socket peers stay open as everywhere else;
+  `/healthz` and `/metrics` are unchanged (documented no-auth).
+- **`GET /api/v1/exports/:filename` is pool-gated.** The artifact is
+  `<container>-<unixtime>.crate` (what `POST …/export` produces); the
+  container name is recovered (`TransferPure::artifactContainerName`)
+  and run through the same per-container pool ACL as every other
+  `:name` route. A pool-scoped admin token could previously download
+  any tenant's export. A filename not of that shape is refused (400).
+- **pf anchor verbs are name-scoped.** `add_pf_rule` / `remove_pf_rule`
+  / `flush_pf_anchor` sat in the host-global Allow arm, but their
+  `anchor` is crate's per-jail `crate/<kernel jail name>` — a tenant
+  could flush or inject into another tenant's anchor. The jail name
+  after the slash is now gated like `destroy_jail`'s name
+  (`DenyForeignAnchor`); the root `crate` anchor, nested anchors and any
+  non-crate anchor are refused for per-user callers.
+- **`attach_zfs` / `detach_zfs` gate the jid too.** A caller could
+  attach its own dataset to, or detach one from, another tenant's jail;
+  the dataset check now runs first, then `checkOwnedJid`.
+- **jid→owner registry reconciled against the kernel.** The registry is
+  persisted across restarts, but jids restart at 1 after a reboot and
+  jails die outside `destroy_jail` (crash, `jail -r`, HTTP `DELETE`), so
+  a loaded row could name a jid now owned by a different jail — and its
+  recorded tenant would pass the jid gate for `set_rctl` /
+  `signal_jail` / cpuset / `configure_iface` against it. `crated` now
+  installs a live probe ("jail with that jid exists and has that name"),
+  drops stale rows at startup (`JidOwnerRegistryPure::reconcile`) and on
+  every `byJid` / `byName` hit. `destroy_jail` forgets by the jid
+  resolved **before** the jail is removed (name fallback only when the
+  pre-dispatch lookup found nothing) — closing the forget-by-name item
+  carried in `TODO` since 1.1.17.
+
+Not changed, by design: an `admin` bearer token remains host-wide
+(trust-model §2b caveat), so a pool-scoped admin can still import a
+`.crate` for a name in its pool and have `crated` run it as root. The
+interface-named verbs (`configure_iface` `ifname`, `teardown_iface`,
+`bridge_*_member`) need an iface→owner registry fed by `create_epair`
+before they can be gated — next item in `TODO` §2.
+
+Docs: `docs/trust-model.md` / `.uk.md` (verb lists, 1.1.36 note),
+`crated.8` (viewer token on the read routes, exports pool check).
+Tests: `privops_authz_pure_test` (anchor parsing, anchor verbs,
+attach_zfs jid), `jid_owner_registry_pure_test` (reconcile),
+`transfer_pure_test` (artifactContainerName). 1451/1451 unit cases.
+
 ## [1.1.35] — 2026-10-17
 
 **privops hardening — the four HIGH findings from the 2026-10 audit

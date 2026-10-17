@@ -34,6 +34,22 @@ std::string validateArtifactName(const std::string &name) {
   return "";
 }
 
+std::string artifactContainerName(const std::string &filename) {
+  static const std::string kSuffix = ".crate";
+  if (filename.size() <= kSuffix.size()) return "";
+  if (filename.compare(filename.size() - kSuffix.size(), kSuffix.size(), kSuffix) != 0)
+    return "";
+  // Strip ".crate", then the trailing "-<digits>" timestamp.
+  std::string stem = filename.substr(0, filename.size() - kSuffix.size());
+  size_t end = stem.size();
+  size_t i = end;
+  while (i > 0 && stem[i - 1] >= '0' && stem[i - 1] <= '9') --i;
+  if (i == end) return "";          // no digits before ".crate"
+  if (i == 0 || stem[i - 1] != '-') return "";   // no "-" before the digits
+  if (i - 1 == 0) return "";        // nothing before the "-"
+  return stem.substr(0, i - 1);
+}
+
 std::string formatExportResponse(const std::string &file,
                                  uint64_t sizeBytes,
                                  const std::string &sha256Hex) {

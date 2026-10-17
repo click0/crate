@@ -65,11 +65,37 @@ bool JidOwnerRegistry::forgetByName(const std::string &name) {
   return false;
 }
 
+void JidOwnerRegistry::setLiveProbe(JidOwnerRegistryPure::LiveProbe probe) {
+  std::lock_guard<std::mutex> g(m_);
+  probe_ = std::move(probe);
+}
+
+size_t JidOwnerRegistry::reconcile() {
+  std::lock_guard<std::mutex> g(m_);
+  if (!probe_) return 0;
+  size_t dropped = JidOwnerRegistryPure::reconcile(entries_, probe_);
+  if (dropped) persistLocked_();
+  return dropped;
+}
+
+bool JidOwnerRegistry::dropIfStaleLocked_(JidOwnerRegistryPure::EntryMap::iterator it) const {
+  if (!probe_) return false;
+  if (probe_(it->first, it->second)) return false;
+  // lookup*() are const for the authz layer's benefit; the registry is
+  // logically const (a stale row carries no information), so the erase
+  // is an allowed cache eviction.
+  auto &self = const_cast<JidOwnerRegistry &>(*this);
+  self.entries_.erase(it);
+  try { persistLocked_(); } catch (...) { /* best-effort bookkeeping */ }
+  return true;
+}
+
 PrivOpsAuthzPure::Owner JidOwnerRegistry::lookupByJid(unsigned jid) const {
   std::lock_guard<std::mutex> g(m_);
   PrivOpsAuthzPure::Owner o;
-  auto it = entries_.find(jid);
-  if (it != entries_.end()) {
+  auto &self = const_cast<JidOwnerRegistry &>(*this);
+  auto it = self.entries_.find(jid);
+  if (it != self.entries_.end() && !dropIfStaleLocked_(it)) {
     o.known = true;
     o.uid   = it->second.uid;
   }
@@ -81,8 +107,12 @@ PrivOpsAuthzPure::Owner JidOwnerRegistry::lookupByName(const std::string &name) 
   PrivOpsAuthzPure::Owner o;
   unsigned jid; JidOwnerRegistryPure::Entry e;
   if (JidOwnerRegistryPure::lookupByName(entries_, name, jid, e)) {
-    o.known = true;
-    o.uid   = e.uid;
+    auto &self = const_cast<JidOwnerRegistry &>(*this);
+    auto it = self.entries_.find(jid);
+    if (it != self.entries_.end() && !dropIfStaleLocked_(it)) {
+      o.known = true;
+      o.uid   = e.uid;
+    }
   }
   return o;
 }

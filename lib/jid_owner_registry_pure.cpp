@@ -148,4 +148,18 @@ bool findOwnerByPath(const EntryMap &entries, const std::string &query,
   return found;
 }
 
+size_t reconcile(EntryMap &entries, const LiveProbe &isLive) {
+  if (!isLive) return 0;
+  size_t dropped = 0;
+  for (auto it = entries.begin(); it != entries.end();) {
+    if (isLive(it->first, it->second)) {
+      ++it;
+    } else {
+      it = entries.erase(it);
+      ++dropped;
+    }
+  }
+  return dropped;
+}
+
 } // namespace JidOwnerRegistryPure

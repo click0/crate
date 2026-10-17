@@ -243,6 +243,56 @@ ATF_TEST_CASE_BODY(path_lookup_skips_entries_with_empty_path) {
   ATF_REQUIRE(!findOwnerByPath(m, "",                jid, e));
 }
 
+// --- 1.1.36: reconcile against a live probe ---
+
+namespace {
+Entry mk(uint32_t uid, const char *name, const char *path) {
+  Entry e; e.uid = uid; e.name = name; e.path = path; return e;
+}
+} // namespace
+
+ATF_TEST_CASE_WITHOUT_HEAD(reconcile_drops_dead_and_renamed_keeps_live);
+ATF_TEST_CASE_BODY(reconcile_drops_dead_and_renamed_keeps_live) {
+  EntryMap m;
+  m[1] = mk(1000, "web_pid10",  "/jails-tenants/1000/web");    // alive, same name
+  m[2] = mk(1001, "db_pid11",   "/jails-tenants/1001/db");     // jid reused by another jail
+  m[3] = mk(1000, "old_pid12",  "/jails-tenants/1000/old");    // gone
+  m[4] = mk(1002, "mail_pid13", "/jails-tenants/1002/mail");   // alive
+  // The daemon's probe: "a jail with this jid exists AND carries this name".
+  auto live = [](unsigned jid, const Entry &e) {
+    switch (jid) {
+      case 1: return e.name == "web_pid10";
+      case 2: return e.name == "other_pid99";   // kernel now has a different jail at jid 2
+      case 4: return e.name == "mail_pid13";
+      default: return false;                    // jid 3: no such jail
+    }
+  };
+  size_t dropped = JidOwnerRegistryPure::reconcile(m, live);
+  ATF_REQUIRE_EQ(dropped, (size_t)2);
+  ATF_REQUIRE_EQ(m.size(), (size_t)2);
+  ATF_REQUIRE(m.count(1) == 1);
+  ATF_REQUIRE(m.count(4) == 1);
+  ATF_REQUIRE(m.count(2) == 0);   // the reused jid no longer grants 1001 anything
+  ATF_REQUIRE(m.count(3) == 0);
+  // Idempotent: a second pass drops nothing.
+  ATF_REQUIRE_EQ(JidOwnerRegistryPure::reconcile(m, live), (size_t)0);
+  // The on-disk form reflects the pruned map.
+  ATF_REQUIRE(JidOwnerRegistryPure::serialize(m).find("db_pid11") == std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(reconcile_without_probe_is_noop);
+ATF_TEST_CASE_BODY(reconcile_without_probe_is_noop) {
+  EntryMap m;
+  m[1] = mk(1000, "web_pid10", "/jails-tenants/1000/web");
+  ATF_REQUIRE_EQ(JidOwnerRegistryPure::reconcile(m, JidOwnerRegistryPure::LiveProbe{}),
+                 (size_t)0);
+  ATF_REQUIRE_EQ(m.size(), (size_t)1);
+  // An empty map is fine too.
+  EntryMap empty;
+  ATF_REQUIRE_EQ(JidOwnerRegistryPure::reconcile(empty, [](unsigned, const Entry &) { return false; }),
+                 (size_t)0);
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, serialize_empty_is_empty_string);
   ATF_ADD_TEST_CASE(tcs, serialize_sorts_by_jid_and_terminates);
@@ -264,4 +314,6 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, path_lookup_picks_longest_prefix);
   ATF_ADD_TEST_CASE(tcs, path_lookup_unknown_path_misses);
   ATF_ADD_TEST_CASE(tcs, path_lookup_skips_entries_with_empty_path);
+  ATF_ADD_TEST_CASE(tcs, reconcile_drops_dead_and_renamed_keeps_live);
+  ATF_ADD_TEST_CASE(tcs, reconcile_without_probe_is_noop);
 }

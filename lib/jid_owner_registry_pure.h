@@ -26,6 +26,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 
@@ -67,5 +68,20 @@ bool lookupByName(const EntryMap &entries, const std::string &name,
 // inside an owned jail. Returns false on no match.
 bool findOwnerByPath(const EntryMap &entries, const std::string &query,
                      unsigned &jidOut, Entry &entryOut);
+
+// 1.1.36: reconciliation against the live kernel state. The registry
+// is persisted across daemon restarts, but jids restart at 1 after a
+// reboot, jails die outside destroy_jail (crash, admin `jail -r`, the
+// HTTP DELETE route) and uid-0 creates are never recorded — so an entry
+// can describe a jid that now belongs to a different jail, and a
+// tenant whose stale entry matches that jid would pass checkOwnedJid
+// for set_rctl / signal_jail / cpuset / configure_iface against it.
+//
+// `isLive(jid, entry)` is the daemon's probe: true iff a jail with that
+// jid exists AND its kernel name equals entry.name. Every entry the
+// probe rejects is erased. Returns the number of entries dropped. Pure
+// — the probe is injected so tests can drive it without libjail.
+using LiveProbe = std::function<bool(unsigned jid, const Entry &entry)>;
+size_t reconcile(EntryMap &entries, const LiveProbe &isLive);
 
 } // namespace JidOwnerRegistryPure

@@ -138,7 +138,9 @@ ATF_TEST_CASE_BODY(authorize_host_global_verbs_allowed) {
   auto e = env1000();
   // Host-global verbs are not pool-scoped; they pass the per-user gate
   // (still group-gated at the socket; host-wide by design).
-  ATF_REQUIRE(authorize(Verb::AddPfRule, "", "", e)        == Decision::Allow);
+  // 1.1.36: add_pf_rule left this group — its anchor names a jail (see
+  // pf_anchor_verbs_name_scoped); an empty anchor is now a deny.
+  ATF_REQUIRE(authorize(Verb::AddPfRule, "", "", e)        == Decision::DenyForeignAnchor);
   ATF_REQUIRE(authorize(Verb::AddIpfwRule, "", "", e)      == Decision::Allow);
   ATF_REQUIRE(authorize(Verb::CreateEpair, "", "", e)      == Decision::Allow);
   ATF_REQUIRE(authorize(Verb::ConfigureIface, "", "", e)   == Decision::Allow);
@@ -560,9 +562,72 @@ ATF_TEST_CASE_BODY(host_global_verbs_still_allowed) {
   auto e = env1000();
   auto foreign = fixedOwner(77, "web", 1001);   // someone else owns everything
   // genuinely host-global verbs are unaffected by the 1.1.17 tightening
-  for (Verb v : {Verb::TeardownIface, Verb::AddPfRule, Verb::AddIpfwRule,
+  // (1.1.36 moved the pf anchor verbs out of this group — see below)
+  for (Verb v : {Verb::TeardownIface, Verb::AddIpfwRule,
                  Verb::SetIfaceUp, Verb::BridgeAddMember, Verb::CreateEpair}) {
     ATF_REQUIRE(authorize(v, Request{}, e, foreign) == Decision::Allow);
+  }
+}
+
+// --- 1.1.36: pf anchor verbs + attach_zfs jid ---
+
+namespace {
+Request reqAnchor(std::string a) { Request r; r.anchor = std::move(a); return r; }
+} // namespace
+
+ATF_TEST_CASE_WITHOUT_HEAD(anchor_jail_name_parsing);
+ATF_TEST_CASE_BODY(anchor_jail_name_parsing) {
+  using PrivOpsAuthzPure::anchorJailName;
+  ATF_REQUIRE_EQ(anchorJailName("crate/web_pid123"), std::string("web_pid123"));
+  ATF_REQUIRE_EQ(anchorJailName("crate/a"), std::string("a"));
+  ATF_REQUIRE_EQ(anchorJailName("crate"), std::string(""));        // root anchor
+  ATF_REQUIRE_EQ(anchorJailName("crate/"), std::string(""));
+  ATF_REQUIRE_EQ(anchorJailName("crate/web/inner"), std::string("")); // nested deeper
+  ATF_REQUIRE_EQ(anchorJailName("crates/web"), std::string(""));
+  ATF_REQUIRE_EQ(anchorJailName("other/web"), std::string(""));
+  ATF_REQUIRE_EQ(anchorJailName(""), std::string(""));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(pf_anchor_verbs_name_scoped);
+ATF_TEST_CASE_BODY(pf_anchor_verbs_name_scoped) {
+  auto e = env1000();
+  auto mine    = fixedOwner(77, "web_pid1", 1000);
+  auto foreign = fixedOwner(77, "web_pid1", 1001);
+  for (Verb v : {Verb::AddPfRule, Verb::RemovePfRule, Verb::FlushPfAnchor}) {
+    // own jail's anchor -> Allow
+    ATF_REQUIRE(authorize(v, reqAnchor("crate/web_pid1"), e, mine) == Decision::Allow);
+    // another tenant's jail anchor -> Deny (flush/inject into their rules)
+    ATF_REQUIRE(authorize(v, reqAnchor("crate/web_pid1"), e, foreign)
+                == Decision::DenyForeignAnchor);
+    // unknown jail (pre-registry / bootstrap) -> Allow, like destroy_jail
+    ATF_REQUIRE(authorize(v, reqAnchor("crate/legacy_pid9"), e, foreign) == Decision::Allow);
+    // not a per-jail crate anchor at all -> Deny: root "crate", nested,
+    // or some unrelated host anchor; a tenant has no business there.
+    ATF_REQUIRE(authorize(v, reqAnchor("crate"), e, mine) == Decision::DenyForeignAnchor);
+    ATF_REQUIRE(authorize(v, reqAnchor("crate/web_pid1/x"), e, mine) == Decision::DenyForeignAnchor);
+    ATF_REQUIRE(authorize(v, reqAnchor("ftp-proxy/*"), e, mine) == Decision::DenyForeignAnchor);
+    ATF_REQUIRE(authorize(v, reqAnchor(""), e, mine) == Decision::DenyForeignAnchor);
+  }
+  ATF_REQUIRE(std::string(decisionReason(Decision::DenyForeignAnchor)).find("anchor")
+              != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(attach_zfs_gates_jid_too);
+ATF_TEST_CASE_BODY(attach_zfs_gates_jid_too) {
+  auto e = env1000();
+  Request rq;
+  rq.dataset = e.zfsPrefix + "/web";   // own dataset
+  rq.jid     = 77;
+  for (Verb v : {Verb::AttachZfs, Verb::DetachZfs}) {
+    // own dataset + own jid -> Allow
+    ATF_REQUIRE(authorize(v, rq, e, fixedOwner(77, "web", 1000)) == Decision::Allow);
+    // own dataset + another tenant's jid -> Deny
+    ATF_REQUIRE(authorize(v, rq, e, fixedOwner(77, "web", 1001)) == Decision::DenyForeignJid);
+    // own dataset + unknown jid -> Allow (bootstrap)
+    ATF_REQUIRE(authorize(v, rq, e, fixedOwner(78, "web", 1001)) == Decision::Allow);
+    // foreign dataset still wins first, whatever the jid says
+    Request bad = rq; bad.dataset = "zroot/crate-tenants/1001/web";
+    ATF_REQUIRE(authorize(v, bad, e, fixedOwner(77, "web", 1000)) == Decision::DenyForeignDataset);
   }
 }
 
@@ -619,4 +684,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, host_global_verbs_still_allowed);
   ATF_ADD_TEST_CASE(tcs, decision_reason_non_empty);
   ATF_ADD_TEST_CASE(tcs, authorize_path_unknown_target_confined_to_caller_prefix);
+  ATF_ADD_TEST_CASE(tcs, anchor_jail_name_parsing);
+  ATF_ADD_TEST_CASE(tcs, pf_anchor_verbs_name_scoped);
+  ATF_ADD_TEST_CASE(tcs, attach_zfs_gates_jid_too);
 }

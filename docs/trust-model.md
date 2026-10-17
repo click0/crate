@@ -129,15 +129,28 @@ differs by transport:
   `jid`) and `reclaim_iface_from_vnet` (pulls an iface out of a named
   jail → gated by `jail_name`).
 
+- *1.1.36:* `add_pf_rule` / `remove_pf_rule` / `flush_pf_anchor` — the
+  `anchor` is crate's per-jail `crate/<kernel jail name>`, so it is
+  gated like `destroy_jail`'s name (`DenyForeignAnchor` for another
+  tenant's jail, for the root `crate` anchor and for any non-crate
+  anchor); `attach_zfs` / `detach_zfs` gate the `jid` end as well as
+  the dataset. The jid→owner registry is **reconciled** against the
+  live kernel at startup and on every lookup hit (a jid that is gone or
+  now carries a different name drops its row), and `destroy_jail`
+  forgets by the jid resolved before removal.
+
 The remaining verbs still pass the gate: **genuinely host-global**
-verbs (`teardown_iface`, `set_iface_up`, `bridge_*`, `add_pf_rule`,
-`add_ipfw_rule`, `configure_ipfw_nat`, `create_epair`) act on shared
-host state with no tenant-specific target, so they cannot be
-pool-scoped and stay host-wide by design. With
-1.1.12+1.1.13+1.1.14+1.1.15+1.1.17 the per-tenant gate covers **every**
-privops verb that carries an operator-controlled ownership signal in
-its request. The per-verb handlers remain uid-blind; the gate runs
-ahead of them.
+verbs (`set_iface_up`, `add_ipfw_rule`, `configure_ipfw_nat`,
+`create_epair`) act on shared host state with no tenant-specific
+target, so they cannot be pool-scoped and stay host-wide by design.
+The **interface-named** verbs (`configure_iface`'s `ifname`/`bridge`,
+`teardown_iface`, `bridge_add_member` / `bridge_del_member`, the iface
+of `reclaim_iface_from_vnet`) do carry a tenant signal — an epair half
+belongs to whoever's `create_epair` made it — but the daemon has no
+iface→owner registry yet to resolve it, so they remain host-wide for
+now (tracked in `TODO`). Everything else that carries an
+operator-controlled ownership signal is gated. The per-verb handlers
+remain uid-blind; the gate runs ahead of them.
 
 > Consequence: whoever can reach privops — an `admin` bearer token, or
 > membership in the privops socket's group — still has host-wide control
@@ -380,10 +393,12 @@ security boundary:
    trail, not an access decision.
 
 What still remains host-wide after (1)–(3) is **by design**, not a
-pending gate: the genuinely host-global verbs (`teardown_iface`,
-`set_iface_up`, `bridge_*`, `add_pf_rule`, `add_ipfw_rule`,
-`configure_ipfw_nat`, `create_epair` — shared host state with no tenant
-target), the `admin`-only HTTP transport (no peer uid), and the
+pending gate: the genuinely host-global verbs (`set_iface_up`,
+`add_ipfw_rule`, `configure_ipfw_nat`, `create_epair` — shared host
+state with no tenant target), the interface-named verbs until an
+iface→owner registry exists (`teardown_iface`, `bridge_*`,
+`configure_iface`'s `ifname`), the `admin`-only HTTP transport (no peer
+uid), and the
 bootstrap concession that lets jids / names absent from the registry
 through (for paths it is limited to the caller's own prefix since
 1.1.35). A multi-tenant deployment that must keep operators off that

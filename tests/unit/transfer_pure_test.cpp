@@ -121,7 +121,37 @@ ATF_TEST_CASE_BODY(hex_encode_basic_vectors) {
                  std::string("deadbeef"));
 }
 
+// --- 1.1.36: artifactContainerName ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(artifact_container_name_round_trip);
+ATF_TEST_CASE_BODY(artifact_container_name_round_trip) {
+  using TransferPure::artifactContainerName;
+  // exactly what handleContainerExport produces: <name>-<unixtime>.crate
+  ATF_REQUIRE_EQ(artifactContainerName("web-1760000000.crate"), std::string("web"));
+  // jail names with '-' and digits of their own: only the LAST -<digits> goes
+  ATF_REQUIRE_EQ(artifactContainerName("dev-postgres-1-1760000000.crate"),
+                 std::string("dev-postgres-1"));
+  ATF_REQUIRE_EQ(artifactContainerName("web_pid123-1760000000.crate"),
+                 std::string("web_pid123"));
+  ATF_REQUIRE_EQ(artifactContainerName("a-1.crate"), std::string("a"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(artifact_container_name_rejects_other_shapes);
+ATF_TEST_CASE_BODY(artifact_container_name_rejects_other_shapes) {
+  using TransferPure::artifactContainerName;
+  const char *bad[] = {
+    "", ".crate", "web.crate", "web-.crate", "-1760000000.crate",
+    "web-1760000000", "web-1760000000.crate.sig", "1760000000.crate",
+    "web-17600x0000.crate",
+  };
+  for (const char *b : bad)
+    if (!artifactContainerName(b).empty())
+      ATF_FAIL(std::string("accepted: ") + b);
+}
+
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, artifact_container_name_round_trip);
+  ATF_ADD_TEST_CASE(tcs, artifact_container_name_rejects_other_shapes);
   ATF_ADD_TEST_CASE(tcs, name_empty_is_rejected);
   ATF_ADD_TEST_CASE(tcs, name_reserved_dot_and_dotdot_rejected);
   ATF_ADD_TEST_CASE(tcs, name_too_long_rejected);
