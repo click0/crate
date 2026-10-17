@@ -115,10 +115,28 @@ Decision authorize(PrivOpsPure::Verb v,
   using V = PrivOpsPure::Verb;
   switch (v) {
     case V::AttachZfs:
-    case V::DetachZfs:
-      return datasetOwned(req.dataset, env.zfsPrefix)
-                 ? Decision::Allow
-                 : Decision::DenyForeignDataset;
+    case V::DetachZfs: {
+      if (!datasetOwned(req.dataset, env.zfsPrefix))
+        return Decision::DenyForeignDataset;
+      // 1.1.36: the jid end too — a caller could otherwise attach its
+      // own dataset to, or detach one from, another tenant's jail.
+      return checkOwnedJid(req.jid, env, lookup);
+    }
+
+    // 1.1.36: pf anchor verbs. crate's per-jail anchors are
+    // "crate/<kernel jail name>", so the anchor carries an ownership
+    // signal exactly like destroy_jail's `name`: a tenant must not
+    // flush or inject into another tenant's anchor. Anything that is
+    // not a per-jail crate anchor (the root "crate", nested or foreign
+    // anchors) is host state a tenant has no business touching.
+    case V::AddPfRule:
+    case V::RemovePfRule:
+    case V::FlushPfAnchor: {
+      const std::string jail = anchorJailName(req.anchor);
+      if (jail.empty()) return Decision::DenyForeignAnchor;
+      Decision d = checkOwnedName(jail, env, lookup);
+      return d == Decision::DenyForeignJailName ? Decision::DenyForeignAnchor : d;
+    }
 
     case V::SetLoginclassRctl:
     case V::ClearLoginclassRctl:
@@ -194,13 +212,25 @@ Decision authorize(PrivOpsPure::Verb v,
 
     default:
       // Remaining host-global verbs (teardown_iface, set_iface_up,
-      // bridge_*, add_pf_rule, add_ipfw_rule, configure_ipfw_nat,
-      // create_epair, …) operate on shared host state with no
-      // tenant-specific target, so they cannot be pool-scoped and stay
-      // host-wide by design — consistent with privops being a single
-      // trust domain for the host.
+      // bridge_*, add_ipfw_rule, configure_ipfw_nat, create_epair, …)
+      // operate on shared host state with no tenant-specific target
+      // the daemon can resolve today, so they stay host-wide —
+      // consistent with privops being a single trust domain for the
+      // host. The iface-named ones (configure_iface ifname/bridge,
+      // teardown_iface, bridge_*_member, reclaim's iface) DO carry a
+      // tenant signal but need an iface→owner registry fed by
+      // create_epair to gate it; tracked in TODO.
       return Decision::Allow;
   }
+}
+
+std::string anchorJailName(const std::string &anchor) {
+  static const std::string kPrefix = "crate/";
+  if (anchor.size() <= kPrefix.size()) return "";
+  if (anchor.compare(0, kPrefix.size(), kPrefix) != 0) return "";
+  std::string rest = anchor.substr(kPrefix.size());
+  if (rest.find('/') != std::string::npos) return "";   // nested deeper
+  return rest;
 }
 
 Decision authorize(PrivOpsPure::Verb v,
@@ -233,6 +263,8 @@ const char *decisionReason(Decision d) {
       return "mount source lies inside another operator's per-user path prefix";
     case Decision::DenyUnownedPath:
       return "path is neither inside a jail owned by the caller nor inside the caller's per-user path prefix";
+    case Decision::DenyForeignAnchor:
+      return "pf anchor is not a crate/<jail> anchor of a jail owned by the caller";
   }
   return "deny";
 }

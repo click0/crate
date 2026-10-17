@@ -61,10 +61,30 @@ class JidOwnerRegistry {
   // tests. Number of entries currently held.
   size_t size() const;
 
+  // 1.1.36: install the live-jail probe (JidOwnerRegistryPure::LiveProbe
+  // — true iff a jail with that jid exists and has that name). Once set,
+  // (a) reconcile() drops every entry the probe rejects and persists,
+  // and (b) lookupByJid / lookupByName re-check a HIT against the probe
+  // and, if the jail is gone or the jid now carries another name,
+  // forget the entry and report unknown. byPath is not re-checked: a
+  // stale path entry for a stopped jail can only produce a *deny* for
+  // a foreign caller (conservative) or an allow for its own owner.
+  void setLiveProbe(JidOwnerRegistryPure::LiveProbe probe);
+
+  // Drop every entry the probe rejects; returns the count. Called by
+  // daemon/main.cpp right after loading the file, before the privops
+  // listener starts. No-op without a probe.
+  size_t reconcile();
+
  private:
   std::string                              path_;
   JidOwnerRegistryPure::EntryMap           entries_;
+  JidOwnerRegistryPure::LiveProbe          probe_;
   mutable std::mutex                       m_;
+
+  // Caller MUST hold `m_`. If a probe is installed and rejects the
+  // entry at `it`, erase it, persist, and return true (stale).
+  bool dropIfStaleLocked_(JidOwnerRegistryPure::EntryMap::iterator it) const;
 
   // Caller MUST hold `m_`. Atomic write: tmpfile + rename.
   void persistLocked_() const;

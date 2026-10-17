@@ -25,6 +25,17 @@ namespace TransferPure {
 // Returns "" on success; otherwise a one-line reason for the 400.
 std::string validateArtifactName(const std::string &name);
 
+// 1.1.36: recover the container name from an export artifact filename.
+// `POST /containers/:name/export` names its artifact
+// `<jail name>-<unix time>.crate` (routes.cpp handleContainerExport);
+// `GET /exports/:filename` needs the jail name back to run the
+// per-container pool gate, so a pool-scoped admin cannot download
+// another pool's export. Returns "" when the filename is not of that
+// shape (the caller then refuses the download). Jail names may
+// themselves contain '-' and digits, so the split is on the LAST
+// "-<digits>.crate" run only.
+std::string artifactContainerName(const std::string &filename);
+
 // Format a 200 OK JSON body for `POST /export`. `sha256Hex` is the
 // SHA-256 of the produced file as 64 lowercase hex characters.
 std::string formatExportResponse(const std::string &file,

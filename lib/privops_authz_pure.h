@@ -79,6 +79,8 @@ enum class Decision {
   DenyForeignSource,     // mount_nullfs source lies inside another tenant's path prefix
   DenyUnownedPath,       // 1.1.35: path-scoped target not in a caller-owned jail and
                          // outside the caller's per-user path prefix (per-user split on)
+  DenyForeignAnchor,     // 1.1.36: pf anchor is not crate/<jail> or that jail is
+                         // owned by another uid
 };
 
 // Result of looking a target up in the daemon's jid->owner registry.
@@ -123,7 +125,16 @@ struct Request {
   // every tenant prefix) stay allowed — privops is a single trust
   // domain for the host, the gate only enforces tenant isolation.
   std::string source;
+  // 1.1.36: pf anchor for add_pf_rule / remove_pf_rule / flush_pf_anchor.
+  // crate composes per-jail anchors as "crate/<kernel jail name>", so
+  // the name after the slash is looked up like destroy_jail's `name`.
+  std::string anchor;
 };
+
+// 1.1.36: the jail name a per-jail pf anchor refers to, or "" when
+// `anchor` is not of the form "crate/<name>" (root "crate", other
+// anchors, nested deeper). Exposed for tests.
+std::string anchorJailName(const std::string &anchor);
 
 // True when `dataset` is the caller's prefix itself or a descendant
 // ("<prefix>/..."). An empty `zfsPrefix` means per-user ZFS split is

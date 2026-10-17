@@ -12,6 +12,7 @@
 #include "privops_listener.h"
 
 #include "../lib/jid_owner_registry.h"
+#include "../lib/jail_query.h"
 
 #include "err.h"
 #include "misc.h"
@@ -144,6 +145,22 @@ int main(int argc, char **argv) {
     // subsequent jid/name-scoped verbs from a different operator are
     // denied 403.
     static JidOwnerRegistry jidOwnerRegistry("/var/db/crate/jid_owners.tsv");
+    // 1.1.36: tie the persisted registry to the live kernel state. jids
+    // restart at 1 after a reboot and jails die outside destroy_jail
+    // (crash, `jail -r`, HTTP DELETE), so a loaded entry can name a jid
+    // that now belongs to a different jail — and its recorded owner
+    // would pass the jid gate against it. The probe says "alive with
+    // the same name"; stale rows are dropped now and on every lookup
+    // hit from here on.
+    jidOwnerRegistry.setLiveProbe(
+      [](unsigned jid, const JidOwnerRegistryPure::Entry &e) {
+        auto j = JailQuery::getJailByJid((int)jid);
+        return j && !j->dying && j->name == e.name;
+      });
+    if (size_t dropped = jidOwnerRegistry.reconcile())
+      std::cerr << "crated: jid_owner_registry: dropped " << dropped
+                << " stale entr" << (dropped == 1 ? "y" : "ies")
+                << " (jail gone or jid reused)" << std::endl;
     Crated::setJidOwnerRegistry(&jidOwnerRegistry);
 
     Crated::PrivopsListener privopsListener(config);

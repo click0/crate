@@ -693,7 +693,7 @@ PerUserEnvPure::Config g_perUserAuthzCfg;
 // orphan jail because we couldn't write a tsv line.
 void maybeUpdateJidOwnerRegistry(Verb v, uint32_t uid,
                                   const PrivOpsNvPure::FieldMap &m,
-                                  int status) {
+                                  int status, unsigned preDestroyJid) {
   if (!g_jidOwnerRegistry || uid == 0) return;
   if (status < 200 || status >= 300)  return;
 
@@ -727,9 +727,13 @@ void maybeUpdateJidOwnerRegistry(Verb v, uint32_t uid,
     std::string name = field("name");
     if (name.empty()) return;
     try {
-      g_jidOwnerRegistry->forgetByName(name);
+      // 1.1.36: forget by the jid resolved before the jail went away —
+      // unambiguous even if two entries ever carried the same name.
+      // Name fallback only when the pre-dispatch lookup found nothing.
+      if (preDestroyJid == 0 || !g_jidOwnerRegistry->forgetByJid(preDestroyJid))
+        g_jidOwnerRegistry->forgetByName(name);
     } catch (const std::exception &e) {
-      std::cerr << "privops: jid_owner_registry forgetByName(" << name
+      std::cerr << "privops: jid_owner_registry forget(" << name
                 << "): " << e.what() << std::endl;
     }
   }
@@ -1087,6 +1091,10 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       // 1.1.17: reclaim_iface_from_vnet names its jail in "jail_name"
       // (not "name"); it's gated by checkOwnedName like destroy_jail.
       case Verb::ReclaimIfaceFromVnet: req.jailName = field("jail_name"); break;
+      // 1.1.36: pf anchor verbs carry "crate/<jail name>" in "anchor".
+      case Verb::AddPfRule:
+      case Verb::RemovePfRule:
+      case Verb::FlushPfAnchor:        req.anchor = field("anchor");     break;
       default:                                                          break;
     }
     PrivOpsAuthzPure::OwnerLookup lookup = g_jidOwnerRegistry
@@ -1097,6 +1105,19 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
     if (dec != PrivOpsAuthzPure::Decision::Allow) {
       return {403, PrivOpsWirePure::formatHandlerError(
                        "forbidden", PrivOpsAuthzPure::decisionReason(dec))};
+    }
+  }
+
+  // 1.1.36: destroy_jail forgets the registry entry by JID, resolved
+  // from the name BEFORE the jail is removed (the kernel name->jid
+  // mapping is gone afterwards). forgetByName stays as the fallback
+  // for a jail that vanished between this lookup and the handler.
+  unsigned preDestroyJid = 0;
+  if (v == Verb::DestroyJail) {
+    auto it = m.find("name");
+    if (it != m.end() && !it->second.empty()) {
+      if (auto j = JailQuery::getJailByName(it->second); j && j->jid > 0)
+        preDestroyJid = static_cast<unsigned>(j->jid);
     }
   }
 
@@ -1351,7 +1372,7 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
   }();
   maybeWritePerUserAudit(rootlessPerUser, operatorUid, v, result.status);
   maybeApplyUmbrella(v, operatorUid, result.status);
-  maybeUpdateJidOwnerRegistry(v, operatorUid, m, result.status);
+  maybeUpdateJidOwnerRegistry(v, operatorUid, m, result.status, preDestroyJid);
   return result;
 }
 

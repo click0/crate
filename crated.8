@@ -10,7 +10,7 @@
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
 .\"
-.Dd September 23, 2026
+.Dd October 17, 2026
 .Dt CRATED 8
 .Os
 .Sh NAME
@@ -112,8 +112,10 @@ Liveness check. No auth.
 List running jails (delegates to
 .Xr jls 8
 .Fl Fl libxo Ar json ) .
+Viewer token (1.1.36; was open on the TCP listener).
 .It GET Pa /api/v1/host
 Host-level info: kernel release, hostname, ncpu, physmem.
+Viewer token (1.1.36).
 .It GET Pa /metrics
 Prometheus exposition. No auth, rate-limited.
 .It GET Pa /api/v1/containers/:name/stats
@@ -156,6 +158,11 @@ Returns
 Stream a previously-exported
 .Pa .crate
 back to the client.
+The filename is
+.Pa <container>-<unixtime>.crate
+and the token's pool ACL is checked against
+.Pa <container>
+(1.1.36).
 .It POST Pa /api/v1/imports/:name
 Accept a raw
 .Pa .crate

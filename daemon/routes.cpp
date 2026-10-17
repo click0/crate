@@ -946,14 +946,24 @@ static void handleContainerExport(const httplib::Request &req, httplib::Response
 
 static void handleExportDownload(const httplib::Request &req, httplib::Response &res,
                                   const Config &config) {
-  if (!isAuthorized(req, config, "admin")) {
-    jsonError(res, 403, "unauthorized");
-    return;
-  }
   auto filename = req.path_params.at("filename");
   auto reason = TransferPure::validateArtifactName(filename);
   if (!reason.empty()) {
     jsonError(res, 400, reason);
+    return;
+  }
+  // 1.1.36: pool gate, like every other per-container route. The
+  // artifact is "<jail name>-<unixtime>.crate" (handleContainerExport),
+  // so the jail name is recoverable; a pool-scoped admin token could
+  // previously download any tenant's export. A filename that is not of
+  // that shape is not something this daemon produced — refuse it.
+  auto containerName = TransferPure::artifactContainerName(filename);
+  if (containerName.empty()) {
+    jsonError(res, 400, "artifact name is not <container>-<time>.crate");
+    return;
+  }
+  if (!isAuthorizedForContainer(req, config, "admin", containerName)) {
+    jsonError(res, 403, "unauthorized");
     return;
   }
   auto path = ARTIFACT_DIR + "/" + filename;
@@ -1096,27 +1106,45 @@ void registerRoutes(httplib::Server &srv, const Config &config,
     res.set_content("{\"status\":\"ok\"}", "application/json");
   });
 
-  // API v1 — read-only (F1) with rate limiting
+  // API v1 — read-only (F1) with rate limiting.
+  // 1.1.36: these three had NO token check at all, so on the TCP
+  // listener anyone could list every tenant's jails (names, paths,
+  // IPs), read a container's VNC/WS ports, and read host facts.
+  // crated.8 AUTHENTICATION has always said read endpoints need a
+  // viewer or admin token; now they do (unix-socket peers stay
+  // open, as everywhere else).
   srv.Get("/api/v1/containers",
-    [](const httplib::Request &req, httplib::Response &res) {
+    [&config](const httplib::Request &req, httplib::Response &res) {
       if (!checkRateLimit(getClientId(req), "/api/v1/containers", RateLimit::kRead)) {
         jsonError(res, 429, "rate limit exceeded");
+        return;
+      }
+      if (!isAuthorized(req, config, "viewer")) {
+        jsonError(res, 403, "unauthorized");
         return;
       }
       handleListContainers(req, res);
     });
   srv.Get("/api/v1/containers/:name/gui",
-    [](const httplib::Request &req, httplib::Response &res) {
+    [&config](const httplib::Request &req, httplib::Response &res) {
       if (!checkRateLimit(getClientId(req), "/api/v1/containers/gui", RateLimit::kRead)) {
         jsonError(res, 429, "rate limit exceeded");
+        return;
+      }
+      if (!isAuthorizedForContainer(req, config, "viewer", req.path_params.at("name"))) {
+        jsonError(res, 403, "unauthorized");
         return;
       }
       handleContainerGui(req, res);
     });
   srv.Get("/api/v1/host",
-    [](const httplib::Request &req, httplib::Response &res) {
+    [&config](const httplib::Request &req, httplib::Response &res) {
       if (!checkRateLimit(getClientId(req), "/api/v1/host", RateLimit::kRead)) {
         jsonError(res, 429, "rate limit exceeded");
+        return;
+      }
+      if (!isAuthorized(req, config, "viewer")) {
+        jsonError(res, 403, "unauthorized");
         return;
       }
       handleHostInfo(res, res);

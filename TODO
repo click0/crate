@@ -95,44 +95,34 @@ The bhyve/VM track is in TODO2.
   its own operator's `crate run`), but the only remaining gap in the
   path chain.
 
-* (MED) Unauthenticated read routes on the TCP listener.
-  daemon/routes.cpp:1096-1119: GET /api/v1/containers (full
-  `jls --libxo json`: names, paths, IPs of every tenant),
-  /api/v1/containers/:name/gui (VNC/WS ports) and /api/v1/host have no
-  isAuthorized() call. crated.8:173-176 says read endpoints need a
-  viewer/admin token; trust-model Plane 2 says list/get are
-  pool-isolated.
+  [FIXED in 1.1.36] viewer token on GET /api/v1/containers, /gui,
+  /host; pool gate on GET /exports/:filename
+  (TransferPure::artifactContainerName); pf anchor verbs name-scoped
+  (Decision::DenyForeignAnchor); attach_zfs/detach_zfs gate the jid;
+  jid→owner registry reconciled against live jails at startup and on
+  every lookup hit; destroy_jail forgets by pre-resolved jid.
 
-* (MED) Pool-scoped admin token escapes its pool via artifacts.
-  GET /api/v1/exports/:filename (routes.cpp:945) is admin-gated with no
-  pool check → downloads any tenant's export. POST /imports/:name +
-  POST /containers/:name/start (:987-1032, :328-334) lets a
-  pool-scoped admin place an arbitrary .crate and have crated run it
-  as root (the spec may declare host shares/scripts).
-  trust-model.md:225-228 presents pool-scoped tokens as isolated.
+* (MED) Interface-named verbs still host-global
+  (lib/privops_authz_pure.cpp default arm): configure_iface gates `jid`
+  but not ifname/bridge (any host NIC can be moved into the caller's
+  vnet); teardown_iface / bridge_add_member / bridge_del_member and the
+  iface of reclaim_iface_from_vnet accept other tenants' epairs. An
+  epair half belongs to whoever's create_epair made it, so the fix is
+  an iface→owner registry of the same shape as jid_owner_registry:
+  record `epairNa`/`epairNb` → uid on a successful create_epair
+  (privops_handlers.cpp handleCreateEpair), forget on teardown_iface,
+  reconcile against `ifconfig -l`, and gate the four verbs with
+  checkOwnedIface (unknown iface → bootstrap Allow, like jid). Non-epair
+  ifnames (host NICs) should be denied for per-user callers outright.
+  trust-model.md names this as the remaining gap.
 
-* (MED) Stale jid ownership: lib/jid_owner_registry.cpp persists to
-  /var/db/crate/jid_owners.tsv, main.cpp:146 loads it at startup with
-  no reconciliation against live jails. jids restart at 1 after
-  reboot; jails that die outside destroy_jail (crash, admin
-  `jail -r`, HTTP DELETE at routes.cpp:365) leave entries; HTTP/uid-0
-  creates never record (privops_handlers.cpp:648). A tenant whose stale
-  entry matches a reused jid passes checkOwnedJid for set_rctl /
-  signal_jail / set_jail_cpuset / configure_iface against someone
-  else's jail. Fix: at startup and on every lookup miss, drop entries
-  whose jid is not alive or whose live name/path differ. (Distinct
-  from the carried-over forget-by-name item in section 10.)
-
-* (MED) Verbs with tenant-identifying arguments left in the
-  host-global Allow arm (lib/privops_authz_pure.cpp:180-187):
-  add_pf_rule / remove_pf_rule / flush_pf_anchor take `anchor`, which
-  crate composes as crate/<jailname> (privops_pure.cpp:385-388) — a
-  tenant can flush or inject into another tenant's anchor;
-  configure_iface gates `jid` but not ifname/bridge (any host NIC can
-  be moved into the caller's vnet); teardown_iface / bridge_del_member
-  accept other tenants' epairs; attach_zfs / detach_zfs gate `dataset`
-  but not `jid` (:102-106). trust-model.md:136-139 claims every verb
-  with an operator-controlled ownership signal is gated.
+* (by design, documented) a pool-scoped ADMIN token can POST
+  /imports/:name + /containers/:name/start for a name in its pool and
+  have crated run that .crate as root (the spec may declare host
+  shares/scripts). trust-model §2b already states admin tokens are
+  host-wide, not pool-confined; only viewer/pool-scoped tokens carry
+  isolation. Making this real needs the spawned `crate run` to drop to
+  the token's mapped uid — part of the rootless §1 work, not a gate.
 
 * (MED) pf rule temp file is a predictable, attacker-ownable path
   written by root. lib/pfctl_ops.cpp:89,104: /tmp/crate-pf-<pid>.rules
@@ -772,11 +762,9 @@ The bhyve/VM track is in TODO2.
   `crate run` by the same user allocate the SAME address. Same bug in
   spec_registry.cpp (section 5). Fix with a stable `<path>.lock`.
 
-* (security, low-probability) jid→owner registry forget-by-name:
-  handleDestroyJail forgets by jail NAME (jid_owner_registry.cpp
-  forgetByName removes the first match); resolve name→jid before the
-  jail is removed and forget by jid. Now also see 2. "stale jid
-  ownership" for the reconciliation half.
+  [FIXED in 1.1.36] jid→owner registry forget-by-name: destroy_jail
+  now resolves name→jid before the handler runs and forgets by jid;
+  stale rows are reconciled against live jails.
 
 * (correctness, MED) lib/stack.cpp `stack up` calls runCrate()
   IN-PROCESS and sequentially per container (stack.cpp:871,977): a

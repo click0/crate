@@ -127,14 +127,28 @@ privileged operations to crated(8)»*).
   `reclaim_iface_from_vnet` (виштовхує iface з названого jail → гейт за
   `jail_name`).
 
+- *1.1.36:* `add_pf_rule` / `remove_pf_rule` / `flush_pf_anchor` —
+  `anchor` це per-jail `crate/<kernel-ім'я jail-у>`, тож гейтується як
+  `name` у `destroy_jail` (`DenyForeignAnchor` для jail-у іншого
+  тенанта, для кореневого якоря `crate` і для будь-якого не-crate
+  якоря); `attach_zfs` / `detach_zfs` гейтують і `jid`, не лише
+  датасет. jid→owner-реєстр **звіряється** з живим ядром на старті та
+  при кожному влучанні лукапу (jid, якого вже нема або який носить
+  інше ім'я, скидає свій рядок), а `destroy_jail` забуває за jid,
+  розв'язаним до видалення.
+
 Решта вербів проходить гейт: **справді host-global** верби
-(`teardown_iface`, `set_iface_up`, `bridge_*`, `add_pf_rule`,
-`add_ipfw_rule`, `configure_ipfw_nat`, `create_epair`) діють на
-спільний host-стан без тенант-специфічної цілі — їх не розпулити,
-лишаються host-wide за задумом. З 1.1.12+1.1.13+1.1.14+1.1.15+1.1.17
-пер-тенант-гейт покриває **кожен** privops-верб, що несе
-operator-controlled ownership-сигнал у запиті. Обробники лишаються
-uid-сліпими; гейт іде попереду них.
+(`set_iface_up`, `add_ipfw_rule`, `configure_ipfw_nat`, `create_epair`)
+діють на спільний host-стан без тенант-специфічної цілі — їх не
+розпулити, лишаються host-wide за задумом. **Інтерфейсно-іменовані**
+верби (`ifname`/`bridge` у `configure_iface`, `teardown_iface`,
+`bridge_add_member` / `bridge_del_member`, iface у
+`reclaim_iface_from_vnet`) тенант-сигнал несуть — epair-половинка
+належить тому, чий `create_epair` її створив, — але демон поки не має
+iface→owner-реєстру, щоб його розв'язати, тож вони лишаються host-wide
+(відстежується в `TODO`). Усе інше, що несе operator-controlled
+ownership-сигнал, гейтується. Обробники лишаються uid-сліпими; гейт іде
+попереду них.
 
 > Наслідок: будь-хто, хто має доступ до privops — `admin` bearer-токен
 > або членство в групі privops-сокета — досі має host-wide контроль над
@@ -375,10 +389,11 @@ privops безпечним для **взаємно недовірливих** о
    рішення доступу.
 
 Те, що лишається host-wide після (1)–(3), — це **задум**, а не
-відкладений гейт: справді host-глобальні верби (`teardown_iface`,
-`set_iface_up`, `bridge_*`, `add_pf_rule`, `add_ipfw_rule`,
-`configure_ipfw_nat`, `create_epair` — спільний стан хоста без
-тенант-цілі), `admin`-only HTTP-транспорт (без uid піра) і bootstrap-
+відкладений гейт: справді host-глобальні верби (`set_iface_up`,
+`add_ipfw_rule`, `configure_ipfw_nat`, `create_epair` — спільний стан
+хоста без тенант-цілі), інтерфейсно-іменовані верби до появи
+iface→owner-реєстру (`teardown_iface`, `bridge_*`, `ifname` у
+`configure_iface`), `admin`-only HTTP-транспорт (без uid піра) і bootstrap-
 поступка, що пропускає jid-и / імена, відсутні в реєстрі (для шляхів
 з 1.1.35 вона обмежена власним префіксом викликача). Мультитенантне
 розгортання, яке має тримати операторів подалі від цієї поверхні, досі
