@@ -68,13 +68,28 @@ Decision checkOwnedName(const std::string &name,
   return o.uid == env.uid ? Decision::Allow : Decision::DenyForeignJailName;
 }
 
+// Path-scoped verbs (mount/unmount target, devfs mount_path).
+//
+// 1.1.35: the registry hit decides when there is one; when there is
+// none the old rule was "Allow" (bootstrap concession for jails that
+// pre-date the registry). With a per-user path split configured that
+// concession let a tenant aim mount_nullfs / unmount (MNT_FORCE) /
+// devfs at any host directory (/etc, /var/db/crate — the registry
+// itself), at another tenant's STOPPED rootfs (destroy_jail forgets
+// the entry, so the tree on disk becomes "unknown"), or at the host
+// /dev. Now, when env.pathMasterPrefix is set, an unknown path is
+// allowed only inside the caller's own slice (env.pathPrefix). With no
+// per-user split configured the single-trust-domain model applies and
+// the bootstrap Allow stands.
 Decision checkOwnedPath(const std::string &path,
                         const PerUserEnvPure::Env &env,
                         const OwnerLookup &lookup) {
-  if (!lookup.byPath) return Decision::Allow;
-  Owner o = lookup.byPath(path);
-  if (!o.known) return Decision::Allow;        // path not in any tracked jail
-  return o.uid == env.uid ? Decision::Allow : Decision::DenyForeignPath;
+  Owner o = lookup.byPath ? lookup.byPath(path) : Owner{};
+  if (o.known)
+    return o.uid == env.uid ? Decision::Allow : Decision::DenyForeignPath;
+  if (env.pathMasterPrefix.empty()) return Decision::Allow;   // not configured
+  return pathOwned(path, env.pathPrefix) ? Decision::Allow
+                                         : Decision::DenyUnownedPath;
 }
 
 // 1.1.17: a mount_nullfs SOURCE is "foreign" when it lies inside the
@@ -216,6 +231,8 @@ const char *decisionReason(Decision d) {
       return "create_jail path is outside the caller's per-user path prefix";
     case Decision::DenyForeignSource:
       return "mount source lies inside another operator's per-user path prefix";
+    case Decision::DenyUnownedPath:
+      return "path is neither inside a jail owned by the caller nor inside the caller's per-user path prefix";
   }
   return "deny";
 }

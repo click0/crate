@@ -30,6 +30,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <errno.h>
+#include <limits.h>   // PATH_MAX (1.1.35 realpath check)
 
 #include <exception>
 #include <string>
@@ -39,6 +40,40 @@ namespace Crated {
 
 using PrivOpsPure::Verb;
 using PrivOpsWirePure::DispatchResult;
+
+namespace {
+
+// 1.1.35: path canonicalisation for the path-carrying verbs.
+//
+// The validators (lib/privops_pure.cpp validateAbsolutePath) and the
+// authorizer (lib/privops_authz_pure.cpp) work on the path STRING.
+// A tenant controls the contents of its own jail root, so a symlink
+// planted inside an owned tree ("<jail>/tmp/x -> /etc") produces a
+// target / mount_path / create path that passes the registry and
+// prefix checks while the kernel resolves it somewhere else. Every
+// such argument is therefore required to resolve to itself: realpath()
+// must succeed and return the same string. A path that does not exist
+// yet (ENOENT) is left to the handler/kernel to report. Residual
+// window: a symlink swapped in between this check and the syscall —
+// closing that needs an fd-based mount (O_RESOLVE_BENEATH), tracked in
+// TODO.
+std::string nonCanonicalReason(const std::string &p, const char *what) {
+  char buf[PATH_MAX];
+  if (::realpath(p.c_str(), buf) == nullptr) {
+    if (errno == ENOENT) return "";
+    return std::string(what) + ": cannot resolve '" + p + "': " + ::strerror(errno);
+  }
+  if (p != buf)
+    return std::string(what) + ": '" + p + "' is not canonical (resolves to '" +
+           buf + "'; symlink or non-normalised component)";
+  return "";
+}
+
+DispatchResult rejectNonCanonical(const std::string &reason) {
+  return {400, PrivOpsWirePure::formatHandlerError("path_not_canonical", reason)};
+}
+
+} // anon
 
 // --- handleSetRctl ---
 
@@ -127,6 +162,11 @@ DispatchResult handleDetachZfs(const PrivOpsPure::DetachZfsReq &r) {
 // --- handleMountNullfs / handleUnmountNullfs ---
 
 DispatchResult handleMountNullfs(const PrivOpsPure::MountNullfsReq &r) {
+  // 1.1.35: both ends must be canonical. The target must exist for
+  // nullfs anyway, so a symlink there is always caught; a source that
+  // is a symlink is refused too (the authorizer judged the string).
+  if (auto e = nonCanonicalReason(r.target, "target"); !e.empty()) return rejectNonCanonical(e);
+  if (auto e = nonCanonicalReason(r.source, "source"); !e.empty()) return rejectNonCanonical(e);
 #ifndef __FreeBSD__
   return {500, PrivOpsWirePure::formatHandlerError(
                 "platform_unsupported",
@@ -160,6 +200,7 @@ DispatchResult handleMountNullfs(const PrivOpsPure::MountNullfsReq &r) {
 }
 
 DispatchResult handleUnmountNullfs(const PrivOpsPure::UnmountNullfsReq &r) {
+  if (auto e = nonCanonicalReason(r.target, "target"); !e.empty()) return rejectNonCanonical(e);
 #ifndef __FreeBSD__
   return {500, PrivOpsWirePure::formatHandlerError(
                 "platform_unsupported",
@@ -338,6 +379,9 @@ DispatchResult handleCreateJail(const PrivOpsPure::CreateJailReq &r) {
   // The privops layer creates only the jail registration. ZFS
   // attach, mount, iface config are operator-driven via the other
   // verbs.
+  // 1.1.35: the path was checked against the caller's prefix as a
+  // string; make sure the kernel will use that same directory.
+  if (auto e = nonCanonicalReason(r.path, "path"); !e.empty()) return rejectNonCanonical(e);
   std::vector<std::string> argv = {CRATE_PATH_JAIL, "-c"};
   argv.push_back("name=" + r.name);
   argv.push_back("path=" + r.path);
@@ -346,8 +390,11 @@ DispatchResult handleCreateJail(const PrivOpsPure::CreateJailReq &r) {
   if (r.vnet)
     argv.push_back("vnet");
   // parameters: split on whitespace into separate argv entries.
-  // Validator already restricts to a single line and forbids shell
-  // metas so this split is safe.
+  // 1.1.35: the validator (PrivOpsPure::validateJailParameters) has
+  // already whitelisted every token as key=value from the allow.* /
+  // enforce_statfs / securelevel / children.max set, so nothing that
+  // reaches here can be an exec.* host hook, mount.fstab, or a second
+  // name=/path=.
   if (!r.parameters.empty()) {
     std::istringstream iss(r.parameters);
     std::string token;
@@ -548,6 +595,7 @@ DispatchResult handleSetJailCpuset(const PrivOpsPure::SetJailCpusetReq &r) {
 // --- handleApplyDevfsRuleset (1.1.10) ---
 
 DispatchResult handleApplyDevfsRuleset(const PrivOpsPure::ApplyDevfsRulesetReq &r) {
+  if (auto e = nonCanonicalReason(r.mountPath, "mount_path"); !e.empty()) return rejectNonCanonical(e);
   std::string rulesetStr = std::to_string(r.ruleset);
   try {
     Util::execCommand(
@@ -565,6 +613,7 @@ DispatchResult handleApplyDevfsRuleset(const PrivOpsPure::ApplyDevfsRulesetReq &
 // --- handleAddDevfsUnhideRule (1.1.10) ---
 
 DispatchResult handleAddDevfsUnhideRule(const PrivOpsPure::AddDevfsUnhideRuleReq &r) {
+  if (auto e = nonCanonicalReason(r.mountPath, "mount_path"); !e.empty()) return rejectNonCanonical(e);
   try {
     Util::execCommand(
       {CRATE_PATH_DEVFS, "-m", r.mountPath,

@@ -419,6 +419,16 @@ struct SignalJailReq {
 // with identical results.
 
 std::string validateCreateJail(const CreateJailReq &r);
+// 1.1.35: create_jail `parameters` whitelist. Whitespace-separated
+// key=value tokens; key must be one of allow.raw_sockets,
+// allow.socket_af, allow.sysvipc, allow.mount, allow.mount.zfs,
+// allow.quotas, allow.set_hostname, allow.chflags, allow.mlock
+// (0/1/true/false), enforce_statfs (0..2), securelevel (-1..3),
+// children.max (unsigned). Everything else jail(8) understands —
+// exec.* host hooks, mount.fstab, devfs_ruleset, ip4.addr, name=,
+// path=, vnet — is rejected. Empty is allowed. Called by
+// validateCreateJail; exposed for tests.
+std::string validateJailParameters(const std::string &parameters);
 std::string validateDestroyJail(const DestroyJailReq &r);
 std::string validateMountNullfs(const MountNullfsReq &r);
 std::string validateUnmountNullfs(const UnmountNullfsReq &r);

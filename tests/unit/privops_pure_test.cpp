@@ -403,6 +403,85 @@ ATF_TEST_CASE_BODY(create_jail_empty_hostname_ok) {
   ATF_REQUIRE_EQ(validateCreateJail(r), std::string());
 }
 
+// --- 1.1.35: create_jail `parameters` whitelist ---
+
+// Exactly what lib/run_jail.cpp composes today must pass unchanged.
+ATF_TEST_CASE_WITHOUT_HEAD(jail_parameters_accepts_client_string);
+ATF_TEST_CASE_BODY(jail_parameters_accepts_client_string) {
+  const std::string client =
+    "allow.raw_sockets=true allow.socket_af=true allow.sysvipc=false"
+    " allow.mount=true allow.mount.zfs=true allow.quotas=false"
+    " allow.set_hostname=false allow.chflags=false allow.mlock=true"
+    " enforce_statfs=1 securelevel=-1 children.max=0";
+  ATF_REQUIRE_EQ(validateJailParameters(client), std::string());
+  // 0/1 spelling, extra whitespace, and the empty list are fine too.
+  ATF_REQUIRE_EQ(validateJailParameters("allow.raw_sockets=0   enforce_statfs=2"), std::string());
+  ATF_REQUIRE_EQ(validateJailParameters("securelevel=3 children.max=16"), std::string());
+  ATF_REQUIRE_EQ(validateJailParameters(""), std::string());
+  CreateJailReq r;
+  r.name = "alpine"; r.path = "/zroot/jails/alpine"; r.parameters = client;
+  ATF_REQUIRE_EQ(validateCreateJail(r), std::string());
+}
+
+// Everything jail(8) understands that is NOT on the whitelist is
+// refused — above all the host-side exec hooks and the fields that
+// would override the gated name/path.
+ATF_TEST_CASE_WITHOUT_HEAD(jail_parameters_rejects_non_whitelisted_keys);
+ATF_TEST_CASE_BODY(jail_parameters_rejects_non_whitelisted_keys) {
+  const char *bad[] = {
+    "exec.prestart=/tmp/evil",
+    "exec.poststart=/tmp/evil",
+    "exec.created=/tmp/evil",
+    "exec.start=/bin/sh",
+    "mount.fstab=/tmp/fstab",
+    "mount.devfs=1",
+    "devfs_ruleset=4",
+    "allow.mount.nullfs=1",
+    "allow.mount.procfs=1",
+    "ip4.addr=10.0.0.1",
+    "ip4=inherit",
+    "host.hostname=other",
+    "name=other",
+    "path=/",
+    "vnet",
+    "persist",
+    "allow.raw_sockets=1 exec.prestart=/tmp/evil",   // one bad token taints the lot
+  };
+  for (const char *p : bad) {
+    if (validateJailParameters(p).empty())
+      ATF_FAIL(std::string("accepted: ") + p);
+    CreateJailReq r;
+    r.name = "alpine"; r.path = "/zroot/jails/alpine"; r.parameters = p;
+    if (validateCreateJail(r).empty())
+      ATF_FAIL(std::string("create_jail accepted: ") + p);
+  }
+}
+
+// A whitelisted key with an out-of-shape value is refused too.
+ATF_TEST_CASE_WITHOUT_HEAD(jail_parameters_rejects_bad_values);
+ATF_TEST_CASE_BODY(jail_parameters_rejects_bad_values) {
+  const char *bad[] = {
+    "allow.raw_sockets=maybe",
+    "allow.raw_sockets=",
+    "=1",
+    "allow.mount",
+    "enforce_statfs=3",
+    "enforce_statfs=-1",
+    "securelevel=4",
+    "securelevel=-2",
+    "securelevel=abc",
+    "children.max=-1",
+    "children.max=1e3",
+    "children.max=99999999999",
+  };
+  for (const char *p : bad)
+    if (validateJailParameters(p).empty())
+      ATF_FAIL(std::string("accepted: ") + p);
+  // The pre-1.1.35 line/metachar rules still apply on top.
+  ATF_REQUIRE(!validateJailParameters("allow.raw_sockets=1\nexec.prestart=/x").empty());
+  ATF_REQUIRE(!validateJailParameters("allow.raw_sockets=$(id)").empty());
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(mount_nullfs_validates_both_paths);
 ATF_TEST_CASE_BODY(mount_nullfs_validates_both_paths) {
   MountNullfsReq r;
@@ -952,6 +1031,9 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, create_jail_rejects_bad_name);
   ATF_ADD_TEST_CASE(tcs, create_jail_rejects_bad_path);
   ATF_ADD_TEST_CASE(tcs, create_jail_empty_hostname_ok);
+  ATF_ADD_TEST_CASE(tcs, jail_parameters_accepts_client_string);
+  ATF_ADD_TEST_CASE(tcs, jail_parameters_rejects_non_whitelisted_keys);
+  ATF_ADD_TEST_CASE(tcs, jail_parameters_rejects_bad_values);
   ATF_ADD_TEST_CASE(tcs, mount_nullfs_validates_both_paths);
   ATF_ADD_TEST_CASE(tcs, set_rctl_uses_retune_validators);
   ATF_ADD_TEST_CASE(tcs, attach_zfs_requires_jid_and_dataset);

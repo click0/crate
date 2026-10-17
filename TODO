@@ -76,66 +76,24 @@ The bhyve/VM track is in TODO2.
 
 === 2. crated privops / HTTP — security ===
 
-* (HIGH) create_jail `parameters` is an unchecked pass-through to
-  `jail -c` argv. daemon/privops_handlers.cpp:351-355 splits
-  r.parameters on whitespace and appends every token; the only check
-  is validateRuleText (lib/privops_pure.cpp:433-436: one line, no
-  `` ` $ ; \ ``). jail(8) parameters include exec.prestart /
-  exec.poststart / exec.created (run on the HOST as root),
-  mount.fstab, allow.mount.*, devfs_ruleset, ip4.addr, children.max,
-  securelevel, and repeated name=/path= (jail(8) accepts duplicates;
-  the recorded registry name/path would then differ from the real
-  jail — plausible). The authz gate (:1037) checks only the top-level
-  `path`. Any privops-group member gets host-root-equivalent through
-  a verb the trust model says is gated. The honest client
-  (lib/run_jail.cpp:88-102) only ever sends allow.*, enforce_statfs,
-  securelevel, children.max → add a daemon-side whitelist of exactly
-  those keys (and reject name=/path=/exec.*/mount.*), with a unit test
-  that validateCreateJail rejects `exec.prestart=...`.
+  [FIXED in 1.1.35] the four HIGH items: create_jail `parameters`
+  whitelist (PrivOpsPure::validateJailParameters); path-scoped verbs
+  confined to the caller's prefix when path_master_prefix is set
+  (Decision::DenyUnownedPath); realpath() canonicalisation of every
+  path argument in privops_handlers.cpp + lstat/O_EXCL mount targets
+  in run_gui.cpp; ws-console on checkBearerAuthFull. Also
+  routes.cpp jsonError() escaping.
 
-* (HIGH) Path-scoped verbs are confined only when the target is
-  already in the registry. lib/privops_authz_pure.cpp:71-78 returns
-  Allow when byPath finds no entry, so mount_nullfs / unmount_nullfs
-  (privops_handlers.cpp:145-149,169) and apply_devfs_ruleset /
-  add_devfs_unhide_rule (:554,:570) work on (a) any host directory
-  (/etc, /usr/local/bin, /var/db/crate — including the registry file
-  itself), (b) any STOPPED tenant's rootfs under
-  path_master_prefix/<other-uid> (destroy_jail forgets the entry),
-  (c) host /dev. `read_only` is client-settable
-  (lib/privops_nv_pure.cpp:112-114) and MNT_FORCE unmount of host
-  filesystems is reachable (:168). The source end already has a
-  tenant-root check (sourceForeign, authz :88-92); apply the same
-  "must be under the caller's own prefix" rule to target /
-  mount_path, and treat "absent from registry AND under
-  path_master_prefix" as foreign. docs/trust-model.md:359-362
-  frames the concession as "resources absent from the registry" —
-  tighten the text with the code.
-
-* (HIGH) No path canonicalisation anywhere in the privops chain.
-  validateAbsolutePath (lib/privops_pure.cpp:200-209) rejects `..`
-  and metacharacters only; handlers hand the string to nmount /
-  unmount / devfs -m / `jail path=`. A tenant controls its own jail
-  root, so a symlink inside an owned tree yields a target / source /
-  mount_path / create_jail path that passes byPath/pathOwned while
-  the kernel resolves it elsewhere. No realpath / O_RESOLVE_BENEATH
-  in daemon/ (grep). Same class on the client side:
-  lib/run_gui.cpp:737-739, 778-782, 819-828, 1023-1028 do
-  `fileExists(target) ? skip : touch(target)` then nullfs-mount the
-  host socket over `target` inside the jail; jail /tmp persists
-  across runs, so a compromised jail plants
-  /tmp/wayland/pipewire-0 -> /etc/master.passwd and the next
-  `crate run` has root mount over the host file (plausible — authz
-  pre-check cannot resolve symlinks). Fix: realpath() on the daemon
-  side after the prefix check (and re-check the prefix on the
-  resolved path), lstat() + S_ISREG/S_ISSOCK on the client before
-  mounting over an existing node.
-
-* (HIGH) ws-console ignores token expiry and scope.
-  daemon/ws_console.cpp:248 calls AuthPure::checkBearerAuth (role
-  only, lib/auth_pure.cpp:32-41) instead of checkBearerAuthFull. An
-  expired or scope-restricted admin token still opens a root
-  `jexec /bin/sh` in any pool-allowed jail. trust-model.md:230-236 and
-  crated.8 promise TTL/scope on every token.
+* (MED, residual of the 1.1.35 canonicalisation) the realpath() check
+  and the nmount()/jail -c/devfs call are two steps; a symlink swapped
+  in between still wins the race. Closing it needs fd-based operation:
+  open(O_RESOLVE_BENEATH) relative to the caller's prefix and
+  nmount with "fspath" replaced by an fd ("fd" iov) / jail path via
+  fdescfs, or at least a second realpath() after the operation with
+  rollback. Same for lib/run_gui.cpp's mount targets (lstat then
+  mount). Low practical exposure (needs a compromised jail racing
+  its own operator's `crate run`), but the only remaining gap in the
+  path chain.
 
 * (MED) Unauthenticated read routes on the TCP listener.
   daemon/routes.cpp:1096-1119: GET /api/v1/containers (full
@@ -222,9 +180,9 @@ The bhyve/VM track is in TODO2.
   silently override the nested `rootless:` block; `role` is
   unvalidated (a typo such as `Admin` silently demotes to viewer);
   privops_socket_mode gets no tightness warning unlike listen.unix_mode.
-* (LOW) routes.cpp:126-129 jsonError() splices e.what() into JSON
-  unescaped (use JsonPure::quote); handlers at privops_handlers.cpp
-  :171,560,577 return raw strerror/e.what() that may echo host paths.
+* (LOW) handlers at privops_handlers.cpp :171,560,577 return raw
+  strerror/e.what() that may echo host paths. (jsonError escaping
+  fixed in 1.1.35.)
 
 === 3. Networking runtime ===
 

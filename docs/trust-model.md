@@ -321,7 +321,14 @@ security boundary:
    exposes a longest-prefix `byPath` lookup; a path inside a tracked
    jail owned by another uid is denied `403` (`DenyForeignPath`); paths
    outside every registered jail fall through under the same
-   bootstrap concession.
+   bootstrap concession — *narrowed in 1.1.35:* with
+   `path_master_prefix` configured, an unregistered `target` /
+   `mount_path` is allowed only inside the caller's own
+   `<master>/<uid>` slice (`DenyUnownedPath` otherwise), so host
+   directories, the registry file, the host `/dev` and another tenant's
+   *stopped* rootfs (forgotten by `destroy_jail`) are no longer
+   reachable through `mount_nullfs` / `unmount_nullfs` / devfs. Without
+   the split the single-trust-domain behaviour is unchanged.
    *Done (1.1.15):* the last narrow item — the `create_jail` `path`
    argument. `PerUserEnvPure::Config` gains `pathMasterPrefix`
    (configured via crated.conf `path_master_prefix:`);
@@ -332,6 +339,15 @@ security boundary:
    (`DenyForeignCreatePath`). Empty `pathMasterPrefix` keeps the
    legacy shape (Allow), so existing deployments don't need to
    reconfigure on upgrade.
+   *Done (1.1.35):* the `create_jail` `parameters` field. It used to be
+   checked only for newlines and shell metacharacters and then split
+   straight into `jail -c` argv, so any privops-group member could pass
+   `exec.prestart=…` (runs **on the host as root**), `mount.fstab=`,
+   `allow.mount.*`, `devfs_ruleset`, `ip4.addr` or a second `name=` /
+   `path=` overriding the gated ones. `PrivOpsPure::validateJailParameters`
+   now whitelists each `key=value`: the nine `allow.*` booleans crate
+   itself sets, `enforce_statfs` (0–2), `securelevel` (−1–3) and
+   `children.max`; everything else is `400`.
 
 2. **Per-operator namespacing is convenience, not a boundary.** Any
    `path` / `jid` / `dataset` argument crossing the privops socket must
@@ -341,6 +357,18 @@ security boundary:
    runtime verbs (1.1.14, longest-prefix `byPath` on the same registry),
    and for `create_jail`'s brand-new path (1.1.15, slash-anchored prefix
    against `env.pathPrefix`).
+   *Done (1.1.35):* the string checks above are backed by
+   canonicalisation — `crated` `realpath()`s every path argument
+   (`target`, `source`, `mount_path`, `create_jail` `path`) before the
+   handler acts and refuses one that does not resolve to itself
+   (`400 path_not_canonical`). A tenant controls its own jail root, so a
+   symlink planted there could otherwise make a string that passed the
+   registry/prefix checks while the kernel mounted or created somewhere
+   else. The client side (`lib/run_gui.cpp`) likewise `lstat()`s each
+   nullfs mount target inside the jail and refuses anything but an empty
+   regular file it created itself. Residual: a symlink swapped in
+   between the check and the syscall — closing that needs fd-based
+   mounts (`O_RESOLVE_BENEATH`), tracked in `TODO`.
 
 3. **Fail closed on identity loss.** On any path that authorizes, a
    `getpeereid` failure must deny. *Done (1.1.19):* the libnv listener
@@ -356,8 +384,9 @@ pending gate: the genuinely host-global verbs (`teardown_iface`,
 `set_iface_up`, `bridge_*`, `add_pf_rule`, `add_ipfw_rule`,
 `configure_ipfw_nat`, `create_epair` — shared host state with no tenant
 target), the `admin`-only HTTP transport (no peer uid), and the
-bootstrap concession that lets resources absent from the registry
-through. A multi-tenant deployment that must keep operators off that
+bootstrap concession that lets jids / names absent from the registry
+through (for paths it is limited to the caller's own prefix since
+1.1.35). A multi-tenant deployment that must keep operators off that
 surface still needs a trusted broker rather than handing them raw
 privops-socket access.
 

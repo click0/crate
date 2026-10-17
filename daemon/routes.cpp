@@ -18,6 +18,7 @@
 #include "commands.h"
 #include "gui_registry.h"
 #include "jail_query.h"
+#include "json_pure.h"
 #include "locs.h"
 #include "pathnames.h"
 #include "util.h"
@@ -125,7 +126,10 @@ static void jsonOk(httplib::Response &res, const std::string &data) {
 
 static void jsonError(httplib::Response &res, int code, const std::string &msg) {
   res.status = code;
-  res.set_content("{\"status\":\"error\",\"error\":\"" + msg + "\"}", "application/json");
+  // 1.1.35: msg is usually e.what() and may carry quotes/newlines from
+  // tool stderr — escape it so the body stays valid JSON.
+  res.set_content("{\"status\":\"error\",\"error\":" + JsonPure::quote(msg) + "}",
+                  "application/json");
 }
 
 // --- GET /api/v1/containers ---
