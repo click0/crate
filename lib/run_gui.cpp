@@ -41,6 +41,31 @@ static void requireTool(const char *path, const char *pkgHint) {
     ERR("required tool not found: " << path << " (install: pkg install " << pkgHint << ")")
 }
 
+// 1.1.35: make sure a nullfs mount TARGET inside the jail is an empty
+// regular file we own — create it O_EXCL, or accept an existing plain
+// file, and refuse anything else. The jail's /tmp persists across runs
+// and belongs to the jail's processes, so a compromised jail could
+// leave a symlink at "/tmp/wayland/pipewire-0" (-> /etc/master.passwd
+// or any host path); the previous `fileExists() ? skip : touch` then
+// skipped the touch and crated, as root, mounted the host socket over
+// whatever the link pointed at. lstat() so the link itself is seen,
+// S_ISREG so sockets/dirs/fifos are refused too.
+static void ensureMountTargetFile(const std::string &target) {
+  struct stat st;
+  if (::lstat(target.c_str(), &st) == 0) {
+    if (!S_ISREG(st.st_mode))
+      ERR("refusing to mount over " << target
+          << ": not a regular file (symlink, directory or socket planted inside the jail?)")
+    return;
+  }
+  if (errno != ENOENT)
+    ERR("lstat(" << target << "): " << strerror(errno))
+  int fd = ::open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+  if (fd == -1)
+    ERR("cannot create mount target " << target << ": " << strerror(errno))
+  ::close(fd);
+}
+
 // Wait for X socket /tmp/.X11-unix/X<N> to appear, with timeout
 static bool waitForXSocket(unsigned displayNum, unsigned timeoutMs = 5000) {
   auto socketPath = STR("/tmp/.X11-unix/X" << displayNum);
@@ -735,7 +760,7 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
           // Pre-create an empty file at the target so nullfs has
           // something to mount over (FreeBSD nullfs needs a target).
           auto jailSockTarget = J("/tmp/wayland/") + sockBasename;
-          { std::ofstream touch(jailSockTarget); }
+          ensureMountTargetFile(jailSockTarget);
           mount(new Mount("nullfs", jailSockTarget, hostSock, MNT_IGNORE));
           setJailEnv("XDG_RUNTIME_DIR", "/tmp/wayland");
           setJailEnv("WAYLAND_DISPLAY", sockBasename);
@@ -776,9 +801,7 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
       try {
         Util::Fs::mkdirIfNotExists(J("/tmp/wayland"), 0700);
         auto jailSockTarget = J("/tmp/wayland/") + sockName;
-        if (!Util::Fs::fileExists(jailSockTarget)) {
-          std::ofstream touch(jailSockTarget);   // empty mount target
-        }
+        ensureMountTargetFile(jailSockTarget);   // empty mount target
         mount(new Mount("nullfs", jailSockTarget, hostSock, MNT_IGNORE));
         anyBound = true;
         if (logProgress)
@@ -822,9 +845,7 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
           auto parentDir = jailSockTarget.substr(0, slashAt);
           Util::Fs::mkdirIfNotExists(parentDir, 0700);
         }
-        if (!Util::Fs::fileExists(jailSockTarget)) {
-          std::ofstream touch(jailSockTarget);   // empty mount target
-        }
+        ensureMountTargetFile(jailSockTarget);   // empty mount target
         mount(new Mount("nullfs", jailSockTarget, hostPulse, MNT_IGNORE));
         // PulseAudio reads XDG_RUNTIME_DIR (same as PipeWire) —
         // already set above when PipeWire bound; setting again
@@ -1024,7 +1045,7 @@ RunAtEnd setupCompositor(const Spec &spec, const std::string &jailPath,
         auto slash = target.rfind('/');
         if (slash != std::string::npos)
           Util::Fs::mkdirIfNotExists(target.substr(0, slash), 0755);
-        if (!Util::Fs::fileExists(target)) { std::ofstream touch(target); }
+        ensureMountTargetFile(target);
         mount(new Mount("nullfs", target, cand, MNT_IGNORE));
         seatdSock = cand;   // bound at the same path inside the jail
         break;

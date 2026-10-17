@@ -422,18 +422,97 @@ std::string validateIpfwAction(const std::string &action) {
 
 // --- Per-verb validators ---
 
+namespace {
+
+// 1.1.35: the jail(8) parameter whitelist for create_jail. Every token
+// of `parameters` must be `key=value` with `key` in this table and
+// `value` of the matching shape. jail(8) accepts far more — exec.*
+// hooks that run ON THE HOST as root, mount.fstab, allow.mount.*,
+// devfs_ruleset, ip4.addr, repeated name=/path= — and the old
+// single-line/no-metachar check let all of it through, so any
+// privops-group member had host root. The whitelist is exactly what
+// lib/run_jail.cpp composes; anything else is a config-file job.
+enum class ParamKind { Bool, EnforceStatfs, Securelevel, Unsigned };
+
+struct ParamSpec { const char *key; ParamKind kind; };
+
+const ParamSpec kJailParamWhitelist[] = {
+  {"allow.raw_sockets",  ParamKind::Bool},
+  {"allow.socket_af",    ParamKind::Bool},
+  {"allow.sysvipc",      ParamKind::Bool},
+  {"allow.mount",        ParamKind::Bool},
+  {"allow.mount.zfs",    ParamKind::Bool},
+  {"allow.quotas",       ParamKind::Bool},
+  {"allow.set_hostname", ParamKind::Bool},
+  {"allow.chflags",      ParamKind::Bool},
+  {"allow.mlock",        ParamKind::Bool},
+  {"enforce_statfs",     ParamKind::EnforceStatfs},
+  {"securelevel",        ParamKind::Securelevel},
+  {"children.max",       ParamKind::Unsigned},
+};
+
+bool allDigits(const std::string &s) {
+  if (s.empty()) return false;
+  for (char c : s) if (c < '0' || c > '9') return false;
+  return true;
+}
+
+std::string validateJailParamValue(ParamKind kind, const std::string &v) {
+  switch (kind) {
+    case ParamKind::Bool:
+      if (v == "0" || v == "1" || v == "true" || v == "false") return "";
+      return "expected 0/1/true/false";
+    case ParamKind::EnforceStatfs:
+      if (v == "0" || v == "1" || v == "2") return "";
+      return "expected 0, 1 or 2";
+    case ParamKind::Securelevel:
+      if (v == "-1" || v == "0" || v == "1" || v == "2" || v == "3") return "";
+      return "expected -1..3";
+    case ParamKind::Unsigned:
+      if (allDigits(v) && v.size() <= 9) return "";
+      return "expected an unsigned integer";
+  }
+  return "unknown parameter kind";
+}
+
+} // anon
+
+std::string validateJailParameters(const std::string &parameters) {
+  if (parameters.empty()) return "";
+  if (parameters.size() > 4096) return "jail parameters longer than 4096 chars";
+  if (auto e = validateRuleText(parameters); !e.empty()) return "jail parameters: " + e;
+  // Tokenise exactly as the daemon does (whitespace split) so what is
+  // checked is what reaches `jail -c` argv.
+  std::istringstream iss(parameters);
+  std::string tok;
+  while (iss >> tok) {
+    auto eq = tok.find('=');
+    if (eq == std::string::npos || eq == 0 || eq + 1 >= tok.size())
+      return "jail parameters: token '" + tok + "' is not key=value";
+    const std::string key = tok.substr(0, eq);
+    const std::string val = tok.substr(eq + 1);
+    const ParamSpec *spec = nullptr;
+    for (const auto &s : kJailParamWhitelist)
+      if (key == s.key) { spec = &s; break; }
+    if (!spec)
+      return "jail parameters: '" + key + "' is not an allowed jail parameter "
+             "(allowed: allow.raw_sockets allow.socket_af allow.sysvipc allow.mount "
+             "allow.mount.zfs allow.quotas allow.set_hostname allow.chflags allow.mlock "
+             "enforce_statfs securelevel children.max)";
+    if (auto e = validateJailParamValue(spec->kind, val); !e.empty())
+      return "jail parameters: '" + key + "=" + val + "': " + e;
+  }
+  return "";
+}
+
 std::string validateCreateJail(const CreateJailReq &r) {
   if (auto e = validateJailName(r.name); !e.empty()) return e;
   if (auto e = validateAbsolutePath(r.path); !e.empty()) return e;
   if (auto e = validateHostname(r.hostname); !e.empty()) return e;
-  // `parameters` is the optional jail.conf fragment. Allow empty;
-  // reject newlines/shell-metas if present so the daemon can pass
-  // it to jail -m without surprises. (Operators with complex
-  // jail.conf needs use a config file, not this field.)
-  if (!r.parameters.empty()) {
-    if (r.parameters.size() > 4096) return "jail parameters longer than 4096 chars";
-    if (auto e = validateRuleText(r.parameters); !e.empty()) return "jail parameters: " + e;
-  }
+  // `parameters` is the optional jail(8) parameter list. 1.1.35: it is
+  // whitelisted key=value by key=value (validateJailParameters), not
+  // just checked for newlines/metachars — see the whitelist comment.
+  if (auto e = validateJailParameters(r.parameters); !e.empty()) return e;
   return "";
 }
 

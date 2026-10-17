@@ -243,9 +243,14 @@ void handleClient(int fd, Config config) {
     return;
   }
 
-  // Bearer-token auth (admin role required).
+  // Bearer-token auth (admin role required). 1.1.35: the FULL check —
+  // role + expires_at + scope against the request path — the same
+  // gate daemon/auth.cpp applies to every HTTP route. Until now this
+  // listener used the role-only variant, so an expired or
+  // scope-restricted admin token still opened a root shell.
   auto authHeader = extractAuthHeader(raw);
-  if (!AuthPure::checkBearerAuth(authHeader, config.tokens, "admin", sha256hex)) {
+  if (!AuthPure::checkBearerAuthFull(authHeader, config.tokens, "admin",
+                                     hs.path, (long)::time(nullptr), sha256hex)) {
     writeAll(fd, WsPure::buildHandshakeRejection("authentication required"));
     ::close(fd);
     return;

@@ -51,6 +51,14 @@
 // (named jail). The only ungated verbs left are genuinely host-global
 // (iface/pf/ipfw/nat/epair on shared host state).
 //
+// 1.1.35 — path-scoped verbs lose the unconditional bootstrap Allow
+// when a per-user path split is configured: a target/mount_path that
+// no registered jail owns must lie inside the caller's own path prefix
+// (DenyUnownedPath otherwise). Without the split the old behaviour is
+// unchanged. Path canonicalisation (symlinks) is the daemon's job —
+// privops_handlers.cpp realpath()s every path argument before the
+// handler acts and refuses one that does not resolve to itself.
+//
 
 #include <functional>
 #include <string>
@@ -69,6 +77,8 @@ enum class Decision {
   DenyForeignPath,       // path lies inside a registry-tracked jail owned by another uid
   DenyForeignCreatePath, // create_jail path is outside the caller's per-user path prefix
   DenyForeignSource,     // mount_nullfs source lies inside another tenant's path prefix
+  DenyUnownedPath,       // 1.1.35: path-scoped target not in a caller-owned jail and
+                         // outside the caller's per-user path prefix (per-user split on)
 };
 
 // Result of looking a target up in the daemon's jid->owner registry.

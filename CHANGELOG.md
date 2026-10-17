@@ -6,6 +6,67 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.35] — 2026-10-17
+
+**privops hardening — the four HIGH findings from the 2026-10 audit
+(`TODO` §2).** ⚠️ `create_jail` now rejects jail parameters outside a
+whitelist; path arguments must be canonical.
+
+- **`create_jail` `parameters` whitelist.** The field was checked only
+  for newlines and shell metacharacters and then split straight into
+  `jail -c` argv, so any privops-group member could pass
+  `exec.prestart=/tmp/x` (runs **on the host as root**), `mount.fstab=`,
+  `allow.mount.*`, `devfs_ruleset=`, `ip4.addr=`, or a second `name=` /
+  `path=` overriding the gated ones. New
+  `PrivOpsPure::validateJailParameters` accepts exactly what
+  `lib/run_jail.cpp` sends: `allow.raw_sockets allow.socket_af
+  allow.sysvipc allow.mount allow.mount.zfs allow.quotas
+  allow.set_hostname allow.chflags allow.mlock` (`0/1/true/false`),
+  `enforce_statfs` (0–2), `securelevel` (−1–3), `children.max`
+  (unsigned). Anything else is `400`. Operators who scripted raw
+  `create_jail` requests with other parameters must move them to a
+  jail.conf.
+- **Path-scoped verbs confined to the caller's prefix.** With
+  `path_master_prefix` configured, `mount_nullfs` / `unmount_nullfs`
+  (`target`) and `apply_devfs_ruleset` / `add_devfs_unhide_rule`
+  (`mount_path`) aimed at a path **no registered jail owns** were
+  allowed by the bootstrap concession — i.e. at `/etc`, at
+  `/var/db/crate` (the registry itself), at the host `/dev`, or at
+  another tenant's *stopped* rootfs (forgotten by `destroy_jail`), with
+  `read_only` client-settable and `MNT_FORCE` reachable. Such a path
+  must now lie inside the caller's own `<master>/<uid>` slice
+  (`DenyUnownedPath`, `403`). A registry hit still decides as before,
+  and without `path_master_prefix` nothing changes.
+- **Path canonicalisation in `crated`.** Every path argument (`target`,
+  `source`, `mount_path`, `create_jail` `path`) is `realpath()`ed before
+  the handler acts and refused with `400 path_not_canonical` if it does
+  not resolve to itself. A tenant controls its own jail root, so a
+  symlink planted there previously made a string that passed the
+  registry/prefix checks while the kernel mounted or created elsewhere.
+  Client side, `lib/run_gui.cpp` now `lstat()`s each nullfs mount target
+  inside the jail (Wayland / PipeWire / PulseAudio / seatd sockets) and
+  accepts only an empty regular file it created `O_EXCL` itself — the
+  old `fileExists() ? skip : touch` skipped the touch for a planted
+  symlink and let root mount a host socket over its target. Residual
+  (tracked): a symlink swapped in between check and syscall needs
+  fd-based mounts (`O_RESOLVE_BENEATH`).
+- **ws-console honours token TTL and scope.** `daemon/ws_console.cpp`
+  used the role-only `checkBearerAuth`; an `expires_at`-expired or
+  scope-restricted admin token still opened a root `jexec /bin/sh`. It
+  now uses `checkBearerAuthFull` against the request path, the same gate
+  every HTTP route goes through.
+- `daemon/routes.cpp` `jsonError()` escapes the message through
+  `JsonPure::quote` (tool stderr with quotes/newlines produced invalid
+  JSON bodies).
+
+Docs: `docs/trust-model.md` / `.uk.md` items 1–2 and the "what remains
+host-wide" paragraph updated. Tests: `privops_pure_test` gains the
+whitelist cases (client string accepted; `exec.*`, `mount.fstab`,
+`name=`, `path=`, `vnet`, bad values rejected);
+`privops_authz_pure_test` gains `DenyUnownedPath` coverage and the two
+bootstrap tests are split into "split off → Allow" / "split on →
+confined". 1444/1444 unit cases.
+
 ## [1.1.34] — 2026-10-17
 
 **The installed `crate(1)` binary runs again — the setuid-era uid gate is

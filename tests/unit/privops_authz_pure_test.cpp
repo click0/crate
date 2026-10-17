@@ -298,7 +298,10 @@ ATF_TEST_CASE_BODY(authorize_null_callbacks_in_lookup_allow) {
               == Decision::Allow);
   ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::DestroyJail, reqName("web"), e, empty)
               == Decision::Allow);
-  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::MountNullfs, reqPath("/jails/web/etc"),
+  // 1.1.35: with the per-user split configured an unknown path is only
+  // allowed inside the caller's own slice, so probe one there.
+  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::MountNullfs,
+                                          reqPath(e.pathPrefix + "/web/etc"),
                                           e, empty) == Decision::Allow);
 }
 
@@ -334,8 +337,12 @@ ATF_TEST_CASE_BODY(authorize_path_foreign_target_denied) {
 ATF_TEST_CASE_WITHOUT_HEAD(authorize_path_unknown_target_allowed_bootstrap);
 ATF_TEST_CASE_BODY(authorize_path_unknown_target_allowed_bootstrap) {
   // Path outside every registered jail — pre-1.1.14 mount points and
-  // jails created before 1.1.13 fall here. Allow with audit.
-  auto e = env1000();
+  // jails created before 1.1.13 fall here. 1.1.35: the bootstrap Allow
+  // only survives when NO per-user path split is configured (single
+  // trust domain); with the split on, see the _confined test below.
+  PerUserEnvPure::Env e = env1000();
+  e.pathMasterPrefix = "";
+  e.pathPrefix       = "";
   auto l = fixedOwner(77, "web", 1001, "/jails/web");
   ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::MountNullfs,
                                           reqPath("/jails/legacy/etc"), e, l)
@@ -343,16 +350,65 @@ ATF_TEST_CASE_BODY(authorize_path_unknown_target_allowed_bootstrap) {
   ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::ApplyDevfsRuleset,
                                           reqPath("/zpool/somewhere/dev"), e, l)
               == Decision::Allow);
+  // A registry hit still decides even without the split.
+  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::MountNullfs,
+                                          reqPath("/jails/web/etc"), e, l)
+              == Decision::DenyForeignPath);
+}
+
+// 1.1.35: with path_master_prefix configured, an unknown path must lie
+// inside the caller's own slice. This is what stops a tenant aiming
+// mount_nullfs / unmount (MNT_FORCE) / devfs at host directories, at the
+// registry file itself, at another tenant's STOPPED rootfs (forgotten
+// by destroy_jail) or at the host /dev.
+ATF_TEST_CASE_WITHOUT_HEAD(authorize_path_unknown_target_confined_to_caller_prefix);
+ATF_TEST_CASE_BODY(authorize_path_unknown_target_confined_to_caller_prefix) {
+  auto e = env1000();                                   // master = /jails-tenants
+  auto l = fixedOwner(77, "web", 1000, e.pathPrefix + "/web");
+  const char *outside[] = {
+    "/etc",
+    "/etc/master.passwd",
+    "/var/db/crate",                    // the jid->owner registry lives here
+    "/dev",
+    "/jails-tenants",                   // the tenant root itself
+    "/jails-tenants/1001/stopped",      // another tenant's dormant tree
+    "/jails-tenants/1001/stopped/dev",
+    "/jails-tenants/10001/x",           // uid-prefix lookalike
+    "/zpool/somewhere/dev",
+  };
+  for (Verb v : {Verb::MountNullfs, Verb::UnmountNullfs,
+                 Verb::ApplyDevfsRuleset, Verb::AddDevfsUnhideRule}) {
+    for (const char *p : outside)
+      if (PrivOpsAuthzPure::authorize(v, reqPath(p), e, l) != Decision::DenyUnownedPath)
+        ATF_FAIL(std::string("verb ") + std::to_string((int)v) + " allowed unknown path " + p);
+    // Inside the caller's slice but not (yet) registered: allowed —
+    // this is the create_jail -> mount window and legacy jails the
+    // operator placed under their own prefix.
+    ATF_REQUIRE(PrivOpsAuthzPure::authorize(v, reqPath(e.pathPrefix + "/legacy/etc"), e, l)
+                == Decision::Allow);
+    ATF_REQUIRE(PrivOpsAuthzPure::authorize(v, reqPath(e.pathPrefix), e, l)
+                == Decision::Allow);
+    // Registered + owned: allowed as before.
+    ATF_REQUIRE(PrivOpsAuthzPure::authorize(v, reqPath(e.pathPrefix + "/web/dev"), e, l)
+                == Decision::Allow);
+  }
+  // The reason string is specific, not the generic "deny".
+  ATF_REQUIRE(std::string(decisionReason(Decision::DenyUnownedPath)).find("per-user path prefix")
+              != std::string::npos);
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(authorize_path_substring_neighbor_not_owned);
 ATF_TEST_CASE_BODY(authorize_path_substring_neighbor_not_owned) {
   // The fixedOwner lookup is slash-anchored: /jails/web does NOT own
-  // /jails/webhook. So a verb targeting the neighbor falls through to
-  // bootstrap-Allow, not DenyForeignPath — fewer false denies, same
-  // safety (it's not our jail, so whoever does own it is responsible).
+  // /jails/webhook, so the neighbour is "unknown", never DenyForeignPath.
+  // 1.1.35: unknown + outside the caller's slice -> DenyUnownedPath when
+  // the split is configured; Allow when it is not.
   auto e = env1000();
   auto l = fixedOwner(77, "web", 1001, "/jails/web");
+  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::MountNullfs,
+                                          reqPath("/jails/webhook/etc"), e, l)
+              == Decision::DenyUnownedPath);
+  e.pathMasterPrefix = ""; e.pathPrefix = "";
   ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::MountNullfs,
                                           reqPath("/jails/webhook/etc"), e, l)
               == Decision::Allow);
@@ -562,4 +618,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, reclaim_iface_name_scoped);
   ATF_ADD_TEST_CASE(tcs, host_global_verbs_still_allowed);
   ATF_ADD_TEST_CASE(tcs, decision_reason_non_empty);
+  ATF_ADD_TEST_CASE(tcs, authorize_path_unknown_target_confined_to_caller_prefix);
 }
