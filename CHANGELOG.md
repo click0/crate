@@ -6,6 +6,52 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.34] — 2026-10-17
+
+**The installed `crate(1)` binary runs again — the setuid-era uid gate is
+gone.** ⚠️ Fixes every invocation of the 0755 binary, root or not.
+
+Up to 0.9.x `crate(1)` was setuid root and `cli/main.cpp` refused to run
+unless `euid == 0 && uid != 0`. The 1.0.0 setuid removal switched
+`make install` to `-m 0755` but left that gate in place, so the
+installed binary exited with
+
+```
+crate has to run as a regular user setuid to root (you ran it just as root, this isn't yet supported)
+```
+
+(or the `UID=…` variant) for **every** command — `--version` and
+`--help` included — whether run by the operator, by root / under
+`sudo`, or by `crated(8)` exec'ing `crate run` for a control-socket or
+HTTP `start`. Only the legacy setuid `crate.x` (`make install-local`)
+passed the check, and nothing in CI ever executed the built binary, so
+the regression shipped in 17 releases and surfaced as the four
+`tests/functional/crate_info_test` failures on a real host.
+
+Fixed:
+
+- `cli/main.cpp`: both uid checks and the `setuid(geteuid())` call are
+  removed. The `security.jail.jailed` check and the environment
+  sanitising stay; `HOME` is now the invoking user's home from the
+  password database instead of a hard-coded `/root`, so
+  `~/.config/crate/crate.yml` and `~/.config/crate/templates/` resolve
+  for the operator.
+- The runtime-directory check moved after argument parsing, so
+  `--help`/`--version` have no filesystem side effects, and
+  `lib/misc.cpp createDirectoryIfNeeded` no longer tries to create or
+  `chmod 0700` `/var/run/crate` when crate runs unprivileged — that
+  directory belongs to `crated(8)`; a non-root caller only refuses a
+  symlink there.
+- `freebsd-build-lite.yml` gains a smoke step that runs `crate
+  --version`, `--help` and a failing `validate` as the runner user and
+  under `sudo`, so a broken entry point fails the PR instead of the
+  functional suite.
+
+What this does **not** do: the remaining rootless gaps found in the
+2026-10 audit (commands that still exec `ifconfig`/`jexec`/`rctl`
+directly, root-owned `/var/run/crate/jail-*` paths, audit log location)
+are tracked in `TODO` §1 and are the next work item.
+
 ## [1.1.33] — 2026-10-03
 
 **`crate run -f` refuses a `.crate` file whose name is not a valid jail

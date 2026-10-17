@@ -23,25 +23,23 @@
 static int mainGuarded(int argc, char** argv) {
 
   //
-  // can only run as a privileged user because we need to run chroot(8) and need to create jails
+  // 1.1.34: no uid/euid gate. Up to 0.9.x crate(1) was setuid root and
+  // refused to run unless euid==0 && uid!=0. The 1.0.0 setuid removal
+  // flipped the Makefile to -m 0755 but left that gate in place, so the
+  // installed binary exited with "crate has to run as a regular user
+  // setuid to root" for every invocation — as the operator (euid!=0),
+  // as root / under sudo (uid==0), and when crated(8) exec'ed `crate run`
+  // for a control-socket or HTTP start. Only the legacy setuid crate.x
+  // ever passed it. Privileged work is delegated to crated(8) over the
+  // privops socket (lib/privops_client.cpp) when crate runs unprivileged,
+  // and done directly when it runs as root.
   //
-  if (::geteuid() != 0) {
-    std::cerr << rang::fg::red << "crate has to run as a regular user setuid to root"
-                               << " (you ran it just as a regular user with UID=" << ::geteuid() << ")"
-                               << rang::style::reset << std::endl;
-    return 1;
-  }
-  if (::getuid() == 0) {
-    std::cerr << rang::fg::red << "crate has to run as a regular user setuid to root"
-                               << " (you ran it just as root, this isn't yet supported)"
-                               << rang::style::reset << std::endl;
-    return 1;
-  }
 
   //
-  // Sanitize environment for setuid safety (CWE-426, CWE-250).
-  // Clear all inherited environment variables and rebuild with safe defaults.
-  // This prevents PATH manipulation, LD_PRELOAD injection, and other env-based attacks.
+  // Sanitize the environment (CWE-426, CWE-250). Kept after the setuid
+  // removal: every helper is exec'ed by absolute path, but a clean PATH /
+  // no LD_* keeps the child environment of jexec'ed and chroot'ed
+  // processes predictable. Clear everything, rebuild with safe defaults.
   //
   bool envNoColor = false;
   {
@@ -66,7 +64,15 @@ static int mainGuarded(int argc, char** argv) {
     environ = empty_env;
 
     ::setenv("PATH", _PATH_DEFPATH, 1);
-    ::setenv("HOME", "/root", 1);
+    // 1.1.34: HOME is the invoking user's home from the password
+    // database (was hard-coded "/root" from the setuid era), so
+    // ~/.config/crate/{crate.yml,templates/} resolve for the operator.
+    // getpwuid(getuid()) rather than the inherited $HOME, which is
+    // caller-controlled.
+    {
+      auto home = Util::Fs::getUserHomeDir();
+      ::setenv("HOME", home.empty() ? "/" : home.c_str(), 1);
+    }
     ::setenv("SHELL", _PATH_BSHELL, 1);
     if (term)    ::setenv("TERM", term, 1);
     if (display) ::setenv("DISPLAY", display, 1);
@@ -87,21 +93,20 @@ static int mainGuarded(int argc, char** argv) {
   }
 
   //
-  // adjust uid, make it equal to euid
-  //
-  Util::ckSyscallError(::setuid(::geteuid()), "setuid", "geteuid()");
-
-  //
-  // create the jails directory if it doesn't yet exist
-  //
-  createJailsDirectoryIfNeeded();
-
-  //
   // parse the arguments
   //
   unsigned numArgsProcessed = 0;
   Args args = parseArguments(argc, argv, numArgsProcessed);
   args.validate();
+
+  //
+  // Make sure the runtime directory exists. 1.1.34: after argument
+  // parsing, so --help/--version/-h have no filesystem side effects and
+  // work for a user who cannot create /var/run/crate; as a non-root
+  // operator this only checks that crated(8) has created it (see
+  // lib/misc.cpp).
+  //
+  createJailsDirectoryIfNeeded();
 
   // Audit: record the invocation now that args are valid. Read-only
   // commands (list/info/stats/logs/validate) are skipped inside

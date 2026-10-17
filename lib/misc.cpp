@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <errno.h>
+#include <string.h>
 #include <iostream>
 
 //
@@ -17,6 +18,22 @@
 
 static void createDirectoryIfNeeded(const char *dir, const char *what) {
   int res;
+
+  // 1.1.34: an unprivileged crate(1) (0755 since 1.0.0) cannot create
+  // or chmod the root-owned runtime directory — crated(8) owns it. For
+  // a non-root caller only refuse a symlink; a missing directory is not
+  // an error here (validate/create/--help never need it, and the
+  // commands that do fail later with their own message), and its mode
+  // is whatever the operator configured for the privops / control-
+  // socket group (crated.conf listen.unix_mode etc.), not 0700.
+  const bool privileged = ::geteuid() == 0;
+  if (!privileged) {
+    struct stat sb;
+    if (::lstat(dir, &sb) == 0 && S_ISLNK(sb.st_mode))
+      ERR2(STR("check " << what << " directory"),
+           what << " directory '" << dir << "' is a symlink, refusing to use it")
+    return;
+  }
 
   // first, just try to create it. It might already exist which is ok.
   res = ::mkdir(dir, 0700); // it should be only readable/writable by root

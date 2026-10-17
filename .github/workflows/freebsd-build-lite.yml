@@ -137,6 +137,27 @@ jobs:
           gmake -j"$(sysctl -n hw.ncpu)" crate
           ls -la crate
 
+      - name: Smoke-run crate(1) as root and as an unprivileged user
+        shell: cpa.sh {0}
+        run: |
+          set -ex
+          # 1.1.34: the 1.0.0 setuid removal left a uid/euid gate in
+          # cli/main.cpp that refused every invocation of the installed
+          # 0755 binary (as the operator AND as root), and nothing in CI
+          # ever executed the binary, so 17 releases shipped with it.
+          # Run the three cheapest commands both ways so a regression
+          # fails the PR here instead of in the functional suite.
+          # The VM shell is the unprivileged runner user (hence `sudo pkg
+          # install` above); `sudo` gives the root variant.
+          id -u
+          for pfx in "" "sudo"; do
+            $pfx ./crate --version | grep '^crate 1\.'
+            $pfx ./crate --help | head -n 1 | grep '^usage:'
+            if $pfx ./crate validate /nonexistent/spec.yml; then
+              echo "::error::crate validate on a missing file must fail"; exit 1
+            fi
+          done
+
       - name: Link daemon binaries crated + crate-snmpd
         shell: cpa.sh {0}
         run: |

@@ -17,34 +17,21 @@ The bhyve/VM track is in TODO2.
 
 === 1. Blocker: the rootless (1.0.0) model is not actually reachable ===
 
-* (HIGH) cli/main.cpp:28-39 refuses to start unless euid==0 AND
-  uid!=0, i.e. unless the binary is setuid root ("crate has to run as
-  a regular user setuid to root"). `make install` has shipped
-  crate(1) as mode 0755 since 1.0.0 (Makefile:165-172), so:
-    - an operator running the installed crate(1) gets that message and
-      exit 1 for EVERY command, including `crate --version` (the gate
-      runs before parseArguments);
-    - `sudo crate ...` / root is refused by the second check ("this
-      isn't yet supported");
-    - crated's own `execl(CRATE_PATH_CRATE, "crate", "run", "-f", ...)`
-      (daemon/control_socket.cpp:291, daemon/routes.cpp spawnCrateRun
-      :110) runs as uid 0 and is refused the same way, so the
-      control-socket `start` (0.8.21) and the HTTP async start/restart
-      (1.1.26) can never have worked end-to-end.
-  Only the legacy setuid `crate.x` (make install-local, 04755) passes
-  the gate, which is presumably how it was exercised. The rest of the
-  rootless path (privops client, per-user paths) is in place; this is a
-  one-gate fix: drop both checks, keep the `security.jail.jailed` check,
-  keep the environment sanitising but stop forcing HOME=/root
-  (cli/main.cpp:69 — breaks ~/.config/crate lookups for the operator;
-  use getpwuid(getuid())->pw_dir), and drop the setuid(geteuid()) call
-  (:92). Then add a lite-CI smoke step that runs `./crate --version`
-  as the build user so this cannot regress silently. Also:
-  daemon/routes.cpp:1096-1119 / control_socket.cpp must then decide
-  which uid the spawned `crate run` should have (root today; the
-  registry records uid 0 creates as unowned — see 6.M1).
-  Everything in sections 2-7 below was found by reading; none of the
-  rootless-only paths have been exercised on hardware because of this.
+  [FIXED in 1.1.34] cli/main.cpp refused to start unless euid==0 AND
+  uid!=0 (setuid only), so the 0755 binary installed since 1.0.0 exited
+  with "crate has to run as a regular user setuid to root" for every
+  command, as the operator, as root, and when crated exec'ed `crate run`.
+  Gate removed, HOME taken from passwd, runtime-dir check moved after
+  argument parsing and made non-root tolerant, lite-CI smoke step added.
+  Still open from that finding: daemon/routes.cpp spawnCrateRun and
+  control_socket.cpp exec `crate run` as uid 0 — decide which uid the
+  spawned run should have (the jid registry records uid-0 creates as
+  unowned, see 2. "stale jid ownership"); and `crate run` itself
+  (run.cpp:317) still creates jail-<name>-<hex> directly under the
+  root-owned /var/run/crate, so an unprivileged `crate run` fails at
+  mkdir — the per-user path helpers (RuntimePathsPure::perUserRoot) are
+  used for leases/registry but not for the jail directory. None of the
+  rootless-only paths below have been exercised on hardware yet.
 
 * (HIGH) Several commands still exec privileged tools directly and
   so fail under rootless with EACCES — they need privops verbs or must
