@@ -36,6 +36,8 @@
 #include <sys/mount.h>
 #include <sys/linker.h>
 #include <sys/wait.h>
+#include <signal.h>
+#include <pthread.h>
 #include <pwd.h>
 #include <fnmatch.h>
 
@@ -118,6 +120,71 @@ void execCommand(const std::vector<std::string> &argv, const std::string &what) 
     int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
     ERR2("exec command", "'" << what << "' failed with exit status " << code)
   }
+}
+
+void execCommandWithInput(const std::vector<std::string> &argv, const std::string &input,
+                          const std::string &what) {
+  if (argv.empty())
+    ERR2("exec command", "empty argv for: " << what)
+  auto cargv = toExecArgv(argv);
+  int pfd[2];
+  if (::pipe2(pfd, O_CLOEXEC) == -1)
+    ERR2("exec command", "pipe() failed for '" << what << "': " << strerror(errno))
+  pid_t pid = ::fork();
+  if (pid == -1) {
+    int e = errno;
+    ::close(pfd[0]); ::close(pfd[1]);
+    ERR2("exec command", "fork failed for '" << what << "': " << strerror(e))
+  }
+  if (pid == 0) {
+    // child: read end becomes stdin; CLOEXEC closes the originals on exec
+    if (::dup2(pfd[0], STDIN_FILENO) < 0)
+      ::_exit(126);
+    ::execv(cargv[0], cargv.data());
+    ::_exit(127);
+  }
+  ::close(pfd[0]);
+  // Feed the input. Block SIGPIPE for this thread while writing so a
+  // child that died early yields EPIPE (reported below via its exit
+  // status) instead of killing the whole process; the CLI does not
+  // ignore SIGPIPE globally the way crated does.
+  sigset_t block, old;
+  sigemptyset(&block);
+  sigaddset(&block, SIGPIPE);
+  pthread_sigmask(SIG_BLOCK, &block, &old);
+  bool writeFailed = false;
+  size_t off = 0;
+  while (off < input.size()) {
+    ssize_t n = ::write(pfd[1], input.data() + off, input.size() - off);
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      writeFailed = true;
+      break;
+    }
+    off += (size_t)n;
+  }
+  ::close(pfd[1]);
+  {
+    // Consume a SIGPIPE that became pending while blocked, then restore.
+    sigset_t pending;
+    sigpending(&pending);
+    if (sigismember(&pending, SIGPIPE)) {
+      struct timespec zero{0, 0};
+      (void)::sigtimedwait(&block, nullptr, &zero);
+    }
+    pthread_sigmask(SIG_SETMASK, &old, nullptr);
+  }
+  int status;
+  while (::waitpid(pid, &status, 0) == -1) {
+    if (errno != EINTR)
+      ERR2("exec command", "waitpid failed for '" << what << "': " << strerror(errno))
+  }
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    ERR2("exec command", "'" << what << "' failed with exit status " << code)
+  }
+  if (writeFailed)
+    ERR2("exec command", "'" << what << "' exited 0 but did not consume its input")
 }
 
 void execCommandLogged(const std::vector<std::string> &argv, const std::string &what,

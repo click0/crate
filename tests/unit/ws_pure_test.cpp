@@ -208,6 +208,28 @@ ATF_TEST_CASE_BODY(frame_parses_short_masked_text) {
   ATF_REQUIRE_EQ(f.payload, std::string("Hello"));
 }
 
+// 1.1.37: an oversized length is a protocol error, not "need more".
+ATF_TEST_CASE_WITHOUT_HEAD(frame_rejects_payload_over_cap);
+ATF_TEST_CASE_BODY(frame_rejects_payload_over_cap) {
+  auto frame64 = [](uint64_t len) {
+    std::string buf;
+    buf += (char)0x82;          // FIN, binary
+    buf += (char)0x7f;          // 64-bit length follows
+    for (int k = 7; k >= 0; k--) buf += (char)((len >> (8 * k)) & 0xff);
+    return buf;
+  };
+  Frame f;
+  // one byte over the cap -> error
+  ATF_REQUIRE(parseFrame(frame64(WsPure::kMaxFramePayload + 1), f) < 0);
+  // 4 GiB claim -> error, no buffering
+  ATF_REQUIRE(parseFrame(frame64(4ULL * 1024 * 1024 * 1024), f) < 0);
+  // exactly the cap: legal, just incomplete until the bytes arrive
+  ATF_REQUIRE_EQ(parseFrame(frame64(WsPure::kMaxFramePayload), f), 0);
+  // 16-bit form stays well under the cap: incomplete, not an error
+  std::string medium = "\x82\x7e\xff\xff";
+  ATF_REQUIRE_EQ(parseFrame(medium, f), 0);
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(frame_parses_medium_length);
 ATF_TEST_CASE_BODY(frame_parses_medium_length) {
   // 200-byte payload, length encoded as 16-bit (len = 126 marker).
@@ -303,6 +325,7 @@ ATF_TEST_CASE_BODY(close_frame_encodes_status_code) {
 }
 
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, frame_rejects_payload_over_cap);
   ATF_ADD_TEST_CASE(tcs, sha1_known_vectors);
   ATF_ADD_TEST_CASE(tcs, sha1_long_input_crosses_block_boundary);
   ATF_ADD_TEST_CASE(tcs, base64_rfc4648_vectors);

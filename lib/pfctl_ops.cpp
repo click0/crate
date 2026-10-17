@@ -79,38 +79,23 @@ void addRules(const std::string &anchor, const std::vector<std::string> &rules) 
     }
   }
 #endif
-  // Fallback: echo rules | pfctl -a <anchor> -f -
+  // Fallback: rules | pfctl -a <anchor> -f -
   std::ostringstream ss;
   for (auto &r : rules)
     ss << r << "\n";
-  auto rulesStr = ss.str();
-
-  // Write rules to a temp file, then load
-  auto tmpFile = STR("/tmp/crate-pf-" << ::getpid() << ".rules");
-  Util::Fs::writeFile(rulesStr, tmpFile);
-  try {
-    Util::execCommand({CRATE_PATH_PFCTL, "-a", anchor, "-f", tmpFile},
-      STR("load PF rules into anchor " << anchor));
-  } catch (...) {
-    Util::Fs::unlink(tmpFile);
-    throw;
-  }
-  Util::Fs::unlink(tmpFile);
+  addRules(anchor, ss.str());
 }
 
 void addRules(const std::string &anchor, const std::string &rulesText) {
   PfLock lock;
-  // Write rules to a temp file, then load
-  auto tmpFile = STR("/tmp/crate-pf-" << ::getpid() << ".rules");
-  Util::Fs::writeFile(rulesText, tmpFile);
-  try {
-    Util::execCommand({CRATE_PATH_PFCTL, "-a", anchor, "-f", tmpFile},
-      STR("load PF rules into anchor " << anchor));
-  } catch (...) {
-    Util::Fs::unlink(tmpFile);
-    throw;
-  }
-  Util::Fs::unlink(tmpFile);
+  // 1.1.37: feed the rules over a pipe (`-f -`). Until now they went
+  // through /tmp/crate-pf-<pid>.rules — a predictable path in a
+  // world-writable directory, written by crated as root (pid public).
+  // A local user who pre-created a regular file there could rewrite
+  // it between our write and pfctl's read and have their own rules
+  // loaded as root. No file, no race.
+  Util::execCommandWithInput({CRATE_PATH_PFCTL, "-a", anchor, "-f", "-"}, rulesText,
+    STR("load PF rules into anchor " << anchor));
 }
 
 void flushRules(const std::string &anchor) {

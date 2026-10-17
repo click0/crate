@@ -38,6 +38,14 @@
 namespace Crated {
 
 std::atomic<bool> WsConsole::g_running{false};
+
+namespace {
+// 1.1.37: handshake read timeout (pre-auth; cleared once the session
+// starts) and the concurrent-session cap.
+constexpr int kHandshakeTimeoutSec = 15;
+constexpr int kMaxActiveSessions   = 64;
+std::atomic<int> g_activeSessions{0};
+} // namespace
 std::thread WsConsole::g_thread;
 int WsConsole::g_listenFd = -1;
 
@@ -291,7 +299,14 @@ void handleClient(int fd, Config config) {
     return;
   }
 
-  // Accept the upgrade and hand off to the session pump.
+  // Accept the upgrade and hand off to the session pump. 1.1.37: the
+  // handshake read timeout set in acceptLoop is lifted here — the
+  // session pump has its own select() timeout and an interactive shell
+  // may sit idle indefinitely.
+  {
+    struct timeval none{};
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &none, sizeof(none));
+  }
   writeAll(fd, WsPure::buildHandshakeResponse(WsPure::computeAcceptKey(hs.clientKey)));
   runJailSession(fd, jail->jid);
   ::close(fd);
@@ -303,12 +318,30 @@ void acceptLoop(Config config, int listenFd) {
     // Use sockaddr_storage so the same loop accepts either v4 or v6.
     sockaddr_storage addr{};
     socklen_t len = sizeof(addr);
-    int cfd = ::accept(listenFd, (sockaddr*)&addr, &len);
+    // 1.1.37: accept4(SOCK_CLOEXEC) — jexec'ed shells must not inherit
+    // other clients' console sockets.
+    int cfd = ::accept4(listenFd, (sockaddr*)&addr, &len, SOCK_CLOEXEC);
     if (cfd < 0) {
       if (errno == EINTR) continue;
       break;
     }
-    std::thread([cfd, config]() { handleClient(cfd, config); }).detach();
+    // 1.1.37: cap concurrent sessions, and give the HANDSHAKE a read
+    // timeout so an idle TCP connect cannot pin a thread before auth.
+    // The timeout is cleared after the handshake — a console session
+    // is legitimately idle for hours.
+    if (g_activeSessions.load() >= kMaxActiveSessions) {
+      writeAll(cfd, WsPure::buildHandshakeRejection("too many console sessions"));
+      ::close(cfd);
+      continue;
+    }
+    struct timeval io{};
+    io.tv_sec = kHandshakeTimeoutSec;
+    ::setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &io, sizeof(io));
+    g_activeSessions.fetch_add(1);
+    std::thread([cfd, config]() {
+      handleClient(cfd, config);
+      g_activeSessions.fetch_sub(1);
+    }).detach();
   }
   ::close(listenFd);
 }

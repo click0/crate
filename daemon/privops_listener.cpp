@@ -33,6 +33,12 @@ namespace Crated {
 namespace {
 
 constexpr int kAcceptTimeoutSec = 1;       // graceful-stop poll period
+// 1.1.37: per-connection I/O timeout (a privops exchange is one
+// request + one reply; 30 s is generous) and the in-flight connection
+// cap. One detached thread per connection beyond this is refused 503.
+constexpr int kConnIoTimeoutSec = 30;
+constexpr int kMaxActiveConns   = 64;
+std::atomic<int> g_activeConns{0};
 
 #ifdef __FreeBSD__
 
@@ -162,7 +168,10 @@ void acceptLoop(Runtime *rt) {
   ::setsockopt(rt->listenFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
   while (!rt->stopFlag.load()) {
-    int connFd = ::accept(rt->listenFd, nullptr, nullptr);
+    // 1.1.37: accept4(SOCK_CLOEXEC) — the connection fd must not leak
+    // into `crate run` and the other children crated forks (the
+    // listener itself got SOCK_CLOEXEC in 1.1.26).
+    int connFd = ::accept4(rt->listenFd, nullptr, nullptr, SOCK_CLOEXEC);
     if (connFd < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
         continue;
@@ -170,7 +179,25 @@ void acceptLoop(Runtime *rt) {
                 << std::strerror(errno) << std::endl;
       break;
     }
-    std::thread(handleConnection, connFd, rt->rootlessPerUser).detach();
+    // 1.1.37: a client that connects and never sends (or never reads
+    // the reply) used to pin a thread + fd forever; N of them exhausted
+    // the daemon. Bound both directions, and cap the number of
+    // in-flight connections.
+    struct timeval io{};
+    io.tv_sec = kConnIoTimeoutSec;
+    ::setsockopt(connFd, SOL_SOCKET, SO_RCVTIMEO, &io, sizeof(io));
+    ::setsockopt(connFd, SOL_SOCKET, SO_SNDTIMEO, &io, sizeof(io));
+    if (g_activeConns.load() >= kMaxActiveConns) {
+      writeErrorResponse(connFd, 503,
+          "{\"error\":\"privops listener busy: too many concurrent connections\"}");
+      ::close(connFd);
+      continue;
+    }
+    g_activeConns.fetch_add(1);
+    std::thread([connFd, rootless = rt->rootlessPerUser]() {
+      handleConnection(connFd, rootless);
+      g_activeConns.fetch_sub(1);
+    }).detach();
   }
 }
 #endif

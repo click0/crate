@@ -204,6 +204,8 @@ listen:
     unix: /var/run/crate/crated.sock
     tcp_port: 9800
     tcp_bind: 0.0.0.0
+    max_body_mb: 1024     # request body cap (imports); 1..65536
+    http_workers: 32      # HTTP worker threads; 4..1024
 
 tls:
     cert: /usr/local/etc/crated.crt

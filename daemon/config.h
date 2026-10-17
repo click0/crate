@@ -47,6 +47,17 @@ struct Config {
   std::string unixSocketGroup;
   unsigned    unixSocketMode = 0660;
 
+  // 1.1.37: HTTP body cap and worker-pool size for the cpp-httplib
+  // listeners. cpp-httplib reads the whole body before routing (and
+  // before our auth gate runs), so without a cap any TCP client could
+  // push gigabytes into daemon memory; 1 GiB covers a large .crate
+  // import. `listen.http_workers` sizes the thread pool shared by all
+  // routes — stop/restart/export run synchronously for seconds to
+  // minutes each, and with cpp-httplib's small default a handful of
+  // them starved /healthz.
+  unsigned long long maxBodyBytes = 1024ULL * 1024 * 1024;
+  unsigned           httpWorkers  = 32;
+
   // TLS (for TCP listener)
   std::string tlsCert;
   std::string tlsKey;
