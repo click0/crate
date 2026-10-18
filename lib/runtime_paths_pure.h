@@ -77,6 +77,17 @@ std::string perUserExportsDir(uint32_t uid);
 // "/var/run/crate/<uid>/imports" — import staging directory.
 std::string perUserImportsDir(uint32_t uid);
 
+// 1.1.39: jail directories. A crate jail root is
+//   /var/run/crate/jail-<name>-<hex>           (legacy / root)
+//   /var/run/crate/<uid>/jail-<name>-<hex>     (rootless per-user)
+// isCrateJailPath() recognises both; crateJailDirName() returns the
+// "jail-<name>-<hex>" component (empty when not a crate jail path).
+// Every "is this one of ours" check (jail_query crateOnly, console,
+// info, clean) goes through these so the per-user layout is not
+// filtered out as a foreign jail.
+bool isCrateJailPath(const std::string &path);
+std::string crateJailDirName(const std::string &path);
+
 // "/var/run/crate/<uid>/audit.log" — per-user audit log tail.
 // The system audit (cap_syslog dual-write) keeps logging the
 // canonical record; this is the operator-readable copy.

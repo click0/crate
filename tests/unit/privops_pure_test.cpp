@@ -27,6 +27,7 @@ ATF_TEST_CASE_BODY(verb_token_roundtrips_for_every_verb) {
     Verb::BridgeAddMember, Verb::BridgeDelMember,
     Verb::SetIfaceInetAddr, Verb::CreateEpair,
     Verb::SetLoginclassRctl, Verb::ClearLoginclassRctl,
+    Verb::EnsureUserRoot,
   };
   for (Verb v : verbs) {
     std::string token = verbName(v);

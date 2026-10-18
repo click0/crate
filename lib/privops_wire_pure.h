@@ -173,6 +173,8 @@ std::string parseSetIfaceInetAddr(const std::string &body,
 
 std::string parseCreateEpair(const std::string &body,
                              PrivOpsPure::CreateEpairReq &out);
+std::string parseEnsureUserRoot(const std::string &body,
+                                PrivOpsPure::EnsureUserRootReq &out);
 
 std::string parseSetLoginclassRctl(const std::string &body,
                                    PrivOpsPure::SetLoginclassRctlReq &out);
@@ -332,6 +334,10 @@ std::string formatSetIfaceInetAddrSuccess(const std::string &ifname,
 // Shape: {"created":true,"a":"<ifaceA>","b":"<ifaceB>"}
 std::string formatCreateEpairSuccess(const std::string &ifaceA,
                                      const std::string &ifaceB);
+
+// 1.1.39: 200 OK body for ensure_user_root.
+// Shape: {"ensured":true,"uid":<uid>,"path":"<per-user root>"}
+std::string formatEnsureUserRootSuccess(uint32_t uid, const std::string &path);
 
 // 0.9.28: 200 OK bodies for loginclass-scoped RCTL ops.
 std::string formatSetLoginclassRctlSuccess(const std::string &loginclass,

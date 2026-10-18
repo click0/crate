@@ -11,6 +11,8 @@
 #include "top_pure.h"
 #include "jail_query.h"
 #include "pathnames.h"
+#include "privops_client.h"
+#include "privops_wire_pure.h"
 #include "util.h"
 #include "err.h"
 
@@ -141,9 +143,24 @@ bool topCrate(const Args &/*args*/) {
 
         std::string rctlOut;
         try {
-          rctlOut = Util::execCommandGetOutput(
-            {CRATE_PATH_RCTL, "-u", "jail:" + std::to_string(j.jid)},
-            "query RCTL usage");
+          // 1.1.39: through privops when unprivileged (rctl -u needs
+          // PRIV_RCTL_GET_RACCT; the swallowed EACCES showed every
+          // column as 0). Same route as `crate inspect` (1.1.1).
+          std::string sock = PrivOpsClient::detectSocketPath();
+          if (!sock.empty()) {
+            auto resp = PrivOpsClient::sendRequest(sock,
+                PrivOpsClient::buildQueryJailRctl((unsigned)j.jid));
+            if (resp.transportError.empty() && resp.status < 400) {
+              std::string out;
+              if (PrivOpsWirePure::extractStringField(resp.body, "output", out)
+                  == PrivOpsWirePure::kPresent)
+                rctlOut = out;
+            }
+          } else {
+            rctlOut = Util::execCommandGetOutput(
+              {CRATE_PATH_RCTL, "-u", "jail:" + std::to_string(j.jid)},
+              "query RCTL usage");
+          }
         } catch (...) {
           // RCTL not available or jail vanished mid-poll — show what we have.
         }

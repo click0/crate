@@ -2,6 +2,7 @@
 
 #include "privops_listener.h"
 
+#include "audit_per_user.h"
 #include "privops_handlers.h"
 #include "sandbox.h"
 
@@ -124,6 +125,17 @@ void handleConnection(int connFd, bool rootlessPerUser) {
         "(getpeereid failed); refusing to run unauthenticated\"}");
     ::close(connFd);
     return;
+  }
+
+  // 1.1.39: make sure the operator's per-user runtime root exists and
+  // is theirs before any verb runs — the lease file, spec registry and
+  // jail directories of a rootless `crate run` live under it, and its
+  // parent /var/run/crate is root-owned. Best-effort: a failure here is
+  // logged, and the verb that needs the directory reports its own error.
+  if (rootlessPerUser && havePeerUid && peerUid > 0) {
+    if (auto e = ensurePerUserRoot(peerUid); !e.empty())
+      std::cerr << "privops_listener: per-user root for uid " << peerUid
+                << ": " << e << std::endl;
   }
 
   nvlist_t *req = nvlist_recv(connFd, 0);

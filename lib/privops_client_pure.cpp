@@ -268,6 +268,12 @@ PrivOpsNvPure::FieldMap buildCreateEpair() {
   };
 }
 
+PrivOpsNvPure::FieldMap buildEnsureUserRoot() {
+  return {
+    {"verb", "ensure_user_root"},
+  };
+}
+
 PrivOpsNvPure::FieldMap buildSetLoginclassRctl(const std::string &loginclass,
                                                 const std::string &key,
                                                 const std::string &rawValue) {

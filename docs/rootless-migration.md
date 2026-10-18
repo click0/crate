@@ -87,12 +87,38 @@ root.
 `lib/runtime_paths_pure.{h,cpp}` introduces per-user paths:
 
 ```
-/var/run/crate/<uid>/              # per-user root (mode 0700)
-/var/run/crate/<uid>/leases/       # IP leases
-/var/run/crate/<uid>/exports/      # export staging
-/var/run/crate/<uid>/imports/      # import staging
+/var/run/crate/<uid>/              # per-user root (mode 0700, owned by uid)
+/var/run/crate/<uid>/jail-<name>-<hex>/   # jail roots (1.1.39; root keeps /var/run/crate/jail-*)
+/var/run/crate/<uid>/network-leases.txt   # IPv4 pool leases (per user)
+/var/run/crate/<uid>/network-leases6.txt  # IPv6 pool leases
+/var/run/crate/<uid>/spec-registry.txt    # name -> .crate path
 /var/run/crate/<uid>/audit.log     # audit tail
 ```
+
+Since 1.1.39 `crated` creates the per-user root on the first privops
+connection (and on the `ensure_user_root` verb) and **chowns it to the
+operator**; before that it was created `root:wheel 0700`, so nothing
+under it was writable by the operator it was meant for. With this
+layout the `create_jail` path gate (1.1.15) expects
+`path_master_prefix: /var/run/crate` in `crated.conf` — the per-user
+slice is then `/var/run/crate/<uid>`, exactly where `crate run` puts
+the jail directory.
+
+Because each operator has their own lease file, two operators drawing
+from one shared `network_pool` would otherwise receive the same
+address. 1.1.39 carves a per-uid sub-block (`network_pool_user_bits`
+in `crate.yml`, default 8 — a `/16` pool gives every uid a `/24`;
+`network_pool6_user_bits`, default 16) and allocates from it; the
+address keeps the pool's prefix length and gateway, so the shared
+bridge needs no extra routing.
+
+**Still open (see `TODO` §1):** `crate run` executes the container's
+command through `jail_attach(2)`/`jexec(8)`, which need root, and no
+privops verb performs an exec. An unprivileged `crate run` therefore
+sets the jail up and fails at the first in-jail command. Until an
+exec verb (or a daemon-run model) lands, start containers through
+`crated` — control-socket / HTTP `start`, which runs `crate run` as
+root — and use the unprivileged `crate(1)` for everything else.
 
 uid is the stable key (operators on NIS/LDAP have mutable
 uid→name maps).

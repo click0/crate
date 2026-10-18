@@ -18,61 +18,88 @@ The bhyve/VM track is in TODO2.
 === 1. Blocker: the rootless (1.0.0) model is not actually reachable ===
 
   [FIXED in 1.1.34] cli/main.cpp refused to start unless euid==0 AND
-  uid!=0 (setuid only), so the 0755 binary installed since 1.0.0 exited
-  with "crate has to run as a regular user setuid to root" for every
-  command, as the operator, as root, and when crated exec'ed `crate run`.
-  Gate removed, HOME taken from passwd, runtime-dir check moved after
-  argument parsing and made non-root tolerant, lite-CI smoke step added.
-  Still open from that finding: daemon/routes.cpp spawnCrateRun and
-  control_socket.cpp exec `crate run` as uid 0 — decide which uid the
-  spawned run should have (the jid registry records uid-0 creates as
-  unowned, see 2. "stale jid ownership"); and `crate run` itself
-  (run.cpp:317) still creates jail-<name>-<hex> directly under the
-  root-owned /var/run/crate, so an unprivileged `crate run` fails at
-  mkdir — the per-user path helpers (RuntimePathsPure::perUserRoot) are
-  used for leases/registry but not for the jail directory. None of the
-  rootless-only paths below have been exercised on hardware yet.
+  uid!=0 (setuid only). Gate removed, HOME from passwd, runtime-dir
+  check made non-root tolerant, lite-CI smoke step added.
 
-* (HIGH) Several commands still exec privileged tools directly and
-  so fail under rootless with EACCES — they need privops verbs or must
-  be documented as root-only:
-    - lib/inter_dns.cpp:36-56 writes /etc/hosts and
-      /usr/local/etc/unbound/conf.d/crate.conf directly.
-    - lib/console.cpp invokes jexec(8) directly (no privops verb).
-    - lib/top.cpp:144-146, lib/info.cpp:129-131 exec `rctl -u/-h`
-      directly (needs PRIV_RCTL_GET_RACCT); the exception is swallowed
-      (top.cpp:147) so MEM/DISK/PROC silently render 0. inspect.cpp
-      :100-116 already has the privops route — reuse it.
-    - lib/run.cpp:181 runHealthcheckOnce uses jexec directly instead
-      of JailExec.
-    - Network teardown: `PrivOpsClient::buildTeardownIface`
-      (privops_client.h:91) has ZERO callers. run_net.cpp:301
-      (destroyEpair), :646 (destroyBridgeEpair), run.cpp:1133 (auto
-      bridge destroy) exec ifconfig directly → every bridge-mode
-      teardown throws for a non-root operator and leaks one epair pair
-      per run. Also direct: run.cpp:1102-1103 (bridge create/up),
-      run_net.cpp:753 (host MAC), run.cpp:1595 (host v6 epair addr),
-      run.cpp:1349-1361,1384-1389 (ipfw auto-fw, failure only warned),
-      stack.cpp:787-797 (bridge), stack.cpp:294 (unbound on :53).
-    - lib/ctx.cpp:191 / locs.cpp:11,14: FwSlots/FwUsers files are
-      root-owned 0600 in /var/run/crate → NAT mode fails at
-      run.cpp:1620 for a non-root user; and if one user did create
-      them, `isEmpty()` across users (run_net.cpp:496-501) removes the
-      shared `nat 50000` rule and resets ip.forwarding while another
-      user's jails depend on it.
+  [FIXED in 1.1.39] per-user runtime root created AND chowned to the
+  operator by crated (every privops connection + new `ensure_user_root`
+  verb); rootless jail directories under /var/run/crate/<uid>/
+  (RuntimePathsPure::isCrateJailPath for jail_query/console/info/clean);
+  network teardown + bridge/auto ipfw through privops
+  (RunNet::teardownIface / ipfwExec); healthcheck via JailExec; top via
+  query_jail_rctl; console argv split; per-user network_pool split
+  (network_pool_user_bits); clear refusals for NAT mode and
+  auto_create_bridge under rootless.
+
+* (BLOCKER, design decision needed) an unprivileged `crate run` cannot
+  execute anything inside the jail. JailExec::execInJail
+  (jail_query.cpp:296-330) forks, jail_attach(2)s, setuid()s and
+  execs; jail_attach needs root, and the jexec(8) fallback does too.
+  No privops verb performs an exec. So after 1.1.39 a rootless run
+  creates the directory, extracts, creates the jail, mounts, wires the
+  network — and fails at the first execInJail (lo0 setup, rc.conf,
+  the service command itself). Every rootless-only path below this
+  line is therefore untested on hardware. Two ways to close it:
+    (A) exec_in_jail privops verb with descriptor passing: the client
+        sends argv, user and its stdin/stdout/stderr (nvlist_add_
+        descriptor over the libnv socket); crated pdfork()s, jail_
+        attach(jid), initgroups/setgid/setuid(user), dup2, execv, and
+        returns the process descriptor (SCM_RIGHTS) so the client
+        waits for exit via kqueue EVFILT_PROCDESC/pdwait without
+        pinning a daemon thread. Authz: checkOwnedJid (the jid must be
+        the caller's). Keeps the current in-process `crate run`
+        architecture intact; execInJail gains a privops branch.
+    (B) daemon-run model: rootless `crate run -f` only validates,
+        registers the spec (SpecRegistry) and asks crated to start the
+        container (control-socket/HTTP `start` already spawns `crate
+        run` as root); logs/console come back over the control socket.
+        Simpler verbs, but `crate run` stops being the foreground
+        supervisor for unprivileged users, and the jid registry records
+        the uid-0 run as unowned (needs an owner argument to `start`).
+  (A) is the recommendation: it matches the trust model (privops as
+  the privileged plane, per-verb ownership gate) and changes no
+  operator-visible behaviour. Also needed by `crate console` (jexec
+  direct) and `crate update --pkg-only` under rootless.
+
+* (HIGH) remaining direct privileged calls under rootless:
+    - run.cpp bridge path: IfconfigOps::createNamedInterface/setUp for
+      auto_create_bridge (now a clear ERR under rootless; needs a
+      `create_bridge` verb); IpfwOps::deleteNat at teardown (now a
+      WARN; needs `delete_ipfw_nat`); host-side static-mac
+      (run_net.cpp setMacAddress, now skipped with a WARN; needs a
+      host-iface ether field on configure_iface or a `set_iface_mac`
+      verb); run.cpp:1595 host v6 epair address (NAT mode only).
+    - NAT mode as a whole: Ctx::FwSlots/FwUsers in root-owned
+      /var/run/crate (ctx.cpp:191, locs.cpp:11,14), ip.forwarding
+      sysctls, setupFirewallRules' ipfw rules partially via privops.
+      Now refused up front under rootless. Making NAT mode rootless
+      needs the slot allocator in the daemon (an `allocate_fw_slot`/
+      `release_fw_slot` pair keyed by peer uid+pid) and a sysctl verb.
+    - lib/inter_dns.cpp:36-56 writes /etc/hosts and the unbound
+      conf.d file directly (root-only by nature; document, or move the
+      rebuild into crated as a verb).
+    - lib/info.cpp:129-131 `rctl -h` (limits, not usage — no verb
+      returns limits; add a `limits` flag to query_jail_rctl).
+    - stack.cpp:787-797 (bridge create), stack.cpp:294 (unbound on
+      :53) — stack is root-only today.
     - lib/pfctl_ops.cpp:28 PfLock opens /var/run/crate/pfctl.lock 0600;
-      a non-root open fails and held() is never checked → no
-      serialisation.
+      non-root open fails and held() is never checked → no
+      serialisation (moot while pf goes through privops, which
+      serialises in the daemon).
     - lib/audit.cpp:130-144 writes Config.logs/audit.log (default
-      /var/log/crate, not operator-writable; no `install -d` for it)
-      and ignores open() failure → audit trail silently lost for every
-      unprivileged caller. RuntimePathsPure::perUserAuditLog exists
-      but only daemon/audit_per_user.cpp:36 uses it. `logs` is also
-      overridable from ~/.config/crate/crate.yml (config.cpp:158), so
-      a user chooses where their own audit trail goes.
+      /var/log/crate, not operator-writable) and ignores open()
+      failure → audit trail silently lost for every unprivileged
+      caller. RuntimePathsPure::perUserAuditLog exists but only
+      daemon/audit_per_user.cpp uses it. `logs` is also overridable
+      from ~/.config/crate/crate.yml, so a user chooses where their
+      own audit trail goes.
     - lib/doctor.cpp:178 (W_OK on /var/run/crate) and :257 (R_OK on
       crated.conf) FAIL for a normal operator; the comment at :171-177
       acknowledges it but keeps FAIL.
+    - daemon/routes.cpp spawnCrateRun and control_socket.cpp exec
+      `crate run` as uid 0 — the jid registry records those creates as
+      unowned. If (B) above is chosen this becomes the main path and
+      needs an owner uid carried into create_jail.
 
 === 2. crated privops / HTTP — security ===
 
@@ -181,16 +208,10 @@ The bhyve/VM track is in TODO2.
   restored only when allowOutbound() (run_net.cpp:498, inbound-only
   jails leave it at 1).
 
-* (HIGH) Two users on one host allocate the same network_pool IP.
-  lib/network_lease.cpp:43-45 / network_lease6.cpp:39-41 move the
-  lease FILE to /var/run/crate/<uid>/ under rootless, but
-  run.cpp:1157-1165 allocates from the host-wide cfg.networkPool with
-  no per-user partitioning (PerUserNetPure::composeIpv4 has no caller
-  in run.cpp). alice and bob each get base+2 on the same bridge →
-  duplicate IP, and each one's SNAT/rdr anchor matches the other's
-  traffic. Either partition the pool per uid (composeIpv4 was written
-  for this) or make the lease file host-wide and root-mediated via a
-  privops verb.
+  [FIXED in 1.1.39] two users on one host allocated the same
+  network_pool IP: per-uid sub-block via PerUserNetPure::composeIpv4
+  (network_pool_user_bits, default 8; v6: network_pool6_user_bits 16),
+  addresses keep the pool prefix/gateway.
 
 * (MED) MAC portacl rules are host-wide, clobbered per run, never
   removed: run.cpp:724-731 writes security.mac.portacl.rules via
@@ -397,14 +418,9 @@ The bhyve/VM track is in TODO2.
   :64,78 emit `10.0.0.1,10.0.0.2` into hosts/local-data and unbound
   rejects the file.
 
-* (HIGH) `crate console` interactive path cannot work:
-  lib/console.cpp:92 pushes "login -f <user>" as ONE argv element and
-  :100 appends shell-quoted extra args onto that same string;
-  Util::execCommandGetStatus (util.cpp:154-173) is fork+execv with no
-  shell, and jexec(8) execvp()s argv[0] literally → "login -f root:
-  No such file". Same for `--cmd "a b"`. Split into separate argv
-  elements. Also `-u <host user>` requires that user to exist inside
-  the jail (document).
+  [FIXED in 1.1.39] `crate console`: "login -f <user>" was one argv
+  element to jexec; split into words, extra args appended verbatim.
+  Still root-only (jexec) until the exec verb from §1 exists.
 
 * (MED) Auto-incremental backup/replicate chain is corrupt after any
   failure or mixed use: backup.cpp:68 takes the snapshot BEFORE
@@ -803,8 +819,8 @@ The bhyve/VM track is in TODO2.
   commands in cli/args.h:10. (`scripts/*` and `limits` ARE documented
   — the previous TODO entry was partly stale.) Stack files (`crate
   stack`) have no man-page section at all; the 1.1.25 name/IP rules
-  live only in CHANGELOG. crate.5:612-671 lacks network_pool,
-  network_pool6, firewall_backend (parsed at config.cpp:56,68,75).
+  live only in CHANGELOG. (network_pool, network_pool6, firewall_backend and the 1.1.39
+  *_user_bits keys ARE documented since 1.1.39.)
 * crate.5:243 must state that `firewall:` applies to NAT mode only
   (until 3. is fixed); :510 "deterministic MAC" is false today; :270-277
   needs the VNC exposure caveat; :82 and README:18 need the export

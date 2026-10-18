@@ -6,6 +6,78 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.39] — 2026-10-18
+
+**Rootless plumbing (`TODO` §1) and the per-user pool split (§3 H2),
+plus the `crate console` argv bug.** ⚠️ New privops verb
+`ensure_user_root`; rootless jail directories move to
+`/var/run/crate/<uid>/`; `crate console` works again.
+
+What this release does **not** do — and now says so: an unprivileged
+`crate run` still cannot execute the container's command.
+`JailExec::execInJail` uses `jail_attach(2)` with a `jexec(8)` fallback,
+both root-only, and the privops verb set has no exec. The rootless run
+therefore sets the jail up and fails at the first in-jail command. The
+two ways to close that (an `exec_in_jail` verb passing the client's
+stdio over the libnv socket, or a daemon-run model where `crate run -f`
+registers the spec and asks `crated` to run it) are laid out in
+`TODO` §1 for a decision; everything below is groundwork either way.
+
+- **Per-user runtime root is created *for the operator*.**
+  `/var/run/crate/<uid>` was created by the audit writer as
+  `root:wheel 0700`, so the lease file, spec registry and (now) jail
+  directories the rootless paths put there were never writable by the
+  uid they belong to. `crated` now creates **and chowns** it on every
+  privops connection, and the new `ensure_user_root` verb (no fields;
+  uid from `getpeereid`) lets `crate run` ask for it before its first
+  mkdir and learn the path. `path_master_prefix: /var/run/crate` makes
+  the 1.1.15 `create_jail` gate line up with this layout.
+- **Rootless jail directories live under `/var/run/crate/<uid>/`.**
+  `crate run` used the root-owned `/var/run/crate/jail-*` and died at
+  `mkdir`. `RuntimePathsPure::isCrateJailPath` / `crateJailDirName`
+  recognise both layouts; `jail_query` (crateOnly), `crate console`,
+  `crate info` and the `crate clean` directory sweep use them, so
+  per-user jails are no longer filtered out as foreign.
+- **Per-user `network_pool` split.** Lease files are per user, so two
+  operators drawing from one pool both got `base+2`. Under rootless each
+  uid now allocates from a sub-block `network_pool_user_bits` (default
+  8) below the pool prefix (`PerUserNetPure::composeIpv4`; `/16` → a
+  `/24` per uid; must stay at `/28` or wider, else a warning and a
+  shared pool); same for `network_pool6` (`network_pool6_user_bits`,
+  default 16). Addresses keep the pool's prefix length and gateway.
+- **Network teardown through privops.** `teardown_iface` had a client
+  builder but no caller: every epair destroy and the auto-created
+  bridge destroy shelled out to `ifconfig` and EACCES'd under rootless,
+  leaking an epair pair per run. New `RunNet::teardownIface` (warn-only
+  on teardown) and `RunNet::ipfwExec` (nat config / add / delete via
+  `configure_ipfw_nat`, `add_ipfw_rule`, `remove_ipfw_rule`) replace the
+  direct calls in the bridge/auto path. Host-side `static-mac` has no
+  verb and is skipped with a warning under rootless; NAT instance
+  deletion has none either and is reported (TODO: `delete_ipfw_nat`).
+- **Clear refusals instead of EPERM deep inside:** NAT mode
+  (`net: outbound/inbound`) under rootless — host-wide firewall slots
+  and sysctls are not reachable through privops; `auto_create_bridge`
+  under rootless — no `create_bridge` verb yet.
+- **`crate console` fixed.** `jexec(8)` `execvp()`s `argv[0]` literally,
+  and the code passed `"login -f <user>"` as ONE argv element (plus
+  shell-quoted extra args glued on), so every interactive console
+  failed with "No such file or directory". Each word is its own
+  argument now; `-- args` are appended verbatim.
+- `crate top` queries RCTL through privops like `crate inspect` does
+  (unprivileged `rctl -u` fails and every column showed 0).
+- Healthchecks run through `JailExec::execInJail` like every other
+  in-jail command (the shell line was one argv token to a raw `jexec`);
+  the deadline is enforced by `timeout(1)` inside the jail.
+
+Docs: `crate.5` gains `network_pool`, `network_pool6`,
+`network_pool_user_bits`, `network_pool6_user_bits`, `firewall_backend`
+(none were documented); `docs/rootless-migration.md` layout + the exec
+caveat; `docs/on-hardware-validation.md` switched to
+`path_master_prefix: /var/run/crate` and lost a reference to a
+`--override-jail-path` flag that never existed. Tests:
+`runtime_paths_pure_test` (both layouts, rejects), verb round-trip
+lists. 1458/1458 unit cases.
+
 ## [1.1.38] — 2026-10-18
 
 **Networking runtime — the `TODO` §3 items that need no architecture

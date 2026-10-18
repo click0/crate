@@ -42,4 +42,13 @@ namespace Crated {
 // On any failure logs a single line to stderr and returns false.
 bool appendPerUserAuditLine(uint32_t uid, const std::string &jsonLine);
 
+// 1.1.39: create /var/run/crate/<uid> (mode 0700) if missing and make
+// sure it is OWNED by uid (group = the uid's primary group when
+// resolvable). Until now the directory was created root:wheel 0700 by
+// the audit writer, so the operator it was meant for could not write
+// the lease file / spec registry / jail directories the rootless
+// paths put there. Idempotent. Returns "" on success, else a reason.
+// Called on every privops connection and by the ensure_user_root verb.
+std::string ensurePerUserRoot(uint32_t uid);
+
 } // namespace Crated

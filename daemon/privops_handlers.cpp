@@ -15,6 +15,7 @@
 #include "../lib/audit_per_user_pure.h"
 #include "../lib/privops_authz_pure.h"
 #include "../lib/jid_owner_registry.h"
+#include "../lib/runtime_paths_pure.h"
 
 #include <iostream>
 
@@ -501,6 +502,21 @@ DispatchResult handleCreateEpair(const PrivOpsPure::CreateEpairReq &/*r*/) {
                                                           pair.second)};
 }
 
+// --- handleEnsureUserRoot (1.1.39) ---
+
+DispatchResult handleEnsureUserRoot(uint32_t peerUid) {
+  if (peerUid == 0) {
+    return {400, PrivOpsWirePure::formatHandlerError(
+                  "no_peer_uid",
+                  "ensure_user_root needs the libnv transport (peer uid > 0); "
+                  "root uses /var/run/crate directly")};
+  }
+  if (auto e = ensurePerUserRoot(peerUid); !e.empty())
+    return {500, PrivOpsWirePure::formatHandlerError("mkdir_failed", e)};
+  return {200, PrivOpsWirePure::formatEnsureUserRootSuccess(
+                peerUid, RuntimePathsPure::perUserRoot(peerUid))};
+}
+
 // --- handleSetLoginclassRctl / handleClearLoginclassRctl (0.9.28) ---
 
 DispatchResult handleSetLoginclassRctl(const PrivOpsPure::SetLoginclassRctlReq &r) {
@@ -934,6 +950,9 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleSetIfaceInetAddr(r);
     }
+    case Verb::EnsureUserRoot:
+      // HTTP transport: no peer uid (operatorUid is 0 here).
+      return handleEnsureUserRoot(operatorUid);
     case Verb::CreateEpair: {
       PrivOpsPure::CreateEpairReq r;
       if (auto e = PrivOpsWirePure::parseCreateEpair(body, r); !e.empty())
@@ -1282,6 +1301,8 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleSetIfaceInetAddr(r);
     }
+    case Verb::EnsureUserRoot:
+      return handleEnsureUserRoot(operatorUid);
     case Verb::CreateEpair: {
       PrivOpsPure::CreateEpairReq r;
       if (auto e = PrivOpsNvPure::parseCreateEpair(m, r); !e.empty())

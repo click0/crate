@@ -129,6 +129,10 @@ PrivOpsNvPure::FieldMap buildSetIfaceInetAddr(const std::string &ifname,
 // them via PrivOpsWirePure::extractStringField.
 PrivOpsNvPure::FieldMap buildCreateEpair();
 
+// 1.1.39: ensure_user_root. No fields; the daemon creates and chowns
+// /var/run/crate/<peer uid> and returns it in "path".
+PrivOpsNvPure::FieldMap buildEnsureUserRoot();
+
 // 0.9.28: per-loginclass RCTL umbrella ops.
 PrivOpsNvPure::FieldMap buildSetLoginclassRctl(const std::string &loginclass,
                                                 const std::string &key,

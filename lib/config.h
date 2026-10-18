@@ -50,6 +50,15 @@ struct Settings {
   // `network_pool: 10.66.0.0/24` in /usr/local/etc/crate.yml or
   // ~/.config/crate/crate.yml.
   std::string networkPool;
+  // 1.1.39: under rootless, each operator allocates from a per-uid
+  // sub-block of network_pool, `network_pool_user_bits` bits narrower
+  // than the pool (default 8: a /16 pool gives every uid a /24; the
+  // sub-block must stay at /28 or wider). 0 disables the split (one
+  // shared pool — two operators can then draw the same address, since
+  // lease files are per user). Addresses keep the POOL's prefix length
+  // and gateway. See PerUserNetPure::composeIpv4.
+  unsigned networkPoolUserBits = 8;
+  unsigned networkPool6UserBits = 16;   // same for network_pool6 (/64 -> /80 per uid)
   // 0.8.15: IPv6 ULA prefix for `network: auto` jails (Phase 1
   // hook). Currently parsed + validated but not wired into runtime
   // — full IPv6 NPTv6 / NAT66 + per-jail allocation is a future

@@ -52,6 +52,33 @@ std::string perUserAuditLog(uint32_t uid) {
   return perUserRoot(uid) + "/audit.log";
 }
 
+namespace {
+bool allDigits(const std::string &s) {
+  if (s.empty()) return false;
+  for (char c : s) if (c < '0' || c > '9') return false;
+  return true;
+}
+} // anon
+
+std::string crateJailDirName(const std::string &path) {
+  const std::string root = std::string(kLegacyRoot) + "/";
+  if (path.compare(0, root.size(), root) != 0) return "";
+  std::string rest = path.substr(root.size());
+  // optional "<uid>/" component
+  auto slash = rest.find('/');
+  if (slash != std::string::npos) {
+    if (!allDigits(rest.substr(0, slash))) return "";
+    rest = rest.substr(slash + 1);
+    if (rest.find('/') != std::string::npos) return "";   // deeper: not a jail root
+  }
+  if (rest.compare(0, 5, "jail-") != 0 || rest.size() <= 5) return "";
+  return rest;
+}
+
+bool isCrateJailPath(const std::string &path) {
+  return !crateJailDirName(path).empty();
+}
+
 std::string validateUid(int64_t uid) {
   if (uid < 0) return "uid must be non-negative";
   if (uid > INT32_MAX) return "uid out of range (>INT32_MAX)";
