@@ -11,6 +11,8 @@
 #include <memory>
 #include <thread>
 
+namespace httplib { class Server; }
+
 namespace Crated {
 
 class Server {
@@ -23,6 +25,10 @@ public:
 
 private:
   Config config_;
+
+  // 1.1.37: body cap / worker pool / FD_CLOEXEC, applied to both the
+  // TCP and the unix-socket httplib instances.
+  void applyListenerLimits(httplib::Server &srv);
 
   struct Impl;
   std::unique_ptr<Impl> impl_;

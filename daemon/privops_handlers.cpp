@@ -246,6 +246,20 @@ DispatchResult handleConfigureIface(const PrivOpsPure::ConfigureIfaceReq &r) {
                   "no running jail with jid " + std::to_string(r.jid))};
   }
 
+  // 1.1.37: validate the bridge/epair combination BEFORE the first
+  // side effect. The check used to sit after moveToVnet, so a request
+  // that was going to be refused 400 had already moved the iface.
+  std::string hostHalf;
+  if (!r.bridge.empty()) {
+    hostHalf = computeEpairPair(r.ifname);
+    if (hostHalf.empty()) {
+      return {400, PrivOpsWirePure::formatHandlerError(
+                    "non_epair_with_bridge",
+                    "bridge attach requires an epair-shaped ifname (got '"
+                    + r.ifname + "')")};
+    }
+  }
+
   try {
     // 1. Move iface into the jail's vnet.
     IfconfigOps::moveToVnet(r.ifname, (int)r.jid);
@@ -283,17 +297,10 @@ DispatchResult handleConfigureIface(const PrivOpsPure::ConfigureIfaceReq &r) {
                         "bring iface up in jail");
     }
 
-    // 3. Host-side: attach the pair-A half to the bridge.
-    if (!r.bridge.empty()) {
-      auto hostHalf = computeEpairPair(r.ifname);
-      if (hostHalf.empty()) {
-        return {400, PrivOpsWirePure::formatHandlerError(
-                      "non_epair_with_bridge",
-                      "bridge attach requires an epair-shaped ifname (got '"
-                      + r.ifname + "')")};
-      }
+    // 3. Host-side: attach the pair-A half to the bridge (shape
+    //    already checked above).
+    if (!r.bridge.empty())
       IfconfigOps::bridgeAddMember(r.bridge, hostHalf);
-    }
   } catch (const std::exception &e) {
     return {500, PrivOpsWirePure::formatHandlerError("exec_failed", e.what())};
   }

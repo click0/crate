@@ -10,8 +10,10 @@
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include <httplib.h>
 
+#include <fcntl.h>
 #include <grp.h>
 #include <pwd.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -50,6 +52,28 @@ Server::Server(const Config &config)
   // Register all REST routes. This is the TCP listener (remote,
   // token-gated) — isUnixListener = false.
   registerRoutes(*impl_->httpSrv, config_, /*isUnixListener=*/false);
+  applyListenerLimits(*impl_->httpSrv);
+}
+
+// 1.1.37: body cap, worker pool, CLOEXEC on the listening socket.
+//   - set_payload_max_length: cpp-httplib buffers the body before our
+//     handler (and auth gate) runs — unbounded by default.
+//   - new_task_queue: stop/restart/export hold a worker for seconds to
+//     minutes; the default pool is small enough that a few concurrent
+//     calls starved /healthz.
+//   - FD_CLOEXEC on the listener: crated forks `crate run` and other
+//     children; they must not inherit the HTTP listening socket (the
+//     hand-rolled listeners got SOCK_CLOEXEC in 1.1.26).
+void Server::applyListenerLimits(httplib::Server &srv) {
+  srv.set_payload_max_length((size_t)config_.maxBodyBytes);
+  const unsigned workers = config_.httpWorkers;
+  srv.new_task_queue = [workers] { return new httplib::ThreadPool(workers); };
+  srv.set_socket_options([](socket_t sock) {
+    int fl = ::fcntl(sock, F_GETFD);
+    if (fl != -1) ::fcntl(sock, F_SETFD, fl | FD_CLOEXEC);
+    int yes = 1;
+    ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+  });
 }
 
 Server::~Server() {
@@ -76,6 +100,7 @@ void Server::start() {
     // Built here (not inside the thread) so stop() can reach it.
     impl_->udsSrv = std::make_unique<httplib::Server>();
     registerRoutes(*impl_->udsSrv, config_, /*isUnixListener=*/true);
+    applyListenerLimits(*impl_->udsSrv);
     impl_->udsSrv->set_address_family(AF_UNIX);
     impl_->unixThread = std::thread([this]() {
       impl_->udsSrv->listen(config_.unixSocket, 0);

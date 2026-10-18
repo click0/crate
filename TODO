@@ -124,42 +124,38 @@ The bhyve/VM track is in TODO2.
   isolation. Making this real needs the spawned `crate run` to drop to
   the token's mapped uid — part of the rootless §1 work, not a gate.
 
-* (MED) pf rule temp file is a predictable, attacker-ownable path
-  written by root. lib/pfctl_ops.cpp:89,104: /tmp/crate-pf-<pid>.rules
-  via Util::Fs::writeFile (O_NOFOLLOW but no O_EXCL), then
-  `pfctl -a <anchor> -f <tmp>`; handleAddPfRule
-  (privops_handlers.cpp:276-283) runs this inside crated as root, whose
-  pid is public. A local user pre-creates a regular file there and
-  rewrites it between the write and `pfctl -f` → attacker-chosen pf
-  rules as root. The string overload (:101) always takes the tmp-file
-  path. Fix: feed `pfctl -f -` through a pipe, or mkstemp in a
-  root-only directory. (plausible — window small, not reproduced)
+  [FIXED in 1.1.37] pf rules over a pipe (`pfctl -f -`,
+  Util::execCommandWithInput); SO_RCVTIMEO/SO_SNDTIMEO + 64-connection
+  cap on privops/control-socket listeners, handshake timeout + session
+  cap on ws-console; WsPure::kMaxFramePayload 1 MiB;
+  listen.max_body_mb / listen.http_workers for httplib;
+  accept4(SOCK_CLOEXEC) + FD_CLOEXEC on the httplib listener;
+  control-socket restart = bounded stop + detached spawnCrateRun;
+  configure_iface shape check before moveToVnet.
 
-* (MED) Unbounded request buffering: privops_listener.cpp:123
-  `nvlist_recv(connFd, 0)` lets libnv allocate per the untrusted header
-  size, one detached thread per connection; server.cpp never calls
-  set_payload_max_length so an import body is held whole in req.body
-  (routes.cpp:999-1022); ws_pure.cpp:258-273 accepts 63-bit frame
-  lengths and ws_console.cpp:177 buffers until the claimed length
-  arrives. The last two are admin-only. Add caps.
+* (MED, residual) privops_listener.cpp `nvlist_recv(connFd, 0)` still
+  lets libnv allocate whatever size the untrusted header announces
+  (the 1.1.37 timeout + cap bound the thread/fd exhaustion, not the
+  per-request allocation). libnv exposes no size cap; options: peek
+  the 19-byte nvlist header (magic, version, flags, descriptors, size)
+  with MSG_PEEK and refuse > N MiB before nvlist_recv, or move to
+  nvlist_unpack over a bounded recv buffer. Needs a FreeBSD build to
+  validate against the header layout.
 
-* (MED) daemon/control_socket.cpp:338 `POST restart` → restartCrate →
-  lib/lifecycle.cpp:518 runCrate() IN-PROCESS on the connection thread
-  — the defect 1.1.26 fixed for HTTP. handleStart (:271-291) forks
-  correctly; make restart do the same.
+* (MED) Synchronous HTTP handlers remain synchronous — by choice in
+  1.1.37 (the worker pool now absorbs them): routes.cpp stop (≤ 11 s),
+  restart (stop phase ≤ 11 s, then spawn), export (`tar | xz --extreme`
+  inline, minutes). `crate migrate` reads the export response (file,
+  size, sha256) and then downloads, so making export asynchronous
+  (202 + poll) needs a migrate client change in the same release;
+  stop/restart could return 202 after SIGTERM with a detached
+  wait/KILL child, but that changes the documented `stopped:true`
+  contract. Decide API shape first, then do both ends.
 
-* (MED) Synchronous long-running HTTP handlers remain:
-  routes.cpp:284-298 (stop: up to 11 s of sleep), :364, :625-635
-  (restart), :918-924 (export: `tar | xz --extreme` of a whole rootfs
-  inline). Each pins an httplib worker; a few concurrent calls starve
-  /healthz.
-
-* (LOW) handleConfigureIface performs moveToVnet
-  (privops_handlers.cpp:210) before the non_epair_with_bridge 400 at
-  :247-253 — side effect on an error path; the check belongs in
-  validateConfigureIface. The handler comment (:212-218) describes a
-  "move-only" mode that validateConfigureIface
-  (privops_pure.cpp:490-491) rejects.
+* (LOW) privops_handlers.cpp handleConfigureIface comment describes a
+  "move-only" mode (all of ipv4/ipv6/mac empty) that
+  validateConfigureIface (privops_pure.cpp:490-491) rejects — either
+  allow it in the validator or drop the comment.
 * (LOW) Registry write happens after `jail -c` returns (:663-671);
   until then the new jid/path are unowned (bootstrap Allow).
 * (LOW) DELETE /api/v1/containers/:name (routes.cpp:348-371) only
@@ -771,22 +767,17 @@ The bhyve/VM track is in TODO2.
   service-only first container never returns, so the second is never
   started. Spawn each `crate run` like daemon/routes.cpp spawnCrateRun.
 
-* (correctness, MED) fd hygiene part 2: httplib's own TCP listener
-  (server.cpp — set_socket_options or fcntl FD_CLOEXEC after bind) and
-  every accept()ed connection fd in control_socket.cpp:618,
-  privops_listener.cpp:165, ws_console.cpp:301 (use
-  accept4(SOCK_CLOEXEC)) are still inherited by forked children.
+  [FIXED in 1.1.37] fd hygiene part 2: accept4(SOCK_CLOEXEC) on the
+  three hand-rolled listeners, FD_CLOEXEC on the httplib listening
+  sockets via set_socket_options.
 
 * (correctness, MED) cron: all entries go into ONE crontab,
   /var/cron/tabs/<user of the FIRST entry> (run.cpp:1823); a `user:`
   on a later entry is silently ignored. Documented as a limitation in
   crate.5 (1.1.31). Group by user, one crontab per user.
 
-* (robustness, MED/LOW) privops_listener.cpp nvlist_recv and
-  control_socket.cpp read() block forever on the CONNECTION fd (the
-  SO_RCVTIMEO at privops_listener.cpp:162 / control_socket.cpp:615 is
-  on the LISTEN fd only); one detached thread per connection with no
-  cap. Add a recv timeout on connFd and a concurrency cap.
+  [FIXED in 1.1.37] connection-fd recv/send timeouts and a per-listener
+  concurrency cap on the privops and control-socket planes.
 
 * (correctness, LOW) lib/privops_wire_pure.cpp escape() is the one
   JSON escaper not on JsonPure: passes control bytes through raw. Its

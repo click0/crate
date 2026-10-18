@@ -79,6 +79,9 @@ namespace {
 constexpr std::size_t kMaxHeader = 8 * 1024;
 constexpr std::size_t kMaxBody   = 64 * 1024;
 constexpr int         kAcceptTimeoutSec = 1;  // for graceful shutdown
+// 1.1.37: per-connection I/O timeout and in-flight cap (per socket).
+constexpr int         kConnIoTimeoutSec = 30;
+constexpr int         kMaxActiveConns   = 64;
 
 // Resolve a unix group name to gid. Returns -1 if not found.
 long resolveGroup(const std::string &name) {
@@ -223,6 +226,35 @@ void handleStats(std::string &resBody, int &status, const std::string &name) {
 // 0.8.13: lifecycle handlers — POST stop / restart.
 // 0.8.21: PostStart now consults the spec registry (introduced
 // in this release) and forks `crate run -f <abs-path>` detached.
+
+// Fork + setsid + exec `crate run -f <cratePath>` so the child outlives
+// this request and runs as a session leader (no controlling tty). The
+// exec target is /usr/local/bin/crate — mode 0755 since 1.0.0 (no
+// longer setuid) — so the child simply inherits crated's own uid
+// (root). That holds whether crated is started by an operator at the
+// console or from /etc/rc.d/crated. Returns the child pid, -1 on fork
+// failure (errno set). 1.1.37: shared by start and restart.
+pid_t spawnCrateRun(const std::string &cratePath) {
+  pid_t pid = ::fork();
+  if (pid < 0) return -1;
+  if (pid == 0) {
+    // Child: detach from controlling terminal so the spawned
+    // crate process survives crated's own teardown / SIGHUP.
+    ::setsid();
+    // Close stdio. Errors from the spawned crate go to its own
+    // log file (lib/audit.cpp) — there's no way to surface them
+    // back to the control-socket caller, who already got 202.
+    ::close(0); ::close(1); ::close(2);
+    ::open("/dev/null", O_RDONLY);
+    ::open("/dev/null", O_WRONLY);
+    ::open("/dev/null", O_WRONLY);
+    ::execl(CRATE_PATH_CRATE, "crate", "run", "-f", cratePath.c_str(),
+            nullptr);
+    ::_exit(127);
+  }
+  return pid;
+}
+
 void handleStart(std::string &resBody, int &status, const std::string &name) {
   // If the jail is already running, reply 409 Conflict so the
   // operator gets a clear "no-op" rather than a 200 that creates
@@ -262,33 +294,12 @@ void handleStart(std::string &resBody, int &status, const std::string &name) {
     return;
   }
 
-  // Fork + setsid + exec so the child outlives this request and
-  // runs as a session leader (no controlling tty). The exec target is
-  // /usr/local/bin/crate — mode 0755 since 1.0.0 (no longer setuid) —
-  // so the child simply inherits crated's own uid (root). That holds
-  // whether crated is started by an operator at the console or from
-  // /etc/rc.d/crated.
-  pid_t pid = ::fork();
+  pid_t pid = spawnCrateRun(cratePath);
   if (pid < 0) {
     status  = 500;
     resBody = ControlSocketPure::renderErrorJson(
       std::string("fork failed: ") + std::strerror(errno));
     return;
-  }
-  if (pid == 0) {
-    // Child: detach from controlling terminal so the spawned
-    // crate process survives crated's own teardown / SIGHUP.
-    ::setsid();
-    // Close stdio. Errors from the spawned crate go to its own
-    // log file (lib/audit.cpp) — there's no way to surface them
-    // back to the control-socket caller, who already got 202.
-    ::close(0); ::close(1); ::close(2);
-    ::open("/dev/null", O_RDONLY);
-    ::open("/dev/null", O_WRONLY);
-    ::open("/dev/null", O_WRONLY);
-    ::execl(CRATE_PATH_CRATE, "crate", "run", "-f", cratePath.c_str(),
-            nullptr);
-    ::_exit(127);
   }
   // Parent: don't wait — the child runs the jail's foreground
   // supervisor for as long as the jail is up, which can be hours.
@@ -324,6 +335,13 @@ void handleStop(std::string &resBody, int &status, const std::string &name) {
   }
 }
 
+// 1.1.37: restart = bounded in-process stop + detached `crate run`.
+// Until now this called restartCrate(), which runs runCrate()
+// IN-PROCESS on the connection thread — the defect 1.1.26 fixed for
+// the HTTP plane: a service-only container never returns, so the
+// thread and fd were pinned for the jail's lifetime and runCrate's
+// signal handlers / getpid()-keyed firewall slots applied to crated.
+// Replies 202 like `start`; poll GET /v1/control/containers/<name>.
 void handleRestart(std::string &resBody, int &status, const std::string &name) {
   auto j = JailQuery::getJailByName(name);
   if (!j) {
@@ -331,22 +349,54 @@ void handleRestart(std::string &resBody, int &status, const std::string &name) {
     resBody = ControlSocketPure::renderErrorJson("container not found");
     return;
   }
-  Args args;
-  args.cmd = CmdRestart;
-  args.restartTarget = name;
+  // Resolve the spec path BEFORE stopping, so a missing registry entry
+  // leaves the container running instead of stopped-and-unrestartable.
+  std::string cratePath;
   try {
-    if (restartCrate(args)) {
-      status  = 200;
-      resBody = R"({"status":"restarted","container":")" + name + "\"}";
-    } else {
+    cratePath = SpecRegistry::lookup(name);
+  } catch (const std::exception &e) {
+    status  = 500;
+    resBody = ControlSocketPure::renderErrorJson(
+      std::string("spec-registry read failed: ") + e.what());
+    return;
+  }
+  struct stat st{};
+  if (cratePath.empty() || ::stat(cratePath.c_str(), &st) != 0) {
+    status  = cratePath.empty() ? 404 : 410;
+    resBody = ControlSocketPure::renderErrorJson(
+      cratePath.empty()
+        ? "no spec registered for '" + name + "' — cannot restart"
+        : "registered .crate path no longer exists: " + cratePath);
+    return;
+  }
+  // Stop phase: SIGTERM, bounded wait, SIGKILL, destroy — the same
+  // sequence `crate stop` runs; bounded by stopTimeout (+1 s).
+  Args stopArgs;
+  stopArgs.cmd = CmdStop;
+  stopArgs.stopTarget = name;
+  stopArgs.stopTimeout = 10;
+  try {
+    if (!stopCrate(stopArgs)) {
       status  = 500;
-      resBody = ControlSocketPure::renderErrorJson("restart returned failure");
+      resBody = ControlSocketPure::renderErrorJson("stop phase returned failure");
+      return;
     }
   } catch (const std::exception &e) {
     status  = 500;
     resBody = ControlSocketPure::renderErrorJson(
-      std::string("restart failed: ") + e.what());
+      std::string("stop phase failed: ") + e.what());
+    return;
   }
+  pid_t pid = spawnCrateRun(cratePath);
+  if (pid < 0) {
+    status  = 500;
+    resBody = ControlSocketPure::renderErrorJson(
+      std::string("stopped, but fork for restart failed: ") + std::strerror(errno));
+    return;
+  }
+  status  = 202;
+  resBody = R"({"status":"restarting","container":")" + name +
+            R"(","crate_path":")" + cratePath + R"("})";
 }
 
 void handlePatch(std::string &resBody, int &status,
@@ -552,6 +602,7 @@ struct SocketRuntime {
   char poolSeparator = '-';
   int  listenFd = -1;
   std::atomic<bool> stopFlag{false};
+  std::atomic<int>  activeConns{0};   // 1.1.37
   std::thread thread;
 };
 
@@ -615,7 +666,9 @@ void acceptLoop(SocketRuntime *rt) {
   ::setsockopt(rt->listenFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
   while (!rt->stopFlag.load()) {
-    int connFd = ::accept(rt->listenFd, nullptr, nullptr);
+    // 1.1.37: accept4(SOCK_CLOEXEC) so the connection fd never
+    // reaches the `crate run` children this plane forks.
+    int connFd = ::accept4(rt->listenFd, nullptr, nullptr, SOCK_CLOEXEC);
     if (connFd < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
         continue;
@@ -624,9 +677,26 @@ void acceptLoop(SocketRuntime *rt) {
                 << "]: accept failed: " << std::strerror(errno) << std::endl;
       break;
     }
+    // 1.1.37: I/O timeouts on the connection (read() blocked forever
+    // on an idle client) and a cap on in-flight connections per
+    // socket, so a client that opens N idle connections cannot pin N
+    // threads.
+    struct timeval io{};
+    io.tv_sec = kConnIoTimeoutSec;
+    ::setsockopt(connFd, SOL_SOCKET, SO_RCVTIMEO, &io, sizeof(io));
+    ::setsockopt(connFd, SOL_SOCKET, SO_SNDTIMEO, &io, sizeof(io));
+    if (rt->activeConns.load() >= kMaxActiveConns) {
+      writeAll(connFd, ControlSocketPure::buildHttpResponse(
+        503, ControlSocketPure::renderErrorJson("control socket busy: too many concurrent connections")));
+      ::close(connFd);
+      continue;
+    }
+    rt->activeConns.fetch_add(1);
     // Per-connection thread; detached so we don't track lifecycle.
-    std::thread(handleConnection, connFd, rt->spec,
-                rt->expectedGid, rt->poolSeparator).detach();
+    std::thread([rt, connFd]() {
+      handleConnection(connFd, rt->spec, rt->expectedGid, rt->poolSeparator);
+      rt->activeConns.fetch_sub(1);
+    }).detach();
   }
 }
 

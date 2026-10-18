@@ -115,6 +115,13 @@ std::string execCommandGetOutput(const std::vector<std::string> &argv, const std
 // can find the captured output.
 void execCommandLogged(const std::vector<std::string> &argv, const std::string &what,
                        const std::string &logFile);
+// 1.1.37: like execCommand but feeds `input` to the child's stdin
+// through a pipe (no temp file). Used for `pfctl -f -` so rule text
+// never touches a predictable /tmp path writable by other users.
+// SIGPIPE is blocked for the writing thread, so a child that exits
+// before reading surfaces as the usual non-zero-exit Exception.
+void execCommandWithInput(const std::vector<std::string> &argv, const std::string &input,
+                          const std::string &what);
 // exec-based pipeline: chain of commands connected by pipes
 void execPipeline(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
                   const std::string &stdinFile = "", const std::string &stdoutFile = "");

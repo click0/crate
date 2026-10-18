@@ -6,6 +6,60 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.37] — 2026-10-17
+
+**Daemon robustness — the remaining `TODO` §2 items that are not
+authorization gates.** ⚠️ Control-socket `POST restart` now returns
+`202 restarting` instead of `200 restarted`; HTTP request bodies are
+capped (default 1 GiB, `listen.max_body_mb`).
+
+- **pf rules go to `pfctl -f -` over a pipe.** `lib/pfctl_ops.cpp`
+  wrote them to `/tmp/crate-pf-<pid>.rules` — a predictable path in a
+  world-writable directory, written as root inside `crated` (pid
+  public). A local user who pre-created a regular file there could
+  rewrite it between our write and pfctl's read and have their own
+  rules loaded as root. New `Util::execCommandWithInput` feeds stdin
+  through a `pipe2(O_CLOEXEC)`; SIGPIPE is blocked around the write so
+  the CLI (which, unlike the daemon, does not ignore SIGPIPE) sees a
+  normal exit-status error if pfctl dies early.
+- **Connection timeouts and caps on the hand-rolled listeners.**
+  `privops_listener.cpp` and `control_socket.cpp` set `SO_RCVTIMEO` /
+  `SO_SNDTIMEO` (30 s) on every accepted connection — `nvlist_recv` /
+  `read()` used to block forever on an idle client — and refuse with
+  `503` beyond 64 in-flight connections per listener (one detached
+  thread each, previously unbounded). `ws_console.cpp` gives the
+  pre-auth handshake a 15 s read timeout (lifted once the session
+  starts) and caps concurrent sessions at 64.
+- **WebSocket frames capped at 1 MiB** (`WsPure::kMaxFramePayload`). A
+  client announcing a 63-bit length made the console buffer until that
+  much arrived; now it is a protocol error (close 1002).
+- **HTTP body cap and worker pool.** cpp-httplib reads the whole body
+  before routing (and before our auth gate), unbounded by default;
+  `listen.max_body_mb` (default 1024) sets `set_payload_max_length`.
+  `listen.http_workers` (default 32) sizes the thread pool — stop /
+  restart / export run synchronously for seconds to minutes each, and
+  a handful of concurrent calls starved `/healthz` on the small default
+  pool. The listening sockets also get `FD_CLOEXEC`.
+- **`accept4(SOCK_CLOEXEC)`** on the privops, control-socket and
+  ws-console listeners: accepted connection fds no longer leak into
+  the `crate run` children and jexec'ed shells crated forks (fd
+  hygiene part 2, carried in `TODO` since 1.1.26).
+- **Control-socket `POST …/restart` no longer runs the jail in-process.**
+  It called `restartCrate()` → `runCrate()` on the connection thread —
+  the defect 1.1.26 fixed for the HTTP plane: a service-only container
+  never returned, pinning the thread and fd for the jail's lifetime,
+  with runCrate's signal handlers and `getpid()`-keyed firewall slots
+  applied to `crated`. Now: resolve the spec path first (404/410 if
+  missing, container left running), bounded `stopCrate`, then the same
+  detached `spawnCrateRun` as `start`; replies `202 restarting`.
+- `configure_iface` validates the bridge/epair combination **before**
+  `moveToVnet`; a request destined for `400 non_epair_with_bridge` had
+  already moved the interface.
+
+Tests: `ws_pure_test` frame-cap cases. 1452/1452 unit cases.
+Docs: `crated.8` CONFIGURATION gains `listen.max_body_mb` /
+`listen.http_workers`.
+
 ## [1.1.36] — 2026-10-17
 
 **privops / HTTP authorization — the MED findings from `TODO` §2.**

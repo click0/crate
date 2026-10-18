@@ -262,6 +262,10 @@ int parseFrame(const std::string &buf, Frame &out) {
     pos += 8;
     if (len & (1ULL << 63)) return -1; // MSB must be 0
   }
+  // 1.1.37: cap the payload. The console carries keystrokes and
+  // terminal bytes; a client claiming a multi-GB frame only makes
+  // the daemon buffer until that much arrives (ws_console.cpp wsBuf).
+  if (len > kMaxFramePayload) return -1;
 
   uint8_t maskKey[4] = {0, 0, 0, 0};
   if (masked) {

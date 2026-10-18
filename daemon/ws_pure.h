@@ -80,10 +80,16 @@ struct Frame {
   std::string payload; // already unmasked
 };
 
+// 1.1.37: largest payload parseFrame accepts (1 MiB). A frame
+// announcing more is a protocol error (<0), not an "incomplete" (0),
+// so the daemon stops buffering instead of waiting for gigabytes.
+constexpr uint64_t kMaxFramePayload = 1024 * 1024;
+
 // Parse one frame from a byte buffer. Returns:
 //   >0 — number of bytes consumed; `out` filled in.
 //    0 — incomplete; caller must read more bytes and try again.
-//   <0 — protocol error; close the connection with code 1002.
+//   <0 — protocol error; close the connection with code 1002
+//        (reserved opcode, bad control frame, payload > kMaxFramePayload).
 //
 // Per RFC 6455, frames from the client MUST be masked; frames from
 // the server MUST NOT be masked. This parser accepts either (it is

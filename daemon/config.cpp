@@ -37,6 +37,19 @@ Config Config::load(const std::string &path) {
           cfg.unixSocketOwner, cfg.unixSocketGroup, cfg.unixSocketMode);
         !e.empty())
       throw std::runtime_error("listen.unix_*: " + e);
+    // 1.1.37
+    if (listen["max_body_mb"]) {
+      auto mb = listen["max_body_mb"].as<unsigned long long>();
+      if (mb == 0 || mb > 65536)
+        throw std::runtime_error("listen.max_body_mb: expected 1..65536");
+      cfg.maxBodyBytes = mb * 1024ULL * 1024ULL;
+    }
+    if (listen["http_workers"]) {
+      auto w = listen["http_workers"].as<unsigned>();
+      if (w < 4 || w > 1024)
+        throw std::runtime_error("listen.http_workers: expected 4..1024");
+      cfg.httpWorkers = w;
+    }
   }
 
   if (auto tls = root["tls"]) {
