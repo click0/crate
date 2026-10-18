@@ -172,19 +172,14 @@ The bhyve/VM track is in TODO2.
 
 === 3. Networking runtime ===
 
-* (HIGH) Bridge / `network: auto` SNAT+rdr rules are never flushed.
-  lib/run.cpp:1207-1302 loads SNAT + rdr into anchor
-  crate/<jailXname>; the comment (:1211-1213) says "flushed at
-  teardown by the existing destroyPfAnchor", but destroyPfAnchor.reset
-  exists only at run.cpp:1651 inside the NAT-mode branch
-  (:1540-1657), so the bridge-mode doNow() at :1997 is a no-op. Anchor
-  names are per-pid, so they accumulate forever; `inbound-tcp: 80:80`
-  keeps `rdr ... -> 10.66.0.5` live after the jail dies, and when the
-  lease file hands 10.66.0.5 to the next jail, host port 80 is
-  forwarded into a different (possibly another tenant's) container.
-  clean.cpp has no anchor cleanup. Fix: reset destroyPfAnchor right
-  after the first successful addPfRule in the bridge path too, and
-  teach `crate clean` to flush crate/* anchors whose pid is dead.
+  [FIXED in 1.1.38] bridge/auto pf anchor flushed at teardown; `crate
+  clean` sweeps stale crate/* anchors and orphaned v4/v6 pool leases;
+  rdr host-port collision warning; `firewall:` policy applied in bridge
+  mode (static/pool IP); static-mac hashed from the jail name; ipfw ids
+  interleaved (40000+2*jid / 40001+2*jid, jid <= 9999, throttle jid <=
+  4999); net.inet6.ip6.forwarding restored. Still open: v4 forwarding is
+  restored only when allowOutbound() (run_net.cpp:498, inbound-only
+  jails leave it at 1).
 
 * (HIGH) Two users on one host allocate the same network_pool IP.
   lib/network_lease.cpp:43-45 / network_lease6.cpp:39-41 move the
@@ -197,49 +192,16 @@ The bhyve/VM track is in TODO2.
   for this) or make the lease file host-wide and root-mediated via a
   privops verb.
 
-* (MED) `firewall:` section is silently ignored outside NAT mode —
-  only run.cpp:1643-1656 composes the pf policy; bridge / auto /
-  passthrough / netgraph jails with `firewall: {default: block}` run
-  wide open. crate.5:243-256 documents no mode restriction.
-
-* (MED) `static-mac` is not deterministic: run.cpp:1114/1450/1502
-  hash jailXname = <name>_pid<pid> (run.cpp:907) → a new MAC every
-  run; defeats DHCP reservations; crate.5:510 promises determinism.
-  Hash nameComponent instead.
-
 * (MED) MAC portacl rules are host-wide, clobbered per run, never
   removed: run.cpp:724-731 writes security.mac.portacl.rules via
   MacOps::setPortaclRules (mac_ops.cpp:129-145), replacing any other
   container's or the operator's rules; no RunAtEnd restores them.
-
-* (MED) Leases are never reclaimed after a crash/SIGKILL: release is
-  a RunAtEnd (run.cpp:1176,1202); the lease key includes a random
-  hex, so a killed `crate run` permanently consumes a pool address;
-  clean.cpp does not touch leases. Add a liveness GC like
-  FwSlots::garbageCollect (needs a pid or jid column in the lease row).
-
-* (MED) ipfw auto-fw ids assume jid < 1000: auto_fw_pure.cpp:130-141
-  ruleIdForJail(1000) == loopbackRuleIdForJail(0); `ipfw delete 41000`
-  at run.cpp:1389 kills both. jids are monotonic per host, so this is
-  hit after ~1000 jail creations. natIdForJail exceeds 16-bit at
-  jid > 35535; validateIpfwNatId has no caller in run.cpp;
-  pickOrphanIpfwRulesByJid (:259-262) mis-attributes jids >= 1000.
-  Same family: lib/throttle_pure.cpp:120 has no bound check — jid >
-  4999 collides with the 30000+ NAT range / exceeds 65535.
-
-* (MED) rdr host-port collisions undetected: run.cpp:1238-1261 emits
-  per-jail `rdr ... port N` into separate anchors; two jails forwarding
-  the same host port both load; pf first-match wins silently. Refuse
-  at run time (pfctl -sn scan) or at least warn.
 
 * (MED) `crate stats` network I/O is always "-" on FreeBSD:
   lib/lifecycle.cpp:142-146 runs `netstat --libxo json`, and when the
   output IS JSON nothing parses it — only the non-JSON fallback branch
   (:147-171) extracts bytes. Drop the libxo attempt or parse it.
 
-* (LOW) run.cpp:1600-1604 enables net.inet6.ip6.forwarding and never
-  restores it; run_net.cpp:498 restores v4 forwarding only when
-  allowOutbound() (inbound-only jails leave it at 1).
 * (LOW) run.cpp:1587-1598 IPv6 epair pairs fd00:cra7:e::<100+2n>/126:
   n and n+1 share one /126 on different host interfaces; std::hex of
   > 0xffff yields an invalid literal. (plausible)

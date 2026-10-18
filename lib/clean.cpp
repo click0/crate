@@ -7,7 +7,10 @@
 #include "ipfw_ops.h"
 #include "jail_query.h"
 #include "locs.h"
+#include "network_lease.h"
+#include "network_lease6.h"
 #include "pathnames.h"
+#include "pfctl_ops.h"
 #include "spec_registry.h"
 #include "util.h"
 #include "err.h"
@@ -19,6 +22,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <filesystem>
 #include <iostream>
 #include <set>
 #include <sstream>
@@ -315,6 +319,81 @@ bool cleanCrates(const Args &args) {
                 << " (skipping orphan sweep)"
                 << rang::style::reset << std::endl;
     }
+  }
+
+  // 1.1.38: stale pf anchors. Every crate jail gets crate/<name>_pid<pid>;
+  // until 1.1.38 the bridge/auto path never flushed it, and a SIGKILLed
+  // run never gets to flush either. A dead anchor still carries SNAT +
+  // rdr for an IP the lease file will hand to the next jail. Needs
+  // /dev/pf (root); under rootless this step is skipped with a note.
+  std::cout << std::endl << rang::style::bold
+            << "Scanning for stale pf anchors (crate/*)..."
+            << rang::style::reset << std::endl;
+  {
+    try {
+      auto out = Util::execCommandGetOutput(
+        {CRATE_PATH_PFCTL, "-a", "crate", "-s", "Anchors"}, "list crate pf anchors");
+      std::set<std::string> runningNames;
+      for (auto &j : JailQuery::getAllJails())
+        runningNames.insert(j.name);
+      for (const auto &name : AutoFwPure::parseCrateAnchorJailNames(out)) {
+        if (runningNames.count(name)) continue;
+        auto anchor = "crate/" + name;
+        if (dryRun) {
+          std::cout << "  [dry-run] would flush stale pf anchor: " << anchor << std::endl;
+        } else {
+          std::cout << "  flushing stale pf anchor: " << anchor << std::endl;
+          PfctlOps::flushRules(anchor);   // warns on failure, never throws
+          cleaned++;
+        }
+      }
+    } catch (const std::exception &e) {
+      std::cerr << rang::fg::yellow
+                << "  skipping pf anchor sweep: " << e.what()
+                << " (needs /dev/pf — run as root)"
+                << rang::style::reset << std::endl;
+    }
+  }
+
+  // 1.1.38: network-pool leases whose jail is gone. The lease key is the
+  // jail directory basename ("jail-<name>-<hex>"), so a lease is live
+  // exactly when a running jail's path ends in it. Release is a
+  // RunAtEnd in `crate run`, so a SIGKILLed run (or a crash before the
+  // handler was armed) kept its address out of the pool forever.
+  std::cout << std::endl << rang::style::bold
+            << "Scanning for orphaned network-pool leases..."
+            << rang::style::reset << std::endl;
+  {
+    std::set<std::string> liveKeys;
+    for (const auto &p : runningPaths)
+      liveKeys.insert(std::filesystem::path(p).filename().string());
+    auto sweep = [&](const char *label, auto readAll, auto releaseFor) {
+      try {
+        for (const auto &lease : readAll()) {
+          if (liveKeys.count(lease.name)) continue;
+          if (dryRun) {
+            std::cout << "  [dry-run] would release orphaned " << label
+                      << " lease: " << lease.name << std::endl;
+          } else {
+            std::cout << "  releasing orphaned " << label << " lease: "
+                      << lease.name << std::endl;
+            try { releaseFor(lease.name); cleaned++; }
+            catch (const std::exception &ex) {
+              std::cerr << rang::fg::yellow << "  warning: " << ex.what()
+                        << rang::style::reset << std::endl;
+            }
+          }
+        }
+      } catch (const std::exception &e) {
+        std::cerr << rang::fg::yellow
+                  << "  warning: " << label << " lease file unreadable: " << e.what()
+                  << " (skipping)" << rang::style::reset << std::endl;
+      }
+    };
+    sweep("IPv4", []{ return NetworkLease::readAll(); },
+          [](const std::string &n){ NetworkLease::releaseFor(n); });
+    sweep("IPv6", []{ return NetworkLease6::readAll(); },
+          [](const std::string &n){ NetworkLease6::releaseFor(n); });
   }
 
   // Summary

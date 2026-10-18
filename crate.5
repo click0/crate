@@ -254,6 +254,17 @@ Default policy:
 or
 .Cm block .
 .El
+.Pp
+The policy is loaded into the per-jail pf anchor
+.Pa crate/<jail>
+in NAT mode and, since 1.1.38, in bridge mode when the jail's IPv4
+address is known at start (a static
+.Sy ip
+or a
+.Sy network_pool
+allocation). With DHCP addressing there is no address to anchor the
+rules on and the policy is skipped with a warning. The anchor is
+flushed at teardown in every mode.
 .Ss GUI
 .Bl -tag -width "vnc_password"
 .It Sy gui/mode
@@ -509,7 +520,10 @@ IPv6 addressing:
 or a static IPv6 address.
 .It Sy static-mac
 Generate deterministic MAC address using SHA-256
-.Pq vendor OUI 58:9c:fc .
+.Pq vendor OUI 58:9c:fc
+over the jail name and interface name, so the same container gets
+the same MAC on every run (since 1.1.38; earlier releases hashed a
+per-run name and the MAC changed each start).
 .It Sy vlan
 802.1Q VLAN ID, 1-4094.
 Only valid with

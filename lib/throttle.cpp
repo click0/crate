@@ -58,6 +58,9 @@ void clearJailThrottle(int jid) {
 void applyDirection(int jid, const std::string &jailIp,
                     const std::string &rate, const std::string &burst,
                     const std::string &queue, bool egress) {
+  // 1.1.38: refuse ids that would leave the throttle ranges.
+  if (auto e = ThrottlePure::validateJidForIds(jid); !e.empty())
+    ERR(e)
   auto pipeId = ThrottlePure::pipeIdForJail(jid, egress);
   auto ruleId = ThrottlePure::ruleIdForJail(jid, egress);
 

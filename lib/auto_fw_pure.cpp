@@ -3,6 +3,7 @@
 #include "auto_fw_pure.h"
 
 #include <sstream>
+#include <utility>
 
 namespace AutoFwPure {
 
@@ -113,10 +114,20 @@ std::string formatRdrAnchorLine(const std::string &externalIface,
 namespace {
 
 // Reserved high-number ranges (matches throttle's 10000/20000 bases).
+//
+// 1.1.38: rule ids are 40000 + 2*jid (main) / 40001 + 2*jid (host-
+// loopback hairpin). The 0.8.39 layout was 40000+jid / 41000+jid,
+// which made ruleIdForJail(1000) == loopbackRuleIdForJail(0) — jids are
+// monotonic per host, so after ~1000 jail creations the main rule of a
+// new jail landed on the loopback id of an old one and `ipfw delete`
+// at teardown removed both. The interleaved layout is collision-free
+// up to jid 9999, which is also where the NAT instance range
+// (30000+jid, must stay below 40000) runs out; kIpfwMaxJid pins both.
 constexpr unsigned kIpfwNatBase           = 30000;
 constexpr unsigned kIpfwRuleBase          = 40000;
-constexpr unsigned kIpfwLoopbackRuleBase  = 41000;  // 0.8.39 (bug#239590)
+constexpr unsigned kIpfwRuleRangeEnd      = 60000;  // exclusive: rule ids live in [40000, 60000)
 constexpr unsigned kIpfwIdMax             = 65535;  // ipfw rule numbers are 16-bit
+constexpr int      kIpfwMaxJid            = 9999;
 
 } // anon
 
@@ -129,15 +140,22 @@ unsigned natIdForJail(int jid) {
 
 unsigned ruleIdForJail(int jid) {
   unsigned u = static_cast<unsigned>(jid);
-  return kIpfwRuleBase + u;
+  return kIpfwRuleBase + 2 * u;
 }
 
 unsigned loopbackRuleIdForJail(int jid) {
-  // 0.8.39 (bug#239590): host-loopback NAT rule. Sits in 41000+
-  // to keep the main nat-activation rule (40000+jid) and the
-  // loopback hairpin rule visually distinct in `ipfw -q list`.
+  // 0.8.39 (bug#239590): host-loopback NAT rule, adjacent to the main
+  // rule since 1.1.38 (see the range comment above).
   unsigned u = static_cast<unsigned>(jid);
-  return kIpfwLoopbackRuleBase + u;
+  return kIpfwRuleBase + 2 * u + 1;
+}
+
+std::string validateIpfwIdsForJid(int jid) {
+  if (jid < 1) return "jid must be >= 1";
+  if (jid > kIpfwMaxJid)
+    return "jid " + std::to_string(jid) + " exceeds the ipfw auto-fw id space (max jid "
+           + std::to_string(kIpfwMaxJid) + "): NAT instance would reach the rule range";
+  return "";
 }
 
 std::string validateIpfwNatId(unsigned id) {
@@ -250,20 +268,93 @@ std::vector<unsigned> pickOrphanIpfwRulesByJid(
   while (std::getline(is, line)) {
     if (!line.empty() && line.back() == '\r') line.pop_back();
     long n = parseLeadingNumber(line);
-    if (n < 40000 || n >= 50000) continue;
-    // 0.8.39: range 40000-49999 covers BOTH the main NAT-activation
-    // rule (40000+jid) and the host-loopback hairpin rule (41000+jid).
-    // For each, recover jid via modulo 1000 and skip rules whose jid
-    // doesn't map back into either base — those would be stray rules
-    // an operator added in our reserved range, not crate-managed.
-    int jid = -1;
-    if (n >= 41000 && n < 42000)       jid = static_cast<int>(n) - 41000;
-    else if (n >= 40000 && n < 41000)  jid = static_cast<int>(n) - 40000;
-    else                               continue;
+    if (n < (long)kIpfwRuleBase || n >= (long)kIpfwRuleRangeEnd) continue;
+    // 1.1.38 layout: main rule 40000+2*jid, loopback 40001+2*jid. Both
+    // halves of a pair map back to the same jid by integer division.
+    int jid = static_cast<int>((n - kIpfwRuleBase) / 2);
     if (runningJids.count(jid) == 0)
       orphans.push_back(static_cast<unsigned>(n));
   }
   return orphans;
+}
+
+// --- 1.1.38: pf anchor / rdr introspection parsers (for run + clean) ---
+
+std::vector<std::string> parseCrateAnchorJailNames(const std::string &pfctlAnchorsOutput) {
+  // `pfctl -a crate -s Anchors` prints one nested anchor per line,
+  // "  crate/<jail>" (leading whitespace varies by version). Keep the
+  // part after "crate/"; ignore the root "crate" line, blanks, and
+  // anything else.
+  std::vector<std::string> names;
+  std::istringstream is(pfctlAnchorsOutput);
+  std::string line;
+  while (std::getline(is, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    size_t b = line.find_first_not_of(" \t");
+    if (b == std::string::npos) continue;
+    size_t e = line.find_last_not_of(" \t");
+    std::string tok = line.substr(b, e - b + 1);
+    static const std::string kPrefix = "crate/";
+    if (tok.size() <= kPrefix.size() || tok.compare(0, kPrefix.size(), kPrefix) != 0) continue;
+    std::string name = tok.substr(kPrefix.size());
+    if (name.find('/') != std::string::npos) continue;   // deeper nesting: not ours
+    names.push_back(name);
+  }
+  return names;
+}
+
+std::vector<RdrHostPort> parseRdrHostPorts(const std::string &pfctlNatOutput) {
+  // `pfctl -sn` prints translation rules normalised, e.g.
+  //   rdr on em0 inet proto tcp from any to (em0) port = 80 -> 10.66.0.5 port 80
+  //   rdr on em0 inet proto udp from any to (em0) port 5000:5010 -> 10.66.0.5 port 5000:5010
+  // Take the protocol and the HOST port token (the first "port " before
+  // "->"). Lines without "rdr", a proto or an arrow are skipped.
+  std::vector<RdrHostPort> out;
+  std::istringstream is(pfctlNatOutput);
+  std::string line;
+  while (std::getline(is, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line.find("rdr") == std::string::npos) continue;
+    size_t arrow = line.find("->");
+    if (arrow == std::string::npos) continue;
+    std::string proto;
+    if (line.find("proto tcp") != std::string::npos) proto = "tcp";
+    else if (line.find("proto udp") != std::string::npos) proto = "udp";
+    else continue;
+    size_t p = line.find(" port ");
+    if (p == std::string::npos || p > arrow) continue;
+    size_t i = p + 6;
+    while (i < arrow && line[i] == ' ') i++;
+    if (i < arrow && line[i] == '=') { i++; while (i < arrow && line[i] == ' ') i++; }
+    auto readNum = [&](unsigned &v) -> bool {
+      size_t start = i;
+      unsigned acc = 0;
+      while (i < arrow && line[i] >= '0' && line[i] <= '9') {
+        acc = acc * 10 + (unsigned)(line[i] - '0');
+        if (acc > 65535) return false;
+        i++;
+      }
+      if (i == start) return false;
+      v = acc;
+      return true;
+    };
+    RdrHostPort r;
+    r.proto = proto;
+    if (!readNum(r.lo)) continue;
+    r.hi = r.lo;
+    if (i < arrow && line[i] == ':') { i++; if (!readNum(r.hi)) continue; }
+    if (r.hi < r.lo) std::swap(r.lo, r.hi);
+    out.push_back(r);
+  }
+  return out;
+}
+
+bool rdrHostPortTaken(const std::vector<RdrHostPort> &taken, const std::string &proto,
+                      unsigned lo, unsigned hi) {
+  if (hi < lo) std::swap(lo, hi);
+  for (const auto &t : taken)
+    if (t.proto == proto && t.lo <= hi && lo <= t.hi) return true;
+  return false;
 }
 
 std::vector<unsigned> pickOrphanIpfwThrottleRulesByJid(

@@ -109,10 +109,13 @@ std::string formatRdrAnchorLine(const std::string &externalIface,
 // `ipfw nat` instances. Each jail gets its own NAT instance id
 // (derived from JID) and one rule that activates it.
 //
-// Conventions:
-//   natIdFor(jid) = 30000 + jid
-//   ruleIdFor(jid) = 40000 + jid
+// Conventions (1.1.38 layout):
+//   natIdFor(jid)          = 30000 + jid        (jid <= 9999)
+//   ruleIdFor(jid)         = 40000 + 2*jid
+//   loopbackRuleIdFor(jid) = 40001 + 2*jid
 //   (high numbers leave the low ranges for operator-defined rules.)
+// The pre-1.1.38 layout (40000+jid / 41000+jid) collided once a host
+// had created ~1000 jails: ruleIdFor(1000) == loopbackRuleIdFor(0).
 //
 // We use SHELL ARGV form here (matching how `lib/throttle_pure.cpp`
 // builds ipfw invocations) — much simpler than parsing an
@@ -122,9 +125,34 @@ unsigned natIdForJail(int jid);
 unsigned ruleIdForJail(int jid);
 
 // 0.8.39 (bug#239590): rule ID for the host-loopback hairpin NAT
-// rule. Sits in 41000+ to keep the main nat-activation rule
-// (40000+jid) visually distinct in `ipfw -q list` output.
+// rule; adjacent to the main rule since 1.1.38.
 unsigned loopbackRuleIdForJail(int jid);
+
+// 1.1.38: "" when all three ids for `jid` fit their ranges (1..9999),
+// otherwise the reason. run.cpp refuses the ipfw auto-fw path (with a
+// warning, not a failed run) instead of emitting colliding ids.
+std::string validateIpfwIdsForJid(int jid);
+
+// 1.1.38: pf introspection parsers shared by run.cpp (rdr collision
+// warning) and clean.cpp (stale anchor sweep).
+//
+// `pfctl -a crate -s Anchors` -> jail names of the nested per-jail
+// anchors ("crate/<name>" -> "<name>"); root "crate" and deeper
+// nesting are ignored.
+std::vector<std::string> parseCrateAnchorJailNames(const std::string &pfctlAnchorsOutput);
+
+// `pfctl -a 'crate/*' -sn` -> the host-side port (range) of every rdr
+// rule, with its protocol. Accepts the normalised "port = N" and
+// "port N:M" spellings.
+struct RdrHostPort {
+  std::string proto;   // "tcp" | "udp"
+  unsigned lo = 0, hi = 0;
+};
+std::vector<RdrHostPort> parseRdrHostPorts(const std::string &pfctlNatOutput);
+
+// True when [lo,hi] for `proto` overlaps any entry of `taken`.
+bool rdrHostPortTaken(const std::vector<RdrHostPort> &taken, const std::string &proto,
+                      unsigned lo, unsigned hi);
 
 // Validate the NAT instance id range. Returns "" on success.
 // Caller passes the result of natIdForJail; this is a sanity belt.
@@ -198,9 +226,10 @@ std::vector<std::string> buildIpfwHostLoopbackNatArgv(unsigned ruleId,
 // drives both surfaces.
 
 // Parse `ipfw -q list` output and return rule numbers in the
-// auto-fw reserved range (40000..49999) whose derived jid
-// (rulenum - 40000) is NOT in `runningJids`. Tolerates blank
-// lines, lines without a leading numeric (skipped), CRLF.
+// auto-fw reserved range (40000..59999) whose derived jid
+// ((rulenum - 40000) / 2, 1.1.38 layout) is NOT in `runningJids`.
+// Tolerates blank lines, lines without a leading numeric (skipped),
+// CRLF.
 std::vector<unsigned> pickOrphanIpfwRulesByJid(
   const std::string &ipfwListOutput,
   const std::set<int> &runningJids);

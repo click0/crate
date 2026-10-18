@@ -6,6 +6,60 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.38] — 2026-10-18
+
+**Networking runtime — the `TODO` §3 items that need no architecture
+change.** ⚠️ `static-mac` addresses change once (they are now actually
+stable); ipfw auto-fw rule numbers move to an interleaved layout.
+
+- **Bridge/`network: auto` pf anchors are flushed at teardown.** The
+  SNAT + rdr rules went into `crate/<name>_pid<pid>` with a comment
+  claiming `destroyPfAnchor` would flush them — but that handler was
+  only ever armed in the NAT branch, so every bridge/auto run left its
+  anchor behind for good. Anchor names are per-pid, so they
+  accumulated; worse, `inbound-tcp: 80:80` kept `rdr … -> 10.66.0.5`
+  live after the jail died, and once the lease file handed 10.66.0.5 to
+  the next jail, host port 80 was forwarded into a different container.
+  The handler is now armed right after the rules load.
+- **`crate clean` sweeps stale `crate/*` anchors and orphaned pool
+  leases.** Anchors whose jail is not running are flushed (`pfctl -a
+  crate -s Anchors`, needs root — skipped with a note otherwise). IPv4
+  and IPv6 `network_pool` leases whose `jail-<name>-<hex>` key matches
+  no running jail path are released: release was a `RunAtEnd`, so a
+  SIGKILLed run kept its address out of the pool forever.
+- **rdr host-port collision warning.** Before loading its rdr rules a
+  bridge/auto jail lists the other crate anchors (`pfctl -a 'crate/*'
+  -sn`) and warns when one of its host ports is already forwarded — pf
+  takes the first match, so the new rule would silently never fire.
+  Best-effort (needs `/dev/pf`); points at `crate clean`.
+- **`firewall:` policy applies in bridge mode.** It was composed only
+  in the NAT branch, so a bridge jail with `firewall: {default: block}`
+  ran wide open while `crate.5` promised the policy for every mode. With
+  a static IP or a `network_pool` address the policy now loads into the
+  same per-jail anchor; with DHCP there is no address to anchor on and
+  a warning says so.
+- **`static-mac` is deterministic.** The MAC was hashed from
+  `<name>_pid<pid>` — a new MAC on every run, so DHCP reservations never
+  matched. It is now hashed from the jail name (`crate.5` said so all
+  along). Existing reservations keyed on the old MACs need one update.
+- **ipfw auto-fw ids no longer collide after ~1000 jails.** The 0.8.39
+  layout (main 40000+jid, hairpin 41000+jid) made
+  `ruleIdForJail(1000) == loopbackRuleIdForJail(0)`; jids are monotonic
+  per host, so a new jail's main rule landed on an old jail's hairpin
+  and teardown deleted both. New layout: main 40000+2·jid, hairpin
+  40001+2·jid, unique up to jid 9999 (`validateIpfwIdsForJid`; beyond
+  that the ipfw path is skipped with a warning). `crate throttle`
+  likewise refuses jid > 4999 instead of writing rules into the NAT
+  range. The orphan scan in `crate clean` follows the new layout —
+  rules left by a pre-1.1.38 run are not recognised as crate's.
+- `net.inet6.ip6.forwarding` is restored at teardown when NAT-mode IPv6
+  enabled it (the v4 sysctl already was).
+
+Tests: `auto_fw_pure_test` — id uniqueness over 1..9999, the motivating
+collision, `validateIpfwIdsForJid`, `parseCrateAnchorJailNames`,
+`parseRdrHostPorts`/`rdrHostPortTaken`; orphan-scan cases renumbered.
+1456/1456 unit cases. `crate.5`: firewall-policy scope, `static-mac`.
+
 ## [1.1.37] — 2026-10-17
 
 **Daemon robustness — the remaining `TODO` §2 items that are not
