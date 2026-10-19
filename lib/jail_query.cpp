@@ -4,6 +4,7 @@
 // Fallback to jls(8)/jexec(8) when API calls fail.
 
 #include "jail_query.h"
+#include "privops_client.h"   // 1.1.40: exec_in_jail under rootless
 #include "runtime_paths_pure.h"
 #include "locs.h"
 #include "pathnames.h"
@@ -19,6 +20,7 @@ extern "C" {
 
 #include <errno.h>
 #include <fcntl.h>      // 1.1.26: O_CLOEXEC for pipe2()
+#include <sys/event.h>  // 1.1.40: kqueue EVFILT_PROCDESC
 #include <grp.h>
 #include <pwd.h>
 #include <signal.h>
@@ -27,6 +29,8 @@ extern "C" {
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <cstdint>      // 1.1.40: uintptr_t for EV_SET
+#include <cstdlib>      // 1.1.40: getenv(TERM)
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -291,8 +295,79 @@ static int fallbackJexec(int jid, const std::vector<std::string> &argv,
   return Util::execCommandGetStatus(jexecArgv, what);
 }
 
+// --- 1.1.40: rootless path through crated's exec_in_jail verb ---
+//
+// jail_attach(2) and jexec(8) both need root. When we are not root and
+// a privops socket is available, the exec is delegated: the daemon
+// pdfork()s + attaches + execs with OUR stdio (passed as descriptors)
+// and hands back a process descriptor; we wait on it with kqueue
+// EVFILT_PROCDESC. The returned value is a wait(2)-style status, like
+// the in-process path, so callers don't care which path ran.
+
+static bool privopsExecWanted(std::string &sockOut) {
+  if (::geteuid() == 0) return false;
+  sockOut = PrivOpsClient::detectSocketPath();
+  return !sockOut.empty();
+}
+
+// Wait for the process behind a process descriptor to exit. Returns
+// the wait status (kevent's `data` for NOTE_EXIT). EINTR is retried
+// — `crate run` installs SIGINT/SIGTERM handlers and must keep waiting
+// for the in-jail command they are meant to stop.
+static int waitProcDesc(int pd, const std::string &what) {
+  int kq = ::kqueue();
+  if (kq == -1) ERR(what << ": kqueue: " << strerror(errno))
+  struct kevent kev;
+  EV_SET(&kev, (uintptr_t)pd, EVFILT_PROCDESC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, nullptr);
+  if (::kevent(kq, &kev, 1, nullptr, 0, nullptr) == -1) {
+    int e = errno;
+    ::close(kq);
+    ERR(what << ": kevent(EVFILT_PROCDESC): " << strerror(e))
+  }
+  for (;;) {
+    int n = ::kevent(kq, nullptr, 0, &kev, 1, nullptr);
+    if (n == -1 && errno == EINTR) continue;
+    if (n == -1) {
+      int e = errno;
+      ::close(kq);
+      ERR(what << ": kevent wait: " << strerror(e))
+    }
+    break;
+  }
+  ::close(kq);
+  return (int)kev.data;
+}
+
+static int privopsExec(const std::string &sock, int jid,
+                       const std::vector<std::string> &argv,
+                       const std::string &user, const std::string &what,
+                       int inFd, int outFd, int errFd) {
+  const char *term = ::getenv("TERM");
+  auto fields = PrivOpsClient::buildExecInJail((unsigned)jid, user, argv,
+                                               term ? std::string(term) : std::string());
+  int pd = -1;
+  auto resp = PrivOpsClient::sendExecRequest(sock, fields, inFd, outFd, errFd, pd);
+  if (!resp.transportError.empty())
+    ERR(what << ": privops exec_in_jail: " << resp.transportError)
+  if (resp.status != 200 || pd < 0) {
+    if (pd >= 0) ::close(pd);
+    ERR(what << ": privops exec_in_jail failed (status " << resp.status << "): " << resp.body)
+  }
+  int status = waitProcDesc(pd, what);
+  ::close(pd);
+  return status;
+}
+
 int execInJail(int jid, const std::vector<std::string> &argv,
                const std::string &user, const std::string &what) {
+  std::string sock;
+  if (privopsExecWanted(sock))
+    return privopsExec(sock, jid, argv, user, what,
+                       STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO);
+  if (::geteuid() != 0)
+    ERR(what << ": executing inside a jail needs root or the crated privops socket "
+             "(rootless: is crated running with privops_socket configured?)")
+
   // Try jail_attach() approach
   pid_t pid = ::fork();
   if (pid == -1)
@@ -338,6 +413,43 @@ std::string execInJailGetOutput(int jid, const std::vector<std::string> &argv,
   // loop below waits for an EOF that never comes (see Util::execCommandGetOutput).
   if (::pipe2(pipefd, O_CLOEXEC) == -1)
     ERR("pipe failed: " << strerror(errno))
+
+  std::string sock;
+  if (privopsExecWanted(sock)) {
+    // 1.1.40: the daemon's child writes into our pipe; stdin/stderr are
+    // ours. Close our write end once it has been shipped (libnv dup()s
+    // it into the request) so the read loop sees EOF when the command
+    // exits. Transport/daemon errors throw from privopsExec — the read
+    // end must not leak, hence the guard.
+    std::string output;
+    struct CloseRead { int fd; ~CloseRead() { if (fd >= 0) ::close(fd); } } rd{pipefd[0]};
+    const char *term = ::getenv("TERM");
+    auto fields = PrivOpsClient::buildExecInJail((unsigned)jid, user, argv,
+                                                 term ? std::string(term) : std::string());
+    int pd = -1;
+    auto resp = PrivOpsClient::sendExecRequest(sock, fields, STDIN_FILENO, pipefd[1],
+                                               STDERR_FILENO, pd);
+    ::close(pipefd[1]);
+    if (!resp.transportError.empty())
+      ERR(what << ": privops exec_in_jail: " << resp.transportError)
+    if (resp.status != 200 || pd < 0) {
+      if (pd >= 0) ::close(pd);
+      ERR(what << ": privops exec_in_jail failed (status " << resp.status << "): " << resp.body)
+    }
+    char buf[4096];
+    ssize_t n;
+    while ((n = ::read(pipefd[0], buf, sizeof(buf))) > 0)
+      output.append(buf, n);
+    (void)waitProcDesc(pd, what);
+    ::close(pd);
+    return output;
+  }
+  if (::geteuid() != 0) {
+    ::close(pipefd[0]);
+    ::close(pipefd[1]);
+    ERR(what << ": executing inside a jail needs root or the crated privops socket "
+             "(rootless: is crated running with privops_socket configured?)")
+  }
 
   pid_t pid = ::fork();
   if (pid == -1) {

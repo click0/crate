@@ -176,6 +176,33 @@ ATF_TEST_CASE_BODY(builder_configure_iface_round_trips) {
   ATF_REQUIRE_EQ(req.macAddr, std::string("02:00:11:22:33:44"));
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(builder_exec_in_jail_round_trips);
+ATF_TEST_CASE_BODY(builder_exec_in_jail_round_trips) {
+  // 1.1.40: argv travels as argc + argv<i>; user/term omitted when empty.
+  auto m = PrivOpsClient::buildExecInJail(42, "", {"/bin/sh", "-c", "echo hi"}, "");
+  ATF_REQUIRE_EQ(m.at("verb"), std::string("exec_in_jail"));
+  ATF_REQUIRE_EQ(m.at("jid"), std::string("42"));
+  ATF_REQUIRE_EQ(m.at("argc"), std::string("3"));
+  ATF_REQUIRE_EQ(m.at("argv2"), std::string("echo hi"));
+  ATF_REQUIRE(m.find("user") == m.end());
+  ATF_REQUIRE(m.find("term") == m.end());
+
+  PrivOpsPure::ExecInJailReq req;
+  ATF_REQUIRE_EQ(PrivOpsNvPure::parseExecInJail(m, req), std::string());
+  ATF_REQUIRE_EQ(req.jid, 42u);
+  ATF_REQUIRE(req.user.empty());
+  ATF_REQUIRE_EQ(req.argv.size(), 3u);
+  ATF_REQUIRE_EQ(req.argv[0], std::string("/bin/sh"));
+  ATF_REQUIRE_EQ(PrivOpsPure::validateExecInJail(req), std::string());
+
+  auto m2 = PrivOpsClient::buildExecInJail(7, "alice", {"/usr/bin/login", "-f", "alice"}, "xterm-256color");
+  PrivOpsPure::ExecInJailReq req2;
+  ATF_REQUIRE_EQ(PrivOpsNvPure::parseExecInJail(m2, req2), std::string());
+  ATF_REQUIRE_EQ(req2.user, std::string("alice"));
+  ATF_REQUIRE_EQ(req2.term, std::string("xterm-256color"));
+  ATF_REQUIRE_EQ(req2.argv[2], std::string("alice"));
+}
+
 // --- detectSocketPath ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(detect_uses_env_var_when_set);
@@ -242,6 +269,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, builder_set_rctl_round_trips_through_nv_parser);
   ATF_ADD_TEST_CASE(tcs, builder_create_jail_round_trips);
   ATF_ADD_TEST_CASE(tcs, builder_configure_iface_round_trips);
+  ATF_ADD_TEST_CASE(tcs, builder_exec_in_jail_round_trips);
   ATF_ADD_TEST_CASE(tcs, detect_uses_env_var_when_set);
   ATF_ADD_TEST_CASE(tcs, detect_empty_when_no_env_no_default);
   ATF_ADD_TEST_CASE(tcs, detect_empty_env_treated_as_unset);

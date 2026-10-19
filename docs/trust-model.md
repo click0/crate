@@ -107,7 +107,11 @@ differs by transport:
   be the caller's `crate-<uid>`). A foreign target is denied `403`
   before the handler runs (fail closed). 1.1.13 extends the same gate
   to **jid- and name-scoped verbs**: `set_rctl`, `clear_rctl`,
-  `set_jail_cpuset`, `query_jail_rctl`, `signal_jail`, `destroy_jail`.
+  `set_jail_cpuset`, `query_jail_rctl`, `signal_jail`, `destroy_jail`
+  (1.1.40: `exec_in_jail` too — and strictly: an *unregistered* jid is
+  denied as well, since exec-as-root into a jail is exactly what the
+  registry exists to confine; the bootstrap "unknown → allow"
+  concession the other jid verbs keep does not apply).
   A daemon-owned jid→owner registry (`lib/jid_owner_registry.*`) records
   the operator uid at `create_jail` time; subsequent verbs from a
   different operator are denied `403` against the same registry. 1.1.14

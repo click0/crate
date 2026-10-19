@@ -31,35 +31,39 @@ The bhyve/VM track is in TODO2.
   (network_pool_user_bits); clear refusals for NAT mode and
   auto_create_bridge under rootless.
 
-* (BLOCKER, design decision needed) an unprivileged `crate run` cannot
-  execute anything inside the jail. JailExec::execInJail
-  (jail_query.cpp:296-330) forks, jail_attach(2)s, setuid()s and
-  execs; jail_attach needs root, and the jexec(8) fallback does too.
-  No privops verb performs an exec. So after 1.1.39 a rootless run
-  creates the directory, extracts, creates the jail, mounts, wires the
-  network — and fails at the first execInJail (lo0 setup, rc.conf,
-  the service command itself). Every rootless-only path below this
-  line is therefore untested on hardware. Two ways to close it:
-    (A) exec_in_jail privops verb with descriptor passing: the client
-        sends argv, user and its stdin/stdout/stderr (nvlist_add_
-        descriptor over the libnv socket); crated pdfork()s, jail_
-        attach(jid), initgroups/setgid/setuid(user), dup2, execv, and
-        returns the process descriptor (SCM_RIGHTS) so the client
-        waits for exit via kqueue EVFILT_PROCDESC/pdwait without
-        pinning a daemon thread. Authz: checkOwnedJid (the jid must be
-        the caller's). Keeps the current in-process `crate run`
-        architecture intact; execInJail gains a privops branch.
-    (B) daemon-run model: rootless `crate run -f` only validates,
-        registers the spec (SpecRegistry) and asks crated to start the
-        container (control-socket/HTTP `start` already spawns `crate
-        run` as root); logs/console come back over the control socket.
-        Simpler verbs, but `crate run` stops being the foreground
-        supervisor for unprivileged users, and the jid registry records
-        the uid-0 run as unowned (needs an owner argument to `start`).
-  (A) is the recommendation: it matches the trust model (privops as
-  the privileged plane, per-verb ownership gate) and changes no
-  operator-visible behaviour. Also needed by `crate console` (jexec
-  direct) and `crate update --pkg-only` under rootless.
+  [FIXED in 1.1.40] the exec blocker. New privops verb `exec_in_jail`
+  (option A): crate(1) sends argv/user/TERM plus its stdin/stdout/
+  stderr as nvlist descriptors; crated pdfork()s, dup2s, closefrom,
+  jail_attach(jid), switches to the jail-side user, builds a minimal
+  env and execve()s; the process descriptor comes back in the reply
+  and JailExec waits on it with kqueue EVFILT_PROCDESC (no daemon
+  thread pinned; the command dies with `crate run`). Authz is STRICT:
+  the jid must be registered to the caller — no bootstrap concession
+  (DenyUnownedJid). JailExec::execInJail/execInJailGetOutput take the
+  privops branch whenever euid != 0 and a socket is detected, so
+  `crate run`, `crate console`, `crate update --pkg-only`, `crate
+  info`, healthchecks and the per-jail network setup all go through
+  it unchanged. libnv transport only (HTTP answers 400).
+
+* (HIGH) exec_in_jail follow-ups:
+    - no on-hardware run yet: the whole rootless `crate run` path
+      (ensure_user_root → create_jail → mounts → exec_in_jail …) has
+      never been exercised end to end; docs/on-hardware-validation.md
+      §4.1 is the first thing to run.
+    - `crate run` cannot signal the in-jail command directly (it only
+      has the pd); Ctrl-C still works through rc.shutdown + destroy
+      _jail. A `pdkill` on the pd from the SIGINT/SIGTERM handler would
+      make the foreground command stop like a local one.
+    - lib/run_gui.cpp:1073-1149 compositor and seatd helpers still
+      exec `jexec` directly (root-only) — GUI crates stay root-only
+      until they use JailExec.
+    - the daemon's child inherits crated's rlimits and cpuset; RCTL
+      rules on the jail still apply (they key on the jail), but
+      per-process limits should come from the jail, not the daemon.
+    - the child calls getpwnam() after fork in a multi-threaded
+      daemon (jemalloc atfork makes it safe in practice); resolving
+      the user from <jailPath>/etc/master.passwd in the parent would
+      remove the dependency.
 
 * (HIGH) remaining direct privileged calls under rootless:
     - run.cpp bridge path: IfconfigOps::createNamedInterface/setUp for
@@ -98,8 +102,11 @@ The bhyve/VM track is in TODO2.
       acknowledges it but keeps FAIL.
     - daemon/routes.cpp spawnCrateRun and control_socket.cpp exec
       `crate run` as uid 0 — the jid registry records those creates as
-      unowned. If (B) above is chosen this becomes the main path and
-      needs an owner uid carried into create_jail.
+      unowned, so a tenant cannot exec_in_jail into a container the
+      daemon started for them over HTTP/control-socket `start`. Carry
+      the requesting operator's uid into that spawn (and into
+      create_jail's registry entry) or document that daemon-started
+      containers are admin-owned.
 
 === 2. crated privops / HTTP — security ===
 

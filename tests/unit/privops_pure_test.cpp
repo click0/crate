@@ -28,6 +28,7 @@ ATF_TEST_CASE_BODY(verb_token_roundtrips_for_every_verb) {
     Verb::SetIfaceInetAddr, Verb::CreateEpair,
     Verb::SetLoginclassRctl, Verb::ClearLoginclassRctl,
     Verb::EnsureUserRoot,
+    Verb::ExecInJail,   // 1.1.40
   };
   for (Verb v : verbs) {
     std::string token = verbName(v);
@@ -982,6 +983,63 @@ ATF_TEST_CASE_BODY(configure_ipfw_nat_minimal) {
   ATF_REQUIRE(!validateConfigureIpfwNat(r).empty());
 }
 
+// --- exec_in_jail (1.1.40) ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(exec_in_jail_validation);
+ATF_TEST_CASE_BODY(exec_in_jail_validation) {
+  ExecInJailReq r;
+  r.jid  = 42;
+  r.argv = {"/bin/sh", "-c", "echo hi"};
+  ATF_REQUIRE_EQ(validateExecInJail(r), std::string());
+
+  // root (empty or explicit) and a regular user both pass.
+  r.user = "root";  ATF_REQUIRE_EQ(validateExecInJail(r), std::string());
+  r.user = "alice"; ATF_REQUIRE_EQ(validateExecInJail(r), std::string());
+  r.term = "xterm-256color"; ATF_REQUIRE_EQ(validateExecInJail(r), std::string());
+
+  // jid range.
+  r.jid = 0;     ATF_REQUIRE(!validateExecInJail(r).empty());
+  r.jid = 70000; ATF_REQUIRE(!validateExecInJail(r).empty());
+  r.jid = 42;
+
+  // argv must be non-empty and argv[0] absolute — the daemon execve()s
+  // it after jail_attach, no PATH search, no shell.
+  r.argv = {};                 ATF_REQUIRE(!validateExecInJail(r).empty());
+  r.argv = {"sh"};             ATF_REQUIRE(!validateExecInJail(r).empty());
+  r.argv = {""};               ATF_REQUIRE(!validateExecInJail(r).empty());
+  r.argv = {"/bin/sh"};        ATF_REQUIRE_EQ(validateExecInJail(r), std::string());
+
+  // Bounds: argument count and total bytes.
+  r.argv.assign(kExecInJailMaxArgs + 1, "x");
+  r.argv[0] = "/bin/echo";
+  ATF_REQUIRE(validateExecInJail(r).find("arguments") != std::string::npos);
+  r.argv = {"/bin/echo", std::string(kExecInJailMaxArgvBytes, 'a')};
+  ATF_REQUIRE(validateExecInJail(r).find("total size") != std::string::npos);
+
+  // Embedded NUL cannot be a C string.
+  r.argv = {"/bin/echo", std::string("a\0b", 3)};
+  ATF_REQUIRE(validateExecInJail(r).find("NUL") != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(exec_in_jail_user_and_term_charsets);
+ATF_TEST_CASE_BODY(exec_in_jail_user_and_term_charsets) {
+  ATF_REQUIRE_EQ(validateJailUserName(""), std::string());
+  ATF_REQUIRE_EQ(validateJailUserName("root"), std::string());
+  ATF_REQUIRE_EQ(validateJailUserName("_svc-user.1"), std::string());
+  ATF_REQUIRE(!validateJailUserName("1abc").empty());          // leading digit
+  ATF_REQUIRE(!validateJailUserName("-abc").empty());          // leading dash
+  ATF_REQUIRE(!validateJailUserName("al ice").empty());        // space
+  ATF_REQUIRE(!validateJailUserName("alice;id").empty());      // shell meta
+  ATF_REQUIRE(!validateJailUserName(std::string(33, 'a')).empty());
+
+  ATF_REQUIRE_EQ(validateTermName(""), std::string());
+  ATF_REQUIRE_EQ(validateTermName("xterm-256color"), std::string());
+  ATF_REQUIRE_EQ(validateTermName("screen.xterm+kitty"), std::string());
+  ATF_REQUIRE(!validateTermName("xterm;rm -rf /").empty());
+  ATF_REQUIRE(!validateTermName("a=b").empty());
+  ATF_REQUIRE(!validateTermName(std::string(65, 'x')).empty());
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, verb_token_roundtrips_for_every_verb);
   ATF_ADD_TEST_CASE(tcs, verb_unknown_token_returns_unknown);
@@ -1060,4 +1118,6 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, apply_devfs_ruleset_minimal);
   ATF_ADD_TEST_CASE(tcs, add_devfs_unhide_rule_minimal);
   ATF_ADD_TEST_CASE(tcs, signal_jail_minimal);
+  ATF_ADD_TEST_CASE(tcs, exec_in_jail_validation);
+  ATF_ADD_TEST_CASE(tcs, exec_in_jail_user_and_term_charsets);
 }

@@ -203,6 +203,9 @@ std::string parseApplyDevfsRuleset(const std::string &body,
 std::string parseAddDevfsUnhideRule(const std::string &body,
                                     PrivOpsPure::AddDevfsUnhideRuleReq &out);
 
+std::string parseExecInJail(const std::string &body,
+                            PrivOpsPure::ExecInJailReq &out);
+
 std::string parseSignalJail(const std::string &body,
                             PrivOpsPure::SignalJailReq &out);
 
@@ -376,5 +379,10 @@ std::string formatAddDevfsUnhideRuleSuccess(const std::string &mountPath,
 
 // 1.1.11: 200 OK body for signal_jail.
 std::string formatSignalJailSuccess(unsigned jid, const std::string &signal);
+
+// 1.1.40: 200 OK body for exec_in_jail. The process descriptor itself
+// travels as an nvlist descriptor next to the body ("pd").
+// Shape: {"started":true,"jid":<jid>,"pid":<pid>}
+std::string formatExecInJailSuccess(unsigned jid, long pid);
 
 } // namespace PrivOpsWirePure

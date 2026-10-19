@@ -79,29 +79,40 @@ bool consoleCrate(const Args &args, int argc, char** argv) {
       consoleUser = "root";
   }
 
-  // Build the command to execute inside the jail
-  std::vector<std::string> execArgv;
-  execArgv.push_back(CRATE_PATH_JEXEC);
-  execArgv.push_back("-l");
-  execArgv.push_back("-U");
-  execArgv.push_back(consoleUser);
-  execArgv.push_back(jidStr);
-
   // 1.1.39: jexec(8) execvp()s argv[0] literally — there is no shell
   // between us and it — so "login -f <user>" as ONE argv element meant
   // "run a program called `login -f root`" and every interactive
   // `crate console` failed with "No such file or directory". Each word
   // is its own argv element now, and the extra `-- args` are appended
   // verbatim (no shell quoting, since nothing unquotes them).
+  std::vector<std::string> innerArgv;
   if (args.consoleCmd.empty()) {
-    execArgv.push_back("/usr/bin/login");
-    execArgv.push_back("-f");
-    execArgv.push_back(consoleUser);
+    innerArgv.push_back("/usr/bin/login");
+    innerArgv.push_back("-f");
+    innerArgv.push_back(consoleUser);
   } else {
-    execArgv.push_back(args.consoleCmd);
+    innerArgv.push_back(args.consoleCmd);
   }
   for (int i = 0; i < argc; i++)
-    execArgv.push_back(argv[i]);
+    innerArgv.push_back(argv[i]);
+
+  // 1.1.40: unprivileged operator — the exec goes through crated's
+  // exec_in_jail verb (our terminal travels as descriptors; the jid
+  // must be registered to us). Root keeps the direct jexec -l path,
+  // which also gives login(1) the clean environment it expects.
+  if (::geteuid() != 0) {
+    int status = JailExec::execInJail(jid, innerArgv, consoleUser, "console into jail");
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+  }
+
+  std::vector<std::string> execArgv;
+  execArgv.push_back(CRATE_PATH_JEXEC);
+  execArgv.push_back("-l");
+  execArgv.push_back("-U");
+  execArgv.push_back(consoleUser);
+  execArgv.push_back(jidStr);
+  for (const auto &a : innerArgv)
+    execArgv.push_back(a);
 
   // Execute — this replaces the process for interactive use via fork+exec
   int status = Util::execCommandGetStatus(execArgv, "console into jail");

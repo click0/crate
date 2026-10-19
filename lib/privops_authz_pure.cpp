@@ -59,6 +59,21 @@ Decision checkOwnedJid(unsigned jid, const PerUserEnvPure::Env &env,
   return o.uid == env.uid ? Decision::Allow : Decision::DenyForeignJid;
 }
 
+// 1.1.40: strict variant for exec_in_jail. Running a command as root
+// inside a jail is the most powerful verb there is; the bootstrap
+// concession (unknown jid -> Allow) that lets older/root-created jails
+// keep working for set_rctl & co. would here let any privops-group
+// member exec into the host admin's containers. A jid the registry
+// does not know is therefore denied, and a missing registry (lookup
+// not wired) denies too.
+Decision checkOwnedJidStrict(unsigned jid, const PerUserEnvPure::Env &env,
+                             const OwnerLookup &lookup) {
+  if (!lookup.byJid) return Decision::DenyUnownedJid;
+  Owner o = lookup.byJid(jid);
+  if (!o.known) return Decision::DenyUnownedJid;
+  return o.uid == env.uid ? Decision::Allow : Decision::DenyForeignJid;
+}
+
 Decision checkOwnedName(const std::string &name,
                         const PerUserEnvPure::Env &env,
                         const OwnerLookup &lookup) {
@@ -159,6 +174,11 @@ Decision authorize(PrivOpsPure::Verb v,
     case V::SignalJail:
     case V::ConfigureIface:
       return checkOwnedJid(req.jid, env, lookup);
+
+    // 1.1.40: exec_in_jail — jid-scoped, but fail closed on an
+    // unregistered jid (see checkOwnedJidStrict).
+    case V::ExecInJail:
+      return checkOwnedJidStrict(req.jid, env, lookup);
 
     // Name-scoped verb. The jail name itself is brand-new and there's
     // nothing in the registry to compare against on create; the gate
@@ -265,6 +285,8 @@ const char *decisionReason(Decision d) {
       return "path is neither inside a jail owned by the caller nor inside the caller's per-user path prefix";
     case Decision::DenyForeignAnchor:
       return "pf anchor is not a crate/<jail> anchor of a jail owned by the caller";
+    case Decision::DenyUnownedJid:
+      return "jid is not registered to the caller (exec_in_jail requires a jail created through privops by the same operator)";
   }
   return "deny";
 }

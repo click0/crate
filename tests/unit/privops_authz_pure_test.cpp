@@ -631,6 +631,31 @@ ATF_TEST_CASE_BODY(attach_zfs_gates_jid_too) {
   }
 }
 
+// --- exec_in_jail (1.1.40): strict, no bootstrap concession ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(exec_in_jail_fails_closed);
+ATF_TEST_CASE_BODY(exec_in_jail_fails_closed) {
+  auto e = env1000();
+  Request rq;
+  rq.jid = 77;
+  // own jid -> Allow
+  ATF_REQUIRE(authorize(Verb::ExecInJail, rq, e, fixedOwner(77, "web", 1000)) == Decision::Allow);
+  // another tenant's jid -> DenyForeignJid
+  ATF_REQUIRE(authorize(Verb::ExecInJail, rq, e, fixedOwner(77, "web", 1001)) == Decision::DenyForeignJid);
+  // UNKNOWN jid -> denied (signal_jail & co. allow this as bootstrap; exec must not)
+  ATF_REQUIRE(authorize(Verb::ExecInJail, rq, e, fixedOwner(78, "web", 1000)) == Decision::DenyUnownedJid);
+  ATF_REQUIRE(authorize(Verb::SignalJail, rq, e, fixedOwner(78, "web", 1000)) == Decision::Allow);
+  // no registry wired at all -> denied too
+  OwnerLookup none;
+  ATF_REQUIRE(authorize(Verb::ExecInJail, rq, e, none) == Decision::DenyUnownedJid);
+  ATF_REQUIRE(authorize(Verb::ExecInJail, rq, e, PrivOpsAuthzPure::nullLookup()) == Decision::DenyUnownedJid);
+  // jid 0 (field missing) is simply an unknown jid -> denied
+  Request zero;
+  ATF_REQUIRE(authorize(Verb::ExecInJail, zero, e, fixedOwner(77, "web", 1000)) == Decision::DenyUnownedJid);
+  ATF_REQUIRE(std::string(decisionReason(Decision::DenyUnownedJid)).find("exec_in_jail")
+              != std::string::npos);
+}
+
 // --- decisionReason ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(decision_reason_non_empty);
@@ -687,4 +712,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, anchor_jail_name_parsing);
   ATF_ADD_TEST_CASE(tcs, pf_anchor_verbs_name_scoped);
   ATF_ADD_TEST_CASE(tcs, attach_zfs_gates_jid_too);
+  ATF_ADD_TEST_CASE(tcs, exec_in_jail_fails_closed);
 }

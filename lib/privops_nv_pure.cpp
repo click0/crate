@@ -313,6 +313,26 @@ std::string parseSignalJail(const FieldMap &m,
   return "";
 }
 
+std::string parseExecInJail(const FieldMap &m,
+                            PrivOpsPure::ExecInJailReq &out) {
+  if (auto e = requireUnsigned(m, "jid", out.jid); !e.empty()) return e;
+  if (auto e = optionalString(m, "user", out.user); !e.empty()) return e;
+  if (auto e = optionalString(m, "term", out.term); !e.empty()) return e;
+  unsigned argc = 0;
+  if (auto e = requireUnsigned(m, "argc", argc); !e.empty()) return e;
+  if (argc == 0) return "field 'argc' must be >= 1";
+  if (argc > PrivOpsPure::kExecInJailMaxArgs)
+    return "field 'argc' exceeds " + std::to_string(PrivOpsPure::kExecInJailMaxArgs);
+  out.argv.clear();
+  out.argv.reserve(argc);
+  for (unsigned i = 0; i < argc; i++) {
+    std::string a;
+    if (auto e = requireString(m, "argv" + std::to_string(i), a); !e.empty()) return e;
+    out.argv.push_back(std::move(a));
+  }
+  return "";
+}
+
 // --- Verb routing ---
 
 PrivOpsPure::Verb extractVerb(const FieldMap &m) {

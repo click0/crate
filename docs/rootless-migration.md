@@ -112,13 +112,23 @@ in `crate.yml`, default 8 — a `/16` pool gives every uid a `/24`;
 address keeps the pool's prefix length and gateway, so the shared
 bridge needs no extra routing.
 
-**Still open (see `TODO` §1):** `crate run` executes the container's
-command through `jail_attach(2)`/`jexec(8)`, which need root, and no
-privops verb performs an exec. An unprivileged `crate run` therefore
-sets the jail up and fails at the first in-jail command. Until an
-exec verb (or a daemon-run model) lands, start containers through
-`crated` — control-socket / HTTP `start`, which runs `crate run` as
-root — and use the unprivileged `crate(1)` for everything else.
+**Closed in 1.1.40 — `exec_in_jail`.** `crate run` used to execute the
+container's command through `jail_attach(2)`/`jexec(8)`, both root-only,
+so an unprivileged run set the jail up and failed at the first in-jail
+command. `JailExec` now delegates every in-jail exec to `crated` when
+the caller is not root and a privops socket is present: the request
+carries argv, the jail-side user, `TERM` and the caller's
+stdin/stdout/stderr as nvlist descriptors; the daemon `pdfork()`s,
+`jail_attach()`s, switches user, builds a minimal environment
+(`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TERM`) and `execve()`s,
+and returns the **process descriptor**. `crate run` waits on it with
+`kqueue(EVFILT_PROCDESC)`; closing the last reference kills the
+command, so the container dies with its supervisor exactly as before.
+The jid must be **registered to the caller** — an unregistered or
+foreign jid is refused `403` (no bootstrap concession for exec).
+`crate console`, `crate update --pkg-only`, `crate info` and the
+healthcheck loop use the same path. Not yet validated on hardware
+(see `docs/on-hardware-validation.md` §4.1).
 
 uid is the stable key (operators on NIS/LDAP have mutable
 uid→name maps).

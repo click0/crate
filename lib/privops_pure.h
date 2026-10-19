@@ -212,6 +212,20 @@ enum class Verb {
   // always falls through to the full stop-timeout + forced
   // destroy_jail.
   SignalJail,
+
+  // 1.1.40: execute a command inside a jail on the caller's behalf.
+  // The one verb a rootless `crate run` cannot do without: every
+  // in-jail step (lo0 setup, pw useradd, service start, the container
+  // command itself) is a jail_attach(2) + exec, and jail_attach needs
+  // root. Only the libnv transport carries it — the caller's
+  // stdin/stdout/stderr travel as nvlist descriptors and the daemon
+  // hands back a process descriptor (pdfork) the client waits on, so
+  // no daemon thread is pinned for the lifetime of the command and the
+  // command dies with the client (last pd reference closed → SIGKILL).
+  // Authz is strict: the jid must be registered to the caller
+  // (no bootstrap concession — exec as root into an unregistered jail
+  // is the one thing the registry exists to prevent).
+  ExecInJail,
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -423,6 +437,26 @@ struct SignalJailReq {
   std::string signal;          // "TERM", "KILL", "HUP", "INT"
 };
 
+// 1.1.40: exec_in_jail. `argv[0]` is the absolute path of the program
+// INSIDE the jail (no PATH search — the daemon execve()s it after
+// jail_attach). `user` is the jail-side account to switch to after
+// attaching ("" or "root" = stay root); it is resolved against the
+// jail's own passwd. `term` is the only environment the caller may
+// pass through (the daemon builds a minimal env: PATH, HOME, USER,
+// LOGNAME, SHELL, and TERM when given). On the wire argv travels as
+// "argc" + "argv0".."argv<N-1>" string fields, since both transports
+// are flat string maps.
+struct ExecInJailReq {
+  unsigned                 jid = 0;
+  std::string              user;
+  std::vector<std::string> argv;
+  std::string              term;
+};
+
+// Bounds for exec_in_jail argv (shared by parsers and validator).
+constexpr unsigned kExecInJailMaxArgs      = 256;
+constexpr size_t   kExecInJailMaxArgvBytes = 65536;   // sum of all args
+
 // --- Per-verb validators ---
 //
 // Each `validate*(req)` returns "" on success, otherwise a one-line
@@ -472,6 +506,7 @@ std::string validateSetJailCpuset(const SetJailCpusetReq &r);
 std::string validateApplyDevfsRuleset(const ApplyDevfsRulesetReq &r);
 std::string validateAddDevfsUnhideRule(const AddDevfsUnhideRuleReq &r);
 std::string validateSignalJail(const SignalJailReq &r);
+std::string validateExecInJail(const ExecInJailReq &r);
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //
@@ -484,6 +519,15 @@ std::string validateSignalJail(const SignalJailReq &r);
 
 // Jail name: alnum + ._-, <=64 chars, not "." or "..".
 std::string validateJailName(const std::string &name);
+
+// 1.1.40: jail-side account name for exec_in_jail: pw(8) charset
+// (letter or underscore first, then alnum + ._-), <=32 chars. Empty
+// is allowed (= root).
+std::string validateJailUserName(const std::string &user);
+
+// 1.1.40: TERM value for exec_in_jail: alnum + ._+-, <=64 chars.
+// Empty is allowed (TERM not set in the child).
+std::string validateTermName(const std::string &term);
 
 // Hostname: RFC 1123-ish — labels of alnum + hyphen, dots between,
 // total <=253 chars. Empty allowed (jail inherits parent host).

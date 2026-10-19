@@ -6,6 +6,63 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.40] — 2026-10-19
+
+**The rootless exec blocker is closed: new privops verb `exec_in_jail`
+(TODO §1 option A).** ⚠️ New verb; rootless `crate run` now runs the
+container's command for real.
+
+- **`exec_in_jail`.** Every in-jail step of `crate run` (lo0 setup,
+  `pw useradd`, `service … onestart`, the command itself), `crate
+  console`, `crate update --pkg-only`, `crate info` and the healthcheck
+  loop went through `JailExec::execInJail` → `jail_attach(2)` with a
+  `jexec(8)` fallback, both root-only. When the caller is not root and
+  a privops socket is present, `JailExec` now sends the request to
+  `crated`: argv (`argc` + `argv0..N`), the jail-side `user`, `TERM`,
+  and the caller's **stdin/stdout/stderr as nvlist descriptors**. The
+  daemon `pdfork(PD_CLOEXEC)`s a child that `dup2`s them onto 0/1/2,
+  `closefrom(3)`, `jail_attach`es, resolves `user` against the jail's
+  passwd, `initgroups/setgid/setuid`, builds a minimal environment
+  (`PATH HOME USER LOGNAME SHELL [TERM]`) and `execve`s `argv[0]`
+  (absolute path, no shell, no PATH search). The reply carries the
+  **process descriptor**; the client waits on it with
+  `kqueue(EVFILT_PROCDESC, NOTE_EXIT)` and gets a wait(2)-style status,
+  so callers see no difference between the two paths. No daemon
+  thread is pinned for the command's lifetime, and closing the last pd
+  reference (crate run exiting) kills it — the "container dies with
+  its supervisor" semantics are preserved. `execInJailGetOutput` passes
+  a pipe as stdout.
+- **Strict authorisation.** `exec_in_jail` is jid-scoped like
+  `signal_jail`, but the bootstrap concession (unknown jid → allow)
+  does **not** apply: an unregistered jid, a foreign jid, or a missing
+  registry all answer `403` (`DenyUnownedJid` / `DenyForeignJid`).
+  Executing as root inside someone else's jail is what the registry
+  exists to prevent. The HTTP transport refuses the verb (`400`, no
+  descriptor passing).
+- **Validation.** jid 1..65535; `user` pw(8) charset ≤32; `TERM`
+  alnum/`._+-` ≤64; argv 1..256 arguments, ≤64 KiB total, `argv[0]`
+  absolute, no embedded NUL; `argc` bounded before any loop.
+- **`crate console`** under rootless goes through the verb with the
+  operator's terminal; root keeps `jexec -l -U`.
+- A clear error when neither root nor a privops socket is available
+  ("executing inside a jail needs root or the crated privops socket")
+  instead of the old exit-126 → jexec → EPERM chain.
+- Listener: received descriptors are marked `FD_CLOEXEC` immediately
+  and closed after dispatch; the pd is moved into the reply nvlist and
+  released by `nvlist_destroy` once sent.
+
+Still open after this release (TODO §1): no on-hardware run of the
+rootless path yet; `crate run` cannot `pdkill` the command on
+Ctrl-C (rc.shutdown + destroy_jail still do the job); GUI compositor
+helpers in `run_gui.cpp` exec `jexec` directly and stay root-only.
+
+Tests: `privops_pure_test` (validator + user/TERM charsets),
+`privops_nv_pure_test` / `privops_wire_pure_test` (argc/argvN parsing,
+bounds, 501 table), `privops_client_pure_test` (builder round-trip),
+`privops_authz_pure_test` (strict jid gate incl. no-registry and
+jid 0). 1464/1464 unit cases. Docs: trust-model EN/UK,
+rootless-migration, on-hardware runbook §4.1.
+
 ## [1.1.39] — 2026-10-18
 
 **Rootless plumbing (`TODO` §1) and the per-user pool split (§3 H2),
