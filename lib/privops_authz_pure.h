@@ -81,6 +81,8 @@ enum class Decision {
                          // outside the caller's per-user path prefix (per-user split on)
   DenyForeignAnchor,     // 1.1.36: pf anchor is not crate/<jail> or that jail is
                          // owned by another uid
+  DenyUnownedJid,        // 1.1.40: exec_in_jail — jid is not registered at all
+                         // (no bootstrap concession for exec)
 };
 
 // Result of looking a target up in the daemon's jid->owner registry.

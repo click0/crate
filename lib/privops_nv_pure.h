@@ -153,6 +153,11 @@ std::string parseAddDevfsUnhideRule(const FieldMap &m,
                                     PrivOpsPure::AddDevfsUnhideRuleReq &out);
 std::string parseSignalJail(const FieldMap &m,
                             PrivOpsPure::SignalJailReq &out);
+// 1.1.40: "jid", optional "user", "argc" + "argv0".."argv<argc-1>",
+// optional "term". argc is bounded by kExecInJailMaxArgs before the
+// loop so a hostile count cannot make the parser spin.
+std::string parseExecInJail(const FieldMap &m,
+                            PrivOpsPure::ExecInJailReq &out);
 
 // --- Verb routing ---
 

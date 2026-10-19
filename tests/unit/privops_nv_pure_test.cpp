@@ -298,6 +298,42 @@ ATF_TEST_CASE_BODY(parsers_same_required_field_set_as_json) {
   ATF_REQUIRE(err.find("missing") != std::string::npos);
 }
 
+// --- exec_in_jail (1.1.40) ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(parse_exec_in_jail);
+ATF_TEST_CASE_BODY(parse_exec_in_jail) {
+  PrivOpsPure::ExecInJailReq r;
+  ATF_REQUIRE_EQ(parseExecInJail({
+      {"verb", "exec_in_jail"}, {"jid", "42"}, {"user", "alice"}, {"term", "xterm"},
+      {"argc", "3"}, {"argv0", "/bin/sh"}, {"argv1", "-c"}, {"argv2", "echo hi"},
+    }, r), std::string());
+  ATF_REQUIRE_EQ(r.jid, 42u);
+  ATF_REQUIRE_EQ(r.user, std::string("alice"));
+  ATF_REQUIRE_EQ(r.term, std::string("xterm"));
+  ATF_REQUIRE_EQ(r.argv.size(), 3u);
+  ATF_REQUIRE_EQ(r.argv[1], std::string("-c"));
+
+  // Optionals absent -> empty; argv order is by index, not map order.
+  PrivOpsPure::ExecInJailReq r2;
+  ATF_REQUIRE_EQ(parseExecInJail({
+      {"jid", "1"}, {"argc", "2"}, {"argv1", "b"}, {"argv0", "/a"},
+    }, r2), std::string());
+  ATF_REQUIRE(r2.user.empty());
+  ATF_REQUIRE_EQ(r2.argv[0], std::string("/a"));
+  ATF_REQUIRE_EQ(r2.argv[1], std::string("b"));
+
+  // argc beyond the delivered argv fields, argc 0, oversized argc.
+  PrivOpsPure::ExecInJailReq r3;
+  ATF_REQUIRE(parseExecInJail({{"jid", "1"}, {"argc", "2"}, {"argv0", "/a"}}, r3)
+              .find("argv1") != std::string::npos);
+  ATF_REQUIRE(!parseExecInJail({{"jid", "1"}, {"argc", "0"}}, r3).empty());
+  ATF_REQUIRE(parseExecInJail({{"jid", "1"}, {"argc", "999999"}}, r3)
+              .find("exceeds") != std::string::npos);
+  // Missing required fields.
+  ATF_REQUIRE(parseExecInJail({{"argc", "1"}, {"argv0", "/a"}}, r3).find("missing") != std::string::npos);
+  ATF_REQUIRE(parseExecInJail({{"jid", "1"}, {"argv0", "/a"}}, r3).find("missing") != std::string::npos);
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, require_string_present_absent);
   ATF_ADD_TEST_CASE(tcs, require_long_typical);
@@ -321,4 +357,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, parse_pf_rules);
   ATF_ADD_TEST_CASE(tcs, parse_ipfw_rules);
   ATF_ADD_TEST_CASE(tcs, parsers_same_required_field_set_as_json);
+  ATF_ADD_TEST_CASE(tcs, parse_exec_in_jail);
 }

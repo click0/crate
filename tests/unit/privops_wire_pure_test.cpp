@@ -591,6 +591,7 @@ ATF_TEST_CASE_BODY(dispatch_covers_every_verb) {
     Verb::SetJailCpuset, Verb::ApplyDevfsRuleset,
     Verb::AddDevfsUnhideRule, Verb::SignalJail,
     Verb::EnsureUserRoot,   // 1.1.39
+    Verb::ExecInJail,       // 1.1.40
   };
   for (auto v : verbs) {
     auto r = parseValidateAndDispatch(v, "{}");
@@ -659,6 +660,50 @@ ATF_TEST_CASE_BODY(format_query_jail_rctl_escapes_newlines) {
   ATF_REQUIRE_EQ(recovered, std::string("memoryuse=512M\nmaxproc=64\n"));
 }
 
+// --- exec_in_jail (1.1.40) ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(parse_exec_in_jail_argv_fields);
+ATF_TEST_CASE_BODY(parse_exec_in_jail_argv_fields) {
+  PrivOpsPure::ExecInJailReq r;
+  ATF_REQUIRE_EQ(parseExecInJail(
+      R"({"jid":42,"user":"alice","term":"xterm","argc":3,"argv0":"/bin/sh","argv1":"-c","argv2":"echo hi"})", r),
+      std::string());
+  ATF_REQUIRE_EQ(r.jid, 42u);
+  ATF_REQUIRE_EQ(r.user, std::string("alice"));
+  ATF_REQUIRE_EQ(r.term, std::string("xterm"));
+  ATF_REQUIRE_EQ(r.argv.size(), 3u);
+  ATF_REQUIRE_EQ(r.argv[0], std::string("/bin/sh"));
+  ATF_REQUIRE_EQ(r.argv[2], std::string("echo hi"));
+
+  // user/term optional.
+  PrivOpsPure::ExecInJailReq r2;
+  ATF_REQUIRE_EQ(parseExecInJail(R"({"jid":1,"argc":1,"argv0":"/bin/true"})", r2), std::string());
+  ATF_REQUIRE(r2.user.empty());
+  ATF_REQUIRE(r2.term.empty());
+
+  // argc without the matching argvN -> parse error naming the field.
+  PrivOpsPure::ExecInJailReq r3;
+  auto e = parseExecInJail(R"({"jid":1,"argc":2,"argv0":"/bin/true"})", r3);
+  ATF_REQUIRE(e.find("argv1") != std::string::npos);
+
+  // argc 0 and a hostile argc are refused before any loop.
+  PrivOpsPure::ExecInJailReq r4;
+  ATF_REQUIRE(!parseExecInJail(R"({"jid":1,"argc":0})", r4).empty());
+  ATF_REQUIRE(parseExecInJail(R"({"jid":1,"argc":4000000000})", r4).find("exceeds")
+              != std::string::npos);
+
+  // Missing jid / argc.
+  PrivOpsPure::ExecInJailReq r5;
+  ATF_REQUIRE(!parseExecInJail(R"({"argc":1,"argv0":"/bin/true"})", r5).empty());
+  ATF_REQUIRE(!parseExecInJail(R"({"jid":1,"argv0":"/bin/true"})", r5).empty());
+
+  // Through the 501 table: parses + validates, then not-implemented.
+  auto d = parseValidateAndDispatch(Verb::ExecInJail,
+      R"({"jid":7,"argc":1,"argv0":"/bin/true"})");
+  ATF_REQUIRE_EQ(d.status, 501);
+  ATF_REQUIRE(formatExecInJailSuccess(7, 1234).find("\"pid\":1234") != std::string::npos);
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, extract_string_present_absent_wrong_type);
   ATF_ADD_TEST_CASE(tcs, extract_string_decodes_escapes);
@@ -721,4 +766,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, parse_flush_pf_anchor);
   ATF_ADD_TEST_CASE(tcs, parse_query_jail_rctl);
   ATF_ADD_TEST_CASE(tcs, format_query_jail_rctl_escapes_newlines);
+  ATF_ADD_TEST_CASE(tcs, parse_exec_in_jail_argv_fields);
 }

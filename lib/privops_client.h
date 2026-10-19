@@ -38,6 +38,7 @@
 #include "privops_nv_pure.h"
 
 #include <string>
+#include <vector>
 
 namespace PrivOpsClient {
 
@@ -177,6 +178,15 @@ PrivOpsNvPure::FieldMap buildAddDevfsUnhideRule(const std::string &mountPath,
 PrivOpsNvPure::FieldMap buildSignalJail(unsigned jid,
                                          const std::string &signal);
 
+// 1.1.40: exec_in_jail request fields. argv travels as "argc" +
+// "argv0".."argvN-1"; user/term are omitted when empty. The caller's
+// stdio descriptors are NOT in the FieldMap — sendExecRequest attaches
+// them to the nvlist.
+PrivOpsNvPure::FieldMap buildExecInJail(unsigned jid,
+                                         const std::string &user,
+                                         const std::vector<std::string> &argv,
+                                         const std::string &term);
+
 // --- Wire transport (FreeBSD-only) ---
 
 struct Response {
@@ -198,5 +208,19 @@ struct Response {
 // fall back to the legacy exec path.
 Response sendRequest(const std::string &socketPath,
                      const PrivOpsNvPure::FieldMap &fields);
+
+// 1.1.40: exec_in_jail round-trip. Like sendRequest, but the three
+// stdio descriptors are attached to the request nvlist ("stdin",
+// "stdout", "stderr"; libnv dup()s them, the caller keeps its copies)
+// and, on a 200 reply, the daemon's process descriptor for the
+// started command is taken out of the response into `procDescOut`
+// (-1 otherwise). The caller waits on it with kqueue
+// EVFILT_PROCDESC/NOTE_EXIT (see JailExec) and closes it; closing the
+// last reference kills the command, which is the intended "dies with
+// crate run" semantics. Linux stub: transportError, procDescOut = -1.
+Response sendExecRequest(const std::string &socketPath,
+                         const PrivOpsNvPure::FieldMap &fields,
+                         int stdinFd, int stdoutFd, int stderrFd,
+                         int &procDescOut);
 
 } // namespace PrivOpsClient

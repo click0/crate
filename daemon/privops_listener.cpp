@@ -16,6 +16,7 @@
 #include <iostream>
 #include <thread>
 
+#include <fcntl.h>      // 1.1.40: FD_CLOEXEC on received descriptors
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -147,13 +148,37 @@ void handleConnection(int connFd, bool rootlessPerUser) {
   }
 
   PrivOpsNvPure::FieldMap m = nvlistToMap(req);
+
+  // 1.1.40: exec_in_jail carries the caller's stdio as descriptors.
+  // Take them out before nvlist_destroy (which would close them) and
+  // mark them CLOEXEC right away so a concurrent fork+exec on another
+  // daemon thread cannot inherit a tenant's terminal.
+  ExecIo io;
+  auto takeFd = [&](const char *name) -> int {
+    if (!nvlist_exists_descriptor(req, name)) return -1;
+    int fd = nvlist_take_descriptor(req, name);
+    if (fd >= 0) ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+    return fd;
+  };
+  io.stdinFd  = takeFd("stdin");
+  io.stdoutFd = takeFd("stdout");
+  io.stderrFd = takeFd("stderr");
   nvlist_destroy(req);
 
-  auto result = dispatchPrivOpFromMap(m, rootlessPerUser, peerUid);
+  int procDesc = -1;
+  auto result = dispatchPrivOpFromMap(m, rootlessPerUser, peerUid, &io, &procDesc);
+
+  // The child (if any) holds its own dup2()ed copies; ours go now.
+  for (int fd : {io.stdinFd, io.stdoutFd, io.stderrFd})
+    if (fd >= 0) ::close(fd);
 
   nvlist_t *resp = nvlist_create(0);
   nvlist_add_number(resp, "status", (uint64_t)result.status);
   nvlist_add_string(resp, "body", result.body.c_str());
+  // nvlist_move_descriptor: the nvlist owns pd from here; nvlist_destroy
+  // closes the daemon's reference after it has been sent. The client's
+  // copy is then the only one, so the command dies with the client.
+  if (procDesc >= 0) nvlist_move_descriptor(resp, "pd", procDesc);
   if (nvlist_send(connFd, resp) != 0) {
     std::cerr << "privops_listener: nvlist_send failed: "
               << std::strerror(errno) << std::endl;

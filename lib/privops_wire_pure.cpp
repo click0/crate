@@ -436,6 +436,25 @@ std::string parseAddDevfsUnhideRule(const std::string &body,
   return "";
 }
 
+std::string parseExecInJail(const std::string &body,
+                            PrivOpsPure::ExecInJailReq &out) {
+  if (auto e = requireUnsignedField(body, "jid", out.jid); !e.empty()) return e;
+  extractStringField(body, "user", out.user);
+  extractStringField(body, "term", out.term);
+  unsigned argc = 0;
+  if (auto e = requireUnsignedField(body, "argc", argc); !e.empty()) return e;
+  if (argc == 0) return "field 'argc' must be >= 1";
+  if (argc > PrivOpsPure::kExecInJailMaxArgs)
+    return "field 'argc' exceeds " + std::to_string(PrivOpsPure::kExecInJailMaxArgs);
+  out.argv.clear();
+  for (unsigned i = 0; i < argc; i++) {
+    std::string a;
+    if (auto e = requireStringField(body, "argv" + std::to_string(i), a); !e.empty()) return e;
+    out.argv.push_back(std::move(a));
+  }
+  return "";
+}
+
 std::string parseSignalJail(const std::string &body,
                             PrivOpsPure::SignalJailReq &out) {
   if (auto e = requireUnsignedField(body, "jid", out.jid); !e.empty()) return e;
@@ -833,6 +852,12 @@ std::string formatAddDevfsUnhideRuleSuccess(const std::string &mountPath,
   return o.str();
 }
 
+std::string formatExecInJailSuccess(unsigned jid, long pid) {
+  std::ostringstream o;
+  o << "{\"started\":true,\"jid\":" << jid << ",\"pid\":" << pid << "}";
+  return o.str();
+}
+
 std::string formatSignalJailSuccess(unsigned jid, const std::string &signal) {
   std::ostringstream o;
   o << "{\"signalled\":true"
@@ -912,6 +937,11 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       return runVerb<AddDevfsUnhideRuleReq>(body, v, parseAddDevfsUnhideRule, validateAddDevfsUnhideRule);
     case Verb::SignalJail:
       return runVerb<SignalJailReq>(body, v, parseSignalJail, validateSignalJail);
+    case Verb::ExecInJail:
+      // 1.1.40: libnv-only (descriptor passing). The JSON parser exists
+      // so the 501 table stays total; the daemon's HTTP dispatcher
+      // refuses the verb with 400 before it gets here.
+      return runVerb<ExecInJailReq>(body, v, parseExecInJail, validateExecInJail);
     case Verb::Unknown:
       break;
   }

@@ -63,10 +63,27 @@ PrivOpsWirePure::DispatchResult dispatchPrivOp(PrivOpsPure::Verb v,
 // new transport. A future release can fold both into a single
 // std::variant-based dispatch if the duplication becomes a
 // real cost.
+// 1.1.40: the stdio descriptors an exec_in_jail request carried over
+// the libnv socket (taken out of the request nvlist by the listener).
+// -1 = not supplied. The listener owns and closes them after dispatch;
+// the handler only dup2()s them in the pdfork()ed child.
+struct ExecIo {
+  int stdinFd  = -1;
+  int stdoutFd = -1;
+  int stderrFd = -1;
+};
+
+// `io` / `procDescOut` (1.1.40) are only meaningful for exec_in_jail:
+// the handler receives the caller's descriptors through `io` and, on
+// 200, stores the pdfork() process descriptor in *procDescOut for the
+// listener to move into the response nvlist. Every other verb ignores
+// both; a null `io` makes exec_in_jail answer 400 (HTTP transport).
 PrivOpsWirePure::DispatchResult dispatchPrivOpFromMap(
     const PrivOpsNvPure::FieldMap &m,
     bool rootlessPerUser = false,
-    uint32_t operatorUid = 0);
+    uint32_t operatorUid = 0,
+    const ExecIo *io = nullptr,
+    int *procDescOut = nullptr);
 
 // --- Per-verb handlers ---
 // Each takes an already-validated request struct and returns a
@@ -220,6 +237,17 @@ PrivOpsWirePure::DispatchResult handleAddDevfsUnhideRule(const PrivOpsPure::AddD
 // 1.1.11: send a signal to all processes in a jail. Wraps
 // `jexec <jid> /bin/kill -<signal> -1`.
 PrivOpsWirePure::DispatchResult handleSignalJail(const PrivOpsPure::SignalJailReq &r);
+
+// 1.1.40: exec_in_jail. pdfork(PD_CLOEXEC) a child that dup2()s the
+// caller's descriptors onto 0/1/2, closefrom(3), jail_attach(jid),
+// switches to `user` (resolved against the jail's passwd after the
+// attach), builds a minimal environment and execve()s argv. The
+// parent returns 200 immediately with the process descriptor in
+// `procDescOut`; it never waits. The jail must exist and not be
+// dying (404 otherwise). FreeBSD-only (501 elsewhere).
+PrivOpsWirePure::DispatchResult handleExecInJail(const PrivOpsPure::ExecInJailReq &r,
+                                                 const ExecIo &io,
+                                                 int &procDescOut);
 
 // 0.9.29: register the daemon's `rctl_umbrella:` config. Called
 // once at daemon startup. The umbrella rules apply after a

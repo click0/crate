@@ -27,7 +27,17 @@
 #include <sys/param.h>
 #include <sys/mount.h>
 #include <sys/uio.h>
+// 1.1.40: exec_in_jail — pdfork(2) + jail_attach(2).
+#include <sys/procdesc.h>
+extern "C" {
+#include <sys/jail.h>
+}
+#include <jail.h>
+#include <grp.h>
+#include <pwd.h>
+#include <unistd.h>
 #endif
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <errno.h>
@@ -668,6 +678,112 @@ DispatchResult handleSignalJail(const PrivOpsPure::SignalJailReq &r) {
   return {200, PrivOpsWirePure::formatSignalJailSuccess(r.jid, r.signal)};
 }
 
+// --- handleExecInJail (1.1.40) ---
+
+#ifdef __FreeBSD__
+namespace {
+
+// Child-side exit codes (the parent never sees them — the client
+// does, through the process descriptor — but they make a failed exec
+// diagnosable from `crate run`'s "command failed with status N").
+constexpr int kExecExitDup2   = 125;
+constexpr int kExecExitAttach = 126;
+constexpr int kExecExitExec   = 127;
+constexpr int kExecExitUser   = 124;
+
+} // anon
+
+DispatchResult handleExecInJail(const PrivOpsPure::ExecInJailReq &r,
+                                const ExecIo &io,
+                                int &procDescOut) {
+  procDescOut = -1;
+  if (io.stdinFd < 0 || io.stdoutFd < 0 || io.stderrFd < 0) {
+    return {400, PrivOpsWirePure::formatHandlerError(
+                  "missing_descriptors",
+                  "exec_in_jail needs stdin/stdout/stderr descriptors "
+                  "(libnv transport only)")};
+  }
+  auto ji = JailQuery::getJailByJid((int)r.jid);
+  if (!ji || ji->dying) {
+    return {404, PrivOpsWirePure::formatHandlerError(
+                  "jail_not_found",
+                  "jid " + std::to_string(r.jid) + " is not a running jail")};
+  }
+
+  // Everything the child needs is prepared BEFORE pdfork so the child
+  // does as little as possible: crated is multi-threaded, and the only
+  // non-trivial libc call left in the child is getpwnam() for a
+  // non-root user (jemalloc's atfork handlers make its allocations
+  // safe; nsdispatch is file-backed inside a jail).
+  std::vector<char*> cargv;
+  cargv.reserve(r.argv.size() + 1);
+  for (const auto &a : r.argv) cargv.push_back(const_cast<char*>(a.c_str()));
+  cargv.push_back(nullptr);
+  const bool switchUser = !r.user.empty() && r.user != "root";
+  static const char kPath[] =
+      "PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin";
+  std::string termEnv = r.term.empty() ? std::string() : "TERM=" + r.term;
+
+  int pd = -1;
+  pid_t pid = ::pdfork(&pd, PD_CLOEXEC);
+  if (pid == -1) {
+    return {500, PrivOpsWirePure::formatHandlerError(
+                  "pdfork_failed", std::strerror(errno))};
+  }
+  if (pid == 0) {
+    // --- child ---
+    if (::dup2(io.stdinFd,  STDIN_FILENO)  == -1 ||
+        ::dup2(io.stdoutFd, STDOUT_FILENO) == -1 ||
+        ::dup2(io.stderrFd, STDERR_FILENO) == -1)
+      ::_exit(kExecExitDup2);
+    ::closefrom(3);
+    if (::jail_attach((int)r.jid) == -1)
+      ::_exit(kExecExitAttach);
+
+    char homeBuf[1024]  = "HOME=/";
+    char shellBuf[1024] = "SHELL=/bin/sh";
+    char userBuf[128]   = "USER=root";
+    char lognameBuf[128] = "LOGNAME=root";
+    if (switchUser) {
+      struct passwd *pw = ::getpwnam(r.user.c_str());
+      if (!pw) ::_exit(kExecExitUser);
+      if (::initgroups(r.user.c_str(), pw->pw_gid) != 0 ||
+          ::setgid(pw->pw_gid) != 0 ||
+          ::setuid(pw->pw_uid) != 0)
+        ::_exit(kExecExitUser);
+      std::snprintf(homeBuf, sizeof homeBuf, "HOME=%s",
+                    (pw->pw_dir && *pw->pw_dir) ? pw->pw_dir : "/");
+      std::snprintf(shellBuf, sizeof shellBuf, "SHELL=%s",
+                    (pw->pw_shell && *pw->pw_shell) ? pw->pw_shell : "/bin/sh");
+      std::snprintf(userBuf, sizeof userBuf, "USER=%s", r.user.c_str());
+      std::snprintf(lognameBuf, sizeof lognameBuf, "LOGNAME=%s", r.user.c_str());
+      if (pw->pw_dir && *pw->pw_dir) (void)::chdir(pw->pw_dir);
+    }
+    char *envp[7];
+    int n = 0;
+    envp[n++] = const_cast<char*>(kPath);
+    envp[n++] = homeBuf;
+    envp[n++] = shellBuf;
+    envp[n++] = userBuf;
+    envp[n++] = lognameBuf;
+    if (!termEnv.empty()) envp[n++] = const_cast<char*>(termEnv.c_str());
+    envp[n] = nullptr;
+    ::execve(cargv[0], cargv.data(), envp);
+    ::_exit(kExecExitExec);
+  }
+
+  // --- parent ---
+  procDescOut = pd;
+  return {200, PrivOpsWirePure::formatExecInJailSuccess(r.jid, (long)pid)};
+}
+#else
+DispatchResult handleExecInJail(const PrivOpsPure::ExecInJailReq &,
+                                const ExecIo &, int &procDescOut) {
+  procDescOut = -1;
+  return {501, PrivOpsWirePure::formatNotImplemented(Verb::ExecInJail)};
+}
+#endif
+
 // --- Top-level dispatcher ---
 
 namespace {
@@ -1041,6 +1157,11 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleSignalJail(r);
     }
+    case Verb::ExecInJail:
+      // 1.1.40: needs descriptor passing — libnv transport only.
+      return {400, PrivOpsWirePure::formatHandlerError(
+                    "transport_unsupported",
+                    "exec_in_jail is only available over the libnv privops socket")};
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
   }
@@ -1055,8 +1176,11 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
 
 DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
                                      bool rootlessPerUser,
-                                     uint32_t operatorUid) {
+                                     uint32_t operatorUid,
+                                     const ExecIo *io,
+                                     int *procDescOut) {
   Verb v = PrivOpsNvPure::extractVerb(m);
+  if (procDescOut) *procDescOut = -1;
 
   // 1.1.12 + 1.1.13: authorize-before-dispatch. The libnv transport
   // carries a real peer uid (getpeereid); when rootless per-user is on,
@@ -1390,6 +1514,23 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       if (auto e = PrivOpsPure::validateSignalJail(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleSignalJail(r);
+    }
+    case Verb::ExecInJail: {
+      PrivOpsPure::ExecInJailReq r;
+      if (auto e = PrivOpsNvPure::parseExecInJail(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateExecInJail(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      if (!io) {
+        return {400, PrivOpsWirePure::formatHandlerError(
+                      "missing_descriptors",
+                      "exec_in_jail needs stdin/stdout/stderr descriptors")};
+      }
+      int localPd = -1;
+      auto res = handleExecInJail(r, *io, localPd);
+      if (procDescOut) *procDescOut = localPd;
+      else if (localPd >= 0) ::close(localPd);
+      return res;
     }
     case Verb::Unknown:
       return {404,

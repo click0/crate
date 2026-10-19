@@ -210,9 +210,14 @@ Pass: `HTTP/1.1 403` with the same `DenyForeignPath` reason.
 # /var/run/crate/1000/jail-alice-app-<hex>, inside the caller's slice
 crate create -s /tmp/alice.yml -o /tmp/alice-app.crate
 crate run -f /tmp/alice-app.crate
-# NOTE (1.1.39): the jail is created and configured, but the in-jail
-# command still fails under rootless — jail_attach/jexec need root and
-# there is no exec verb yet (TODO §1). Start it via crated instead.
+# 1.1.40: the in-jail command runs through the exec_in_jail verb
+# (crated pdfork + jail_attach; crate run waits on the returned process
+# descriptor). First end-to-end rootless run — check all of:
+#   - `jls` shows the jail; the command's stdout reaches this terminal
+#   - `crate console alice-app` (as uid 1000) gets a login prompt
+#   - Ctrl-C in crate run stops the command and destroys the jail
+#   - as uid 1001: `crate console alice-app` -> 403 (jid not owned)
+#   - /var/run/crate/1000/audit.log has an exec_in_jail line per exec
 ```
 
 Pass: jail starts, `jls` shows it.

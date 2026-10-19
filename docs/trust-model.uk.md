@@ -106,7 +106,10 @@ privileged operations to crated(8)»*).
   `crate-<uid>` викликача). Чужа ціль → `403` ще до handler'а (fail
   closed). 1.1.13 поширює цей самий гейт на **jid- та name-scoped
   верби**: `set_rctl`, `clear_rctl`, `set_jail_cpuset`, `query_jail_rctl`,
-  `signal_jail`, `destroy_jail`. Демон веде jid→owner-реєстр
+  `signal_jail`, `destroy_jail` (1.1.40: і `exec_in_jail` — суворо:
+  *незареєстрований* jid також відбивається, бо exec від root у jail —
+  саме те, що реєстр і має обмежувати; bootstrap-поблажка «невідомий →
+  allow» для інших jid-вербів тут не діє). Демон веде jid→owner-реєстр
   (`lib/jid_owner_registry.*`), фіксує uid оператора в момент
   `create_jail`; наступні верби від іншого оператора відбиваються `403`
   за тим самим реєстром. 1.1.14 додає до того ж реєстру longest-prefix

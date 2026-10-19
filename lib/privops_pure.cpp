@@ -106,6 +106,7 @@ const char *verbName(Verb v) {
     case Verb::ApplyDevfsRuleset:    return "apply_devfs_ruleset";
     case Verb::AddDevfsUnhideRule:   return "add_devfs_unhide_rule";
     case Verb::SignalJail:           return "signal_jail";
+    case Verb::ExecInJail:           return "exec_in_jail";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -143,6 +144,7 @@ Verb parseVerb(const std::string &name) {
   if (name == "apply_devfs_ruleset")     return Verb::ApplyDevfsRuleset;
   if (name == "add_devfs_unhide_rule")   return Verb::AddDevfsUnhideRule;
   if (name == "signal_jail")             return Verb::SignalJail;
+  if (name == "exec_in_jail")            return Verb::ExecInJail;
   return Verb::Unknown;
 }
 
@@ -740,6 +742,61 @@ std::string validateSetJailCpuset(const SetJailCpusetReq &r) {
       os << "invalid character '" << c << "' in cpuset";
       return os.str();
     }
+  }
+  return "";
+}
+
+// --- exec_in_jail (1.1.40) ---
+
+std::string validateJailUserName(const std::string &user) {
+  if (user.empty()) return "";                 // = root
+  if (user.size() > 32) return "user name longer than 32 chars";
+  if (!(isAlnum(user[0]) && !std::isdigit((unsigned char)user[0])) && user[0] != '_')
+    return "user name must start with a letter or '_'";
+  for (char c : user) {
+    bool ok = isAlnum(c) || c == '.' || c == '_' || c == '-';
+    if (!ok) {
+      std::ostringstream os;
+      os << "invalid character '" << c << "' in user name";
+      return os.str();
+    }
+  }
+  return "";
+}
+
+std::string validateTermName(const std::string &term) {
+  if (term.size() > 64) return "term longer than 64 chars";
+  for (char c : term) {
+    bool ok = isAlnum(c) || c == '.' || c == '_' || c == '-' || c == '+';
+    if (!ok) {
+      std::ostringstream os;
+      os << "invalid character '" << c << "' in term";
+      return os.str();
+    }
+  }
+  return "";
+}
+
+std::string validateExecInJail(const ExecInJailReq &r) {
+  if (r.jid == 0 || r.jid > 65535) return "jid: out of range (1..65535)";
+  if (auto e = validateJailUserName(r.user); !e.empty()) return "user: " + e;
+  if (auto e = validateTermName(r.term); !e.empty()) return "term: " + e;
+  if (r.argv.empty()) return "argv is empty";
+  if (r.argv.size() > kExecInJailMaxArgs)
+    return "argv: more than " + std::to_string(kExecInJailMaxArgs) + " arguments";
+  // argv[0] is execve()d as-is after jail_attach — an absolute path
+  // inside the jail, no PATH search, no shell. ".." is fine here (the
+  // jail root is the boundary, not the string), but a NUL cannot be
+  // part of a C string and an empty argv[0] cannot be exec'd.
+  const std::string &a0 = r.argv[0];
+  if (a0.empty() || a0[0] != '/') return "argv0: must be an absolute path";
+  if (a0.size() > 1024) return "argv0: longer than 1024 chars";
+  size_t total = 0;
+  for (const auto &a : r.argv) {
+    if (a.find('\0') != std::string::npos) return "argv: embedded NUL";
+    total += a.size() + 1;
+    if (total > kExecInJailMaxArgvBytes)
+      return "argv: total size exceeds " + std::to_string(kExecInJailMaxArgvBytes) + " bytes";
   }
   return "";
 }

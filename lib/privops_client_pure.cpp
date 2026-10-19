@@ -362,4 +362,20 @@ PrivOpsNvPure::FieldMap buildSignalJail(unsigned jid,
   };
 }
 
+PrivOpsNvPure::FieldMap buildExecInJail(unsigned jid,
+                                         const std::string &user,
+                                         const std::vector<std::string> &argv,
+                                         const std::string &term) {
+  PrivOpsNvPure::FieldMap m = {
+    {"verb", "exec_in_jail"},
+    {"jid", std::to_string(jid)},
+    {"argc", std::to_string(argv.size())},
+  };
+  if (!user.empty()) m["user"] = user;
+  if (!term.empty()) m["term"] = term;
+  for (size_t i = 0; i < argv.size(); i++)
+    m["argv" + std::to_string(i)] = argv[i];
+  return m;
+}
+
 } // namespace PrivOpsClient
