@@ -57,6 +57,17 @@ gains an optional `limits` field.
   PASS), the root-owned tree and `/var/log/crate` are reported as such,
   and an unreadable `crated.conf` is the expected state.
 
+- **Release workflow fills the Release page.** `.github/workflows/
+  release.yml` gained a `notes` job that runs first on a `v*` tag:
+  it refuses a tag whose version is not the one compiled into
+  `cli/args.cpp` or has no `## [X.Y.Z]` section here, then creates (or
+  rewrites) the GitHub Release with that section as the body, a
+  download table for the FreeBSD tarballs, the `sha256 -c` recipe and
+  a compare link to the previous tag. The build jobs attach assets
+  only, so they no longer race each other to create the Release, and
+  `./crate --version` is checked against the tag before packaging.
+  `workflow_dispatch` with a tag re-runs both stages.
+
 Tests: validators for the three verbs (incl. cloner-name rule), nv/JSON
 parsers + `limits`, builder round-trips (`limits` omitted when false),
 host-global authz list extended, `perUserCrateAuditLog`. 1468/1468 unit

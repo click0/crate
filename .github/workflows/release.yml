@@ -1,11 +1,24 @@
 name: Release binaries
 
-# Triggered when a version tag is pushed. Builds `crate`, `crated`, and
-# `crate-snmpd` on a FreeBSD VM for each supported release, packages
-# them into a tarball, and attaches it to the GitHub Release created
-# from the tag.
+# Triggered when a version tag is pushed. Two stages:
 #
-# Expected tag format: v0.3.1, v1.0.0, etc.
+#   1. `notes`  — creates (or updates) the GitHub Release for the tag
+#      and fills its page from CHANGELOG.md: the `## [X.Y.Z]` section
+#      becomes the release body, plus a download table and a compare
+#      link to the previous tag. Fails fast when the tag does not match
+#      the version compiled into cli/args.cpp or CHANGELOG.md has no
+#      section for it — a mis-tag never reaches the Releases page.
+#   2. `build`  — builds `crate`, `crated` and `crate-snmpd` on a FreeBSD
+#      VM for each supported release, packages a tarball + sha256 and
+#      attaches both to that Release (assets only; the body written by
+#      stage 1 is left alone).
+#
+# Expected tag format: v0.3.1, v1.0.0, v1.1.41. A tag with a suffix
+# (v1.2.0-rc1) is published as a pre-release.
+#
+# workflow_dispatch with `tag` re-runs both stages for an existing tag
+# (e.g. after a VM flake) — the Release body is rewritten from the
+# CHANGELOG at that tag and assets are re-uploaded.
 
 on:
   push:
@@ -19,10 +32,124 @@ on:
         type: string
 
 permissions:
-  contents: write  # needed by softprops/action-gh-release to upload assets
+  contents: write  # softprops/action-gh-release: create/update the release, upload assets
 
 jobs:
+  notes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: Release page from CHANGELOG
+    outputs:
+      tag: ${{ steps.ver.outputs.tag }}
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0   # all history + tags: needed for the previous-tag compare link
+
+      - name: Extract version from tag
+        id: ver
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          case "$TAG" in
+            v[0-9]*) ;;
+            *) echo "::error::tag '$TAG' is not a version tag (expected vX.Y.Z)"; exit 1 ;;
+          esac
+          VERSION="${TAG#v}"
+          PRERELEASE=false
+          case "$VERSION" in *-*) PRERELEASE=true ;; esac
+          echo "tag=$TAG"               >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION"       >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG version=$VERSION prerelease=$PRERELEASE"
+
+      - name: Check the tag matches the compiled version
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          # cli/args.cpp prints "crate X.Y.Z" for --version; the tag must
+          # name the same release, otherwise the Releases page would lie
+          # about what the attached binaries report.
+          if ! grep -q "\"crate ${VERSION}\"" cli/args.cpp; then
+            echo "::error::cli/args.cpp does not contain \"crate ${VERSION}\" — tag ${{ steps.ver.outputs.tag }} does not match the compiled version:"
+            grep -n '"crate [0-9]' cli/args.cpp || true
+            exit 1
+          fi
+          echo "cli/args.cpp reports crate ${VERSION}"
+
+      - name: Build release notes from CHANGELOG.md
+        id: notes
+        run: |
+          set -eu
+          TAG="${{ steps.ver.outputs.tag }}"
+          VERSION="${{ steps.ver.outputs.version }}"
+          REPO="${{ github.repository }}"
+
+          # The "## [X.Y.Z] — date" section, up to the next "## [" heading.
+          awk -v ver="$VERSION" '
+            $0 ~ ("^## \\[" ver "\\]") { f = 1; next }
+            f && /^## \[/              { exit }
+            f                          { print }
+          ' CHANGELOG.md > section.md
+          # Trim leading/trailing blank lines and "---" separators.
+          sed -i -e :a -e '/^\(---\)\?[[:space:]]*$/{$d;N;ba' -e '}' section.md
+          sed -i -e '/./,$!d' section.md
+          if ! grep -q '[^[:space:]]' section.md; then
+            echo "::error::CHANGELOG.md has no '## [${VERSION}]' section — add it before tagging"
+            grep -n '^## \[' CHANGELOG.md | head -n 5
+            exit 1
+          fi
+
+          # Previous version tag for the compare link (first release: none).
+          PREV="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${TAG}^" 2>/dev/null || true)"
+
+          {
+            echo "## Changes"
+            echo
+            cat section.md
+            echo
+            echo "## Downloads"
+            echo
+            echo "Built by this workflow on a clean FreeBSD VM from tag \`${TAG}\` (binaries stripped; \`crate --version\` prints \`crate ${VERSION}\`)."
+            echo
+            echo "| FreeBSD | Tarball | Checksum |"
+            echo "|---|---|---|"
+            for v in 14.2 15.0; do
+              base="crate-${VERSION}-freebsd-${v}-amd64.tar.xz"
+              echo "| ${v} amd64 | \`${base}\` | \`${base}.sha256\` |"
+            done
+            echo
+            echo 'Verify and unpack:'
+            echo
+            echo '```sh'
+            echo "sha256 -c \$(cut -d' ' -f4 crate-${VERSION}-freebsd-14.2-amd64.tar.xz.sha256) crate-${VERSION}-freebsd-14.2-amd64.tar.xz"
+            echo "tar -xJf crate-${VERSION}-freebsd-14.2-amd64.tar.xz"
+            echo '```'
+            echo
+            echo "The tarball holds \`bin/crate\`, \`sbin/crated\`, \`sbin/crate-snmpd\`, \`man/man5/crate.5.gz\`, \`crated.conf.sample\`, \`crated.rc\`, the SNMP MIB and this changelog. Assets appear a few minutes after the Release page (separate build jobs)."
+            echo
+            if [ -n "$PREV" ]; then
+              echo "**Full changelog:** https://github.com/${REPO}/compare/${PREV}...${TAG}"
+            else
+              echo "**Full changelog:** https://github.com/${REPO}/commits/${TAG}"
+            fi
+          } > release-notes.md
+
+          echo "previous=$PREV" >> "$GITHUB_OUTPUT"
+          echo "----- release-notes.md -----"
+          cat release-notes.md
+
+      - name: Create or update the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: crate ${{ steps.ver.outputs.version }}
+          body_path: release-notes.md
+          prerelease: ${{ steps.ver.outputs.prerelease == 'true' }}
+          draft: false
+
   build:
+    needs: notes
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -39,8 +166,8 @@ jobs:
       - name: Extract version from tag
         id: ver
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          VERSION="${TAG#v}"
+          TAG="${{ needs.notes.outputs.tag }}"
+          VERSION="${{ needs.notes.outputs.version }}"
           echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building tag=$TAG version=$VERSION for FreeBSD ${{ matrix.freebsd-version }}"
@@ -81,6 +208,8 @@ jobs:
             strip crate crated crate-snmpd
             ls -la crate crated crate-snmpd
             file crate crated crate-snmpd || true
+            # The binary must report the version the tag names.
+            ./crate --version | grep -Fx "crate ${{ steps.ver.outputs.version }}"
             echo "::endgroup::"
 
             echo "::group::Package tarball"
@@ -112,7 +241,9 @@ jobs:
           retention-days: 90
 
       - name: Attach to GitHub Release
-        if: github.event_name == 'push'
+        # Assets only — no `body`, so the page written by the `notes`
+        # job is kept. Also runs for workflow_dispatch re-runs now that
+        # the Release is guaranteed to exist.
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
