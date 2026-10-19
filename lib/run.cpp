@@ -147,6 +147,43 @@ static void addPfRulePrivopsOrLocal(const std::string &anchor,
   PfctlOps::addRules(anchor, rulesText);
 }
 
+// 1.1.38: before loading our rdr rules, look at what the other crate
+// anchors already forward. pf evaluates rdr first-match across the
+// nested anchors, so a second jail claiming an already-forwarded host
+// port silently never receives traffic — and until 1.1.38 every
+// bridge/auto run left its anchor behind, so the "other" anchor is
+// often a dead one. Listing needs /dev/pf; when that fails (rootless
+// crate(1)) the check is skipped, not failed.
+static void warnOnRdrHostPortCollision(const Spec::NetOptDetails *optionNet,
+                                       const std::string &ownAnchor) {
+  if (optionNet->inboundPortsTcp.empty() && optionNet->inboundPortsUdp.empty())
+    return;
+  std::string out;
+  try {
+    out = Util::execCommandGetOutput({CRATE_PATH_PFCTL, "-a", "crate/*", "-sn"},
+                                     "list crate rdr rules");
+  } catch (...) {
+    return;
+  }
+  auto taken = AutoFwPure::parseRdrHostPorts(out);
+  auto check = [&](const char *proto, const auto &ports) {
+    for (const auto &[host, jail] : ports) {
+      (void)jail;
+      if (AutoFwPure::rdrHostPortTaken(taken, proto, host.first, host.second)) {
+        std::cerr << rang::fg::yellow
+                  << "auto-fw[pf]: host " << proto << " port "
+                  << host.first << (host.first != host.second ? ":" + std::to_string(host.second) : "")
+                  << " is already forwarded by another crate anchor — this jail's rdr "
+                     "(anchor " << ownAnchor << ") will not receive that traffic. If the other "
+                     "jail is gone, `crate clean` flushes its stale anchor."
+                  << rang::style::reset << std::endl;
+      }
+    }
+  };
+  check("tcp", optionNet->inboundPortsTcp);
+  check("udp", optionNet->inboundPortsUdp);
+}
+
 static void flushPfAnchorPrivopsOrLocal(const std::string &anchor) {
   std::string sock = PrivOpsClient::detectSocketPath();
   if (!sock.empty()) {
@@ -1078,6 +1115,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   RunAtEnd destroyFirewallRulesAtEnd;
   RunAtEnd destroyPfAnchor;
   RunAtEnd releaseFwSlot;
+  // 1.1.38: put net.inet6.ip6.forwarding back the way we found it.
+  // The v4 sysctl is restored by setupFirewallRules' teardown; the v6
+  // one was enabled here and never reset.
+  RunAtEnd restoreIp6ForwardingAtEnd;
   auto optionNet = spec.optionNet();
   std::string jailSideIface; // jail-side network interface name (for all modes)
 
@@ -1109,9 +1150,13 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     auto bridgeInfo = RunNet::createBridgeEpair(jid, jidStr, optionNet->bridgeIface, execInJail);
     jailSideIface = bridgeInfo.ifaceB;
 
-    // Static MAC address (deterministic based on jail name + interface)
+    // Static MAC address (deterministic based on jail name + interface).
+    // 1.1.38: hashed from nameComponent, not jailXname — jailXname is
+    // "<name>_pid<pid>" and changed on every run, so the MAC changed on
+    // every run and DHCP reservations never matched. crate.5 promised a
+    // stable MAC all along.
     if (optionNet->staticMac) {
-      auto [macA, macB] = RunNet::generateStaticMac(jailXname, bridgeInfo.ifaceA);
+      auto [macA, macB] = RunNet::generateStaticMac(nameComponent, bridgeInfo.ifaceA);
       RunNet::setMacAddress(bridgeInfo.ifaceA, macA);
       execInJail({CRATE_PATH_IFCONFIG, bridgeInfo.ifaceB, "ether", macB},
         "set static MAC on jail-side epair");
@@ -1138,6 +1183,11 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       }
     });
 
+    // 1.1.38: the jail's IPv4 address once known (static or pool) —
+    // feeds the per-container firewall policy below. Empty for DHCP
+    // (address not known at this point) and for ip: none.
+    std::string bridgeJailIp;
+
     // Configure IP addressing
     if (optionNet->ipMode == Spec::NetOptDetails::IpMode::Dhcp) {
       // DHCP provides its own resolv.conf — don't copy host's
@@ -1148,6 +1198,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       // Copy resolv.conf for static IP (no DHCP to provide it)
       Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
       LOG("bridge mode: static IP " << optionNet->staticIp << " on " << bridgeInfo.ifaceB)
+      bridgeJailIp = optionNet->staticIp.substr(0, optionNet->staticIp.find('/'));
     } else if (optionNet->ipMode != Spec::NetOptDetails::IpMode::None) {
       // Auto / unspecified.
       // 0.7.17: if Settings.networkPool is configured, allocate from
@@ -1170,6 +1221,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
         LOG("bridge mode: auto-allocated IP " << ip
             << " (gw " << gw << ") on " << bridgeInfo.ifaceB)
+        bridgeJailIp = ipBare;
         // Release the lease on teardown so the IP comes back into
         // the pool. Best-effort: a failure here logs but doesn't
         // mask the real teardown error.
@@ -1290,16 +1342,41 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
                 "skipping SNAT/rdr auto-rules per operator request")
           } else if (pfStatus == 0) {
             auto anchor = std::string("crate/") + jailXname;
+            // 1.1.38: warn when another crate anchor already forwards
+            // one of our host ports — pf takes the first match, so the
+            // second rdr silently never fires. Best-effort: listing
+            // anchors needs /dev/pf, so under rootless this is skipped.
+            warnOnRdrHostPortCollision(optionNet, anchor);
             try {
               addPfRulePrivopsOrLocal(anchor, rule);
               LOG("auto-fw[pf]: rules added to anchor " << anchor
                   << " (" << ipBare << " -> " << externalIface << ")")
+              // 1.1.38: flush the anchor at teardown. The comment above
+              // always claimed destroyPfAnchor did this, but it was only
+              // ever armed in the NAT branch — every bridge/auto run left
+              // its crate/<name>_pid<pid> anchor (SNAT + rdr) behind for
+              // good, and once the lease handed the IP to the next jail
+              // the stale rdr forwarded the host port into it.
+              if (!destroyPfAnchor) {
+                destroyPfAnchor.reset([anchor, &args]() {
+                  LOG("flushing pf anchor '" << anchor << "'")
+                  flushPfAnchorPrivopsOrLocal(anchor);
+                });
+              }
             } catch (const std::exception &ex) {
               std::cerr << rang::fg::yellow
                         << "auto-fw[pf]: SNAT/rdr load failed: " << ex.what()
                         << " — outbound traffic may not work; configure pf manually"
                         << rang::style::reset << std::endl;
             }
+          } else if (ipfwStatus == 0 && !AutoFwPure::validateIpfwIdsForJid(jid).empty()) {
+            // 1.1.38: the ipfw id layout covers jids 1..9999; beyond
+            // that the NAT instance id would run into the rule range.
+            std::cerr << rang::fg::yellow
+                      << "auto-fw[ipfw]: " << AutoFwPure::validateIpfwIdsForJid(jid)
+                      << " — skipping SNAT/redir auto-rules for this jail; "
+                         "reboot (resets jids) or configure ipfw manually"
+                      << rang::style::reset << std::endl;
           } else if (ipfwStatus == 0) {
             // 0.8.2 + 0.8.3: ipfw alternative. SNAT (always) plus
             // redir_port clauses for each inbound: declaration.
@@ -1436,6 +1513,44 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       LOG("bridge mode: static IPv6 " << optionNet->staticIp6 << " on " << bridgeInfo.ifaceB)
     }
 
+    // 1.1.38: per-container firewall policy in bridge/auto mode. It
+    // was composed only in the NAT branch, so a bridge jail with
+    // `firewall: {default: block}` ran wide open while crate.5 promised
+    // the policy for every mode. Needs the jail's IPv4 (static or
+    // pool); with DHCP the address is not known here, so say so.
+    if (spec.firewallPolicy) {
+      if (bridgeJailIp.empty()) {
+        std::cerr << rang::fg::yellow
+                  << "firewall: policy NOT applied — bridge mode with DHCP/none "
+                     "addressing gives no jail IP to anchor the rules on; use a "
+                     "static IP or network_pool"
+                  << rang::style::reset << std::endl;
+      } else {
+        std::string v6 = (optionNet->ip6Mode == Spec::NetOptDetails::Ip6Mode::Static)
+                           ? optionNet->staticIp6.substr(0, optionNet->staticIp6.find('/'))
+                           : std::string();
+        auto composed = PfctlOps::composeContainerPolicy(spec, jailXname, bridgeJailIp, v6);
+        if (!composed.anchor.empty()) {
+          try {
+            addPfRulePrivopsOrLocal(composed.anchor, composed.rulesText);
+            LOG("pf anchor '" << composed.anchor << "' policy loaded (bridge mode)")
+            if (!destroyPfAnchor) {
+              auto anchorName = composed.anchor;
+              destroyPfAnchor.reset([anchorName, &args]() {
+                LOG("flushing pf anchor '" << anchorName << "'")
+                flushPfAnchorPrivopsOrLocal(anchorName);
+              });
+            }
+          } catch (const std::exception &ex) {
+            std::cerr << rang::fg::yellow
+                      << "firewall: policy load failed: " << ex.what()
+                      << " — the jail runs WITHOUT its firewall policy"
+                      << rang::style::reset << std::endl;
+          }
+        }
+      }
+    }
+
   } else if (optionNet && optionNet->mode == Spec::NetOptDetails::Mode::Passthrough) {
     //
     // Passthrough mode: physical interface directly into jail
@@ -1447,7 +1562,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
     // Static MAC
     if (optionNet->staticMac) {
-      auto [macA, macB] = RunNet::generateStaticMac(jailXname, ptInfo.iface);
+      auto [macA, macB] = RunNet::generateStaticMac(nameComponent, ptInfo.iface);
       // For passthrough, there's only one interface — set MAC inside jail
       execInJail({CRATE_PATH_IFCONFIG, ptInfo.iface, "ether", macB},
         "set static MAC on passthrough interface");
@@ -1499,7 +1614,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
     // Static MAC
     if (optionNet->staticMac) {
-      auto [macA, macB] = RunNet::generateStaticMac(jailXname, ngInfo.ngIface);
+      auto [macA, macB] = RunNet::generateStaticMac(nameComponent, ngInfo.ngIface);
       execInJail({CRATE_PATH_IFCONFIG, ngInfo.ngIface, "ether", macB},
         "set static MAC on netgraph eiface");
       LOG("netgraph mode: static MAC " << macB)
@@ -1601,6 +1716,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       if (origIp6Forwarding == 0) {
         LOG("enabling net.inet6.ip6.forwarding")
         Util::setSysctlInt("net.inet6.ip6.forwarding", 1);
+        restoreIp6ForwardingAtEnd.reset([&args]() {
+          LOG("restoring net.inet6.ip6.forwarding=0")
+          try { Util::setSysctlInt("net.inet6.ip6.forwarding", 0); } catch (...) {}
+        });
       }
       LOG("IPv6 networking configured: " << epipeIp6A << " <-> " << epipeIp6B)
     }
@@ -1676,7 +1795,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         auto bi = RunNet::createBridgeEpair(jid, jidStr, ex.bridgeIface, execInJail);
         extraIface = bi.ifaceB;
         if (ex.staticMac) {
-          auto [macA, macB] = RunNet::generateStaticMac(jailXname, bi.ifaceA);
+          auto [macA, macB] = RunNet::generateStaticMac(nameComponent, bi.ifaceA);
           RunNet::setMacAddress(bi.ifaceA, macA);
           execInJail({CRATE_PATH_IFCONFIG, bi.ifaceB, "ether", macB}, "set static MAC on extra bridge epair");
         }
@@ -1689,7 +1808,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         auto pi = RunNet::passthroughInterface(jid, jidStr, ex.passthroughIface, execInJail);
         extraIface = pi.iface;
         if (ex.staticMac) {
-          auto [macA, macB] = RunNet::generateStaticMac(jailXname, pi.iface);
+          auto [macA, macB] = RunNet::generateStaticMac(nameComponent, pi.iface);
           execInJail({CRATE_PATH_IFCONFIG, pi.iface, "ether", macB}, "set static MAC on extra passthrough");
         }
         if (ex.vlanId >= 0)
@@ -1702,7 +1821,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         auto ni = RunNet::createNetgraphInterface(jid, jidStr, ex.netgraphIface, jailXname, execInJail);
         extraIface = ni.ngIface;
         if (ex.staticMac) {
-          auto [macA, macB] = RunNet::generateStaticMac(jailXname, ni.ngIface);
+          auto [macA, macB] = RunNet::generateStaticMac(nameComponent, ni.ngIface);
           execInJail({CRATE_PATH_IFCONFIG, ni.ngIface, "ether", macB}, "set static MAC on extra netgraph");
         }
         if (ex.vlanId >= 0)
@@ -2007,6 +2126,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     destroyFirewallRulesAtEnd.doNow();
     destroyEpipeAtEnd.doNow();
     releaseFwSlot.doNow();
+    restoreIp6ForwardingAtEnd.doNow();
   }
   removeMacRules.doNow();
   if (spec.cowOptions)

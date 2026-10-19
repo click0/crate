@@ -124,6 +124,14 @@ unsigned ruleIdForJail(int jid, bool egress) {
   return kRuleBase + (unsigned)(jid * 2) + (egress ? 1u : 0u);
 }
 
+std::string validateJidForIds(int jid) {
+  if (jid < 1) return "jid must be >= 1";
+  if (jid > 4999)
+    return "jid " + std::to_string(jid) + " exceeds the throttle id space (max jid 4999): "
+           "rule ids would reach the auto-fw NAT range at 30000";
+  return "";
+}
+
 std::string validateSpec(const ThrottleSpec &s) {
   if (!s.ingressRate.empty())
     if (auto e = validateRate(s.ingressRate); !e.empty())

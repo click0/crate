@@ -65,6 +65,11 @@ constexpr unsigned kRuleBase = 20000;
 
 unsigned ruleIdForJail(int jid, bool egress);
 
+// 1.1.38: "" when both pipe and rule ids for `jid` fit their 10000-
+// wide ranges (jid 1..4999); otherwise the reason. jid 5000+ would
+// put the rule pair at 30000+, inside the auto-fw NAT instance range.
+std::string validateJidForIds(int jid);
+
 // --- Spec ---
 
 struct ThrottleSpec {

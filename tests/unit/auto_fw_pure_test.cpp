@@ -254,7 +254,80 @@ ATF_TEST_CASE_BODY(ipfw_ids_in_reserved_ranges) {
   ATF_REQUIRE_EQ(natIdForJail(0),  30000u);
   ATF_REQUIRE_EQ(ruleIdForJail(0), 40000u);
   ATF_REQUIRE_EQ(natIdForJail(42),  30042u);
-  ATF_REQUIRE_EQ(ruleIdForJail(42), 40042u);
+  // 1.1.38 layout: main 40000+2*jid, loopback 40001+2*jid.
+  ATF_REQUIRE_EQ(ruleIdForJail(42), 40084u);
+  ATF_REQUIRE_EQ(AutoFwPure::loopbackRuleIdForJail(42), 40085u);
+  ATF_REQUIRE_EQ(ruleIdForJail(9999), 59998u);
+  ATF_REQUIRE_EQ(AutoFwPure::loopbackRuleIdForJail(9999), 59999u);
+}
+
+// 1.1.38: the old 40000+jid / 41000+jid layout collided at jid 1000
+// (main of 1000 == loopback of 0); every id must now be unique across
+// the whole supported jid range, for both roles.
+ATF_TEST_CASE_WITHOUT_HEAD(ipfw_ids_unique_across_jids);
+ATF_TEST_CASE_BODY(ipfw_ids_unique_across_jids) {
+  std::set<unsigned> seen;
+  for (int jid = 1; jid <= 9999; jid++) {
+    ATF_REQUIRE(seen.insert(ruleIdForJail(jid)).second);
+    ATF_REQUIRE(seen.insert(AutoFwPure::loopbackRuleIdForJail(jid)).second);
+    ATF_REQUIRE(natIdForJail(jid) < 40000u);
+    ATF_REQUIRE(AutoFwPure::loopbackRuleIdForJail(jid) < 60000u);
+  }
+  // the specific collision that motivated the change
+  ATF_REQUIRE(ruleIdForJail(1000) != AutoFwPure::loopbackRuleIdForJail(0));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(validate_ipfw_ids_for_jid);
+ATF_TEST_CASE_BODY(validate_ipfw_ids_for_jid) {
+  ATF_REQUIRE_EQ(AutoFwPure::validateIpfwIdsForJid(1), std::string());
+  ATF_REQUIRE_EQ(AutoFwPure::validateIpfwIdsForJid(1000), std::string());
+  ATF_REQUIRE_EQ(AutoFwPure::validateIpfwIdsForJid(9999), std::string());
+  ATF_REQUIRE(!AutoFwPure::validateIpfwIdsForJid(10000).empty());
+  ATF_REQUIRE(!AutoFwPure::validateIpfwIdsForJid(0).empty());
+  ATF_REQUIRE(!AutoFwPure::validateIpfwIdsForJid(-1).empty());
+}
+
+// --- 1.1.38: pf introspection parsers ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(parse_crate_anchor_names);
+ATF_TEST_CASE_BODY(parse_crate_anchor_names) {
+  std::string out =
+    "  crate/web_pid123\n"
+    "crate/db_pid77\r\n"
+    "  crate\n"                    // root anchor: not a jail
+    "  crate/x/inner\n"            // deeper nesting: not ours
+    "  other/thing\n"
+    "\n";
+  auto names = AutoFwPure::parseCrateAnchorJailNames(out);
+  ATF_REQUIRE_EQ(names.size(), (size_t)2);
+  ATF_REQUIRE_EQ(names[0], std::string("web_pid123"));
+  ATF_REQUIRE_EQ(names[1], std::string("db_pid77"));
+  ATF_REQUIRE(AutoFwPure::parseCrateAnchorJailNames("").empty());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(parse_rdr_host_ports);
+ATF_TEST_CASE_BODY(parse_rdr_host_ports) {
+  std::string out =
+    "nat on em0 inet from 10.66.0.5 to any -> (em0)\n"
+    "rdr on em0 inet proto tcp from any to (em0) port = 80 -> 10.66.0.5 port 80\n"
+    "rdr on em0 inet proto udp from any to (em0) port 5000:5010 -> 10.66.0.5 port 5000:5010\n"
+    "rdr pass on em0 inet proto tcp from any to (em0) port = 443 -> 10.66.0.6 port 8443\r\n"
+    "garbage line without arrow\n"
+    "rdr on em0 inet proto tcp from any to (em0) port = 99999 -> 10.66.0.7 port 1\n";  // out of range
+  auto ports = AutoFwPure::parseRdrHostPorts(out);
+  ATF_REQUIRE_EQ(ports.size(), (size_t)3);
+  ATF_REQUIRE_EQ(ports[0].proto, std::string("tcp"));
+  ATF_REQUIRE_EQ(ports[0].lo, 80u);  ATF_REQUIRE_EQ(ports[0].hi, 80u);
+  ATF_REQUIRE_EQ(ports[1].proto, std::string("udp"));
+  ATF_REQUIRE_EQ(ports[1].lo, 5000u); ATF_REQUIRE_EQ(ports[1].hi, 5010u);
+  ATF_REQUIRE_EQ(ports[2].lo, 443u);
+  // overlap checks
+  ATF_REQUIRE(AutoFwPure::rdrHostPortTaken(ports, "tcp", 80, 80));
+  ATF_REQUIRE(AutoFwPure::rdrHostPortTaken(ports, "udp", 5005, 5005));
+  ATF_REQUIRE(AutoFwPure::rdrHostPortTaken(ports, "udp", 4990, 5000));   // touches range start
+  ATF_REQUIRE(!AutoFwPure::rdrHostPortTaken(ports, "udp", 80, 80));      // other proto
+  ATF_REQUIRE(!AutoFwPure::rdrHostPortTaken(ports, "tcp", 81, 442));
+  ATF_REQUIRE(!AutoFwPure::rdrHostPortTaken({}, "tcp", 80, 80));
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(ipfw_validate_id_range);
@@ -401,40 +474,39 @@ ATF_TEST_CASE_WITHOUT_HEAD(orphan_rules_picks_non_running);
 ATF_TEST_CASE_BODY(orphan_rules_picks_non_running) {
   // jids 5 and 7 are running; rules at 40005 + 40007 valid,
   // 40009 + 40012 are orphans.
+  // 1.1.38 layout: rule 40000+2*jid. jids 5,7 running -> 40010, 40014
+  // valid; 40018 (jid 9) and 40024 (jid 12) are orphans.
   std::set<int> running{5, 7};
   std::string out =
-    "40005 nat 30005 ip from 10.66.0.5 to any out via em0\n"
-    "40007 nat 30007 ip from 10.66.0.7 to any out via em0\n"
-    "40009 nat 30009 ip from 10.66.0.9 to any out via em0\n"
-    "40012 nat 30012 ip from 10.66.0.12 to any out via em0\n";
+    "40010 nat 30005 ip from 10.66.0.5 to any out via em0\n"
+    "40014 nat 30007 ip from 10.66.0.7 to any out via em0\n"
+    "40018 nat 30009 ip from 10.66.0.9 to any out via em0\n"
+    "40024 nat 30012 ip from 10.66.0.12 to any out via em0\n";
   auto orphans = AutoFwPure::pickOrphanIpfwRulesByJid(out, running);
   ATF_REQUIRE_EQ(orphans.size(), (size_t)2);
-  ATF_REQUIRE_EQ(orphans[0], 40009u);
-  ATF_REQUIRE_EQ(orphans[1], 40012u);
+  ATF_REQUIRE_EQ(orphans[0], 40018u);
+  ATF_REQUIRE_EQ(orphans[1], 40024u);
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(orphan_rules_skips_out_of_range);
 ATF_TEST_CASE_BODY(orphan_rules_skips_out_of_range) {
-  // 0.8.39: scan now narrowed from "anything in 40000-49999" to
-  // the specific sub-ranges crate actually populates:
-  //   40000-40999  main NAT-activation rule (40000+jid)
-  //   41000-41999  host-loopback hairpin rule (41000+jid)
-  // Other rules in the broader 40000-49999 are operator-managed
-  // strays — left alone, NOT flagged as orphans.
+  // 1.1.38: the crate rule range is [40000, 60000): main 40000+2*jid,
+  // loopback 40001+2*jid. Anything outside is operator-managed and
+  // left alone.
   std::set<int> running;   // none running
   std::string out =
     "100 allow ip from any to any\n"
     "39999 allow ip from any to any\n"   // below crate range
-    "40000 allow ip from any to any\n"   // jid 0 = orphan (crate main)
-    "41005 allow ip from any to any\n"   // jid 5 = orphan (crate loopback)
-    "42000 allow ip from any to any\n"   // unknown crate sub-range; skip
-    "49999 allow ip from any to any\n"   // unknown crate sub-range; skip
-    "50000 allow ip from any to any\n"   // above crate range
-    "60000 allow ip from any to any\n";
+    "40000 allow ip from any to any\n"   // jid 0 main = orphan
+    "40011 allow ip from any to any\n"   // jid 5 loopback = orphan
+    "59999 allow ip from any to any\n"   // jid 9999 loopback = orphan
+    "60000 allow ip from any to any\n"   // above crate range
+    "65000 allow ip from any to any\n";
   auto orphans = AutoFwPure::pickOrphanIpfwRulesByJid(out, running);
-  ATF_REQUIRE_EQ(orphans.size(), (size_t)2);
+  ATF_REQUIRE_EQ(orphans.size(), (size_t)3);
   ATF_REQUIRE_EQ(orphans[0], 40000u);
-  ATF_REQUIRE_EQ(orphans[1], 41005u);
+  ATF_REQUIRE_EQ(orphans[1], 40011u);
+  ATF_REQUIRE_EQ(orphans[2], 59999u);
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(orphan_rules_handles_crlf_blanks);
@@ -491,7 +563,7 @@ ATF_TEST_CASE_BODY(loopback_rule_id_distinct_from_main) {
     auto loop = AutoFwPure::loopbackRuleIdForJail(jid);
     ATF_REQUIRE(main != loop);
     ATF_REQUIRE(loop > main);
-    ATF_REQUIRE(loop - main == 1000);
+    ATF_REQUIRE(loop - main == 1);   // 1.1.38: adjacent pair
   }
 }
 
@@ -513,18 +585,18 @@ ATF_TEST_CASE_BODY(loopback_argv_shape) {
 
 ATF_TEST_CASE_WITHOUT_HEAD(orphan_scan_recognises_loopback_range);
 ATF_TEST_CASE_BODY(orphan_scan_recognises_loopback_range) {
-  // jid 5 running -> 40005 (main) + 41005 (loopback) both valid.
-  // jid 9 not running -> 40009 + 41009 both orphans.
+  // jid 5 running -> 40010 (main) + 40011 (loopback) both valid.
+  // jid 9 not running -> 40018 + 40019 both orphans.
   std::set<int> running{5};
   std::string out =
-    "40005 nat 30005 ip from 10.66.0.5 to any out via em0\n"
-    "41005 nat 30005 tcp from me to me\n"
-    "40009 nat 30009 ip from 10.66.0.9 to any out via em0\n"
-    "41009 nat 30009 tcp from me to me\n";
+    "40010 nat 30005 ip from 10.66.0.5 to any out via em0\n"
+    "40011 nat 30005 tcp from me to me\n"
+    "40018 nat 30009 ip from 10.66.0.9 to any out via em0\n"
+    "40019 nat 30009 tcp from me to me\n";
   auto orphans = AutoFwPure::pickOrphanIpfwRulesByJid(out, running);
   ATF_REQUIRE_EQ(orphans.size(), (size_t)2);
-  ATF_REQUIRE_EQ(orphans[0], 40009u);
-  ATF_REQUIRE_EQ(orphans[1], 41009u);
+  ATF_REQUIRE_EQ(orphans[0], 40018u);
+  ATF_REQUIRE_EQ(orphans[1], 40019u);
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(orphan_nat_ids_skips_non_nat_lines);
@@ -566,6 +638,10 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, rdr_anchor_line_has_trailing_newline);
   ATF_ADD_TEST_CASE(tcs, ipfw_ids_deterministic_per_jid);
   ATF_ADD_TEST_CASE(tcs, ipfw_ids_in_reserved_ranges);
+  ATF_ADD_TEST_CASE(tcs, ipfw_ids_unique_across_jids);
+  ATF_ADD_TEST_CASE(tcs, validate_ipfw_ids_for_jid);
+  ATF_ADD_TEST_CASE(tcs, parse_crate_anchor_names);
+  ATF_ADD_TEST_CASE(tcs, parse_rdr_host_ports);
   ATF_ADD_TEST_CASE(tcs, ipfw_validate_id_range);
   ATF_ADD_TEST_CASE(tcs, ipfw_nat_config_argv_shape);
   ATF_ADD_TEST_CASE(tcs, ipfw_nat_rule_argv_shape);
