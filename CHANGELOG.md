@@ -6,6 +6,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.44] — 2026-10-19
+
+**TODO §3 tail: MAC portacl stops clobbering the host list, `crate
+stats` shows network I/O on FreeBSD, and the options/net fields are
+validated where they are written.** ⚠️ Specs with a malformed
+`options/net/ip`, `gateway`, `ip6` or `extra[].interface` are now
+rejected at parse time instead of failing (or misbehaving) at jail start.
+
+- **MAC portacl rules merged, not overwritten.** `crate run` wrote
+  `security.mac.portacl.rules` wholesale with the current container's
+  `mac_portacl/allow_ports`, deleting every other container's and the
+  operator's rules, and never restored anything. `MacOps::
+  addPortaclRules` now merges into the live list (`MacPure::
+  mergePortaclRules`, no duplicates) and a `RunAtEnd` takes exactly this
+  container's rules out again on stop. `crate.5` says so.
+- **`crate stats` network I/O.** `netstat -I <epair> -b --libxo json`
+  was requested and then never parsed — only the tabular fallback set
+  the counters, so on FreeBSD (where libxo works) `net_in`/`net_out`
+  were always "-". `LifecyclePure::parseNetstatIfaceBytesJson` reads
+  `received-bytes`/`sent-bytes` from the interface object.
+- **IPv6 NAT-mode epair addresses.** `fd00:cra7:e::<100+2n+idx>/126`
+  put pairs n and n+1 into one /126 on two host interfaces and printed
+  an invalid hextet past 0xffff. `RunPure::epairIp6` gives each pair
+  its own /126 (`0x100 + 4n`, host +1, jail +2) and spreads the offset
+  over two hextets when needed.
+- **options/net validated at parse time.** `ip` (bare IPv4 or
+  `/0..32`), `gateway` (bare IPv4), `ip6` (bare IPv6 or `/0..128`) and
+  `extra[].interface` (interface-name charset) — `SpecPure::
+  validateStaticIp4/6`, `validateGateway4`, `PrivOpsPure::
+  validateIfaceName`. `run_net.cpp` keeps belt-and-braces guards: an
+  IPv4 prefix > 32 used to be undefined behaviour in `1u << (32 - n)`,
+  an IPv6 prefix token went to `ifconfig` verbatim.
+- **Defensive parsing.** The epair unit from the privops `create_epair`
+  reply is parsed by `RunPure::epairUnit` (a clear error instead of
+  `substr()` throwing `out_of_range`); `net.cpp` checks the dotted-quad
+  vector sizes before indexing; `MacOps::addUgidfwRule` passes one argv
+  word per token (ugidfw parses per argv; the single-token form was
+  rejected — dead path, now correct).
+- **healthcheck `interval: 0`** is rejected (the monitor loop spun
+  without sleeping).
+
+Tests: `mac_pure_test` (new), lifecycle netstat JSON, `run_pure_test`
+epair unit + IPv6 pairs, `spec_validate_test` address validators.
+Version 1.1.44.
+
 ## [1.1.43] — 2026-10-19
 
 **TODO §2: the interface-named privops verbs get an owner gate, the

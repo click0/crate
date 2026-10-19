@@ -142,6 +142,14 @@ bool statsCrate(const Args &args) {
       auto nsOutput = Util::execCommandGetOutput(
         {CRATE_PATH_NETSTAT, "-I", hostIface, "-b", "-n", "--libxo", "json"},
         "query netstat interface stats");
+      // 1.1.44: the libxo JSON used to be requested and then never
+      // parsed — only the tabular fallback below set the counters, so
+      // on FreeBSD (where --libxo works) net I/O was always "-".
+      uint64_t jIn = 0, jOut = 0;
+      if (LifecyclePure::parseNetstatIfaceBytesJson(nsOutput, hostIface, jIn, jOut)) {
+        netIn = humanBytes(jIn);
+        netOut = humanBytes(jOut);
+      }
       // Fallback: parse tabular netstat output if JSON not available
       if (nsOutput.empty() || nsOutput[0] != '{') {
         // Try without --libxo

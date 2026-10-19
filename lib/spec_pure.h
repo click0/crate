@@ -25,4 +25,14 @@ std::string substituteVars(const std::string &input,
 //   network: auto      # vnet jail, auto-create bridge, auto-allocate IP
 std::string validateTopLevelNetwork(const std::string &v);
 
+// 1.1.44: options/net address fields were stored unvalidated and only
+// blew up (or did something undefined) in run_net.cpp at jail start.
+// "" on success, otherwise a one-line reason.
+//   static IPv4: "a.b.c.d" or "a.b.c.d/0..32"
+//   static IPv6: "<v6>" or "<v6>/0..128"
+//   gateway:     bare IPv4 address
+std::string validateStaticIp4(const std::string &v);
+std::string validateStaticIp6(const std::string &v);
+std::string validateGateway4(const std::string &v);
+
 }

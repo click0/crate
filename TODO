@@ -210,33 +210,27 @@ The bhyve/VM track is in TODO2.
   (network_pool_user_bits, default 8; v6: network_pool6_user_bits 16),
   addresses keep the pool prefix/gateway.
 
-* (MED) MAC portacl rules are host-wide, clobbered per run, never
-  removed: run.cpp:724-731 writes security.mac.portacl.rules via
-  MacOps::setPortaclRules (mac_ops.cpp:129-145), replacing any other
-  container's or the operator's rules; no RunAtEnd restores them.
+  [FIXED in 1.1.44] MAC portacl rules merged into the host-wide list on
+  start and removed on stop (MacPure::merge/removePortaclRules,
+  MacOps::add/removePortaclRules, RunAtEnd); `crate stats` parses the
+  netstat --libxo JSON (LifecyclePure::parseNetstatIfaceBytesJson);
+  IPv6 epair pairs one /126 each with two-hextet overflow
+  (RunPure::epairIp6); options/net ip / gateway / ip6 / extra[]
+  interface validated at spec parse (SpecPure::validateStaticIp4/6,
+  validateGateway4; PrivOpsPure::validateIfaceName); run_net.cpp
+  prefix-length guards (v4 ≤ 32, v6 numeric ≤ 128); epair unit parsed
+  defensively (RunPure::epairUnit) instead of substr(); net.cpp
+  netmask vector size check; ugidfw add argv split per word;
+  healthcheck interval 0 rejected.
 
-* (MED) `crate stats` network I/O is always "-" on FreeBSD:
-  lib/lifecycle.cpp:142-146 runs `netstat --libxo json`, and when the
-  output IS JSON nothing parses it — only the non-JSON fallback branch
-  (:147-171) extracts bytes. Drop the libxo attempt or parse it.
-
-* (LOW) run.cpp:1587-1598 IPv6 epair pairs fd00:cra7:e::<100+2n>/126:
-  n and n+1 share one /126 on different host interfaces; std::hex of
-  > 0xffff yields an invalid literal. (plausible)
-* (LOW) spec.cpp:649,652,696 store `ip` / `gateway` / `interface`
-  unvalidated (no inet_pton in spec/validate); run_net.cpp:678
-  `1u << (32 - prefixLen)` is UB for prefix > 32; run_net.cpp:725
-  passes an arbitrary prefixlen token to ifconfig.
-* (LOW) run_net.cpp:277,627 substr(5, size-6) throws
-  std::out_of_range on an unexpected epair name from privops;
-  ipfw_ops.cpp:85 treats EINVAL as "native API available";
-  net.cpp:51 indexes netmaskVec[i] without a size check.
-* (LOW) mac_ops.cpp:88 addUgidfwRule passes the whole rule as one
-  argv token (ugidfw parses per-argv) — would fail; no callers (dead).
-  mac_ops.cpp:103-115 deletes by list-line index.
-* (LOW) healthcheck: run.cpp:256 `retries: 0` flags UNHEALTHY on
-  every failure; `interval: 0` busy-loops at :209 (spec.cpp:1246
-  accepts 0).
+* (LOW) ipfw_ops.cpp:85 treats EINVAL from IP_FW_XGET as "native API
+  available" — EINVAL can also mean an unsupported opcode on an older
+  kernel; needs a FreeBSD check before changing.
+* (LOW) mac_ops.cpp removeUgidfwRules deletes by list-line index (a
+  concurrent add shifts indexes); the native path should match rules
+  by content.
+* (LOW) healthcheck `retries: 0` means the first failure is UNHEALTHY —
+  that is the documented meaning of zero retries; left as is.
 
 === 4. crate stack ===
 
