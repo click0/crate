@@ -64,16 +64,22 @@ The bhyve/VM track is in TODO2.
   (plain file, one link, owner root or the operator) and chowned to
   the operator so the "operator-readable copy" is readable.
 
+  [FIXED in 1.1.42] GUI compositor + wayvnc start through
+  JailExec::spawnInJail (root: fork+jail_attach; rootless: exec_in_jail
+  with a process descriptor; signalSpawned/waitSpawned hide the
+  difference) — the last raw `jexec` in crate(1). Daemon-started
+  containers (control-socket / HTTP `start`+`restart`) are now recorded
+  in the jid→owner registry: crated watches for the jail whose kernel
+  name ends in `_pid<crate run pid>` (RunPure::jailXnameHasPid) and
+  records the control-socket peer uid (0 = admin for the bearer-token
+  HTTP path). The operator who started a container can exec/console
+  into it; other tenants lose the bootstrap Allow on it.
+
 * (HIGH) exec_in_jail follow-ups:
     - no on-hardware run yet: the whole rootless `crate run` path
       (ensure_user_root → create_jail → mounts → exec_in_jail …) has
       never been exercised end to end; docs/on-hardware-validation.md
       §4.1 is the first thing to run.
-    - lib/run_gui.cpp:1073-1149 compositor and seatd helpers still
-      exec `jexec` directly (root-only) — GUI crates stay root-only
-      until JailExec grows a non-blocking "spawn in jail, keep the
-      handle" variant (exec_in_jail already returns a pd; the client
-      side just needs to hand it back instead of waiting).
     - the daemon's child inherits crated's rlimits and cpuset; RCTL
       rules on the jail still apply (they key on the jail), but
       per-process limits should come from the jail, not the daemon.
@@ -106,13 +112,6 @@ The bhyve/VM track is in TODO2.
       with auto_create_bridge and a renamed bridge (e.g. "lan0") gets a
       clear 400 under rootless — needs create + `name` rename in the
       daemon if that is wanted.
-    - daemon/routes.cpp spawnCrateRun and control_socket.cpp exec
-      `crate run` as uid 0 — the jid registry records those creates as
-      unowned, so a tenant cannot exec_in_jail into a container the
-      daemon started for them over HTTP/control-socket `start`. Carry
-      the requesting operator's uid into that spawn (and into
-      create_jail's registry entry) or document that daemon-started
-      containers are admin-owned.
 
 === 2. crated privops / HTTP — security ===
 

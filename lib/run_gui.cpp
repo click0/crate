@@ -6,6 +6,7 @@
 #include "compositor_pure.h"
 #include "spec.h"
 #include "gui_registry.h"
+#include "jail_query.h"      // 1.1.42: JailExec::spawnInJail for compositor/wayvnc
 #include "pathnames.h"
 #include "util.h"
 #include "x11_ops.h"
@@ -1069,8 +1070,11 @@ RunAtEnd setupCompositor(const Spec &spec, const std::string &jailPath,
   setJailEnv("XDG_RUNTIME_DIR", runtimeDir);
   setJailEnv("WAYLAND_DISPLAY", CompositorPure::defaultWaylandSocket());
 
-  // jexec <jid> /usr/bin/env K=V ... <compositor argv...>
-  std::vector<std::string> argv = { CRATE_PATH_JEXEC, jidStr, CRATE_PATH_ENV };
+  // /usr/bin/env K=V ... <compositor argv...>, started inside the jail.
+  // 1.1.42: through JailExec::spawnInJail (root: fork + jail_attach;
+  // rootless: exec_in_jail with a process descriptor) instead of a raw
+  // `jexec` fork — the last GUI piece that was root-only by construction.
+  std::vector<std::string> argv = { CRATE_PATH_ENV };
   for (const auto &kv : env)
     argv.push_back(kv.first + "=" + kv.second);
   for (const auto &a : compArgv)
@@ -1082,25 +1086,18 @@ RunAtEnd setupCompositor(const Spec &spec, const std::string &jailPath,
               << ", renderer=" << (gpuAccel ? "gles2" : "pixman") << ")"
               << rang::style::reset << std::endl;
 
-  pid_t compPid = ::fork();
-  if (compPid == 0) {
-    int devnull = ::open("/dev/null", O_RDWR);
-    if (devnull >= 0) {
-      ::dup2(devnull, STDIN_FILENO);   // leave stdout/stderr for compositor logs
-      ::close(devnull);
-    }
-    std::vector<const char*> cargv;
-    for (auto &a : argv) cargv.push_back(a.c_str());
-    cargv.push_back(nullptr);
-    ::execv(CRATE_PATH_JEXEC, const_cast<char* const*>(cargv.data()));
-    ::_exit(127);
+  const int jidNum = std::stoi(jidStr);
+  JailExec::Spawned comp;
+  try {
+    comp = JailExec::spawnInJail(jidNum, argv, "root", "start compositor in jail");
+  } catch (const std::exception &e) {
+    ERR("failed to start compositor: " << e.what())
   }
-  if (compPid == -1)
-    ERR("failed to fork compositor (jexec): " << strerror(errno))
+  const pid_t compPid = comp.pid;
 
   // Headless backend: expose the offscreen output over VNC via wayvnc
   // inside the jail (wayvnc speaks VNC directly — no x11vnc/X server).
-  pid_t wayvncPid = -1;
+  JailExec::Spawned wayvnc;
   unsigned vncPort = 0;
   if (backend == Backend::Headless && spec.guiOptions->vnc) {
     vncPort = (spec.guiOptions->vncPort != 0) ? spec.guiOptions->vncPort : 5900;
@@ -1129,7 +1126,7 @@ RunAtEnd setupCompositor(const Spec &spec, const std::string &jailPath,
     }
 
     std::vector<std::string> wv = {
-      CRATE_PATH_JEXEC, jidStr, CRATE_PATH_ENV,
+      CRATE_PATH_ENV,
       std::string("XDG_RUNTIME_DIR=") + runtimeDir,
       std::string("WAYLAND_DISPLAY=") + CompositorPure::defaultWaylandSocket(),
       CRATE_PATH_WAYVNC,
@@ -1141,20 +1138,14 @@ RunAtEnd setupCompositor(const Spec &spec, const std::string &jailPath,
       std::cerr << rang::fg::gray << "gui.compositor: starting wayvnc on port "
                 << vncPort << " in jail " << jidStr << rang::style::reset << std::endl;
 
-    wayvncPid = ::fork();
-    if (wayvncPid == 0) {
-      std::vector<const char*> wargv;
-      for (auto &a : wv) wargv.push_back(a.c_str());
-      wargv.push_back(nullptr);
-      ::execv(CRATE_PATH_JEXEC, const_cast<char* const*>(wargv.data()));
-      ::_exit(127);
-    }
-    if (wayvncPid == -1) {
+    try {
+      wayvnc = JailExec::spawnInJail(jidNum, wv, "root", "start wayvnc in jail");
+    } catch (const std::exception &e) {
       // Don't advertise/register a VNC port nothing is serving. The
       // compositor itself is already running, so this is a warning,
       // not a fatal error.
       std::cerr << rang::fg::yellow
-                << "gui.compositor: failed to fork wayvnc (" << strerror(errno)
+                << "gui.compositor: failed to start wayvnc (" << e.what()
                 << ") — compositor is running but VNC is unavailable"
                 << rang::style::reset << std::endl;
       vncPort = 0;
@@ -1180,21 +1171,21 @@ RunAtEnd setupCompositor(const Spec &spec, const std::string &jailPath,
               << rang::style::reset << std::endl;
 
   auto ownerPid = ::getpid();
-  return RunAtEnd([compPid, wayvncPid, ownerPid, logProgress]() {
+  return RunAtEnd([comp, wayvnc, ownerPid, logProgress]() mutable {
     try {
       auto reg = Ctx::GuiRegistry::lock();
       reg->unregisterEntry(ownerPid);
       reg->unlock();
     } catch (...) {}
-    if (wayvncPid > 0) {
-      ::kill(wayvncPid, SIGTERM);
-      int status; ::waitpid(wayvncPid, &status, 0);
+    if (wayvnc.valid()) {
+      JailExec::signalSpawned(wayvnc, SIGTERM);
+      JailExec::waitSpawned(wayvnc);
     }
     if (logProgress)
-      std::cerr << rang::fg::gray << "killing compositor pid=" << compPid
+      std::cerr << rang::fg::gray << "killing compositor pid=" << comp.pid
                 << rang::style::reset << std::endl;
-    ::kill(compPid, SIGTERM);
-    int status; ::waitpid(compPid, &status, 0);
+    JailExec::signalSpawned(comp, SIGTERM);
+    JailExec::waitSpawned(comp);
   });
 }
 

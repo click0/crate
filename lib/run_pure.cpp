@@ -58,4 +58,14 @@ std::string validateCrateFileJailName(const std::string &crateFile) {
   return "";
 }
 
+std::string jailXnamePidSuffix(long pid) {
+  return "_pid" + std::to_string(pid);
+}
+
+bool jailXnameHasPid(const std::string &jailName, long pid) {
+  const std::string suffix = jailXnamePidSuffix(pid);
+  if (jailName.size() <= suffix.size()) return false;   // needs a non-empty <name>
+  return jailName.compare(jailName.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
 }

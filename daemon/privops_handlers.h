@@ -282,4 +282,18 @@ void setPerUserAuthzConfig(const PerUserEnvPure::Config &cfg);
 // verbs).
 void setJidOwnerRegistry(::JidOwnerRegistry *registry);
 
+// 1.1.42: a `crate run` the daemon spawned as root (control-socket /
+// HTTP `start` and `restart`) creates its jail with jail_setv directly,
+// so it never passed through create_jail and the jid→owner registry did
+// not know it: every tenant's jid-scoped verb got the bootstrap Allow
+// on it, and the tenant who asked for the start could not exec into it.
+// This watches (detached thread, up to a few minutes) for the jail
+// whose kernel name ends in "_pid<crateRunPid>" (RunPure::
+// jailXnameHasPid) and records it as owned by `ownerUid` — the
+// control-socket peer, or 0 (admin-owned) for the bearer-token HTTP
+// path. Stops early when the child exits first (and reaps it). No-op
+// without a registry.
+void registerSpawnedJailOwner(long crateRunPid, uint32_t ownerUid,
+                              const std::string &container);
+
 } // namespace Crated

@@ -15,9 +15,12 @@
 #include "../lib/audit_per_user_pure.h"
 #include "../lib/privops_authz_pure.h"
 #include "../lib/jid_owner_registry.h"
+#include "../lib/run_pure.h"           // 1.1.42: jailXnameHasPid
 #include "../lib/runtime_paths_pure.h"
 
 #include <iostream>
+#include <thread>                      // 1.1.42: registerSpawnedJailOwner
+#include <sys/wait.h>
 
 #include <ctime>
 
@@ -1641,6 +1644,44 @@ void setPerUserAuthzConfig(const PerUserEnvPure::Config &cfg) {
 
 void setJidOwnerRegistry(::JidOwnerRegistry *registry) {
   g_jidOwnerRegistry = registry;
+}
+
+void registerSpawnedJailOwner(long crateRunPid, uint32_t ownerUid,
+                              const std::string &container) {
+  if (!g_jidOwnerRegistry || crateRunPid <= 0) return;
+  // A cold `crate run` extracts the image before jail_setv; give it
+  // ten minutes. One probe per second is negligible against a daemon
+  // that already reconciles the registry on every lookup.
+  constexpr int kMaxProbes = 600;
+  std::thread([crateRunPid, ownerUid, container]() {
+    for (int i = 0; i < kMaxProbes; i++) {
+      try {
+        for (const auto &j : JailQuery::getAllJails(/*crateOnly=*/true)) {
+          if (j.dying || !RunPure::jailXnameHasPid(j.name, crateRunPid)) continue;
+          g_jidOwnerRegistry->recordCreate(static_cast<unsigned>(j.jid), ownerUid,
+                                           j.name, j.path);
+          std::cerr << "crated: container '" << container << "' started as pid "
+                    << crateRunPid << " -> jail " << j.name << " (jid " << j.jid
+                    << ") recorded for uid " << ownerUid << std::endl;
+          return;
+        }
+      } catch (const std::exception &e) {
+        std::cerr << "crated: jail owner watch for '" << container << "': "
+                  << e.what() << std::endl;
+      }
+      // The supervisor died before its jail appeared (bad spec, extract
+      // failure, ...): reap it and stop watching.
+      int st = 0;
+      if (::waitpid((pid_t)crateRunPid, &st, WNOHANG) == (pid_t)crateRunPid) {
+        std::cerr << "crated: container '" << container << "' (pid " << crateRunPid
+                  << ") exited before its jail appeared; nothing recorded" << std::endl;
+        return;
+      }
+      ::sleep(1);
+    }
+    std::cerr << "crated: container '" << container << "' (pid " << crateRunPid
+              << "): no jail after " << kMaxProbes << " s; owner not recorded" << std::endl;
+  }).detach();
 }
 
 } // namespace Crated

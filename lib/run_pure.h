@@ -40,4 +40,12 @@ std::string validateCronUser(const std::string &user);
 // otherwise a message telling the operator to rename the file.
 std::string validateCrateFileJailName(const std::string &crateFile);
 
+// 1.1.42: the kernel jail name `crate run` composes is
+// "<name>_pid<pid of crate run>". The suffix is the one thing the
+// daemon knows about a `crate run` it spawned (it has the child pid),
+// so it finds the jail by it to record the owner. Both sides use these
+// so the format cannot drift.
+std::string jailXnamePidSuffix(long pid);
+bool jailXnameHasPid(const std::string &jailName, long pid);
+
 }

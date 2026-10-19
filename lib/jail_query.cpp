@@ -5,6 +5,7 @@
 
 #include "jail_query.h"
 #include "privops_client.h"   // 1.1.40: exec_in_jail under rootless
+#include "privops_wire_pure.h" // 1.1.42: pid from the exec_in_jail reply
 #include "runtime_paths_pure.h"
 #include "locs.h"
 #include "pathnames.h"
@@ -550,6 +551,83 @@ void execInJailChecked(int jid, const std::vector<std::string> &argv,
   int status = execInJail(jid, argv, user, what);
   if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
     ERR(what << ": command failed with status " << WEXITSTATUS(status))
+}
+
+// --- 1.1.42: background processes ---
+
+Spawned spawnInJail(int jid, const std::vector<std::string> &argv,
+                    const std::string &user, const std::string &what) {
+  if (argv.empty()) ERR(what << ": empty argv")
+  int devnull = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
+  if (devnull < 0) ERR(what << ": open /dev/null: " << strerror(errno))
+  struct CloseDevNull { int fd; ~CloseDevNull() { ::close(fd); } } dn{devnull};
+
+  std::string sock;
+  if (privopsExecWanted(sock)) {
+    const char *term = ::getenv("TERM");
+    auto fields = PrivOpsClient::buildExecInJail((unsigned)jid, user, argv,
+                                                 term ? std::string(term) : std::string());
+    Spawned s;
+    auto resp = PrivOpsClient::sendExecRequest(sock, fields, devnull, STDOUT_FILENO,
+                                               STDERR_FILENO, s.pd);
+    if (!resp.transportError.empty())
+      ERR(what << ": privops exec_in_jail: " << resp.transportError)
+    if (resp.status != 200 || s.pd < 0) {
+      if (s.pd >= 0) ::close(s.pd);
+      ERR(what << ": privops exec_in_jail failed (status " << resp.status << "): " << resp.body)
+    }
+    long pid = -1;
+    if (PrivOpsWirePure::extractLongField(resp.body, "pid", pid) != PrivOpsWirePure::kPresent || pid <= 0) {
+      ::close(s.pd);
+      ERR(what << ": privops exec_in_jail reply carries no pid: " << resp.body)
+    }
+    s.pid = (pid_t)pid;
+    return s;
+  }
+  if (::geteuid() != 0)
+    ERR(what << ": executing inside a jail needs root or the crated privops socket "
+             "(rootless: is crated running with privops_socket configured?)")
+
+  pid_t pid = ::fork();
+  if (pid == -1) ERR(what << ": fork failed: " << strerror(errno))
+  if (pid == 0) {
+    ::dup2(devnull, STDIN_FILENO);     // stdout/stderr stay with the caller (logs)
+    if (::jail_attach(jid) == -1) ::_exit(126);
+    if (!user.empty() && user != "root") {
+      struct passwd *pw = ::getpwnam(user.c_str());
+      if (!pw) ::_exit(124);
+      if (::initgroups(user.c_str(), pw->pw_gid) != 0 || ::setgid(pw->pw_gid) != 0 ||
+          ::setuid(pw->pw_uid) != 0)
+        ::_exit(124);
+    }
+    auto cargv = buildArgv(argv);
+    ::execv(argv[0].c_str(), cargv.data());
+    ::_exit(127);
+  }
+  Spawned s;
+  s.pid = pid;
+  return s;
+}
+
+void signalSpawned(const Spawned &s, int sig) {
+  if (!s.valid()) return;
+  if (s.pd >= 0) (void)::pdkill(s.pd, sig);
+  else           (void)::kill(s.pid, sig);
+}
+
+int waitSpawned(Spawned &s) {
+  if (!s.valid()) return 0;
+  int status = 0;
+  if (s.pd >= 0) {
+    try { status = waitProcDesc(s.pd, "wait for spawned jail process"); }
+    catch (...) { status = -1; }
+    ::close(s.pd);
+    s.pd = -1;
+  } else {
+    while (::waitpid(s.pid, &status, 0) == -1 && errno == EINTR) {}
+  }
+  s.pid = -1;
+  return status;
 }
 
 }

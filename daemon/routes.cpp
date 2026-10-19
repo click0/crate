@@ -340,6 +340,10 @@ static void handleContainerStart(const httplib::Request &req, httplib::Response 
     jsonError(res, 500, "failed to start container: fork failed");
     return;
   }
+  // 1.1.42: bearer-token path has no operator uid — the jail is
+  // recorded as admin-owned (uid 0), so tenants' jid-scoped privops
+  // verbs no longer get the bootstrap Allow on it.
+  Crated::registerSpawnedJailOwner(pid, 0, name);
   // The child is the jail's foreground supervisor and outlives this
   // request: "started" now means "spawned". Poll
   // GET /api/v1/containers/:name for the running state.
@@ -657,6 +661,7 @@ static void handleContainerRestart(const httplib::Request &req, httplib::Respons
     jsonError(res, 500, "failed to start container after stop: fork failed");
     return;
   }
+  Crated::registerSpawnedJailOwner(pid, 0, name);   // 1.1.42: admin-owned
   jsonOk(res, "{\"restarted\":true,\"async\":true,\"pid\":" + std::to_string(pid)
               + ",\"name\":\"" + name + "\"}");
 }

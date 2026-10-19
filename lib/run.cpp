@@ -973,7 +973,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     }
   }
 
-  auto jailXname = STR(nameComponent << "_pid" << ::getpid());
+  // 1.1.42: suffix via RunPure so crated (which knows our pid after
+  // spawning us) can find this jail and record its owner.
+  auto jailXname = STR(nameComponent << RunPure::jailXnamePidSuffix(::getpid()));
 
   // environment in jail
   std::string jailEnv;

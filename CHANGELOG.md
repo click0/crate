@@ -6,6 +6,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.42] — 2026-10-19
+
+**TODO §1 tail: GUI compositor/wayvnc through `exec_in_jail`, and
+daemon-started containers get an owner.**
+
+- **`JailExec::spawnInJail`** — a background process inside a jail
+  (stdin `/dev/null`, stdout/stderr inherited) with a uniform handle:
+  root path `fork` + `jail_attach` + `execv` (pid), rootless path
+  `exec_in_jail` (process descriptor + the pid the daemon reports).
+  `signalSpawned` (`kill` / `pdkill`) and `waitSpawned` (`waitpid` /
+  kqueue) hide the difference. `run_gui.cpp` starts the Wayland
+  compositor and `wayvnc` through it instead of a raw `jexec` fork —
+  the last place in crate(1) that exec'd `jexec` directly, so GUI
+  crates are no longer root-only by construction. (Other GUI pieces
+  under rootless — seatd socket nullfs mount, devfs rules — already go
+  through privops; none of it has been exercised unprivileged yet.)
+- **Daemon-started containers are owned.** A `crate run` that `crated`
+  spawns as root for control-socket / HTTP `start` and `restart`
+  creates its jail with `jail_setv` directly, so it never passed
+  `create_jail` and the jid→owner registry did not know it: every
+  tenant's jid-scoped verb got the bootstrap Allow on it, and the
+  operator who asked for the start could not `exec_in_jail`/`console`
+  into it. `Crated::registerSpawnedJailOwner` now watches (detached
+  thread, ≤10 min, reaps the child if it dies first) for the jail
+  whose kernel name ends in `_pid<crate run pid>` — the suffix `crate
+  run` has always used, now composed via `RunPure::jailXnamePidSuffix`
+  on both sides — and records it: control-socket peer uid, or 0
+  (admin-owned) for the bearer-token HTTP path. Effect: the starting
+  operator owns the container; admin-started containers are known as
+  uid 0, so tenants' `set_rctl`/`signal_jail`/… on them now answer 403
+  instead of the unknown-jid Allow.
+
+Tests: `run_pure_test` `jail_xname_pid_suffix`. Full unit suite
+1469/1469. Version 1.1.42.
+
 ## [1.1.41] — 2026-10-19
 
 **Rootless follow-ups to `exec_in_jail`: Ctrl-C reaches the container
@@ -56,7 +91,6 @@ gains an optional `limits` field.
   checked (absent → WARN with the reason, not writable → FAIL, else
   PASS), the root-owned tree and `/var/log/crate` are reported as such,
   and an unreadable `crated.conf` is the expected state.
-
 - **Release workflow fills the Release page.** `.github/workflows/
   release.yml` gained a `notes` job that runs first on a `v*` tag:
   it refuses a tag whose version is not the one compiled into

@@ -136,6 +136,22 @@ ATF_TEST_CASE_BODY(crate_file_jail_name_rejected)
 	ATF_REQUIRE(e.find("rename the file") != std::string::npos);
 }
 
+// --- 1.1.42: jail xname pid suffix (shared by crate run and crated) ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(jail_xname_pid_suffix);
+ATF_TEST_CASE_BODY(jail_xname_pid_suffix) {
+	ATF_REQUIRE_EQ(RunPure::jailXnamePidSuffix(4242), std::string("_pid4242"));
+	ATF_REQUIRE(RunPure::jailXnameHasPid("web_pid4242", 4242));
+	ATF_REQUIRE(RunPure::jailXnameHasPid("my.app-2_pid1", 1));
+	// a different pid, a pid that is only a prefix of the real one, no
+	// <name> part at all, or the suffix in the middle -> no match
+	ATF_REQUIRE(!RunPure::jailXnameHasPid("web_pid4242", 424));
+	ATF_REQUIRE(!RunPure::jailXnameHasPid("web_pid42420", 4242));
+	ATF_REQUIRE(!RunPure::jailXnameHasPid("_pid4242", 4242));
+	ATF_REQUIRE(!RunPure::jailXnameHasPid("web_pid4242_x", 4242));
+	ATF_REQUIRE(!RunPure::jailXnameHasPid("", 4242));
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
 	ATF_ADD_TEST_CASE(tcs, argsToString_empty);
@@ -150,4 +166,5 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, cron_user_injection_rejected);
 	ATF_ADD_TEST_CASE(tcs, crate_file_jail_name_valid);
 	ATF_ADD_TEST_CASE(tcs, crate_file_jail_name_rejected);
+	ATF_ADD_TEST_CASE(tcs, jail_xname_pid_suffix);
 }
