@@ -6,6 +6,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.41] — 2026-10-19
+
+**Rootless follow-ups to `exec_in_jail`: Ctrl-C reaches the container
+again, the last three host-side primitives get verbs, audit and doctor
+stop lying to an unprivileged operator.** ⚠️ Three new privops verbs
+(`set_iface_mac`, `delete_ipfw_nat`, `create_bridge`); `query_jail_rctl`
+gains an optional `limits` field.
+
+- **Signal forwarding under rootless.** With `exec_in_jail` the
+  container's command is `crated`'s child, not `crate run`'s, so a
+  terminal SIGINT never reached it: `crate run`'s handler recorded the
+  signal and the kqueue wait went on forever (the in-process path got
+  the signal through the shared process group). The SIGINT/SIGTERM
+  handler now `pdkill`s every process descriptor `JailExec` is waiting
+  on (`forwardSignalToPrivopsChildren`, atomics + one syscall, async-
+  signal-safe), and after an interrupt the wait is bounded — 5 s grace,
+  then a "killed by SIGTERM" status — so `rc.shutdown` + `destroy_jail`
+  run even when the command ignores the signal, mirroring the EINTR
+  behaviour of `waitpid()` on the root path.
+- **`set_iface_mac`** (host-side `static-mac`, was skipped with a
+  warning), **`delete_ipfw_nat`** (auto-fw NAT instance teardown, was
+  left in place with a warning) and **`create_bridge`**
+  (`auto_create_bridge`, was a hard error). All host-global like
+  `set_iface_up`; `create_bridge` accepts cloner names only
+  (`bridge<N>`), since the daemon runs `ifconfig <name> create` and a
+  tenant must not pick arbitrary host interface names.
+- **`query_jail_rctl` `limits`.** `crate info` printed "(RCTL not
+  available)" for an unprivileged operator because `rctl -h` is root-
+  only and the verb only knew `-u`. `limits: true` returns the rule
+  list; omitted/false keeps the 1.1.1 wire shape.
+- **crate(1) audit trail no longer silently lost.** `lib/audit.cpp`
+  appended to `Config.logs/audit.log` (default `/var/log/crate`) and
+  ignored the `open()` failure every unprivileged call produced. It now
+  falls back to `/var/run/crate/<uid>/crate-audit.log` (the operator's
+  own runtime root, created and chowned by `crated` since 1.1.39) and
+  warns once on stderr if even that fails.
+- **Security — crated's per-user `audit.log` open.** Since 1.1.39 the
+  daemon opens `/var/run/crate/<uid>/audit.log` as root inside a
+  directory the operator owns. The open is now `O_NOFOLLOW|O_CLOEXEC`
+  and the descriptor is `fstat`-checked (regular file, one link, owner
+  root or the operator) before anything is written; a planted symlink,
+  hard link, fifo or directory is refused with a log line. The file is
+  then `fchown`ed to the operator, which is what "operator-readable
+  copy" always meant.
+- **`crate doctor` without root.** The filesystem check FAILed on
+  `W_OK /var/run/crate` and the config check on `R_OK crated.conf` for
+  every normal operator. Unprivileged: the per-user runtime root is
+  checked (absent → WARN with the reason, not writable → FAIL, else
+  PASS), the root-owned tree and `/var/log/crate` are reported as such,
+  and an unreadable `crated.conf` is the expected state.
+
+Tests: validators for the three verbs (incl. cloner-name rule), nv/JSON
+parsers + `limits`, builder round-trips (`limits` omitted when false),
+host-global authz list extended, `perUserCrateAuditLog`. 1468/1468 unit
+cases. TODO §1 updated (blocker fixed; remaining: on-hardware run, GUI
+compositor via raw `jexec`, NAT mode, daemon-started containers
+unowned). Version 1.1.41.
+
 ## [1.1.40] — 2026-10-19
 
 **The rootless exec blocker is closed: new privops verb `exec_in_jail`

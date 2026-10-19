@@ -63,8 +63,16 @@ bool appendPerUserAuditLine(uint32_t uid, const std::string &jsonLine) {
     return false;
   }
 
+  // 1.1.41: the directory is OWNED BY THE OPERATOR since 1.1.39, so a
+  // root open() by path in it must not follow anything the operator
+  // planted: O_NOFOLLOW, then fstat — a plain file with one link,
+  // owned by root (pre-1.1.41 file) or by the operator. Anything else
+  // (symlink, hard link to some other file, fifo, directory) is
+  // refused. A file we accept is handed to the operator (fchown) so
+  // the "operator-readable copy" is actually readable, and crate(1)'s
+  // own fallback (crate-audit.log, lib/audit.cpp) sits next to it.
   int fd = ::open(path.c_str(),
-                  O_WRONLY | O_APPEND | O_CREAT,
+                  O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC,
                   0600);
   if (fd < 0) {
     std::fprintf(stderr,
@@ -72,6 +80,17 @@ bool appendPerUserAuditLine(uint32_t uid, const std::string &jsonLine) {
         path.c_str(), std::strerror(errno));
     return false;
   }
+  struct stat fst{};
+  if (::fstat(fd, &fst) != 0 || !S_ISREG(fst.st_mode) || fst.st_nlink != 1 ||
+      (fst.st_uid != 0 && fst.st_uid != (uid_t)uid)) {
+    std::fprintf(stderr,
+        "audit_per_user: %s is not a plain single-link file owned by root or uid %u"
+        " — refusing to append\n", path.c_str(), (unsigned)uid);
+    ::close(fd);
+    return false;
+  }
+  if (fst.st_uid != (uid_t)uid)
+    (void)::fchown(fd, (uid_t)uid, (gid_t)-1);
 
   // One line + '\n'. POSIX guarantees append-mode writes <= PIPE_BUF
   // are atomic; one privops audit line is under 200 bytes so we're

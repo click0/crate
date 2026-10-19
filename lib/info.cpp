@@ -4,6 +4,8 @@
 #include "args.h"
 #include "locs.h"
 #include "jail_query.h"
+#include "privops_client.h"       // 1.1.41: query_jail_rctl limits under rootless
+#include "privops_wire_pure.h"
 #include "runtime_paths_pure.h"
 #include "pathnames.h"
 #include "util.h"
@@ -126,9 +128,26 @@ bool infoCrate(const Args &args) {
   std::cout << std::endl;
   std::cout << rang::fg::green << "=== Resource Limits (RCTL) ===" << rang::style::reset << std::endl;
   try {
-    auto rctlOutput = Util::execCommandGetOutput(
-      {CRATE_PATH_RCTL, "-h", STR("jail:" << jidStr)},
-      "get RCTL limits");
+    // 1.1.41: unprivileged -> query_jail_rctl with limits=true (the
+    // `rctl -h` rule list) through crated; root keeps the direct call.
+    std::string rctlOutput;
+    std::string sock = ::geteuid() != 0 ? PrivOpsClient::detectSocketPath() : std::string();
+    if (!sock.empty()) {
+      auto resp = PrivOpsClient::sendRequest(sock,
+          PrivOpsClient::buildQueryJailRctl((unsigned)jid, /*limits=*/true));
+      if (!resp.transportError.empty())
+        throw std::runtime_error(resp.transportError);
+      if (resp.status >= 400)
+        throw std::runtime_error("privops status " + std::to_string(resp.status));
+      std::string out;
+      if (PrivOpsWirePure::extractStringField(resp.body, "output", out)
+          == PrivOpsWirePure::kPresent)
+        rctlOutput = out;
+    } else {
+      rctlOutput = Util::execCommandGetOutput(
+        {CRATE_PATH_RCTL, "-h", STR("jail:" << jidStr)},
+        "get RCTL limits");
+    }
     if (rctlOutput.empty() || rctlOutput == "\n") {
       std::cout << "  (none)" << std::endl;
     } else {

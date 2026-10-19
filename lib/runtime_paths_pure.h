@@ -93,6 +93,13 @@ std::string crateJailDirName(const std::string &path);
 // canonical record; this is the operator-readable copy.
 std::string perUserAuditLog(uint32_t uid);
 
+// 1.1.41: "/var/run/crate/<uid>/crate-audit.log" — where an
+// unprivileged crate(1) appends its own audit events (lib/audit.cpp)
+// when the configured `logs` directory (default /var/log/crate) is not
+// writable by the operator. Separate from audit.log, which holds the
+// daemon's privops records in a different JSON-lines schema.
+std::string perUserCrateAuditLog(uint32_t uid);
+
 // --- Validators ---
 
 // Ensure a uid is in the safe range we encode into paths

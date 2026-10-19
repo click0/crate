@@ -586,8 +586,10 @@ DispatchResult handleFlushPfAnchor(const PrivOpsPure::FlushPfAnchorReq &r) {
 DispatchResult handleQueryJailRctl(const PrivOpsPure::QueryJailRctlReq &r) {
   std::string output;
   try {
+    // 1.1.41: `limits` -> the rules that apply (`rctl -h`, what
+    // `crate info` prints); default -> usage counters (`rctl -u`).
     output = Util::execCommandGetOutput(
-      {CRATE_PATH_RCTL, "-u", "jail:" + std::to_string(r.jid)},
+      {CRATE_PATH_RCTL, r.limits ? "-h" : "-u", "jail:" + std::to_string(r.jid)},
       "privops query_jail_rctl");
   } catch (const std::exception &e) {
     return {500, PrivOpsWirePure::formatHandlerError("rctl_failed", e.what())};
@@ -676,6 +678,40 @@ DispatchResult handleSignalJail(const PrivOpsPure::SignalJailReq &r) {
     return {500, PrivOpsWirePure::formatHandlerError("jexec_failed", e.what())};
   }
   return {200, PrivOpsWirePure::formatSignalJailSuccess(r.jid, r.signal)};
+}
+
+// --- 1.1.41: host-side primitives ---
+
+DispatchResult handleSetIfaceMac(const PrivOpsPure::SetIfaceMacReq &r) {
+  try {
+    IfconfigOps::setMacAddr(r.ifname, r.mac);
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("ifconfig_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatSetIfaceMacSuccess(r.ifname, r.mac)};
+}
+
+DispatchResult handleDeleteIpfwNat(const PrivOpsPure::DeleteIpfwNatReq &r) {
+  // Direct exec rather than IpfwOps::deleteNat: that helper swallows
+  // the failure into a WARN, and the client wants a status.
+  try {
+    Util::execCommand(
+      {CRATE_PATH_IPFW, "nat", std::to_string(r.number), "delete"},
+      "privops delete_ipfw_nat");
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("ipfw_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatDeleteIpfwNatSuccess(r.number)};
+}
+
+DispatchResult handleCreateBridge(const PrivOpsPure::CreateBridgeReq &r) {
+  try {
+    IfconfigOps::createNamedInterface(r.name);
+    IfconfigOps::setUp(r.name);
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("ifconfig_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatCreateBridgeSuccess(r.name)};
 }
 
 // --- handleExecInJail (1.1.40) ---
@@ -1162,6 +1198,30 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
       return {400, PrivOpsWirePure::formatHandlerError(
                     "transport_unsupported",
                     "exec_in_jail is only available over the libnv privops socket")};
+    case Verb::SetIfaceMac: {
+      PrivOpsPure::SetIfaceMacReq r;
+      if (auto e = PrivOpsWirePure::parseSetIfaceMac(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateSetIfaceMac(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleSetIfaceMac(r);
+    }
+    case Verb::DeleteIpfwNat: {
+      PrivOpsPure::DeleteIpfwNatReq r;
+      if (auto e = PrivOpsWirePure::parseDeleteIpfwNat(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateDeleteIpfwNat(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleDeleteIpfwNat(r);
+    }
+    case Verb::CreateBridge: {
+      PrivOpsPure::CreateBridgeReq r;
+      if (auto e = PrivOpsWirePure::parseCreateBridge(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateCreateBridge(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleCreateBridge(r);
+    }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
   }
@@ -1531,6 +1591,30 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       if (procDescOut) *procDescOut = localPd;
       else if (localPd >= 0) ::close(localPd);
       return res;
+    }
+    case Verb::SetIfaceMac: {
+      PrivOpsPure::SetIfaceMacReq r;
+      if (auto e = PrivOpsNvPure::parseSetIfaceMac(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateSetIfaceMac(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleSetIfaceMac(r);
+    }
+    case Verb::DeleteIpfwNat: {
+      PrivOpsPure::DeleteIpfwNatReq r;
+      if (auto e = PrivOpsNvPure::parseDeleteIpfwNat(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateDeleteIpfwNat(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleDeleteIpfwNat(r);
+    }
+    case Verb::CreateBridge: {
+      PrivOpsPure::CreateBridgeReq r;
+      if (auto e = PrivOpsNvPure::parseCreateBridge(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateCreateBridge(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleCreateBridge(r);
     }
     case Verb::Unknown:
       return {404,

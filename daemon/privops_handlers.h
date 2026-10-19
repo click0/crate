@@ -249,6 +249,14 @@ PrivOpsWirePure::DispatchResult handleExecInJail(const PrivOpsPure::ExecInJailRe
                                                  const ExecIo &io,
                                                  int &procDescOut);
 
+// 1.1.41: host-side primitives. Wrap IfconfigOps::setMacAddr,
+// IpfwOps::deleteNat (`ipfw nat N delete`, run directly so a failure
+// is a 500 instead of a swallowed warning) and
+// IfconfigOps::createNamedInterface + setUp.
+PrivOpsWirePure::DispatchResult handleSetIfaceMac(const PrivOpsPure::SetIfaceMacReq &r);
+PrivOpsWirePure::DispatchResult handleDeleteIpfwNat(const PrivOpsPure::DeleteIpfwNatReq &r);
+PrivOpsWirePure::DispatchResult handleCreateBridge(const PrivOpsPure::CreateBridgeReq &r);
+
 // 0.9.29: register the daemon's `rctl_umbrella:` config. Called
 // once at daemon startup. The umbrella rules apply after a
 // successful create_jail privops invocation when the operator's

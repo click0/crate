@@ -45,18 +45,35 @@ The bhyve/VM track is in TODO2.
   info`, healthchecks and the per-jail network setup all go through
   it unchanged. libnv transport only (HTTP answers 400).
 
+  [FIXED in 1.1.41] Ctrl-C/SIGTERM under rootless: the in-jail
+  command is crated's child, so a terminal signal never reached it and
+  `crate run` sat in its kqueue wait forever. The SIGINT/SIGTERM
+  handler now forwards the signal through the process descriptors
+  being waited on (JailExec::forwardSignalToPrivopsChildren → pdkill),
+  and the wait becomes bounded (5 s grace, then "killed by SIGTERM")
+  so teardown runs even if the command ignores the signal. Also
+  fixed: host-side static-mac (`set_iface_mac`), NAT instance delete
+  (`delete_ipfw_nat`), auto_create_bridge (`create_bridge`, cloner
+  names bridge<N> only), `crate info` RCTL limits (query_jail_rctl
+  `limits: true` → rctl -h), crate(1) audit fallback to
+  /var/run/crate/<uid>/crate-audit.log with a one-time warning instead
+  of a silent drop, `crate doctor` without root (per-user root checked
+  instead of the root-owned tree; crated.conf unreadable = expected),
+  and — security — crated's per-user audit.log open (root, inside a
+  directory the operator owns since 1.1.39) now O_NOFOLLOW + fstat
+  (plain file, one link, owner root or the operator) and chowned to
+  the operator so the "operator-readable copy" is readable.
+
 * (HIGH) exec_in_jail follow-ups:
     - no on-hardware run yet: the whole rootless `crate run` path
       (ensure_user_root → create_jail → mounts → exec_in_jail …) has
       never been exercised end to end; docs/on-hardware-validation.md
       §4.1 is the first thing to run.
-    - `crate run` cannot signal the in-jail command directly (it only
-      has the pd); Ctrl-C still works through rc.shutdown + destroy
-      _jail. A `pdkill` on the pd from the SIGINT/SIGTERM handler would
-      make the foreground command stop like a local one.
     - lib/run_gui.cpp:1073-1149 compositor and seatd helpers still
       exec `jexec` directly (root-only) — GUI crates stay root-only
-      until they use JailExec.
+      until JailExec grows a non-blocking "spawn in jail, keep the
+      handle" variant (exec_in_jail already returns a pd; the client
+      side just needs to hand it back instead of waiting).
     - the daemon's child inherits crated's rlimits and cpuset; RCTL
       rules on the jail still apply (they key on the jail), but
       per-process limits should come from the jail, not the daemon.
@@ -66,13 +83,7 @@ The bhyve/VM track is in TODO2.
       remove the dependency.
 
 * (HIGH) remaining direct privileged calls under rootless:
-    - run.cpp bridge path: IfconfigOps::createNamedInterface/setUp for
-      auto_create_bridge (now a clear ERR under rootless; needs a
-      `create_bridge` verb); IpfwOps::deleteNat at teardown (now a
-      WARN; needs `delete_ipfw_nat`); host-side static-mac
-      (run_net.cpp setMacAddress, now skipped with a WARN; needs a
-      host-iface ether field on configure_iface or a `set_iface_mac`
-      verb); run.cpp:1595 host v6 epair address (NAT mode only).
+    - run.cpp:1595 host v6 epair address (NAT mode only).
     - NAT mode as a whole: Ctx::FwSlots/FwUsers in root-owned
       /var/run/crate (ctx.cpp:191, locs.cpp:11,14), ip.forwarding
       sysctls, setupFirewallRules' ipfw rules partially via privops.
@@ -82,24 +93,19 @@ The bhyve/VM track is in TODO2.
     - lib/inter_dns.cpp:36-56 writes /etc/hosts and the unbound
       conf.d file directly (root-only by nature; document, or move the
       rebuild into crated as a verb).
-    - lib/info.cpp:129-131 `rctl -h` (limits, not usage — no verb
-      returns limits; add a `limits` flag to query_jail_rctl).
     - stack.cpp:787-797 (bridge create), stack.cpp:294 (unbound on
       :53) — stack is root-only today.
     - lib/pfctl_ops.cpp:28 PfLock opens /var/run/crate/pfctl.lock 0600;
       non-root open fails and held() is never checked → no
       serialisation (moot while pf goes through privops, which
       serialises in the daemon).
-    - lib/audit.cpp:130-144 writes Config.logs/audit.log (default
-      /var/log/crate, not operator-writable) and ignores open()
-      failure → audit trail silently lost for every unprivileged
-      caller. RuntimePathsPure::perUserAuditLog exists but only
-      daemon/audit_per_user.cpp uses it. `logs` is also overridable
-      from ~/.config/crate/crate.yml, so a user chooses where their
-      own audit trail goes.
-    - lib/doctor.cpp:178 (W_OK on /var/run/crate) and :257 (R_OK on
-      crated.conf) FAIL for a normal operator; the comment at :171-177
-      acknowledges it but keeps FAIL.
+    - `logs` is overridable from ~/.config/crate/crate.yml, so a user
+      still chooses where their own audit trail goes (the daemon's
+      audit.log is the record that counts for privops).
+    - `create_bridge` only accepts cloner names (bridge<N>); a spec
+      with auto_create_bridge and a renamed bridge (e.g. "lan0") gets a
+      clear 400 under rootless — needs create + `name` rename in the
+      daemon if that is wanted.
     - daemon/routes.cpp spawnCrateRun and control_socket.cpp exec
       `crate run` as uid 0 — the jid registry records those creates as
       unowned, so a tenant cannot exec_in_jail into a container the

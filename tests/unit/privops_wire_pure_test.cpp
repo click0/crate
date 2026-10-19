@@ -592,6 +592,7 @@ ATF_TEST_CASE_BODY(dispatch_covers_every_verb) {
     Verb::AddDevfsUnhideRule, Verb::SignalJail,
     Verb::EnsureUserRoot,   // 1.1.39
     Verb::ExecInJail,       // 1.1.40
+    Verb::SetIfaceMac, Verb::DeleteIpfwNat, Verb::CreateBridge,   // 1.1.41
   };
   for (auto v : verbs) {
     auto r = parseValidateAndDispatch(v, "{}");
@@ -704,6 +705,41 @@ ATF_TEST_CASE_BODY(parse_exec_in_jail_argv_fields) {
   ATF_REQUIRE(formatExecInJailSuccess(7, 1234).find("\"pid\":1234") != std::string::npos);
 }
 
+// --- 1.1.41 ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(parse_1141_verbs_and_rctl_limits);
+ATF_TEST_CASE_BODY(parse_1141_verbs_and_rctl_limits) {
+  PrivOpsPure::SetIfaceMacReq m;
+  ATF_REQUIRE_EQ(parseSetIfaceMac(R"({"ifname":"epair0a","mac":"02:00:11:22:33:44"})", m), std::string());
+  ATF_REQUIRE_EQ(m.ifname, std::string("epair0a"));
+  ATF_REQUIRE_EQ(m.mac, std::string("02:00:11:22:33:44"));
+  ATF_REQUIRE(!parseSetIfaceMac(R"({"ifname":"epair0a"})", m).empty());
+
+  PrivOpsPure::DeleteIpfwNatReq n;
+  ATF_REQUIRE_EQ(parseDeleteIpfwNat(R"({"number":7})", n), std::string());
+  ATF_REQUIRE_EQ(n.number, 7u);
+  ATF_REQUIRE(!parseDeleteIpfwNat(R"({})", n).empty());
+
+  PrivOpsPure::CreateBridgeReq b;
+  ATF_REQUIRE_EQ(parseCreateBridge(R"({"name":"bridge0"})", b), std::string());
+  ATF_REQUIRE_EQ(b.name, std::string("bridge0"));
+  ATF_REQUIRE(!parseCreateBridge(R"({})", b).empty());
+
+  // query_jail_rctl: `limits` optional, default false.
+  PrivOpsPure::QueryJailRctlReq q;
+  ATF_REQUIRE_EQ(parseQueryJailRctl(R"({"jid":42})", q), std::string());
+  ATF_REQUIRE(!q.limits);
+  ATF_REQUIRE_EQ(parseQueryJailRctl(R"({"jid":42,"limits":true})", q), std::string());
+  ATF_REQUIRE(q.limits);
+
+  ATF_REQUIRE(formatSetIfaceMacSuccess("epair0a", "02:00:11:22:33:44").find("\"set\":true") != std::string::npos);
+  ATF_REQUIRE(formatDeleteIpfwNatSuccess(7).find("\"number\":7") != std::string::npos);
+  ATF_REQUIRE(formatCreateBridgeSuccess("bridge0").find("\"name\":\"bridge0\"") != std::string::npos);
+  // 501 table covers them (parse + validate, then not implemented)
+  ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::CreateBridge, R"({"name":"bridge0"})").status, 501);
+  ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::CreateBridge, R"({"name":"br0"})").status, 400);
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, extract_string_present_absent_wrong_type);
   ATF_ADD_TEST_CASE(tcs, extract_string_decodes_escapes);
@@ -767,4 +803,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, parse_query_jail_rctl);
   ATF_ADD_TEST_CASE(tcs, format_query_jail_rctl_escapes_newlines);
   ATF_ADD_TEST_CASE(tcs, parse_exec_in_jail_argv_fields);
+  ATF_ADD_TEST_CASE(tcs, parse_1141_verbs_and_rctl_limits);
 }

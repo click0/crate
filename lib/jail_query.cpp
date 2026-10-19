@@ -21,6 +21,7 @@ extern "C" {
 #include <errno.h>
 #include <fcntl.h>      // 1.1.26: O_CLOEXEC for pipe2()
 #include <sys/event.h>  // 1.1.40: kqueue EVFILT_PROCDESC
+#include <sys/procdesc.h> // 1.1.41: pdkill
 #include <grp.h>
 #include <pwd.h>
 #include <signal.h>
@@ -29,6 +30,7 @@ extern "C" {
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <atomic>       // 1.1.41: active-pd registry
 #include <cstdint>      // 1.1.40: uintptr_t for EV_SET
 #include <cstdlib>      // 1.1.40: getenv(TERM)
 #include <iostream>
@@ -310,11 +312,47 @@ static bool privopsExecWanted(std::string &sockOut) {
   return !sockOut.empty();
 }
 
+// 1.1.41: the process descriptors currently being waited on, so a
+// signal handler can forward SIGINT/SIGTERM to the in-jail commands
+// (they are crated's children — a terminal signal never reaches them).
+// Slots hold pd+1 (0 = free) so the zero-initialised array is "empty"
+// without a constructor. 16 slots is far beyond what one crate(1)
+// process has in flight (the foreground command + the healthcheck
+// thread); an exec that finds no free slot simply isn't forwardable.
+namespace {
+constexpr int kMaxActivePds = 16;
+std::atomic<int> g_activePds[kMaxActivePds];
+
+int registerActivePd(int pd) {
+  for (int i = 0; i < kMaxActivePds; i++) {
+    int expected = 0;
+    if (g_activePds[i].compare_exchange_strong(expected, pd + 1)) return i;
+  }
+  return -1;
+}
+void unregisterActivePd(int slot) {
+  if (slot >= 0) g_activePds[slot].store(0);
+}
+} // anon
+
+void forwardSignalToPrivopsChildren(int sig) {
+  for (int i = 0; i < kMaxActivePds; i++) {
+    int v = g_activePds[i].load();
+    if (v > 0) (void)::pdkill(v - 1, sig);
+  }
+}
+
 // Wait for the process behind a process descriptor to exit. Returns
-// the wait status (kevent's `data` for NOTE_EXIT). EINTR is retried
-// — `crate run` installs SIGINT/SIGTERM handlers and must keep waiting
-// for the in-jail command they are meant to stop.
+// the wait status (kevent's `data` for NOTE_EXIT). A signal that
+// interrupts the wait (EINTR — `crate run` installs SIGINT/SIGTERM
+// handlers without SA_RESTART) has already been forwarded to the
+// command by the handler via forwardSignalToPrivopsChildren; from then
+// on the wait is bounded (kGraceAfterSignalSec) and a command that
+// ignores the signal is reported as killed by SIGTERM so the caller's
+// teardown — which destroys the jail and with it the process — runs.
+// Mirrors the in-process path, where waitpid() returns EINTR at once.
 static int waitProcDesc(int pd, const std::string &what) {
+  constexpr time_t kGraceAfterSignalSec = 5;
   int kq = ::kqueue();
   if (kq == -1) ERR(what << ": kqueue: " << strerror(errno))
   struct kevent kev;
@@ -324,17 +362,20 @@ static int waitProcDesc(int pd, const std::string &what) {
     ::close(kq);
     ERR(what << ": kevent(EVFILT_PROCDESC): " << strerror(e))
   }
+  int slot = registerActivePd(pd);
+  struct CleanUp {
+    int kq, slot;
+    ~CleanUp() { unregisterActivePd(slot); ::close(kq); }
+  } cleanup{kq, slot};
+  struct timespec grace{kGraceAfterSignalSec, 0};
+  const struct timespec *timeout = nullptr;
   for (;;) {
-    int n = ::kevent(kq, nullptr, 0, &kev, 1, nullptr);
-    if (n == -1 && errno == EINTR) continue;
-    if (n == -1) {
-      int e = errno;
-      ::close(kq);
-      ERR(what << ": kevent wait: " << strerror(e))
-    }
+    int n = ::kevent(kq, nullptr, 0, &kev, 1, timeout);
+    if (n == -1 && errno == EINTR) { timeout = &grace; continue; }
+    if (n == -1) ERR(what << ": kevent wait: " << strerror(errno))
+    if (n == 0) return SIGTERM;          // grace period over: "killed by signal"
     break;
   }
-  ::close(kq);
   return (int)kev.data;
 }
 

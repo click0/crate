@@ -158,6 +158,13 @@ std::string parseSignalJail(const FieldMap &m,
 // loop so a hostile count cannot make the parser spin.
 std::string parseExecInJail(const FieldMap &m,
                             PrivOpsPure::ExecInJailReq &out);
+// 1.1.41
+std::string parseSetIfaceMac(const FieldMap &m,
+                             PrivOpsPure::SetIfaceMacReq &out);
+std::string parseDeleteIpfwNat(const FieldMap &m,
+                               PrivOpsPure::DeleteIpfwNatReq &out);
+std::string parseCreateBridge(const FieldMap &m,
+                              PrivOpsPure::CreateBridgeReq &out);
 
 // --- Verb routing ---
 

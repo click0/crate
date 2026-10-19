@@ -29,6 +29,7 @@ ATF_TEST_CASE_BODY(verb_token_roundtrips_for_every_verb) {
     Verb::SetLoginclassRctl, Verb::ClearLoginclassRctl,
     Verb::EnsureUserRoot,
     Verb::ExecInJail,   // 1.1.40
+    Verb::SetIfaceMac, Verb::DeleteIpfwNat, Verb::CreateBridge,   // 1.1.41
   };
   for (Verb v : verbs) {
     std::string token = verbName(v);
@@ -1040,6 +1041,35 @@ ATF_TEST_CASE_BODY(exec_in_jail_user_and_term_charsets) {
   ATF_REQUIRE(!validateTermName(std::string(65, 'x')).empty());
 }
 
+// --- 1.1.41: host-side primitives ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(host_primitives_1141_validation);
+ATF_TEST_CASE_BODY(host_primitives_1141_validation) {
+  SetIfaceMacReq m;
+  m.ifname = "epair0a"; m.mac = "02:00:11:22:33:44";
+  ATF_REQUIRE_EQ(validateSetIfaceMac(m), std::string());
+  m.mac = "";                      ATF_REQUIRE(!validateSetIfaceMac(m).empty());   // explicit set needs a MAC
+  m.mac = "02:00:11:22:33";        ATF_REQUIRE(!validateSetIfaceMac(m).empty());
+  m.mac = "02:00:11:22:33:44"; m.ifname = "epair0a; rm";
+  ATF_REQUIRE(!validateSetIfaceMac(m).empty());
+
+  DeleteIpfwNatReq n;
+  n.number = 1;     ATF_REQUIRE_EQ(validateDeleteIpfwNat(n), std::string());
+  n.number = 65534; ATF_REQUIRE_EQ(validateDeleteIpfwNat(n), std::string());
+  n.number = 0;     ATF_REQUIRE(!validateDeleteIpfwNat(n).empty());
+  n.number = 65535; ATF_REQUIRE(!validateDeleteIpfwNat(n).empty());
+
+  CreateBridgeReq b;
+  b.name = "bridge0";   ATF_REQUIRE_EQ(validateCreateBridge(b), std::string());
+  b.name = "bridge123"; ATF_REQUIRE_EQ(validateCreateBridge(b), std::string());
+  // cloner names only — the daemon runs `ifconfig <name> create`
+  b.name = "bridge";    ATF_REQUIRE(!validateCreateBridge(b).empty());
+  b.name = "br0";       ATF_REQUIRE(!validateCreateBridge(b).empty());
+  b.name = "bridge0a";  ATF_REQUIRE(!validateCreateBridge(b).empty());
+  b.name = "epair0a";   ATF_REQUIRE(!validateCreateBridge(b).empty());
+  b.name = "";          ATF_REQUIRE(!validateCreateBridge(b).empty());
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, verb_token_roundtrips_for_every_verb);
   ATF_ADD_TEST_CASE(tcs, verb_unknown_token_returns_unknown);
@@ -1120,4 +1150,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, signal_jail_minimal);
   ATF_ADD_TEST_CASE(tcs, exec_in_jail_validation);
   ATF_ADD_TEST_CASE(tcs, exec_in_jail_user_and_term_charsets);
+  ATF_ADD_TEST_CASE(tcs, host_primitives_1141_validation);
 }

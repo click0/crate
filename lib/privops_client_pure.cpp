@@ -310,10 +310,35 @@ PrivOpsNvPure::FieldMap buildFlushPfAnchor(const std::string &anchor) {
   };
 }
 
-PrivOpsNvPure::FieldMap buildQueryJailRctl(unsigned jid) {
-  return {
+PrivOpsNvPure::FieldMap buildQueryJailRctl(unsigned jid, bool limits) {
+  PrivOpsNvPure::FieldMap m = {
     {"verb", "query_jail_rctl"},
     {"jid", std::to_string(jid)},
+  };
+  if (limits) m["limits"] = "true";   // 1.1.41
+  return m;
+}
+
+PrivOpsNvPure::FieldMap buildSetIfaceMac(const std::string &ifname,
+                                         const std::string &mac) {
+  return {
+    {"verb", "set_iface_mac"},
+    {"ifname", ifname},
+    {"mac", mac},
+  };
+}
+
+PrivOpsNvPure::FieldMap buildDeleteIpfwNat(unsigned number) {
+  return {
+    {"verb", "delete_ipfw_nat"},
+    {"number", std::to_string(number)},
+  };
+}
+
+PrivOpsNvPure::FieldMap buildCreateBridge(const std::string &name) {
+  return {
+    {"verb", "create_bridge"},
+    {"name", name},
   };
 }
 

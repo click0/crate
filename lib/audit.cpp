@@ -5,6 +5,7 @@
 #include "args.h"
 #include "capsicum_ops.h"
 #include "config.h"
+#include "runtime_paths_pure.h"   // 1.1.41: per-user fallback
 #include "util.h"
 #include "err.h"
 
@@ -136,6 +137,26 @@ static void writeRecord(const AuditPure::Event &ev) {
   int fd = ::open(path.c_str(),
                   O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
                   0640);
+  // 1.1.41: an unprivileged operator cannot append to the root-owned
+  // default (/var/log/crate), and the line used to be dropped without
+  // a word. Fall back to the operator's own per-user runtime root
+  // (created and chowned by crated since 1.1.39), and say so once if
+  // even that fails — an audit trail that silently vanishes is worse
+  // than none.
+  if (fd < 0 && ::geteuid() != 0) {
+    auto alt = RuntimePathsPure::perUserCrateAuditLog((uint32_t)::getuid());
+    fd = ::open(alt.c_str(),
+                O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW,
+                0600);
+    if (fd < 0) {
+      static std::atomic<bool> warned{false};
+      if (!warned.exchange(true))
+        std::cerr << "audit: cannot append to " << path << " nor " << alt
+                  << " (" << std::strerror(errno)
+                  << ") — audit events of this command are not recorded"
+                  << std::endl;
+    }
+  }
   if (fd >= 0) {
     // Single write() is atomic per POSIX for size <= PIPE_BUF (4096).
     // A single audit JSON line stays well under that.

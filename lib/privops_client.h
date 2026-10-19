@@ -151,7 +151,15 @@ PrivOpsNvPure::FieldMap buildFlushPfAnchor(const std::string &anchor);
 
 // 1.1.1: query `rctl -u jail:<jid>` output. Response carries the
 // raw rctl text in the `output` field for client-side parsing.
-PrivOpsNvPure::FieldMap buildQueryJailRctl(unsigned jid);
+// 1.1.41: `limits` = true asks for the rules (`rctl -h`) instead of
+// the usage counters (`rctl -u`); omitted from the map when false.
+PrivOpsNvPure::FieldMap buildQueryJailRctl(unsigned jid, bool limits = false);
+
+// 1.1.41: host-side primitives.
+PrivOpsNvPure::FieldMap buildSetIfaceMac(const std::string &ifname,
+                                         const std::string &mac);
+PrivOpsNvPure::FieldMap buildDeleteIpfwNat(unsigned number);
+PrivOpsNvPure::FieldMap buildCreateBridge(const std::string &name);
 
 // 1.1.8: configure an ipfw NAT instance. `config` is the body
 // following `ipfw nat <number> config` (one line, no shell metas).
