@@ -203,6 +203,40 @@ ATF_TEST_CASE_BODY(builder_exec_in_jail_round_trips) {
   ATF_REQUIRE_EQ(req2.argv[2], std::string("alice"));
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(builders_1141_round_trip);
+ATF_TEST_CASE_BODY(builders_1141_round_trip) {
+  {
+    auto m = PrivOpsClient::buildSetIfaceMac("epair0a", "02:00:11:22:33:44");
+    PrivOpsPure::SetIfaceMacReq r;
+    ATF_REQUIRE_EQ(m.at("verb"), std::string("set_iface_mac"));
+    ATF_REQUIRE_EQ(PrivOpsNvPure::parseSetIfaceMac(m, r), std::string());
+    ATF_REQUIRE_EQ(PrivOpsPure::validateSetIfaceMac(r), std::string());
+  }
+  {
+    auto m = PrivOpsClient::buildDeleteIpfwNat(7);
+    PrivOpsPure::DeleteIpfwNatReq r;
+    ATF_REQUIRE_EQ(m.at("verb"), std::string("delete_ipfw_nat"));
+    ATF_REQUIRE_EQ(PrivOpsNvPure::parseDeleteIpfwNat(m, r), std::string());
+    ATF_REQUIRE_EQ(r.number, 7u);
+  }
+  {
+    auto m = PrivOpsClient::buildCreateBridge("bridge0");
+    PrivOpsPure::CreateBridgeReq r;
+    ATF_REQUIRE_EQ(m.at("verb"), std::string("create_bridge"));
+    ATF_REQUIRE_EQ(PrivOpsNvPure::parseCreateBridge(m, r), std::string());
+    ATF_REQUIRE_EQ(PrivOpsPure::validateCreateBridge(r), std::string());
+  }
+  {
+    // query_jail_rctl: limits omitted when false (wire stays 1.1.1-identical)
+    auto m = PrivOpsClient::buildQueryJailRctl(42);
+    ATF_REQUIRE(m.find("limits") == m.end());
+    auto m2 = PrivOpsClient::buildQueryJailRctl(42, true);
+    PrivOpsPure::QueryJailRctlReq r;
+    ATF_REQUIRE_EQ(PrivOpsNvPure::parseQueryJailRctl(m2, r), std::string());
+    ATF_REQUIRE(r.limits);
+  }
+}
+
 // --- detectSocketPath ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(detect_uses_env_var_when_set);
@@ -270,6 +304,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, builder_create_jail_round_trips);
   ATF_ADD_TEST_CASE(tcs, builder_configure_iface_round_trips);
   ATF_ADD_TEST_CASE(tcs, builder_exec_in_jail_round_trips);
+  ATF_ADD_TEST_CASE(tcs, builders_1141_round_trip);
   ATF_ADD_TEST_CASE(tcs, detect_uses_env_var_when_set);
   ATF_ADD_TEST_CASE(tcs, detect_empty_when_no_env_no_default);
   ATF_ADD_TEST_CASE(tcs, detect_empty_env_treated_as_unset);

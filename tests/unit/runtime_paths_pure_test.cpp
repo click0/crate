@@ -94,6 +94,10 @@ ATF_TEST_CASE_BODY(per_user_paths_no_traversal_segments) {
   std::string p = perUserLeaseFile(1000, "alpine");
   ATF_REQUIRE(p.find("..") == std::string::npos);
   ATF_REQUIRE(p.find("//") == std::string::npos);
+  // 1.1.41: crate(1)'s own audit fallback sits next to the daemon's
+  // audit.log, under the same per-user root, with a distinct name.
+  ATF_REQUIRE_EQ(perUserCrateAuditLog(1000), std::string("/var/run/crate/1000/crate-audit.log"));
+  ATF_REQUIRE(perUserCrateAuditLog(1000) != perUserAuditLog(1000));
 }
 
 // --- 1.1.39: crate jail path recognition (legacy + per-user layouts) ---

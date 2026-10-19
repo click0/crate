@@ -226,6 +226,14 @@ enum class Verb {
   // (no bootstrap concession — exec as root into an unregistered jail
   // is the one thing the registry exists to prevent).
   ExecInJail,
+
+  // 1.1.41: the last three host-side primitives `crate run` still
+  // called directly under rootless. All host-global (no tenant target
+  // the daemon can resolve), gated by privops-group membership like
+  // set_iface_up / create_epair.
+  SetIfaceMac,      // ifconfig <iface> ether <mac>   (host-side static-mac)
+  DeleteIpfwNat,    // ipfw nat <n> delete            (auto-fw teardown)
+  CreateBridge,     // ifconfig bridge<N> create + up (auto_create_bridge)
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -392,6 +400,30 @@ struct FlushPfAnchorReq {
 // 1.1.1: query RCTL usage for a running jail by jid.
 struct QueryJailRctlReq {
   unsigned jid = 0;          // jail id (validated 1..65535)
+  // 1.1.41: false (default) -> `rctl -u jail:<jid>` (usage counters,
+  // what inspect/top read); true -> `rctl -h jail:<jid>` (the rules
+  // that apply, what `crate info` prints). Optional on the wire.
+  bool     limits = false;
+};
+
+// 1.1.41: host-side MAC change. `mac` is required here (the empty =
+// "kernel-assigned" meaning validateMacAddress allows makes no sense
+// for an explicit set).
+struct SetIfaceMacReq {
+  std::string ifname;
+  std::string mac;
+};
+
+// 1.1.41: delete an ipfw NAT instance (inverse of ConfigureIpfwNat).
+struct DeleteIpfwNatReq {
+  unsigned number = 0;       // 1..65534
+};
+
+// 1.1.41: create a bridge interface and bring it up. The name must be
+// a cloner name (`bridge<N>`) — that is what `ifconfig <name> create`
+// understands and what a spec's `auto_create_bridge` can ask for.
+struct CreateBridgeReq {
+  std::string name;
 };
 
 // 1.1.8: configure an ipfw NAT instance. The `config` field is
@@ -507,6 +539,9 @@ std::string validateApplyDevfsRuleset(const ApplyDevfsRulesetReq &r);
 std::string validateAddDevfsUnhideRule(const AddDevfsUnhideRuleReq &r);
 std::string validateSignalJail(const SignalJailReq &r);
 std::string validateExecInJail(const ExecInJailReq &r);
+std::string validateSetIfaceMac(const SetIfaceMacReq &r);
+std::string validateDeleteIpfwNat(const DeleteIpfwNatReq &r);
+std::string validateCreateBridge(const CreateBridgeReq &r);
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //

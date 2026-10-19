@@ -564,7 +564,8 @@ ATF_TEST_CASE_BODY(host_global_verbs_still_allowed) {
   // genuinely host-global verbs are unaffected by the 1.1.17 tightening
   // (1.1.36 moved the pf anchor verbs out of this group — see below)
   for (Verb v : {Verb::TeardownIface, Verb::AddIpfwRule,
-                 Verb::SetIfaceUp, Verb::BridgeAddMember, Verb::CreateEpair}) {
+                 Verb::SetIfaceUp, Verb::BridgeAddMember, Verb::CreateEpair,
+                 Verb::SetIfaceMac, Verb::DeleteIpfwNat, Verb::CreateBridge}) {   // 1.1.41
     ATF_REQUIRE(authorize(v, Request{}, e, foreign) == Decision::Allow);
   }
 }

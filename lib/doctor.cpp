@@ -22,6 +22,7 @@
 #include "nv_protocol.h"
 #include "pfctl_ops.h"
 #include "run_gui_pure.h"
+#include "runtime_paths_pure.h"   // 1.1.41: per-user root for an unprivileged doctor
 #include "util.h"
 #include "zfs_ops.h"
 #include "err.h"
@@ -199,6 +200,36 @@ void checkOneDirectory(Report &r, const std::string &path,
 }
 
 void checkDirectories(Report &r) {
+  // 1.1.41: an unprivileged operator is not supposed to write the
+  // root-owned tree — crate(1) works out of /var/run/crate/<uid>
+  // (created and chowned by crated on the first privops connection)
+  // and falls back to <per-user root>/crate-audit.log for its audit
+  // events. Check what applies to this caller instead of failing on
+  // permissions that are correct.
+  if (::geteuid() != 0) {
+    const std::string mine = RuntimePathsPure::perUserRoot((uint32_t)::getuid());
+    struct stat st{};
+    if (::stat(mine.c_str(), &st) != 0) {
+      r.checks.push_back(warnCheck("filesystem", mine,
+        "per-user runtime root absent — crated creates it on the first "
+        "privops call (any crate command that talks to crated); is crated "
+        "running with privops_socket configured?"));
+    } else if (!S_ISDIR(st.st_mode)) {
+      r.checks.push_back(failCheck("filesystem", mine, "exists but is not a directory"));
+    } else if (::access(mine.c_str(), W_OK) != 0) {
+      r.checks.push_back(failCheck("filesystem", mine,
+        "exists but not writable by this user — crated 1.1.39+ chowns it to "
+        "the operator; check the crated version and rootless.per_user"));
+    } else {
+      r.checks.push_back(passCheck("filesystem", mine, "per-user runtime root, writable"));
+    }
+    r.checks.push_back(passCheck("filesystem", "/var/run/crate",
+      "root-owned — writability not checked for an unprivileged doctor"));
+    r.checks.push_back(passCheck("filesystem", "/var/log/crate",
+      "root-owned — crate(1) appends its audit events to "
+      + RuntimePathsPure::perUserCrateAuditLog((uint32_t)::getuid())));
+    return;
+  }
   checkOneDirectory(r, "/var/run/crate", 100,
     "crated runtime state (sockets, pid)");
   checkOneDirectory(r, "/var/log/crate",  50,
@@ -255,6 +286,14 @@ void checkCratedConf(Report &r) {
     return;
   }
   if (::access(path, R_OK) != 0) {
+    // 1.1.41: crated.conf is root-readable by design (it may hold a
+    // bearer token); an unprivileged doctor not being able to read it
+    // is the expected state, not a failure.
+    if (::geteuid() != 0) {
+      r.checks.push_back(passCheck("config", path,
+        "present; not readable by this user (expected — crated reads it as root)"));
+      return;
+    }
     r.checks.push_back(failCheck("config", path,
       "present but not readable by crated"));
     return;

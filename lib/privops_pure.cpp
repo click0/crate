@@ -107,6 +107,9 @@ const char *verbName(Verb v) {
     case Verb::AddDevfsUnhideRule:   return "add_devfs_unhide_rule";
     case Verb::SignalJail:           return "signal_jail";
     case Verb::ExecInJail:           return "exec_in_jail";
+    case Verb::SetIfaceMac:          return "set_iface_mac";
+    case Verb::DeleteIpfwNat:        return "delete_ipfw_nat";
+    case Verb::CreateBridge:         return "create_bridge";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -145,6 +148,9 @@ Verb parseVerb(const std::string &name) {
   if (name == "add_devfs_unhide_rule")   return Verb::AddDevfsUnhideRule;
   if (name == "signal_jail")             return Verb::SignalJail;
   if (name == "exec_in_jail")            return Verb::ExecInJail;
+  if (name == "set_iface_mac")           return Verb::SetIfaceMac;
+  if (name == "delete_ipfw_nat")         return Verb::DeleteIpfwNat;
+  if (name == "create_bridge")           return Verb::CreateBridge;
   return Verb::Unknown;
 }
 
@@ -798,6 +804,34 @@ std::string validateExecInJail(const ExecInJailReq &r) {
     if (total > kExecInJailMaxArgvBytes)
       return "argv: total size exceeds " + std::to_string(kExecInJailMaxArgvBytes) + " bytes";
   }
+  return "";
+}
+
+// --- 1.1.41: host-side primitives ---
+
+std::string validateSetIfaceMac(const SetIfaceMacReq &r) {
+  if (auto e = validateIfaceName(r.ifname); !e.empty()) return "ifname: " + e;
+  if (r.mac.empty()) return "mac: is empty";
+  if (auto e = validateMacAddress(r.mac); !e.empty()) return "mac: " + e;
+  return "";
+}
+
+std::string validateDeleteIpfwNat(const DeleteIpfwNatReq &r) {
+  if (r.number == 0 || r.number > 65534)
+    return "number: out of range (1..65534)";
+  return "";
+}
+
+std::string validateCreateBridge(const CreateBridgeReq &r) {
+  if (auto e = validateIfaceName(r.name); !e.empty()) return "name: " + e;
+  // Cloner name only: `ifconfig <name> create` works for "bridge<N>";
+  // anything else would need create + rename, and a tenant must not
+  // be able to ask the host for an arbitrary interface name.
+  static const std::string kPrefix = "bridge";
+  if (r.name.compare(0, kPrefix.size(), kPrefix) != 0 || r.name.size() == kPrefix.size())
+    return "name: must be bridge<N>";
+  for (size_t i = kPrefix.size(); i < r.name.size(); i++)
+    if (!std::isdigit((unsigned char)r.name[i])) return "name: must be bridge<N>";
   return "";
 }
 

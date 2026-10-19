@@ -118,7 +118,16 @@ static unsigned    hostIP6Prefix = 0;
 
 // Signal handling: catch SIGINT/SIGTERM so RunAtEnd destructors fire for clean shutdown
 static volatile sig_atomic_t g_signalReceived = 0;
-static void signalHandler(int sig) { g_signalReceived = sig; }
+// 1.1.41: under rootless the in-jail command is crated's child (pdfork
+// behind exec_in_jail), not ours, so a terminal SIGINT never reaches it
+// and nothing in the jail would notice Ctrl-C. Forward the signal
+// through the process descriptors JailExec is currently waiting on
+// (pdkill is a plain syscall — async-signal-safe). In the root path
+// the children are in our process group and get the signal directly.
+static void signalHandler(int sig) {
+  g_signalReceived = sig;
+  JailExec::forwardSignalToPrivopsChildren(sig);
+}
 
 //
 // helpers
@@ -1163,15 +1172,23 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         ERR("bridge mode: bridge '" << optionNet->bridgeIface
             << "' does not exist; create it manually or set 'auto_create_bridge: true' in the spec")
       } else if (act == BridgePure::Action::Create) {
-        // 1.1.39: no create_bridge privops verb yet — say so instead
-        // of failing deep inside ifconfig with EPERM.
-        if (!PrivOpsClient::detectSocketPath().empty())
-          ERR("bridge mode: bridge '" << optionNet->bridgeIface
-              << "' does not exist and crate runs unprivileged; auto_create_bridge "
-                 "needs root — create it once as root (`ifconfig "
-              << optionNet->bridgeIface << " create up`, or cloned_interfaces in rc.conf)")
-        IfconfigOps::createNamedInterface(optionNet->bridgeIface);
-        IfconfigOps::setUp(optionNet->bridgeIface);
+        // 1.1.41: create_bridge verb under rootless (the daemon only
+        // accepts cloner names, bridge<N>); root creates it directly.
+        std::string sock = PrivOpsClient::detectSocketPath();
+        if (!sock.empty()) {
+          auto resp = PrivOpsClient::sendRequest(sock,
+              PrivOpsClient::buildCreateBridge(optionNet->bridgeIface));
+          if (!resp.transportError.empty())
+            ERR("bridge mode: privops create_bridge transport error: " << resp.transportError)
+          if (resp.status != 200)
+            ERR("bridge mode: privops create_bridge '" << optionNet->bridgeIface
+                << "' failed (status " << resp.status << "): " << resp.body
+                << " — create it once as root (`ifconfig " << optionNet->bridgeIface
+                << " create up`, or cloned_interfaces in rc.conf)")
+        } else {
+          IfconfigOps::createNamedInterface(optionNet->bridgeIface);
+          IfconfigOps::setUp(optionNet->bridgeIface);
+        }
         weCreatedBridge = true;
         LOG("bridge mode: auto-created bridge " << optionNet->bridgeIface)
       }
@@ -1546,12 +1563,17 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
                 // so the outer try/catch is now redundant — kept
                 // for safety in case a future implementation
                 // changes behaviour.
-                // 1.1.39: no privops verb deletes a NAT instance; under
-                // rootless say so (TODO: delete_ipfw_nat verb).
-                if (!PrivOpsClient::detectSocketPath().empty()) {
-                  WARN("auto-fw[ipfw]: nat instance " << natId
-                       << " left in place (no privops verb to delete it); root: `ipfw nat "
-                       << natId << " delete`")
+                // 1.1.41: delete_ipfw_nat verb under rootless (1.1.39
+                // left the instance in place with a warning).
+                std::string sock = PrivOpsClient::detectSocketPath();
+                if (!sock.empty()) {
+                  auto resp = PrivOpsClient::sendRequest(sock,
+                      PrivOpsClient::buildDeleteIpfwNat(natId));
+                  if (!resp.transportError.empty() || resp.status != 200)
+                    WARN("auto-fw[ipfw]: privops delete_ipfw_nat " << natId << " failed: "
+                         << (resp.transportError.empty()
+                               ? "status " + std::to_string(resp.status) + " " + resp.body
+                               : resp.transportError))
                 } else {
                   try {
                     IpfwOps::deleteNat(natId);

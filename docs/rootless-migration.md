@@ -92,7 +92,8 @@ root.
 /var/run/crate/<uid>/network-leases.txt   # IPv4 pool leases (per user)
 /var/run/crate/<uid>/network-leases6.txt  # IPv6 pool leases
 /var/run/crate/<uid>/spec-registry.txt    # name -> .crate path
-/var/run/crate/<uid>/audit.log     # audit tail
+/var/run/crate/<uid>/audit.log     # crated privops audit tail (chowned to the operator, 1.1.41)
+/var/run/crate/<uid>/crate-audit.log # crate(1) audit events when /var/log/crate is not writable (1.1.41)
 ```
 
 Since 1.1.39 `crated` creates the per-user root on the first privops
@@ -127,8 +128,12 @@ command, so the container dies with its supervisor exactly as before.
 The jid must be **registered to the caller** — an unregistered or
 foreign jid is refused `403` (no bootstrap concession for exec).
 `crate console`, `crate update --pkg-only`, `crate info` and the
-healthcheck loop use the same path. Not yet validated on hardware
-(see `docs/on-hardware-validation.md` §4.1).
+healthcheck loop use the same path. 1.1.41 adds signal forwarding —
+the command is `crated`'s child, so `crate run`'s SIGINT/SIGTERM
+handler `pdkill`s it through the process descriptor (5 s grace, then
+teardown proceeds regardless) — and the last three host-side
+primitives (`set_iface_mac`, `delete_ipfw_nat`, `create_bridge`). Not
+yet validated on hardware (see `docs/on-hardware-validation.md` §4.1).
 
 uid is the stable key (operators on NIS/LDAP have mutable
 uid→name maps).

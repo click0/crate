@@ -334,6 +334,31 @@ ATF_TEST_CASE_BODY(parse_exec_in_jail) {
   ATF_REQUIRE(parseExecInJail({{"jid", "1"}, {"argv0", "/a"}}, r3).find("missing") != std::string::npos);
 }
 
+// --- 1.1.41 ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(parse_1141_verbs_and_rctl_limits);
+ATF_TEST_CASE_BODY(parse_1141_verbs_and_rctl_limits) {
+  PrivOpsPure::SetIfaceMacReq m;
+  ATF_REQUIRE_EQ(parseSetIfaceMac({{"ifname", "epair0a"}, {"mac", "02:00:11:22:33:44"}}, m), std::string());
+  ATF_REQUIRE_EQ(m.mac, std::string("02:00:11:22:33:44"));
+  ATF_REQUIRE(parseSetIfaceMac({{"ifname", "epair0a"}}, m).find("missing") != std::string::npos);
+
+  PrivOpsPure::DeleteIpfwNatReq n;
+  ATF_REQUIRE_EQ(parseDeleteIpfwNat({{"number", "7"}}, n), std::string());
+  ATF_REQUIRE_EQ(n.number, 7u);
+  ATF_REQUIRE(!parseDeleteIpfwNat({{"number", "x"}}, n).empty());
+
+  PrivOpsPure::CreateBridgeReq b;
+  ATF_REQUIRE_EQ(parseCreateBridge({{"name", "bridge0"}}, b), std::string());
+  ATF_REQUIRE(parseCreateBridge({}, b).find("missing") != std::string::npos);
+
+  PrivOpsPure::QueryJailRctlReq q;
+  ATF_REQUIRE_EQ(parseQueryJailRctl({{"jid", "42"}}, q), std::string());
+  ATF_REQUIRE(!q.limits);
+  ATF_REQUIRE_EQ(parseQueryJailRctl({{"jid", "42"}, {"limits", "true"}}, q), std::string());
+  ATF_REQUIRE(q.limits);
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, require_string_present_absent);
   ATF_ADD_TEST_CASE(tcs, require_long_typical);
@@ -358,4 +383,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, parse_ipfw_rules);
   ATF_ADD_TEST_CASE(tcs, parsers_same_required_field_set_as_json);
   ATF_ADD_TEST_CASE(tcs, parse_exec_in_jail);
+  ATF_ADD_TEST_CASE(tcs, parse_1141_verbs_and_rctl_limits);
 }

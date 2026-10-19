@@ -275,6 +275,28 @@ std::string parseFlushPfAnchor(const FieldMap &m,
 std::string parseQueryJailRctl(const FieldMap &m,
                                PrivOpsPure::QueryJailRctlReq &out) {
   if (auto e = requireUnsigned(m, "jid", out.jid); !e.empty()) return e;
+  if (auto e = optionalBool(m, "limits", out.limits); !e.empty()) return e;   // 1.1.41
+  return "";
+}
+
+// --- 1.1.41 ---
+
+std::string parseSetIfaceMac(const FieldMap &m,
+                             PrivOpsPure::SetIfaceMacReq &out) {
+  if (auto e = requireString(m, "ifname", out.ifname); !e.empty()) return e;
+  if (auto e = requireString(m, "mac", out.mac); !e.empty()) return e;
+  return "";
+}
+
+std::string parseDeleteIpfwNat(const FieldMap &m,
+                               PrivOpsPure::DeleteIpfwNatReq &out) {
+  if (auto e = requireUnsigned(m, "number", out.number); !e.empty()) return e;
+  return "";
+}
+
+std::string parseCreateBridge(const FieldMap &m,
+                              PrivOpsPure::CreateBridgeReq &out) {
+  if (auto e = requireString(m, "name", out.name); !e.empty()) return e;
   return "";
 }
 

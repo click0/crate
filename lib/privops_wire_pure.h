@@ -205,6 +205,13 @@ std::string parseAddDevfsUnhideRule(const std::string &body,
 
 std::string parseExecInJail(const std::string &body,
                             PrivOpsPure::ExecInJailReq &out);
+// 1.1.41
+std::string parseSetIfaceMac(const std::string &body,
+                             PrivOpsPure::SetIfaceMacReq &out);
+std::string parseDeleteIpfwNat(const std::string &body,
+                               PrivOpsPure::DeleteIpfwNatReq &out);
+std::string parseCreateBridge(const std::string &body,
+                              PrivOpsPure::CreateBridgeReq &out);
 
 std::string parseSignalJail(const std::string &body,
                             PrivOpsPure::SignalJailReq &out);
@@ -384,5 +391,13 @@ std::string formatSignalJailSuccess(unsigned jid, const std::string &signal);
 // travels as an nvlist descriptor next to the body ("pd").
 // Shape: {"started":true,"jid":<jid>,"pid":<pid>}
 std::string formatExecInJailSuccess(unsigned jid, long pid);
+
+// 1.1.41
+// {"set":true,"ifname":"...","mac":"..."}
+std::string formatSetIfaceMacSuccess(const std::string &ifname, const std::string &mac);
+// {"deleted":true,"number":N}
+std::string formatDeleteIpfwNatSuccess(unsigned number);
+// {"created":true,"name":"bridge0"}
+std::string formatCreateBridgeSuccess(const std::string &name);
 
 } // namespace PrivOpsWirePure

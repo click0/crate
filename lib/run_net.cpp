@@ -775,14 +775,16 @@ std::pair<std::string,std::string> generateStaticMac(
 }
 
 void setMacAddress(const std::string &iface, const std::string &mac) {
-  // 1.1.39: there is no privops verb for a host-side MAC change (the
-  // jail-side half goes through configure_iface's mac field). Under
-  // rootless the host half keeps its kernel-assigned MAC; it is the
-  // bridge-member side, so DHCP reservations (which key on the jail
-  // side) are unaffected.
-  if (!PrivOpsClient::detectSocketPath().empty()) {
-    WARN("static-mac: host-side " << iface << " keeps its kernel MAC under rootless "
-         "(no privops verb for host-side ether); jail-side MAC is set")
+  // 1.1.41: host-side MAC through the set_iface_mac verb under rootless
+  // (1.1.39 skipped it with a warning — no verb existed). The jail-side
+  // half still travels in configure_iface's mac field.
+  std::string sock = PrivOpsClient::detectSocketPath();
+  if (!sock.empty()) {
+    auto resp = PrivOpsClient::sendRequest(sock, PrivOpsClient::buildSetIfaceMac(iface, mac));
+    if (!resp.transportError.empty())
+      ERR("privops set_iface_mac transport error: " << resp.transportError)
+    if (resp.status != 200)
+      ERR("privops set_iface_mac failed (status " << resp.status << "): " << resp.body)
     return;
   }
   IfconfigOps::setMacAddr(iface, mac);

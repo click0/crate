@@ -405,6 +405,28 @@ std::string parseFlushPfAnchor(const std::string &body,
 std::string parseQueryJailRctl(const std::string &body,
                                PrivOpsPure::QueryJailRctlReq &out) {
   if (auto e = requireUnsignedField(body, "jid", out.jid); !e.empty()) return e;
+  extractBoolField(body, "limits", out.limits);   // 1.1.41, optional
+  return "";
+}
+
+// --- 1.1.41 ---
+
+std::string parseSetIfaceMac(const std::string &body,
+                             PrivOpsPure::SetIfaceMacReq &out) {
+  if (auto e = requireStringField(body, "ifname", out.ifname); !e.empty()) return e;
+  if (auto e = requireStringField(body, "mac", out.mac); !e.empty()) return e;
+  return "";
+}
+
+std::string parseDeleteIpfwNat(const std::string &body,
+                               PrivOpsPure::DeleteIpfwNatReq &out) {
+  if (auto e = requireUnsignedField(body, "number", out.number); !e.empty()) return e;
+  return "";
+}
+
+std::string parseCreateBridge(const std::string &body,
+                              PrivOpsPure::CreateBridgeReq &out) {
+  if (auto e = requireStringField(body, "name", out.name); !e.empty()) return e;
   return "";
 }
 
@@ -852,6 +874,25 @@ std::string formatAddDevfsUnhideRuleSuccess(const std::string &mountPath,
   return o.str();
 }
 
+std::string formatSetIfaceMacSuccess(const std::string &ifname, const std::string &mac) {
+  std::ostringstream o;
+  o << "{\"set\":true,\"ifname\":\"" << escape(ifname)
+    << "\",\"mac\":\"" << escape(mac) << "\"}";
+  return o.str();
+}
+
+std::string formatDeleteIpfwNatSuccess(unsigned number) {
+  std::ostringstream o;
+  o << "{\"deleted\":true,\"number\":" << number << "}";
+  return o.str();
+}
+
+std::string formatCreateBridgeSuccess(const std::string &name) {
+  std::ostringstream o;
+  o << "{\"created\":true,\"name\":\"" << escape(name) << "\"}";
+  return o.str();
+}
+
 std::string formatExecInJailSuccess(unsigned jid, long pid) {
   std::ostringstream o;
   o << "{\"started\":true,\"jid\":" << jid << ",\"pid\":" << pid << "}";
@@ -942,6 +983,12 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       // so the 501 table stays total; the daemon's HTTP dispatcher
       // refuses the verb with 400 before it gets here.
       return runVerb<ExecInJailReq>(body, v, parseExecInJail, validateExecInJail);
+    case Verb::SetIfaceMac:
+      return runVerb<SetIfaceMacReq>(body, v, parseSetIfaceMac, validateSetIfaceMac);
+    case Verb::DeleteIpfwNat:
+      return runVerb<DeleteIpfwNatReq>(body, v, parseDeleteIpfwNat, validateDeleteIpfwNat);
+    case Verb::CreateBridge:
+      return runVerb<CreateBridgeReq>(body, v, parseCreateBridge, validateCreateBridge);
     case Verb::Unknown:
       break;
   }

@@ -48,6 +48,10 @@ std::string perUserImportsDir(uint32_t uid) {
   return perUserRoot(uid) + "/imports";
 }
 
+std::string perUserCrateAuditLog(uint32_t uid) {
+  return perUserRoot(uid) + "/crate-audit.log";
+}
+
 std::string perUserAuditLog(uint32_t uid) {
   return perUserRoot(uid) + "/audit.log";
 }

@@ -64,4 +64,15 @@ void execInJailChecked(int jid, const std::vector<std::string> &argv,
                        const std::string &user = "root",
                        const std::string &what = "exec in jail");
 
+// 1.1.41: deliver `sig` (pdkill) to every in-jail command this process
+// is currently waiting on through the exec_in_jail path. Those
+// commands are crated's children, so a terminal SIGINT does not reach
+// them on its own. Async-signal-safe (atomics + pdkill); a no-op when
+// nothing is in flight or on the in-process (root) path. After a
+// forwarded signal the wait gives the command a short grace period
+// and then returns a "killed by SIGTERM" status so the caller's
+// teardown (rc.shutdown, destroy_jail) proceeds even if the command
+// ignores the signal.
+void forwardSignalToPrivopsChildren(int sig);
+
 }
