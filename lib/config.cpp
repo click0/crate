@@ -54,6 +54,16 @@ static void applyYaml(Settings &s, const YAML::Node &cfg) {
   if (cfg["default_bridge"])    s.defaultBridge = cfg["default_bridge"].as<std::string>();
   if (cfg["static_mac_default"]) s.staticMacDefault = cfg["static_mac_default"].as<bool>();
   if (cfg["network_pool"])      s.networkPool = cfg["network_pool"].as<std::string>();
+  if (cfg["network_pool_user_bits"]) {   // 1.1.39
+    auto v = cfg["network_pool_user_bits"].as<unsigned>();
+    if (v > 24) throw std::runtime_error("network_pool_user_bits must be 0..24");
+    s.networkPoolUserBits = v;
+  }
+  if (cfg["network_pool6_user_bits"]) {
+    auto v = cfg["network_pool6_user_bits"].as<unsigned>();
+    if (v > 32) throw std::runtime_error("network_pool6_user_bits must be 0..32");
+    s.networkPool6UserBits = v;
+  }
   if (cfg["network_pool6"]) {
     auto v = cfg["network_pool6"].as<std::string>();
     // 0.8.15: validate basic shape — must contain '::' (IPv6

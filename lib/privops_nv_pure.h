@@ -131,6 +131,8 @@ std::string parseSetIfaceInetAddr(const FieldMap &m,
                                   PrivOpsPure::SetIfaceInetAddrReq &out);
 std::string parseCreateEpair(const FieldMap &m,
                              PrivOpsPure::CreateEpairReq &out);
+std::string parseEnsureUserRoot(const FieldMap &m,
+                                PrivOpsPure::EnsureUserRootReq &out);
 std::string parseSetLoginclassRctl(const FieldMap &m,
                                    PrivOpsPure::SetLoginclassRctlReq &out);
 std::string parseClearLoginclassRctl(const FieldMap &m,

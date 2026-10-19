@@ -4,6 +4,7 @@
 #include "args.h"
 #include "locs.h"
 #include "jail_query.h"
+#include "runtime_paths_pure.h"
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
@@ -25,7 +26,6 @@
 // Uses libjail API via JailQuery (replaces jls parsing).
 static bool resolveContainer(const std::string &target, int &outJid, std::string &outPath,
                              std::string &outHostname, std::string &outIp) {
-  auto cratePrefix = std::string(Locations::jailDirectoryPath) + "/jail-";
 
   // Try direct lookup by name first
   auto jail = JailQuery::getJailByName(target);
@@ -38,7 +38,7 @@ static bool resolveContainer(const std::string &target, int &outJid, std::string
   }
 
   // If direct lookup succeeded and it's a crate jail, use it
-  if (jail && jail->path.find(cratePrefix) == 0) {
+  if (jail && RuntimePathsPure::isCrateJailPath(jail->path)) {
     outJid = jail->jid;
     outPath = jail->path;
     outHostname = jail->hostname;
@@ -49,7 +49,7 @@ static bool resolveContainer(const std::string &target, int &outJid, std::string
   // Fall back to scanning all crate jails for partial match
   auto jails = JailQuery::getAllJails(true /* crateOnly */);
   for (auto &j : jails) {
-    auto name = j.path.substr(std::string(Locations::jailDirectoryPath).size() + 1);
+    auto name = RuntimePathsPure::crateJailDirName(j.path);   // "jail-<name>-<hex>"
     bool match = false;
     try { match = (std::stoi(target) == j.jid); } catch (...) {}
     if (!match) match = (name == target);

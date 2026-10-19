@@ -174,6 +174,12 @@ PrivOpsWirePure::DispatchResult handleSetIfaceInetAddr(const PrivOpsPure::SetIfa
 // the response body carries the assigned A/B iface names.
 PrivOpsWirePure::DispatchResult handleCreateEpair(const PrivOpsPure::CreateEpairReq &r);
 
+// 1.1.39: ensure_user_root — create + chown /var/run/crate/<uid> for
+// the connection's peer uid. Takes the uid, not a request struct, so a
+// client cannot ask for another user's root. uid 0 is refused (root
+// uses the legacy tree).
+PrivOpsWirePure::DispatchResult handleEnsureUserRoot(uint32_t peerUid);
+
 // 0.9.28: per-loginclass RCTL umbrella ops. Wraps
 // `rctl -a loginclass:<name>:<key>:deny=<value>` and
 // `rctl -r loginclass:<name>:<key>:deny`. The set_rctl

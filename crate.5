@@ -656,6 +656,34 @@ mode when not specified in spec.
 .It Sy static_mac_default
 Enable deterministic MAC by default for non-NAT modes.
 Default: false.
+.It Sy network_pool
+IPv4 CIDR from which
+.Cm network: auto
+jails receive a static address and the pool's first host address as
+gateway
+.Pq e.g. Dq 10.66.0.0/16 .
+Empty (default) falls back to DHCP on the bridge.
+.It Sy network_pool6
+IPv6 ULA prefix for the same purpose
+.Pq e.g. Dq fd00:0:0:1::/64 .
+.It Sy network_pool_user_bits
+Rootless only (1.1.39): each operator allocates from a per-uid
+sub-block this many bits narrower than
+.Sy network_pool
+(a /16 pool with the default 8 gives every uid a /24; the sub-block
+must stay at /28 or wider). 0 shares one pool between operators, who
+may then receive the same address because lease files are per user.
+Default: 8.
+.It Sy network_pool6_user_bits
+Same for
+.Sy network_pool6 .
+Default: 16.
+.It Sy firewall_backend
+.Cm pf , ipfw , none
+or empty (auto-detect via
+.Xr kldstat 8 ,
+pf preferred) for the SNAT/rdr auto-rules of
+.Cm network: auto .
 .It Sy bootstrap_method
 Base system bootstrap method.
 Default:

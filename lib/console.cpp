@@ -4,6 +4,7 @@
 #include "args.h"
 #include "locs.h"
 #include "jail_query.h"
+#include "runtime_paths_pure.h"
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
@@ -25,7 +26,6 @@
 // Resolve a container target (name or JID) to its JID and path.
 // Uses libjail API via JailQuery (replaces jls parsing).
 static bool resolveContainer(const std::string &target, int &outJid, std::string &outPath) {
-  auto cratePrefix = std::string(Locations::jailDirectoryPath) + "/jail-";
 
   // Try direct lookup by name first
   auto jail = JailQuery::getJailByName(target);
@@ -36,7 +36,7 @@ static bool resolveContainer(const std::string &target, int &outJid, std::string
     } catch (...) {}
   }
 
-  if (jail && jail->path.find(cratePrefix) == 0) {
+  if (jail && RuntimePathsPure::isCrateJailPath(jail->path)) {
     outJid = jail->jid;
     outPath = jail->path;
     return true;
@@ -45,7 +45,7 @@ static bool resolveContainer(const std::string &target, int &outJid, std::string
   // Fall back to scanning all crate jails for partial match
   auto jails = JailQuery::getAllJails(true);
   for (auto &j : jails) {
-    auto name = j.path.substr(std::string(Locations::jailDirectoryPath).size() + 1);
+    auto name = RuntimePathsPure::crateJailDirName(j.path);   // "jail-<name>-<hex>"
     bool match = false;
     try { match = (std::stoi(target) == j.jid); } catch (...) {}
     if (!match) match = (name == target);
@@ -87,17 +87,21 @@ bool consoleCrate(const Args &args, int argc, char** argv) {
   execArgv.push_back(consoleUser);
   execArgv.push_back(jidStr);
 
+  // 1.1.39: jexec(8) execvp()s argv[0] literally — there is no shell
+  // between us and it — so "login -f <user>" as ONE argv element meant
+  // "run a program called `login -f root`" and every interactive
+  // `crate console` failed with "No such file or directory". Each word
+  // is its own argv element now, and the extra `-- args` are appended
+  // verbatim (no shell quoting, since nothing unquotes them).
   if (args.consoleCmd.empty()) {
-    // Interactive login shell
-    execArgv.push_back(STR("login -f " << consoleUser));
+    execArgv.push_back("/usr/bin/login");
+    execArgv.push_back("-f");
+    execArgv.push_back(consoleUser);
   } else {
-    // Specific command
     execArgv.push_back(args.consoleCmd);
   }
-
-  // Append any extra arguments passed after --
   for (int i = 0; i < argc; i++)
-    execArgv.back() += STR(" " << Util::shellQuote(argv[i]));
+    execArgv.push_back(argv[i]);
 
   // Execute — this replaces the process for interactive use via fork+exec
   int status = Util::execCommandGetStatus(execArgv, "console into jail");

@@ -96,7 +96,46 @@ ATF_TEST_CASE_BODY(per_user_paths_no_traversal_segments) {
   ATF_REQUIRE(p.find("//") == std::string::npos);
 }
 
+// --- 1.1.39: crate jail path recognition (legacy + per-user layouts) ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(crate_jail_path_both_layouts);
+ATF_TEST_CASE_BODY(crate_jail_path_both_layouts) {
+  // legacy / root
+  ATF_REQUIRE(isCrateJailPath("/var/run/crate/jail-web-1a2b"));
+  ATF_REQUIRE_EQ(crateJailDirName("/var/run/crate/jail-web-1a2b"), std::string("jail-web-1a2b"));
+  // rootless per-user
+  ATF_REQUIRE(isCrateJailPath("/var/run/crate/1000/jail-web-1a2b"));
+  ATF_REQUIRE_EQ(crateJailDirName("/var/run/crate/1000/jail-web-1a2b"), std::string("jail-web-1a2b"));
+  ATF_REQUIRE(isCrateJailPath(perUserRoot(65534) + "/jail-x-0"));
+  // names may contain dots and dashes
+  ATF_REQUIRE_EQ(crateJailDirName("/var/run/crate/jail-my.app-2-ffff"), std::string("jail-my.app-2-ffff"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(crate_jail_path_rejects_others);
+ATF_TEST_CASE_BODY(crate_jail_path_rejects_others) {
+  const char *bad[] = {
+    "",
+    "/var/run/crate",
+    "/var/run/crate/",
+    "/var/run/crate/jail-",                    // empty name
+    "/var/run/crate/1000",                     // the per-user root itself
+    "/var/run/crate/1000/leases",              // a per-user subdir, not a jail
+    "/var/run/crate/alice/jail-web-1",         // non-numeric uid segment
+    "/var/run/crate/1000/x/jail-web-1",        // too deep
+    "/var/run/crate/jail-web-1/etc",           // inside a jail, not its root
+    "/var/run/crate/chroot-create-web-1",      // create scratch dir
+    "/var/run/cratex/jail-web-1",              // prefix lookalike
+    "/zroot/jails/jail-web-1",
+  };
+  for (const char *p : bad)
+    if (isCrateJailPath(p))
+      ATF_FAIL(std::string("accepted: ") + p);
+  ATF_REQUIRE_EQ(crateJailDirName("/var/run/crate/1000/leases"), std::string());
+}
+
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, crate_jail_path_both_layouts);
+  ATF_ADD_TEST_CASE(tcs, crate_jail_path_rejects_others);
   ATF_ADD_TEST_CASE(tcs, legacy_root_is_var_run_crate);
   ATF_ADD_TEST_CASE(tcs, per_user_root_format);
   ATF_ADD_TEST_CASE(tcs, per_user_root_root_uid_does_not_alias_legacy);

@@ -4,6 +4,7 @@
 // Fallback to jls(8)/jexec(8) when API calls fail.
 
 #include "jail_query.h"
+#include "runtime_paths_pure.h"
 #include "locs.h"
 #include "pathnames.h"
 #include "util.h"
@@ -151,7 +152,8 @@ static std::vector<JailInfo> fallbackGetAllJails() {
 
 std::vector<JailInfo> getAllJails(bool crateOnly) {
   std::vector<JailInfo> result;
-  auto cratePrefix = std::string(Locations::jailDirectoryPath) + "/jail-";
+  // 1.1.39: crate jails live at /var/run/crate/jail-* (root) or
+  // /var/run/crate/<uid>/jail-* (rootless); RuntimePathsPure decides.
 
   // Try native jailparam iteration: walk lastjid
   std::vector<std::string> names = {"lastjid", "jid", "name", "path",
@@ -162,7 +164,7 @@ std::vector<JailInfo> getAllJails(bool crateOnly) {
     auto fallback = fallbackGetAllJails();
     if (crateOnly) {
       for (auto &j : fallback)
-        if (j.path.find(cratePrefix) == 0)
+        if (RuntimePathsPure::isCrateJailPath(j.path))
           result.push_back(j);
       return result;
     }
@@ -174,7 +176,7 @@ std::vector<JailInfo> getAllJails(bool crateOnly) {
     auto fallback = fallbackGetAllJails();
     if (crateOnly) {
       for (auto &j : fallback)
-        if (j.path.find(cratePrefix) == 0)
+        if (RuntimePathsPure::isCrateJailPath(j.path))
           result.push_back(j);
       return result;
     }
@@ -205,7 +207,7 @@ std::vector<JailInfo> getAllJails(bool crateOnly) {
     auto nextJid = std::to_string(info.jid);
     jailparam_import(&ps.params[0], nextJid.c_str());
 
-    if (crateOnly && info.path.find(cratePrefix) != 0)
+    if (crateOnly && !RuntimePathsPure::isCrateJailPath(info.path))
       continue;
 
     result.push_back(info);

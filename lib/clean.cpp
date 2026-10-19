@@ -50,8 +50,21 @@ bool cleanCrates(const Args &args) {
   // 1. Clean orphaned jail directories under /var/run/crate/
   std::cout << rang::style::bold << "Scanning for orphaned jail directories..."
             << rang::style::reset << std::endl;
-  {
-    auto jailDir = std::string(Locations::jailDirectoryPath);
+  // 1.1.39: also sweep the per-user roots /var/run/crate/<uid>/ where
+  // rootless `crate run` places its jail directories.
+  std::vector<std::string> jailDirs{std::string(Locations::jailDirectoryPath)};
+  if (DIR *top = ::opendir(Locations::jailDirectoryPath)) {
+    struct dirent *ent;
+    while ((ent = ::readdir(top)) != nullptr) {
+      std::string name = ent->d_name;
+      if (name.empty() || name.find_first_not_of("0123456789") != std::string::npos) continue;
+      auto p = std::string(Locations::jailDirectoryPath) + "/" + name;
+      struct stat sb;
+      if (::lstat(p.c_str(), &sb) == 0 && S_ISDIR(sb.st_mode)) jailDirs.push_back(p);
+    }
+    ::closedir(top);
+  }
+  for (const auto &jailDir : jailDirs) {
     DIR *dir = ::opendir(jailDir.c_str());
     if (dir) {
       struct dirent *ent;

@@ -239,6 +239,11 @@ std::string parseCreateEpair(const FieldMap &/*m*/,
   return "";
 }
 
+std::string parseEnsureUserRoot(const FieldMap &/*m*/,
+                                PrivOpsPure::EnsureUserRootReq &/*out*/) {
+  return "";
+}
+
 std::string parseSetLoginclassRctl(const FieldMap &m,
                                    PrivOpsPure::SetLoginclassRctlReq &out) {
   if (auto e = requireString(m, "loginclass", out.loginclass); !e.empty()) return e;

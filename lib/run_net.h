@@ -7,6 +7,7 @@
 #include "spec.h"
 
 #include <string>
+#include <vector>
 #include <functional>
 
 namespace RunNet {
@@ -41,6 +42,11 @@ EpairInfo createEpair(int jid, const std::string &jidStr,
 
 // Destroy an epair interface (host side — jail side is auto-destroyed with jail)
 void destroyEpair(const std::string &ifaceA);
+// 1.1.39: privops-aware interface destroy (teardown_iface verb; warn-only
+// on failure). Used for epair halves and the auto-created bridge.
+void teardownIface(const std::string &ifname);
+// 1.1.39: privops-aware ipfw (args without the leading /sbin/ipfw).
+void ipfwExec(const std::vector<std::string> &args, const std::string &what);
 
 // 0.8.32: epairNumToIp moved into anon namespace in run_net.cpp —
 // only called from within the file; no external callers in lib/,

@@ -24,15 +24,15 @@ service crated start
 crate --version           # expect 1.1.16+
 crated --version 2>&1     # same
 
-# 0.3 (optional, enables the 1.1.15 gate) — pick a pool root for tenants
-install -d -m 0755 /jails-tenants
-install -d -o 1000 /jails-tenants/1000   # per-uid scratch space
-
+# 0.3 (optional, enables the 1.1.15 gate). Since 1.1.39 a rootless
+# `crate run` puts jail directories under /var/run/crate/<uid>/ (crated
+# creates and chowns that root on the first privops connection), so the
+# create_jail path gate must use the same prefix:
 cat >> /usr/local/etc/crated.conf <<'EOF'
 rootless:
   per_user: true
   zfs_master_prefix: zroot/jails
-  path_master_prefix: /jails-tenants     # 1.1.15
+  path_master_prefix: /var/run/crate     # 1.1.15 gate; per-user slice = /var/run/crate/<uid>
 EOF
 service crated restart
 
@@ -118,13 +118,13 @@ Run as a non-root operator (`uid 1000`) talking to the privops socket.
 
 ```sh
 # as operator (uid 1000)
-crate create -s /jails-tenants/1000/web.yml -o /tmp/web.crate
+crate create -s /var/run/crate/1000/jail-web-1a2b.yml -o /tmp/web.crate
 crate run -f /tmp/web.crate &
 sleep 2
 
 # as root: registry must contain the entry
 grep -E "$\(jls -j sway-headless jid\)\b" /var/db/crate/jid_owners.tsv
-# expected: <jid>\t1000\tweb\t/jails-tenants/1000/web
+# expected: <jid>\t1000\tweb\t/var/run/crate/1000/jail-web-1a2b
 ```
 
 Pass: a line appears with `uid=1000` matching the running jail's name+path.
@@ -163,7 +163,7 @@ script's 211.4 also asserts the TSV stays well-formed).
 ### 3.1 Own mount target — Allow
 
 ```sh
-# as uid 1000; the jail's path is /jails-tenants/1000/web
+# as uid 1000; the jail's path is /var/run/crate/1000/jail-web-1a2b
 crate run web -- mount -t nullfs /some/local/cache /var/cache
 ```
 
@@ -176,7 +176,7 @@ Pass: succeeds.
 sudo -u "#1001" \
   curl --unix-socket /var/run/crate/privops.sock \
        -X POST http://localhost/api/v1/privops/mount_nullfs \
-       -d '{"source":"/etc","target":"/jails-tenants/1000/web/host_etc"}'
+       -d '{"source":"/etc","target":"/var/run/crate/1000/jail-web-1a2b/host_etc"}'
 ```
 
 Pass: `HTTP/1.1 403`, body contains
@@ -186,7 +186,7 @@ Pass: `HTTP/1.1 403`, body contains
 
 Operators rarely call this directly — `crate run` does it automatically.
 The check is that, when called via the privops socket with
-`mount_path=/jails-tenants/1000/web/dev`, the gate resolves to alice's
+`mount_path=/var/run/crate/1000/jail-web-1a2b/dev`, the gate resolves to alice's
 jail (longest-prefix from PR #212). Verify with `apply_devfs_ruleset`:
 
 ```sh
@@ -194,7 +194,7 @@ jail (longest-prefix from PR #212). Verify with `apply_devfs_ruleset`:
 sudo -u "#1001" \
   curl --unix-socket /var/run/crate/privops.sock \
        -X POST http://localhost/api/v1/privops/apply_devfs_ruleset \
-       -d '{"mount_path":"/jails-tenants/1000/web/dev","ruleset":4}'
+       -d '{"mount_path":"/var/run/crate/1000/jail-web-1a2b/dev","ruleset":4}'
 ```
 
 Pass: `HTTP/1.1 403` with the same `DenyForeignPath` reason.
@@ -206,10 +206,13 @@ Pass: `HTTP/1.1 403` with the same `DenyForeignPath` reason.
 ### 4.1 Inside-prefix create — Allow
 
 ```sh
-# as uid 1000
-crate create -s /tmp/alice.yml -o /tmp/alice.crate \
-  --override-jail-path /jails-tenants/1000/alice-app
-crate run -f /tmp/alice.crate
+# as uid 1000 — the jail directory is chosen by crate run:
+# /var/run/crate/1000/jail-alice-app-<hex>, inside the caller's slice
+crate create -s /tmp/alice.yml -o /tmp/alice-app.crate
+crate run -f /tmp/alice-app.crate
+# NOTE (1.1.39): the jail is created and configured, but the in-jail
+# command still fails under rootless — jail_attach/jexec need root and
+# there is no exec verb yet (TODO §1). Start it via crated instead.
 ```
 
 Pass: jail starts, `jls` shows it.
@@ -220,7 +223,7 @@ Pass: jail starts, `jls` shows it.
 sudo -u "#1000" \
   curl --unix-socket /var/run/crate/privops.sock \
        -X POST http://localhost/api/v1/privops/create_jail \
-       -d '{"name":"escape","path":"/jails-tenants/1001/escape","hostname":"escape","vnet":false,"parameters":""}'
+       -d '{"name":"escape","path":"/var/run/crate/1001/escape","hostname":"escape","vnet":false,"parameters":""}'
 ```
 
 Pass: `HTTP/1.1 403`, body contains
@@ -252,8 +255,8 @@ This is the headline manual check the driver script flags as
 
 1. SSH as uid 1000.
 2. Run `crate(1)` against the privops socket (the rootless flow).
-3. Try to create a jail at `/jails-tenants/1001/...` or anywhere
-   outside `/jails-tenants/1000/...`.
+3. Try to create a jail at `/var/run/crate/1001/...` or anywhere
+   outside `/var/run/crate/1000/...`.
 4. Confirm the `403` and that no jail is created (verify with
    `jls` from root).
 

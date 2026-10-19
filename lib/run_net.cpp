@@ -297,8 +297,33 @@ EpairInfo createEpair(int jid, const std::string &jidStr,
   return info;
 }
 
+// 1.1.39: privops-aware interface destroy. Teardown path: warn-only,
+// like the other teardown wrappers — an orphaned epair is reported by
+// `crate doctor`/`crate clean`, and a thrown exception here would mask
+// the real teardown error. PrivOpsClient::buildTeardownIface existed
+// since 0.9.x but had no caller: every bridge/NAT teardown shelled out
+// to ifconfig directly and EACCES'd under rootless, leaking one epair
+// pair per run.
+void teardownIface(const std::string &ifname) {
+  std::string sock = PrivOpsClient::detectSocketPath();
+  if (!sock.empty()) {
+    auto resp = PrivOpsClient::sendRequest(sock,
+        PrivOpsClient::buildTeardownIface(ifname));
+    if (!resp.transportError.empty()) {
+      WARN("privops teardown_iface '" << ifname << "' transport error: "
+           << resp.transportError)
+      return;
+    }
+    if (resp.status >= 400)
+      WARN("privops teardown_iface '" << ifname << "' failed (status "
+           << resp.status << "): " << resp.body)
+    return;
+  }
+  IfconfigOps::destroyInterface(ifname);
+}
+
 void destroyEpair(const std::string &ifaceA) {
-  IfconfigOps::destroyInterface(ifaceA);
+  teardownIface(ifaceA);
 }
 
 RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
@@ -643,7 +668,7 @@ BridgeInfo createBridgeEpair(int jid, const std::string &jidStr,
 void destroyBridgeEpair(const BridgeInfo &info) {
   // remove from bridge first, then destroy
   bridgeDelMemberPrivopsOrLocal(info.bridgeIface, info.ifaceA);
-  IfconfigOps::destroyInterface(info.ifaceA);
+  teardownIface(info.ifaceA);
 }
 
 //
@@ -750,7 +775,58 @@ std::pair<std::string,std::string> generateStaticMac(
 }
 
 void setMacAddress(const std::string &iface, const std::string &mac) {
+  // 1.1.39: there is no privops verb for a host-side MAC change (the
+  // jail-side half goes through configure_iface's mac field). Under
+  // rootless the host half keeps its kernel-assigned MAC; it is the
+  // bridge-member side, so DHCP reservations (which key on the jail
+  // side) are unaffected.
+  if (!PrivOpsClient::detectSocketPath().empty()) {
+    WARN("static-mac: host-side " << iface << " keeps its kernel MAC under rootless "
+         "(no privops verb for host-side ether); jail-side MAC is set")
+    return;
+  }
   IfconfigOps::setMacAddr(iface, mac);
+}
+
+// 1.1.39: privops-aware ipfw for run.cpp's bridge/auto ipfw path (the
+// NAT-mode setupFirewallRules has its own equivalent lambda). `args`
+// is the ipfw argv WITHOUT the leading /sbin/ipfw:
+//   {"nat", "<N>", "config", ...}  -> ConfigureIpfwNat
+//   {"add", "<N>", "<action>", ...} -> AddIpfwRule (set 0)
+//   {"delete", "<N>"}               -> RemoveIpfwRule (set 0)
+// Anything else is executed directly (legacy/root) or refused under
+// rootless with a clear message.
+void ipfwExec(const std::vector<std::string> &args, const std::string &what) {
+  std::string sock = PrivOpsClient::detectSocketPath();
+  if (sock.empty()) {
+    std::vector<std::string> argv{CRATE_PATH_IPFW};
+    argv.insert(argv.end(), args.begin(), args.end());
+    Util::execCommand(argv, what);
+    return;
+  }
+  auto num = [&](size_t i) -> unsigned {
+    try { return (unsigned)std::stoul(args.at(i)); }
+    catch (...) { ERR2("run_net", what << ": bad ipfw number '" << (i < args.size() ? args[i] : "") << "'") }
+  };
+  auto join = [&](size_t from) {
+    std::string s;
+    for (size_t i = from; i < args.size(); i++) { if (i > from) s += ' '; s += args[i]; }
+    return s;
+  };
+  PrivOpsClient::Response resp;
+  if (args.size() >= 3 && args[0] == "nat" && args[2] == "config") {
+    resp = PrivOpsClient::sendRequest(sock, PrivOpsClient::buildConfigureIpfwNat(num(1), join(3)));
+  } else if (args.size() >= 3 && args[0] == "add") {
+    resp = PrivOpsClient::sendRequest(sock, PrivOpsClient::buildAddIpfwRule(0, num(1), args[2], join(3)));
+  } else if (args.size() == 2 && args[0] == "delete") {
+    resp = PrivOpsClient::sendRequest(sock, PrivOpsClient::buildRemoveIpfwRule(0, num(1)));
+  } else {
+    ERR2("run_net", what << ": no privops verb for `ipfw " << join(0) << "` — run as root")
+  }
+  if (!resp.transportError.empty())
+    ERR2("run_net", what << ": privops transport error: " << resp.transportError)
+  if (resp.status >= 400)
+    ERR2("run_net", what << ": privops failed (status " << resp.status << "): " << resp.body)
 }
 
 //

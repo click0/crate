@@ -39,6 +39,9 @@
 #include "run_services.h"
 #include "pfctl_ops.h"
 #include "privops_client.h"
+#include "privops_wire_pure.h"
+#include "per_user_net_pure.h"
+#include "runtime_paths_pure.h"
 
 #include <rang.hpp>
 
@@ -209,19 +212,16 @@ static void flushPfAnchorPrivopsOrLocal(const std::string &anchor) {
 static bool runHealthcheckOnce(const std::string &jidStr, const std::string &user,
                                const Spec::Healthcheck &hc, unsigned timeoutSec) {
   try {
-    auto cmd = STR("/bin/sh -c " << Util::shellQuote(hc.test));
-    int status;
-    if (timeoutSec > 0) {
-      // Use timeout(1) to enforce the healthcheck deadline
-      status = Util::execCommandGetStatus(
-        {"/usr/bin/timeout", std::to_string(timeoutSec),
-         CRATE_PATH_JEXEC, "-l", "-U", user, jidStr, cmd},
-        "healthcheck");
-    } else {
-      status = Util::execCommandGetStatus(
-        {CRATE_PATH_JEXEC, "-l", "-U", user, jidStr, cmd},
-        "healthcheck");
-    }
+    // 1.1.39: through JailExec like every other in-jail command (was a
+    // raw jexec argv, and the shell line was passed as ONE argv token).
+    // The deadline is enforced by timeout(1) INSIDE the jail (base
+    // ships /usr/bin/timeout).
+    std::vector<std::string> argv;
+    if (timeoutSec > 0)
+      argv = {"/usr/bin/timeout", std::to_string(timeoutSec), "/bin/sh", "-c", hc.test};
+    else
+      argv = {"/bin/sh", "-c", hc.test};
+    int status = JailExec::execInJail(std::stoi(jidStr), argv, user, "healthcheck");
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
   } catch (...) {
     return false;
@@ -351,7 +351,30 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     ERR(e)
   }
 
-  auto jailPath = STR(Locations::jailDirectoryPath << "/jail-" << nameComponent << "-" << runHex);
+  // 1.1.39: under rootless the jail directory lives in the operator's
+  // per-user root (/var/run/crate/<uid>/, RuntimePathsPure) — the same
+  // tree the lease file and spec registry already use — not in the
+  // root-owned /var/run/crate, where an unprivileged mkdir fails. The
+  // daemon creates and chowns that root (ensure_user_root).
+  std::string jailBaseDir = Locations::jailDirectoryPath;
+  {
+    std::string sock = PrivOpsClient::detectSocketPath();
+    if (!sock.empty()) {
+      auto resp = PrivOpsClient::sendRequest(sock, PrivOpsClient::buildEnsureUserRoot());
+      if (!resp.transportError.empty())
+        ERR("privops ensure_user_root transport error: " << resp.transportError)
+      if (resp.status >= 400)
+        ERR("privops ensure_user_root failed (status " << resp.status << "): " << resp.body)
+      std::string p;
+      if (PrivOpsWirePure::extractStringField(resp.body, "path", p) == PrivOpsWirePure::kPresent
+          && !p.empty())
+        jailBaseDir = p;
+      else
+        jailBaseDir = RuntimePathsPure::perUserRoot((uint32_t)::getuid());
+      LOG("rootless: jail directories under " << jailBaseDir)
+    }
+  }
+  auto jailPath = STR(jailBaseDir << "/jail-" << nameComponent << "-" << runHex);
 
   // For warm-base we let ZFS create + mount the directory by setting
   // mountpoint inheritance on the clone. For the cold path we mkdir
@@ -370,12 +393,12 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       ERR("--warm-base: " << e)
     // (--name is validated up front, right after nameComponent, since 1.1.33.)
 
-    if (!Util::Fs::isOnZfs(Locations::jailDirectoryPath))
+    if (!Util::Fs::isOnZfs(jailBaseDir))
       ERR("--warm-base requires the jails directory to live on ZFS; "
-          << Locations::jailDirectoryPath << " is not")
-    auto parentDataset = Util::Fs::getZfsDataset(Locations::jailDirectoryPath);
+          << jailBaseDir << " is not")
+    auto parentDataset = Util::Fs::getZfsDataset(jailBaseDir);
     if (parentDataset.empty())
-      ERR("--warm-base: cannot determine ZFS dataset of " << Locations::jailDirectoryPath)
+      ERR("--warm-base: cannot determine ZFS dataset of " << jailBaseDir)
 
     warmSnapName = WarmPure::fullSnapshotName(
       args.runWarmBase, WarmPure::warmRunSnapshotSuffix(::time(nullptr)));
@@ -1140,6 +1163,13 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         ERR("bridge mode: bridge '" << optionNet->bridgeIface
             << "' does not exist; create it manually or set 'auto_create_bridge: true' in the spec")
       } else if (act == BridgePure::Action::Create) {
+        // 1.1.39: no create_bridge privops verb yet — say so instead
+        // of failing deep inside ifconfig with EPERM.
+        if (!PrivOpsClient::detectSocketPath().empty())
+          ERR("bridge mode: bridge '" << optionNet->bridgeIface
+              << "' does not exist and crate runs unprivileged; auto_create_bridge "
+                 "needs root — create it once as root (`ifconfig "
+              << optionNet->bridgeIface << " create up`, or cloned_interfaces in rc.conf)")
         IfconfigOps::createNamedInterface(optionNet->bridgeIface);
         IfconfigOps::setUp(optionNet->bridgeIface);
         weCreatedBridge = true;
@@ -1175,7 +1205,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       // it (the typical case), leave it intact for the next run.
       if (weCreatedBridge) {
         try {
-          IfconfigOps::destroyInterface(optionNet->bridgeIface);
+          RunNet::teardownIface(optionNet->bridgeIface);   // 1.1.39: privops-aware
         } catch (...) {
           // Best-effort: log but don't propagate (we may be unwinding
           // from another error and a missing bridge isn't critical).
@@ -1213,7 +1243,33 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         // Lease key = jail directory basename ("jail-<name>-<hex>"),
         // unique per jail instance and stable for its lifetime.
         auto leaseName = std::filesystem::path(jailPath).filename().string();
-        uint32_t addr = NetworkLease::allocateFor(leaseName, pool);
+        // 1.1.39: under rootless each operator has its OWN lease file,
+        // so two operators allocating from the same host-wide pool got
+        // the same address (both start at base+2). Carve a per-uid
+        // sub-block (PerUserNetPure::composeIpv4, network_pool_user_bits
+        // below the pool prefix) and allocate from it; the address is
+        // still configured with the POOL's prefix length and gateway so
+        // routing on the shared bridge is unchanged.
+        IpAllocPure::Network allocPool = pool;
+        if (!PrivOpsClient::detectSocketPath().empty() && cfg.networkPoolUserBits > 0) {
+          unsigned sub = pool.prefixLen + cfg.networkPoolUserBits;
+          if (sub > 28) {
+            std::cerr << rang::fg::yellow
+                      << "network_pool " << cfg.networkPool << " is too small to split per user ("
+                      << cfg.networkPoolUserBits << " bits -> /" << sub
+                      << "); sharing one pool — two operators may receive the same address. "
+                         "Use a wider pool or set network_pool_user_bits: 0 to silence."
+                      << rang::style::reset << std::endl;
+          } else {
+            auto r = PerUserNetPure::composeIpv4(cfg.networkPool, sub, (uint32_t)::getuid());
+            if (!r.error.empty())
+              ERR("network_pool per-user split: " << r.error)
+            if (auto e = IpAllocPure::parseCidr(r.cidr, allocPool); !e.empty())
+              ERR("network_pool per-user split '" << r.cidr << "': " << e)
+            LOG("network_pool: uid " << ::getuid() << " allocates from " << r.cidr)
+          }
+        }
+        uint32_t addr = NetworkLease::allocateFor(leaseName, allocPool);
         auto ipBare = IpAllocPure::formatIp(addr);
         auto ip = ipBare + "/" + std::to_string(pool.prefixLen);
         auto gw = IpAllocPure::formatIp(IpAllocPure::gatewayFor(pool));
@@ -1245,7 +1301,23 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
           Ip6AllocPure::Network6 pool6;
           if (auto e = Ip6AllocPure::parseCidr6(cfg.networkPool6, pool6); !e.empty())
             ERR("network_pool6 '" << cfg.networkPool6 << "': " << e)
-          auto addr6 = NetworkLease6::allocateFor(leaseName, pool6);
+          Ip6AllocPure::Network6 allocPool6 = pool6;
+          if (!PrivOpsClient::detectSocketPath().empty() && cfg.networkPool6UserBits > 0) {
+            unsigned sub6 = pool6.prefixLen + cfg.networkPool6UserBits;
+            if (sub6 > 120) {
+              std::cerr << rang::fg::yellow
+                        << "network_pool6 " << cfg.networkPool6 << " is too small to split per user"
+                        << rang::style::reset << std::endl;
+            } else {
+              auto r6 = PerUserNetPure::composeIpv6(cfg.networkPool6, sub6, (uint32_t)::getuid());
+              if (!r6.error.empty())
+                ERR("network_pool6 per-user split: " << r6.error)
+              if (auto e = Ip6AllocPure::parseCidr6(r6.cidr, allocPool6); !e.empty())
+                ERR("network_pool6 per-user split '" << r6.cidr << "': " << e)
+              LOG("network_pool6: uid " << ::getuid() << " allocates from " << r6.cidr)
+            }
+          }
+          auto addr6 = NetworkLease6::allocateFor(leaseName, allocPool6);
           auto ip6Bare = Ip6AllocPure::formatIp6(addr6);
           auto ip6 = ip6Bare + "/" + std::to_string(pool6.prefixLen);
           RunNet::configureStaticIp6(bridgeInfo.ifaceB, ip6, jid, execInJail);
@@ -1422,10 +1494,14 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
                 if (!natConfig.empty()) natConfig += ' ';
                 natConfig += natArgv[i];
               }
-              IpfwOps::configureNat(natId, natConfig);
-              Util::execCommand(
-                AutoFwPure::buildIpfwNatRuleArgv(ruleId, natId, ipBare, externalIface),
-                "ipfw add nat rule");
+              // 1.1.39: through privops when unprivileged (was a direct
+              // ipfw exec that EACCES'd under rootless).
+              RunNet::ipfwExec({"nat", std::to_string(natId), "config", natConfig},
+                               "ipfw nat config");
+              {
+                auto a = AutoFwPure::buildIpfwNatRuleArgv(ruleId, natId, ipBare, externalIface);
+                RunNet::ipfwExec(std::vector<std::string>(a.begin() + 1, a.end()), "ipfw add nat rule");
+              }
               // 0.8.39 (bug#239590): hairpin rule so connections
               // from the host itself to its own LAN address reach
               // the jail. Best-effort — soft-warn if it fails;
@@ -1433,9 +1509,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
               unsigned loopbackId = AutoFwPure::loopbackRuleIdForJail(jid);
               bool loopbackInstalled = false;
               try {
-                Util::execCommand(
-                  AutoFwPure::buildIpfwHostLoopbackNatArgv(loopbackId, natId),
-                  "ipfw add host-loopback nat rule");
+                auto a = AutoFwPure::buildIpfwHostLoopbackNatArgv(loopbackId, natId);
+                RunNet::ipfwExec(std::vector<std::string>(a.begin() + 1, a.end()),
+                                 "ipfw add host-loopback nat rule");
                 loopbackInstalled = true;
               } catch (const std::exception &ex) {
                 std::cerr << rang::fg::yellow
@@ -1458,22 +1534,29 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
                     << " + nat " << natId)
                 if (loopbackInstalled) {
                   try {
-                    Util::execCommand(AutoFwPure::buildIpfwRuleDeleteArgv(loopbackId),
-                                      "ipfw delete host-loopback rule");
+                    RunNet::ipfwExec({"delete", std::to_string(loopbackId)},
+                                     "ipfw delete host-loopback rule");
                   } catch (...) {}
                 }
                 try {
-                  Util::execCommand(AutoFwPure::buildIpfwRuleDeleteArgv(ruleId),
-                                    "ipfw delete rule");
+                  RunNet::ipfwExec({"delete", std::to_string(ruleId)}, "ipfw delete rule");
                 } catch (...) {}
                 // 0.8.30: ditto for the cleanup path. deleteNat
                 // already swallows its own exceptions and warns,
                 // so the outer try/catch is now redundant — kept
                 // for safety in case a future implementation
                 // changes behaviour.
-                try {
-                  IpfwOps::deleteNat(natId);
-                } catch (...) {}
+                // 1.1.39: no privops verb deletes a NAT instance; under
+                // rootless say so (TODO: delete_ipfw_nat verb).
+                if (!PrivOpsClient::detectSocketPath().empty()) {
+                  WARN("auto-fw[ipfw]: nat instance " << natId
+                       << " left in place (no privops verb to delete it); root: `ipfw nat "
+                       << natId << " delete`")
+                } else {
+                  try {
+                    IpfwOps::deleteNat(natId);
+                  } catch (...) {}
+                }
               });
             } catch (const std::exception &ex) {
               std::cerr << rang::fg::yellow
@@ -1656,6 +1739,14 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     //
     // NAT mode (original behavior): epair + ipfw NAT
     //
+    // 1.1.39: NAT mode coordinates host-wide ipfw slots through the
+    // root-owned /var/run/crate/ctx-fw-slots file and writes sysctls;
+    // none of that goes through privops. Refuse up front with the
+    // alternative instead of dying on EACCES at FwSlots::lock.
+    if (!PrivOpsClient::detectSocketPath().empty())
+      ERR("NAT mode (net: outbound/inbound) needs root: firewall slots and "
+          "ip forwarding are host-wide and not reachable through privops yet. "
+          "Under rootless use `network: auto` (bridge + network_pool) or run as root.")
     // detect host's gateway
     auto gw = RunNet::detectGateway();
     gwIface = gw.iface; hostIP = gw.hostIP; hostLAN = gw.hostLAN;

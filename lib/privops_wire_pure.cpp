@@ -369,6 +369,11 @@ std::string parseCreateEpair(const std::string &/*body*/,
   return "";
 }
 
+std::string parseEnsureUserRoot(const std::string &/*body*/,
+                                PrivOpsPure::EnsureUserRootReq &/*out*/) {
+  return "";
+}
+
 std::string parseSetLoginclassRctl(const std::string &body,
                                    PrivOpsPure::SetLoginclassRctlReq &out) {
   if (auto e = requireStringField(body, "loginclass", out.loginclass); !e.empty()) return e;
@@ -724,6 +729,13 @@ std::string formatSetIfaceInetAddrSuccess(const std::string &ifname,
   return o.str();
 }
 
+std::string formatEnsureUserRootSuccess(uint32_t uid, const std::string &path) {
+  std::ostringstream o;
+  o << "{\"ensured\":true,\"uid\":" << uid
+    << ",\"path\":\"" << escape(path) << "\"}";
+  return o.str();
+}
+
 std::string formatCreateEpairSuccess(const std::string &ifaceA,
                                      const std::string &ifaceB) {
   std::ostringstream o;
@@ -874,6 +886,12 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       return runVerb<SetIfaceInetAddrReq>(body, v, parseSetIfaceInetAddr, validateSetIfaceInetAddr);
     case Verb::CreateEpair:
       return runVerb<CreateEpairReq>(body, v, parseCreateEpair, validateCreateEpair);
+    case Verb::EnsureUserRoot:
+      // 1.1.39: the HTTP transport has no peer uid, so there is no
+      // per-user root to ensure. parseValidateAndDispatch is the
+      // 501 fallback table; the daemon's dispatchers handle the real
+      // thing on the libnv path.
+      return runVerb<EnsureUserRootReq>(body, v, parseEnsureUserRoot, validateEnsureUserRoot);
     case Verb::SetLoginclassRctl:
       return runVerb<SetLoginclassRctlReq>(body, v, parseSetLoginclassRctl, validateSetLoginclassRctl);
     case Verb::ClearLoginclassRctl:
