@@ -12,6 +12,7 @@
 #include "privops_listener.h"
 
 #include "../lib/jid_owner_registry.h"
+#include "../lib/iface_owner_registry.h"   // 1.1.43
 #include "../lib/jail_query.h"
 
 #include "err.h"
@@ -162,6 +163,21 @@ int main(int argc, char **argv) {
                 << " stale entr" << (dropped == 1 ? "y" : "ies")
                 << " (jail gone or jid reused)" << std::endl;
     Crated::setJidOwnerRegistry(&jidOwnerRegistry);
+
+    // 1.1.43: interface->owner registry for the interface-named privops
+    // verbs. Fed by create_epair / teardown_iface; reconciled against the
+    // host's live interfaces (the `a` half — the `b` half sits inside a
+    // vnet and is invisible here). Pre-1.1.43 epairs are unknown and get
+    // the bootstrap Allow; host NICs named by a per-user caller are
+    // refused outright.
+    static IfaceOwnerRegistry ifaceOwnerRegistry("/var/db/crate/iface_owners.tsv");
+    ifaceOwnerRegistry.setLiveProbe(
+      [](const std::string &ifname) { return Util::interfaceExists(ifname); });
+    if (size_t dropped = ifaceOwnerRegistry.reconcile())
+      std::cerr << "crated: iface_owner_registry: dropped " << dropped
+                << " stale entr" << (dropped == 1 ? "y" : "ies")
+                << " (epair gone)" << std::endl;
+    Crated::setIfaceOwnerRegistry(&ifaceOwnerRegistry);
 
     Crated::PrivopsListener privopsListener(config);
     bool privopsStarted = privopsListener.start();

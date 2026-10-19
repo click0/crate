@@ -139,6 +139,27 @@ void handleConnection(int connFd, bool rootlessPerUser) {
                 << ": " << e << std::endl;
   }
 
+  // 1.1.43: refuse oversized requests BEFORE libnv allocates for them.
+  // nvlist_recv() trusts the size in the peer's header; peek the header
+  // and apply PrivOpsNvPure's limits first (1 MiB, 3 descriptors).
+  {
+    unsigned char hdr[PrivOpsNvPure::kNvlistHeaderSize];
+    ssize_t n = ::recv(connFd, hdr, sizeof hdr, MSG_PEEK | MSG_WAITALL);
+    PrivOpsNvPure::NvlistHeader h;
+    std::string why;
+    if (n != (ssize_t)sizeof hdr)
+      why = n < 0 ? std::string("recv: ") + std::strerror(errno) : "short header";
+    else if (why = PrivOpsNvPure::parseNvlistHeader(hdr, sizeof hdr, h); why.empty())
+      why = PrivOpsNvPure::checkNvlistHeaderLimits(h);
+    if (!why.empty()) {
+      std::cerr << "privops_listener: refusing request from uid " << peerUid
+                << ": " << why << std::endl;
+      writeErrorResponse(connFd, 413, "{\"error\":\"" + why + "\"}");
+      ::close(connFd);
+      return;
+    }
+  }
+
   nvlist_t *req = nvlist_recv(connFd, 0);
   if (!req) {
     writeErrorResponse(connFd, 400,

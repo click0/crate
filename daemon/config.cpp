@@ -6,6 +6,7 @@
 #include "../lib/retune_pure.h"
 
 #include <yaml-cpp/yaml.h>
+#include <iostream>   // 1.1.43: override warning
 #include <stdexcept>
 
 namespace Crated {
@@ -76,6 +77,10 @@ Config Config::load(const std::string &path) {
         at.name = t["name"].as<std::string>();
         at.tokenHash = t["token_hash"].as<std::string>();
         at.role = t["role"].as<std::string>("viewer");
+        // 1.1.43: a typo such as `Admin` used to demote the token to
+        // viewer silently; refuse anything but the two known roles.
+        if (at.role != "admin" && at.role != "viewer")
+          throw std::runtime_error("auth.tokens[" + at.name + "].role must be 'admin' or 'viewer', got '" + at.role + "'");
         if (t["expires_at"]) {
           auto raw = t["expires_at"].as<std::string>();
           auto parsed = AuthPure::parseIso8601Utc(raw);
@@ -138,7 +143,11 @@ Config Config::load(const std::string &path) {
           spec.mode = s["mode"].as<unsigned>();
         }
       }
-      if (s["role"]) spec.role = s["role"].as<std::string>();
+      if (s["role"]) {
+        spec.role = s["role"].as<std::string>();
+        if (spec.role != "admin" && spec.role != "viewer")   // 1.1.43
+          throw std::runtime_error("control_sockets[" + spec.path + "].role must be 'admin' or 'viewer', got '" + spec.role + "'");
+      }
       if (auto pl = s["pools"]) {
         if (pl.IsSequence())
           for (auto p : pl) spec.pools.push_back(p.as<std::string>());
@@ -175,6 +184,15 @@ Config Config::load(const std::string &path) {
   }
   // Top-level shorthand (avoids the `rootless:` block for operators
   // who only flip the toggle without changing pools).
+  // 1.1.43: the shorthand silently overrode the nested block; say so.
+  if (auto rl = root["rootless"]) {
+    for (const char *k : {"zfs_master_prefix", "path_master_prefix",
+                          "network_master_cidr_v4", "network_sub_prefix_len_v4",
+                          "network_master_cidr_v6", "network_sub_prefix_len_v6"})
+      if (rl[k] && root[k])
+        std::cerr << "crated.conf: both rootless." << k << " and top-level " << k
+                  << " are set — the top-level value wins" << std::endl;
+  }
   if (root["zfs_master_prefix"])
     cfg.zfsMasterPrefix = root["zfs_master_prefix"].as<std::string>();
   if (root["path_master_prefix"])

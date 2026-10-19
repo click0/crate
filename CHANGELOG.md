@@ -6,6 +6,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.43] — 2026-10-19
+
+**TODO §2: the interface-named privops verbs get an owner gate, the
+privops listener caps request size before libnv allocates, and a
+rootless-breaking validator bug is fixed.** ⚠️ Behaviour change for
+per-user callers: naming a host interface (`em0`, `bridge0`, …) in an
+interface verb is now refused.
+
+- **Rootless move was rejected (bug).** `validateConfigureIface`
+  demanded at least one of ipv4/ipv6, but `run_net.cpp`'s
+  `moveToVnetPrivopsOrLocal` sends `configure_iface` with all of them
+  empty for *every* epair and passthrough move under rootless — the
+  "move-only" mode the handler has supported since 0.9.20. Every
+  rootless network setup therefore failed with 400 at the move. Move-
+  only is valid now; the test that pinned the old rule is inverted.
+- **iface→owner registry.** `lib/iface_owner_registry{,_pure}.*`
+  (`/var/db/crate/iface_owners.tsv`, `<ifname>\t<uid>`): both halves
+  recorded at `create_epair` for the peer uid, forgotten at
+  `teardown_iface`, reconciled against the host's live interfaces (the
+  `a` half — the `b` half sits inside a vnet). The authz gate now has
+  `OwnerLookup::byIface` and `Request::ifname`: `configure_iface`
+  (ifname, in addition to the jid), `teardown_iface`, `bridge_add_member`
+  / `bridge_del_member` (member), `reclaim_iface_from_vnet` (in addition
+  to the jail name), `set_iface_up`, `disable_iface_offload`,
+  `set_iface_inet_addr`, `set_iface_mac`. Another operator's epair half
+  → `DenyForeignIface`; a non-epair name → `DenyHostIface` (closes
+  "move any host NIC into my vnet"); an unregistered half → bootstrap
+  Allow like an unknown jid; no registry wired → unchanged. The bridge
+  argument stays shared host state. Root/HTTP-made epairs are not
+  recorded (unknown → Allow).
+- **nvlist request size cap.** `nvlist_recv()` allocates whatever the
+  peer's header announces. The listener now peeks the 19-byte header
+  (`MSG_PEEK|MSG_WAITALL`), decodes it (`PrivOpsNvPure::
+  parseNvlistHeader`, both byte orders) and refuses `413` above 1 MiB
+  or 3 descriptors before libnv reads anything.
+- **HTTP `DELETE /api/v1/containers/:name`** stops through `stopCrate`
+  (the control socket's path) instead of `kill -9 -1` + `jail -r`,
+  which skipped the supervisor's teardown and leaked mounts, epairs and
+  pf anchors; the reply carries `was_running` and `destroyed` is no
+  longer `true` for a container that was not running.
+- **crated.conf:** `role` must be `admin` or `viewer` (a typo such as
+  `Admin` used to demote to viewer silently) for both `auth.tokens[]`
+  and `control_sockets[]`; a top-level `zfs_master_prefix`/… set
+  together with the same key under `rootless:` is reported (top-level
+  wins, as before).
+
+Tests: `iface_owner_registry_pure_test` (shape, serde, fail-closed
+parse, reconcile through the `a` half), authz iface gate (own/foreign/
+unknown/host, configure + reclaim both ends, no-registry unchanged),
+nvlist header parse + limits, move-only accepted. Docs: trust-model
+EN/UK. Version 1.1.43.
+
 ## [1.1.42] — 2026-10-19
 
 **TODO §1 tail: GUI compositor/wayvnc through `exec_in_jail`, and

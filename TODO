@@ -141,19 +141,20 @@ The bhyve/VM track is in TODO2.
   jid→owner registry reconciled against live jails at startup and on
   every lookup hit; destroy_jail forgets by pre-resolved jid.
 
-* (MED) Interface-named verbs still host-global
-  (lib/privops_authz_pure.cpp default arm): configure_iface gates `jid`
-  but not ifname/bridge (any host NIC can be moved into the caller's
-  vnet); teardown_iface / bridge_add_member / bridge_del_member and the
-  iface of reclaim_iface_from_vnet accept other tenants' epairs. An
-  epair half belongs to whoever's create_epair made it, so the fix is
-  an iface→owner registry of the same shape as jid_owner_registry:
-  record `epairNa`/`epairNb` → uid on a successful create_epair
-  (privops_handlers.cpp handleCreateEpair), forget on teardown_iface,
-  reconcile against `ifconfig -l`, and gate the four verbs with
-  checkOwnedIface (unknown iface → bootstrap Allow, like jid). Non-epair
-  ifnames (host NICs) should be denied for per-user callers outright.
-  trust-model.md names this as the remaining gap.
+  [FIXED in 1.1.43] interface-named verbs gated: iface→owner registry
+  (lib/iface_owner_registry{,_pure}.*, /var/db/crate/iface_owners.tsv)
+  fed by create_epair / teardown_iface, reconciled against the host's
+  `a` halves; checkOwnedIface on configure_iface's ifname,
+  teardown_iface, bridge_*_member's member, reclaim's iface,
+  set_iface_up/disable_iface_offload/set_iface_inet_addr/set_iface_mac.
+  Non-epair names → DenyHostIface for per-user callers; unknown epair →
+  bootstrap Allow. Also: validateConfigureIface rejected the move-only
+  request run_net.cpp sends for EVERY rootless move (400) — fixed;
+  nvlist header peeked before nvlist_recv (1 MiB / 3 descriptors);
+  HTTP DELETE /containers/:name goes through stopCrate (no more
+  kill -9 + jail -r leaking mounts/epairs/anchors) and reports
+  was_running; crated.conf role values validated, top-level vs
+  rootless.* override warned.
 
 * (by design, documented) a pool-scoped ADMIN token can POST
   /imports/:name + /containers/:name/start for a name in its pool and
@@ -172,15 +173,6 @@ The bhyve/VM track is in TODO2.
   control-socket restart = bounded stop + detached spawnCrateRun;
   configure_iface shape check before moveToVnet.
 
-* (MED, residual) privops_listener.cpp `nvlist_recv(connFd, 0)` still
-  lets libnv allocate whatever size the untrusted header announces
-  (the 1.1.37 timeout + cap bound the thread/fd exhaustion, not the
-  per-request allocation). libnv exposes no size cap; options: peek
-  the 19-byte nvlist header (magic, version, flags, descriptors, size)
-  with MSG_PEEK and refuse > N MiB before nvlist_recv, or move to
-  nvlist_unpack over a bounded recv buffer. Needs a FreeBSD build to
-  validate against the header layout.
-
 * (MED) Synchronous HTTP handlers remain synchronous — by choice in
   1.1.37 (the worker pool now absorbs them): routes.cpp stop (≤ 11 s),
   restart (stop phase ≤ 11 s, then spawn), export (`tar | xz --extreme`
@@ -191,20 +183,13 @@ The bhyve/VM track is in TODO2.
   wait/KILL child, but that changes the documented `stopped:true`
   contract. Decide API shape first, then do both ends.
 
-* (LOW) privops_handlers.cpp handleConfigureIface comment describes a
-  "move-only" mode (all of ipv4/ipv6/mac empty) that
-  validateConfigureIface (privops_pure.cpp:490-491) rejects — either
-  allow it in the validator or drop the comment.
 * (LOW) Registry write happens after `jail -c` returns (:663-671);
   until then the new jid/path are unowned (bootstrap Allow).
-* (LOW) DELETE /api/v1/containers/:name (routes.cpp:348-371) only
-  `kill -9` + `jail -r`; crated.8:135-136 says it removes the dataset.
-  Returns destroyed:true even when nothing was running. Stop/destroy
-  bypass crate's own teardown (mounts, epairs, anchors) → leaks.
-* (LOW) daemon/config.cpp:165-176 top-level zfs_master_prefix etc.
-  silently override the nested `rootless:` block; `role` is
-  unvalidated (a typo such as `Admin` silently demotes to viewer);
-  privops_socket_mode gets no tightness warning unlike listen.unix_mode.
+* (LOW) crated.8:135-136 says DELETE /containers/:name removes the
+  dataset; it stops the container (via stopCrate since 1.1.43) and
+  nothing else — fix the man page or implement the dataset removal.
+* (LOW) privops_socket_mode gets no tightness warning unlike
+  listen.unix_mode.
 * (LOW) handlers at privops_handlers.cpp :171,560,577 return raw
   strerror/e.what() that may echo host paths. (jsonError escaping
   fixed in 1.1.35.)

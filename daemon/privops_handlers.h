@@ -24,6 +24,7 @@
 // only needs a pointer at this header level, so a forward decl avoids
 // dragging the registry includes into every TU that #includes us.
 class JidOwnerRegistry;
+class IfaceOwnerRegistry;   // 1.1.43
 
 namespace Crated {
 
@@ -281,6 +282,12 @@ void setPerUserAuthzConfig(const PerUserEnvPure::Config &cfg);
 // dispatcher falls back to the 1.1.12 behavior — Allow for these
 // verbs).
 void setJidOwnerRegistry(::JidOwnerRegistry *registry);
+
+// 1.1.43: register the interface->owner registry (lib/iface_owner_registry.h).
+// Fed by create_epair (both halves, peer uid) and teardown_iface (forget
+// the pair); consulted by the authz gate for the interface-named verbs
+// through OwnerLookup::byIface. nullptr keeps those verbs host-wide.
+void setIfaceOwnerRegistry(::IfaceOwnerRegistry *registry);
 
 // 1.1.42: a `crate run` the daemon spawned as root (control-socket /
 // HTTP `start` and `restart`) creates its jail with jail_setv directly,

@@ -355,6 +355,40 @@ std::string parseExecInJail(const FieldMap &m,
   return "";
 }
 
+// --- 1.1.43: nvlist header pre-check ---
+
+std::string parseNvlistHeader(const unsigned char *buf, size_t len, NvlistHeader &out) {
+  out = NvlistHeader{};
+  if (buf == nullptr || len < kNvlistHeaderSize) return "short header";
+  if (buf[0] != 0x6c) return "bad nvlist magic";
+  if (buf[1] != 0x00) return "unsupported nvlist version";
+  const unsigned char flags = buf[2];
+  out.bigEndian = (flags & 0x80) != 0;
+  auto rd64 = [&](size_t off) -> uint64_t {
+    uint64_t v = 0;
+    for (size_t i = 0; i < 8; i++) {
+      // libnv writes the header in the *sender's* byte order and marks
+      // big-endian senders in flags; decode accordingly.
+      size_t idx = out.bigEndian ? off + i : off + (7 - i);
+      v = (v << 8) | (uint64_t)buf[idx];
+    }
+    return v;
+  };
+  out.descriptors = rd64(3);
+  out.size        = rd64(11);
+  return "";
+}
+
+std::string checkNvlistHeaderLimits(const NvlistHeader &h) {
+  if (h.size > kMaxNvlistRequestBytes)
+    return "request too large (" + std::to_string(h.size) + " bytes, limit " +
+           std::to_string(kMaxNvlistRequestBytes) + ")";
+  if (h.descriptors > kMaxNvlistRequestDescriptors)
+    return "too many descriptors (" + std::to_string(h.descriptors) + ", limit " +
+           std::to_string(kMaxNvlistRequestDescriptors) + ")";
+  return "";
+}
+
 // --- Verb routing ---
 
 PrivOpsPure::Verb extractVerb(const FieldMap &m) {

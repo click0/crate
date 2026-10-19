@@ -74,6 +74,21 @@ Decision checkOwnedJidStrict(unsigned jid, const PerUserEnvPure::Env &env,
   return o.uid == env.uid ? Decision::Allow : Decision::DenyForeignJid;
 }
 
+// 1.1.43: interface-named verbs. Without an iface registry (byIface
+// null) behaviour is unchanged — host-wide. With one: only epair halves
+// may be named by a per-user caller (anything else is host state ->
+// DenyHostIface); a half registered to someone else is denied; an
+// unregistered half gets the same bootstrap Allow as an unknown jid
+// (epairs created before 1.1.43 or by root).
+Decision checkOwnedIface(const std::string &ifname, const PerUserEnvPure::Env &env,
+                         const OwnerLookup &lookup) {
+  if (!lookup.byIface) return Decision::Allow;
+  if (!isEpairIfaceName(ifname)) return Decision::DenyHostIface;
+  Owner o = lookup.byIface(ifname);
+  if (!o.known) return Decision::Allow;
+  return o.uid == env.uid ? Decision::Allow : Decision::DenyForeignIface;
+}
+
 Decision checkOwnedName(const std::string &name,
                         const PerUserEnvPure::Env &env,
                         const OwnerLookup &lookup) {
@@ -172,8 +187,30 @@ Decision authorize(PrivOpsPure::Verb v,
     case V::SetJailCpuset:
     case V::QueryJailRctl:
     case V::SignalJail:
-    case V::ConfigureIface:
       return checkOwnedJid(req.jid, env, lookup);
+
+    // 1.1.43: configure_iface gates BOTH ends — the jid (1.1.17) and
+    // the interface being moved into it: a per-user caller may only
+    // move its own epair half, never a host NIC (that was the
+    // "passthrough any NIC into my vnet" hole).
+    case V::ConfigureIface: {
+      Decision d = checkOwnedJid(req.jid, env, lookup);
+      if (d != Decision::Allow) return d;
+      return checkOwnedIface(req.ifname, env, lookup);
+    }
+
+    // 1.1.43: interface-named verbs. teardown_iface / set_iface_up /
+    // disable_iface_offload / set_iface_inet_addr / set_iface_mac act on
+    // "ifname"; bridge_*_member on "member" (the dispatcher copies the
+    // right field into req.ifname). The bridge itself stays shared.
+    case V::TeardownIface:
+    case V::SetIfaceUp:
+    case V::DisableIfaceOffload:
+    case V::SetIfaceInetAddr:
+    case V::SetIfaceMac:
+    case V::BridgeAddMember:
+    case V::BridgeDelMember:
+      return checkOwnedIface(req.ifname, env, lookup);
 
     // 1.1.40: exec_in_jail — jid-scoped, but fail closed on an
     // unregistered jid (see checkOwnedJidStrict).
@@ -189,8 +226,15 @@ Decision authorize(PrivOpsPure::Verb v,
     // vnet, so naming a foreign jail steals/DoSes its networking. Was
     // wrongly in the default Allow arm.
     case V::DestroyJail:
-    case V::ReclaimIfaceFromVnet:
       return checkOwnedName(req.jailName, env, lookup);
+
+    // 1.1.43: reclaim gates the jail name (1.1.17) AND the interface
+    // being pulled out of it.
+    case V::ReclaimIfaceFromVnet: {
+      Decision d = checkOwnedName(req.jailName, env, lookup);
+      if (d != Decision::Allow) return d;
+      return checkOwnedIface(req.ifname, env, lookup);
+    }
 
     // 1.1.15: create_jail's brand-new path must fall inside the
     // caller's per-user path prefix (cfg.pathMasterPrefix/<uid>). When
@@ -244,6 +288,17 @@ Decision authorize(PrivOpsPure::Verb v,
   }
 }
 
+bool isEpairIfaceName(const std::string &name) {
+  static const std::string kPrefix = "epair";
+  if (name.size() < kPrefix.size() + 2) return false;
+  if (name.compare(0, kPrefix.size(), kPrefix) != 0) return false;
+  size_t i = kPrefix.size();
+  const size_t digitsStart = i;
+  while (i < name.size() && name[i] >= '0' && name[i] <= '9') i++;
+  if (i == digitsStart || i != name.size() - 1) return false;
+  return name[i] == 'a' || name[i] == 'b';
+}
+
 std::string anchorJailName(const std::string &anchor) {
   static const std::string kPrefix = "crate/";
   if (anchor.size() <= kPrefix.size()) return "";
@@ -287,6 +342,10 @@ const char *decisionReason(Decision d) {
       return "pf anchor is not a crate/<jail> anchor of a jail owned by the caller";
     case Decision::DenyUnownedJid:
       return "jid is not registered to the caller (exec_in_jail requires a jail created through privops by the same operator)";
+    case Decision::DenyForeignIface:
+      return "interface is an epair half created by a different operator";
+    case Decision::DenyHostIface:
+      return "interface is not an epair half; host interfaces cannot be named by a per-user caller";
   }
   return "deny";
 }
