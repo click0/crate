@@ -6,6 +6,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.47] — 2026-10-20
+
+**TODO §6: `crate doctor` stops failing every FreeBSD host.**
+
+- **Wrong hand-typed paths.** The required-command table said
+  `/usr/bin/jls`, `/sbin/jail` and `/sbin/rctl`; the real binaries are
+  `/usr/sbin/jls`, `/usr/sbin/jail`, `/usr/bin/rctl` — exactly what
+  `pathnames.h` has had all along. So `crate doctor` reported a
+  required-command FAIL (exit 2) on every host and always skipped the
+  RCTL presence check. The table uses the `CRATE_PATH_*` constants now.
+- **racct is a kernel option, not a module.** `kldstat -n racct` fails
+  everywhere, which made the exit code permanently ≥ 1. `checkRacct`
+  reads `kern.racct.enable`: absent → WARN (kernel without RACCT), 0 →
+  WARN with the loader.conf hint, 1 → PASS.
+- **Firewall check** replaces the `ipfw` module entry (which warned on
+  every pf-only host; pf is compiled into GENERIC and never shows in
+  `kldstat`): pf via `/dev/pf`, ipfw via `net.inet.ip.fw.enable`;
+  `firewall_backend: pf|ipfw` makes a missing one a FAIL, `auto` warns
+  only when neither is there, `none` just reports.
+- `audit.log` and the logs-directory check honour crate.yml `logs`
+  instead of a hardcoded `/var/log/crate`; the rotation threshold is
+  50 MB as the section header says (was 100).
+
+Version 1.1.47.
+
 ## [1.1.46] — 2026-10-20
 
 **TODO §5: spec parsing, crate.yml and the registries stop accepting

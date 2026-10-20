@@ -296,25 +296,28 @@ The bhyve/VM track is in TODO2.
   last-wins. (plausible — yaml-cpp iteration semantics)
 * (LOW) locs.cpp:18-22 static initialiser calls getSysctlString; a
   throw there is std::terminate before main.
-* (LOW) lib/doctor.cpp: :77 WARNs when ipfw is missing on pf-only
-  hosts; `pf` not in kModules; :204/:317 hardcode /var/log/crate
-  ignoring Config.logs; :327 threshold is 100 MB while the
-  comment/section say 50.
 * (LOW) `unless-stopped` == `always` in cli/main.cpp; no backoff
   between restarts.
 
 === 6. crate doctor ===
 
-* (HIGH) Wrong absolute paths → false FAIL on every FreeBSD host:
-  lib/doctor.cpp:129 requires /usr/bin/jls (real /usr/sbin/jls,
-  pathnames.h:96) and :134/:425 use /sbin/rctl (real /usr/bin/rctl,
-  pathnames.h:75). `crate doctor` always reports a required-command
-  FAIL (exit 2) and always skips the RCTL presence check. Use the
-  CRATE_PATH_* constants.
-* (HIGH) doctor.cpp:73 probes racct with `kldstat -n racct`; RACCT is
-  a kernel option, not a module, so this is WARN on every host and
-  the exit code is permanently >= 1. Check the sysctl
-  kern.racct.enable instead. (plausible — FreeBSD fact)
+  [FIXED in 1.1.47] command paths come from pathnames.h (CRATE_PATH_*):
+  /usr/bin/jls, /sbin/jail and /sbin/rctl were hand-typed wrong, so
+  every FreeBSD host got a required-command FAIL (exit 2) and the RCTL
+  presence check was always skipped. racct probed via
+  kern.racct.enable (it is a kernel option — `kldstat -n racct` warned
+  on every host); ipfw/pf replaced by one checkFirewall() (pf via
+  /dev/pf, ipfw via net.inet.ip.fw.enable, firewall_backend decides
+  FAIL vs note — a pf-only host no longer warns about ipfw); audit.log
+  and the logs directory honour crate.yml `logs`; the rotation
+  threshold is 50 MB as the section says.
+
+* (LOW) doctor's auto-fw anchor probe (checkAutoFwRules) does not know
+  the running jail's `_pid<N>` xname and probes `crate/<name>_pid?`
+  literally — make it list `pfctl -a crate -s Anchors` and match the
+  prefix.
+* (LOW) `crate doctor --json` has no schema version field; consumers
+  cannot tell 1.1.x output shapes apart.
 
 === 7. Lifecycle, storage, GUI, monitoring, DNS, VPN ===
 
