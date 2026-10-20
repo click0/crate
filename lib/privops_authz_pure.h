@@ -83,6 +83,10 @@ enum class Decision {
                          // owned by another uid
   DenyUnownedJid,        // 1.1.40: exec_in_jail — jid is not registered at all
                          // (no bootstrap concession for exec)
+  DenyForeignIface,      // 1.1.43: epair half registered to another operator
+  DenyHostIface,         // 1.1.43: interface is not an epair half (host NIC,
+                         // bridge, vlan…) — host state a per-user caller may
+                         // not move, tear down or reconfigure by name
 };
 
 // Result of looking a target up in the daemon's jid->owner registry.
@@ -102,6 +106,10 @@ struct OwnerLookup {
   // (mount_nullfs target, devfs mount_path). The path is considered
   // owned by jail J if it equals J.path or starts with J.path + "/".
   std::function<Owner(const std::string &path)>  byPath;
+  // 1.1.43: epair half -> owner (lib/iface_owner_registry). Null means
+  // "no iface registry wired" and the interface-named verbs keep their
+  // pre-1.1.43 host-wide behaviour.
+  std::function<Owner(const std::string &ifname)> byIface;
 };
 
 // Convenience: a lookup where every probe reports "unknown". Useful
@@ -131,7 +139,17 @@ struct Request {
   // crate composes per-jail anchors as "crate/<kernel jail name>", so
   // the name after the slash is looked up like destroy_jail's `name`.
   std::string anchor;
+  // 1.1.43: the interface a verb acts on by name — configure_iface /
+  // teardown_iface / reclaim_iface_from_vnet / set_iface_up /
+  // disable_iface_offload / set_iface_inet_addr / set_iface_mac use
+  // "ifname"; bridge_add_member / bridge_del_member use "member" (the
+  // bridge itself is shared host state and is not gated).
+  std::string ifname;
 };
+
+// 1.1.43: true when `name` is an epair half ("epair<N>a"/"epair<N>b").
+// Exposed so the pure gate and the registry agree on the shape.
+bool isEpairIfaceName(const std::string &name);
 
 // 1.1.36: the jail name a per-jail pf anchor refers to, or "" when
 // `anchor` is not of the form "crate/<name>" (root "crate", other

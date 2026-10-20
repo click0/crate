@@ -340,6 +340,10 @@ static void handleContainerStart(const httplib::Request &req, httplib::Response 
     jsonError(res, 500, "failed to start container: fork failed");
     return;
   }
+  // 1.1.42: bearer-token path has no operator uid — the jail is
+  // recorded as admin-owned (uid 0), so tenants' jid-scoped privops
+  // verbs no longer get the bootstrap Allow on it.
+  Crated::registerSpawnedJailOwner(pid, 0, name);
   // The child is the jail's foreground supervisor and outlives this
   // request: "started" now means "spawned". Poll
   // GET /api/v1/containers/:name for the running state.
@@ -358,20 +362,33 @@ static void handleContainerDestroy(const httplib::Request &req, httplib::Respons
   }
 
 
-  // Stop if running
+  // Stop if running. 1.1.43: through crate's own stop path (the same one
+  // the control socket uses) instead of `kill -9 -1` + `jail -r`, which
+  // skipped the supervisor's teardown and leaked mounts, epairs and pf
+  // anchors. stopCrate signals the jail, waits, force-destroys on
+  // timeout — and `crate run`'s RunAtEnd chain cleans up behind it.
   auto jail = JailQuery::getJailByName(name);
+  bool wasRunning = (bool)jail;
   if (jail) {
+    Args args;
+    args.cmd = CmdStop;
+    args.stopTarget = name;
     try {
-      Util::execCommand({CRATE_PATH_JEXEC, std::to_string(jail->jid),
-                         "/bin/kill", "-KILL", "-1"},
-        "kill jail processes");
-      ::sleep(1);
-      Util::execCommand({CRATE_PATH_JAIL, "-r", std::to_string(jail->jid)},
-        "remove jail");
-    } catch (...) {}
+      if (!stopCrate(args)) {
+        jsonError(res, 500, "stop returned failure");
+        return;
+      }
+    } catch (const std::exception &e) {
+      jsonError(res, 500, std::string("stop failed: ") + e.what());
+      return;
+    }
   }
 
-  jsonOk(res, "{\"destroyed\":true,\"name\":\"" + name + "\"}");
+  // Say what actually happened: destroyed:true used to be returned even
+  // when nothing was running.
+  jsonOk(res, "{\"destroyed\":" + std::string(wasRunning ? "true" : "false")
+              + ",\"was_running\":" + (wasRunning ? "true" : "false")
+              + ",\"name\":\"" + name + "\"}");
 }
 
 // --- Route registration ---
@@ -657,6 +674,7 @@ static void handleContainerRestart(const httplib::Request &req, httplib::Respons
     jsonError(res, 500, "failed to start container after stop: fork failed");
     return;
   }
+  Crated::registerSpawnedJailOwner(pid, 0, name);   // 1.1.42: admin-owned
   jsonOk(res, "{\"restarted\":true,\"async\":true,\"pid\":" + std::to_string(pid)
               + ",\"name\":\"" + name + "\"}");
 }

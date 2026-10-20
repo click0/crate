@@ -58,4 +58,44 @@ std::string validateCrateFileJailName(const std::string &crateFile) {
   return "";
 }
 
+std::string jailXnamePidSuffix(long pid) {
+  return "_pid" + std::to_string(pid);
+}
+
+bool jailXnameHasPid(const std::string &jailName, long pid) {
+  const std::string suffix = jailXnamePidSuffix(pid);
+  if (jailName.size() <= suffix.size()) return false;   // needs a non-empty <name>
+  return jailName.compare(jailName.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+bool epairUnit(const std::string &ifname, unsigned &unitOut) {
+  static const std::string kPrefix = "epair";
+  if (ifname.size() < kPrefix.size() + 2) return false;
+  if (ifname.compare(0, kPrefix.size(), kPrefix) != 0) return false;
+  const char half = ifname.back();
+  if (half != 'a' && half != 'b') return false;
+  const std::string digits = ifname.substr(kPrefix.size(), ifname.size() - kPrefix.size() - 1);
+  if (digits.empty() || digits.size() > 9) return false;
+  unsigned v = 0;
+  for (char c : digits) {
+    if (c < '0' || c > '9') return false;
+    v = v * 10 + (unsigned)(c - '0');
+  }
+  unitOut = v;
+  return true;
+}
+
+std::string epairIp6(unsigned num, unsigned idx) {
+  // 4 addresses per pair: [base+0 .. base+3] is one /126; host gets
+  // +1, jail +2 (+0 is the network address, +3 stays free).
+  const unsigned long long offset = 0x100ull + 4ull * num + 1ull + (idx ? 1ull : 0ull);
+  std::ostringstream ss;
+  ss << "fd00:cra7:e::";
+  if (offset > 0xffffull)
+    ss << std::hex << (offset >> 16) << ":" << std::hex << (offset & 0xffffull);
+  else
+    ss << std::hex << offset;
+  return ss.str();
+}
+
 }

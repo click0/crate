@@ -576,8 +576,13 @@ std::string validateConfigureIface(const ConfigureIfaceReq &r) {
   if (auto e = validateIpv4Cidr(r.ipv4Cidr); !e.empty()) return "ipv4: " + e;
   if (auto e = validateIpv6Cidr(r.ipv6Cidr); !e.empty()) return "ipv6: " + e;
   if (auto e = validateMacAddress(r.macAddr); !e.empty()) return "mac: " + e;
-  if (r.ipv4Cidr.empty() && r.ipv6Cidr.empty())
-    return "at least one of ipv4 or ipv6 CIDR must be set";
+  // 1.1.43: "move-only" (ipv4, ipv6 and mac all empty) is a valid
+  // request — it is exactly what run_net.cpp's moveToVnetPrivopsOrLocal
+  // sends for every epair / passthrough move under rootless, and the
+  // handler has supported it since 0.9.20 (the iface is moved and left
+  // down for the caller to configure). The old "at least one of ipv4 or
+  // ipv6" rule rejected it with 400, so every rootless network setup
+  // failed at the move.
   return "";
 }
 

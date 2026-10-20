@@ -147,13 +147,23 @@ The remaining verbs still pass the gate: **genuinely host-global**
 verbs (`set_iface_up`, `add_ipfw_rule`, `configure_ipfw_nat`,
 `create_epair`) act on shared host state with no tenant-specific
 target, so they cannot be pool-scoped and stay host-wide by design.
-The **interface-named** verbs (`configure_iface`'s `ifname`/`bridge`,
-`teardown_iface`, `bridge_add_member` / `bridge_del_member`, the iface
-of `reclaim_iface_from_vnet`) do carry a tenant signal — an epair half
-belongs to whoever's `create_epair` made it — but the daemon has no
-iface→owner registry yet to resolve it, so they remain host-wide for
-now (tracked in `TODO`). Everything else that carries an
-operator-controlled ownership signal is gated. The per-verb handlers
+The **interface-named** verbs (`configure_iface`'s `ifname`,
+`teardown_iface`, `bridge_add_member` / `bridge_del_member`'s `member`,
+the iface of `reclaim_iface_from_vnet`, `set_iface_up`,
+`disable_iface_offload`, `set_iface_inet_addr`, `set_iface_mac`) carry a
+tenant signal too — an epair half belongs to whoever's `create_epair`
+made it — and since 1.1.43 the daemon resolves it through an
+**iface→owner registry** (`lib/iface_owner_registry.*`, persisted at
+`/var/db/crate/iface_owners.tsv`): both halves are recorded at
+`create_epair` for the peer uid, forgotten at `teardown_iface`, and
+reconciled against the host's live interface list. A per-user caller
+may name only epair halves: another operator's half is `403`
+(`DenyForeignIface`), a host interface by name (`em0`, `bridge0`,
+`vlan…`) is `403` (`DenyHostIface`) — the "move any host NIC into my
+vnet" hole is closed — and an unregistered half gets the same bootstrap
+Allow as an unknown jid. The bridge named in `bridge_*_member` /
+`configure_iface` stays shared host state. Everything else that carries
+an operator-controlled ownership signal is gated. The per-verb handlers
 remain uid-blind; the gate runs ahead of them.
 
 > Consequence: whoever can reach privops — an `admin` bearer token, or
@@ -398,10 +408,9 @@ security boundary:
 
 What still remains host-wide after (1)–(3) is **by design**, not a
 pending gate: the genuinely host-global verbs (`set_iface_up`,
-`add_ipfw_rule`, `configure_ipfw_nat`, `create_epair` — shared host
-state with no tenant target), the interface-named verbs until an
-iface→owner registry exists (`teardown_iface`, `bridge_*`,
-`configure_iface`'s `ifname`), the `admin`-only HTTP transport (no peer
+`add_ipfw_rule`, `configure_ipfw_nat`, `create_epair`, `create_bridge`
+— shared host state with no tenant target; the interface-named verbs
+are gated since 1.1.43), the `admin`-only HTTP transport (no peer
 uid), and the
 bootstrap concession that lets jids / names absent from the registry
 through (for paths it is limited to the caller's own prefix since

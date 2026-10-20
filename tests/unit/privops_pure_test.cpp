@@ -542,9 +542,15 @@ ATF_TEST_CASE_BODY(configure_iface_requires_at_least_one_addr) {
   r.ipv4Cidr = "10.66.1.5/24";
   ATF_REQUIRE_EQ(validateConfigureIface(r), std::string());
 
-  // both empty -> reject
+  // 1.1.43: both empty is the "move-only" request run_net.cpp sends for
+  // every epair / passthrough move under rootless (the handler moves
+  // the iface and leaves it down). It was rejected with 400 until
+  // 1.1.43, which broke every rootless network setup at the move.
   r.ipv4Cidr.clear();
-  ATF_REQUIRE(!validateConfigureIface(r).empty());
+  ATF_REQUIRE_EQ(validateConfigureIface(r), std::string());
+  r.bridge.clear();
+  r.macAddr.clear();
+  ATF_REQUIRE_EQ(validateConfigureIface(r), std::string());
 
   // ipv6 only is fine
   r.ipv6Cidr = "fd00::5/64";

@@ -15,9 +15,13 @@
 #include "../lib/audit_per_user_pure.h"
 #include "../lib/privops_authz_pure.h"
 #include "../lib/jid_owner_registry.h"
+#include "../lib/iface_owner_registry.h"   // 1.1.43
+#include "../lib/run_pure.h"           // 1.1.42: jailXnameHasPid
 #include "../lib/runtime_paths_pure.h"
 
 #include <iostream>
+#include <thread>                      // 1.1.42: registerSpawnedJailOwner
+#include <sys/wait.h>
 
 #include <ctime>
 
@@ -857,6 +861,9 @@ PerUserEnvPure::Config g_perUserAuthzCfg;
 // jid/name-scoped verbs). JidOwnerRegistry has its own internal mutex,
 // so multiple dispatcher threads can read/write safely.
 ::JidOwnerRegistry *g_jidOwnerRegistry = nullptr;
+// 1.1.43: interface->owner registry (set once at startup via
+// setIfaceOwnerRegistry). nullptr = interface-named verbs stay host-wide.
+::IfaceOwnerRegistry *g_ifaceOwnerRegistry = nullptr;
 
 // Update the jid->owner registry after a successful create_jail /
 // destroy_jail dispatch (libnv path only — uid==0 on HTTP means we
@@ -911,6 +918,33 @@ void maybeUpdateJidOwnerRegistry(Verb v, uint32_t uid,
       std::cerr << "privops: jid_owner_registry forget(" << name
                 << "): " << e.what() << std::endl;
     }
+  }
+}
+
+// 1.1.43: interface->owner bookkeeping. create_epair records both
+// halves for the peer uid (the reply body carries "a"/"b");
+// teardown_iface forgets the pair. uid 0 (HTTP/admin) is not recorded —
+// like jails, root-made epairs stay "unknown" and get the bootstrap
+// Allow (they predate or sit outside the per-user model).
+void maybeUpdateIfaceOwnerRegistry(Verb v, uint32_t uid,
+                                   const PrivOpsNvPure::FieldMap &m,
+                                   const DispatchResult &result) {
+  if (!g_ifaceOwnerRegistry || uid == 0) return;
+  if (result.status < 200 || result.status >= 300) return;
+  try {
+    if (v == Verb::CreateEpair) {
+      std::string a, b;
+      if (PrivOpsWirePure::extractStringField(result.body, "a", a) == PrivOpsWirePure::kPresent &&
+          PrivOpsWirePure::extractStringField(result.body, "b", b) == PrivOpsWirePure::kPresent)
+        g_ifaceOwnerRegistry->recordEpair(a, b, uid);
+    } else if (v == Verb::TeardownIface) {
+      auto it = m.find("ifname");
+      if (it != m.end() && !it->second.empty())
+        g_ifaceOwnerRegistry->forgetPair(it->second);
+    }
+  } catch (const std::exception &e) {
+    std::cerr << "privops: iface_owner_registry update after "
+              << PrivOpsPure::verbName(v) << ": " << e.what() << std::endl;
   }
 }
 
@@ -1305,11 +1339,26 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       case Verb::AddPfRule:
       case Verb::RemovePfRule:
       case Verb::FlushPfAnchor:        req.anchor = field("anchor");     break;
+      // 1.1.43: interface-named verbs — the interface acted on by name.
+      case Verb::ConfigureIface:
+      case Verb::TeardownIface:
+      case Verb::SetIfaceUp:
+      case Verb::DisableIfaceOffload:
+      case Verb::SetIfaceInetAddr:
+      case Verb::SetIfaceMac:          req.ifname = field("ifname");     break;
+      case Verb::BridgeAddMember:
+      case Verb::BridgeDelMember:      req.ifname = field("member");     break;
       default:                                                          break;
     }
+    // reclaim_iface_from_vnet carries both a jail name and an ifname.
+    if (v == Verb::ReclaimIfaceFromVnet) req.ifname = field("ifname");
     PrivOpsAuthzPure::OwnerLookup lookup = g_jidOwnerRegistry
         ? g_jidOwnerRegistry->makeLookup()
         : PrivOpsAuthzPure::nullLookup();
+    if (g_ifaceOwnerRegistry) {
+      auto *ir = g_ifaceOwnerRegistry;
+      lookup.byIface = [ir](const std::string &ifname) { return ir->lookup(ifname); };
+    }
     PrivOpsAuthzPure::Decision dec =
         PrivOpsAuthzPure::authorize(v, req, env, lookup);
     if (dec != PrivOpsAuthzPure::Decision::Allow) {
@@ -1626,6 +1675,7 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
   maybeWritePerUserAudit(rootlessPerUser, operatorUid, v, result.status);
   maybeApplyUmbrella(v, operatorUid, result.status);
   maybeUpdateJidOwnerRegistry(v, operatorUid, m, result.status, preDestroyJid);
+  maybeUpdateIfaceOwnerRegistry(v, operatorUid, m, result);
   return result;
 }
 
@@ -1641,6 +1691,48 @@ void setPerUserAuthzConfig(const PerUserEnvPure::Config &cfg) {
 
 void setJidOwnerRegistry(::JidOwnerRegistry *registry) {
   g_jidOwnerRegistry = registry;
+}
+
+void setIfaceOwnerRegistry(::IfaceOwnerRegistry *registry) {
+  g_ifaceOwnerRegistry = registry;
+}
+
+void registerSpawnedJailOwner(long crateRunPid, uint32_t ownerUid,
+                              const std::string &container) {
+  if (!g_jidOwnerRegistry || crateRunPid <= 0) return;
+  // A cold `crate run` extracts the image before jail_setv; give it
+  // ten minutes. One probe per second is negligible against a daemon
+  // that already reconciles the registry on every lookup.
+  constexpr int kMaxProbes = 600;
+  std::thread([crateRunPid, ownerUid, container]() {
+    for (int i = 0; i < kMaxProbes; i++) {
+      try {
+        for (const auto &j : JailQuery::getAllJails(/*crateOnly=*/true)) {
+          if (j.dying || !RunPure::jailXnameHasPid(j.name, crateRunPid)) continue;
+          g_jidOwnerRegistry->recordCreate(static_cast<unsigned>(j.jid), ownerUid,
+                                           j.name, j.path);
+          std::cerr << "crated: container '" << container << "' started as pid "
+                    << crateRunPid << " -> jail " << j.name << " (jid " << j.jid
+                    << ") recorded for uid " << ownerUid << std::endl;
+          return;
+        }
+      } catch (const std::exception &e) {
+        std::cerr << "crated: jail owner watch for '" << container << "': "
+                  << e.what() << std::endl;
+      }
+      // The supervisor died before its jail appeared (bad spec, extract
+      // failure, ...): reap it and stop watching.
+      int st = 0;
+      if (::waitpid((pid_t)crateRunPid, &st, WNOHANG) == (pid_t)crateRunPid) {
+        std::cerr << "crated: container '" << container << "' (pid " << crateRunPid
+                  << ") exited before its jail appeared; nothing recorded" << std::endl;
+        return;
+      }
+      ::sleep(1);
+    }
+    std::cerr << "crated: container '" << container << "' (pid " << crateRunPid
+              << "): no jail after " << kMaxProbes << " s; owner not recorded" << std::endl;
+  }).detach();
 }
 
 } // namespace Crated

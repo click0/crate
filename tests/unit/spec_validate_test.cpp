@@ -607,6 +607,33 @@ ATF_TEST_CASE_BODY(top_level_network_unsupported_value_rejected)
 	}
 }
 
+// --- 1.1.44: options/net address validators ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(net_address_validators);
+ATF_TEST_CASE_BODY(net_address_validators) {
+	ATF_REQUIRE_EQ(SpecPure::validateStaticIp4("192.168.1.50"), std::string());
+	ATF_REQUIRE_EQ(SpecPure::validateStaticIp4("192.168.1.50/24"), std::string());
+	ATF_REQUIRE_EQ(SpecPure::validateStaticIp4("10.0.0.1/32"), std::string());
+	ATF_REQUIRE(!SpecPure::validateStaticIp4("").empty());
+	ATF_REQUIRE(!SpecPure::validateStaticIp4("192.168.1.256").empty());
+	ATF_REQUIRE(!SpecPure::validateStaticIp4("192.168.1.50/33").empty());   // used to be UB in run_net
+	ATF_REQUIRE(!SpecPure::validateStaticIp4("192.168.1.50/abc").empty());
+	ATF_REQUIRE(!SpecPure::validateStaticIp4("fd00::1").empty());
+	ATF_REQUIRE(!SpecPure::validateStaticIp4("10.0.0.1; rm -rf /").empty());
+
+	ATF_REQUIRE_EQ(SpecPure::validateStaticIp6("fd00::50"), std::string());
+	ATF_REQUIRE_EQ(SpecPure::validateStaticIp6("fd00::50/64"), std::string());
+	ATF_REQUIRE(!SpecPure::validateStaticIp6("fd00::50/129").empty());
+	ATF_REQUIRE(!SpecPure::validateStaticIp6("fd00::50/64x").empty());   // went to ifconfig verbatim
+	ATF_REQUIRE(!SpecPure::validateStaticIp6("192.168.1.1").empty());
+	ATF_REQUIRE(!SpecPure::validateStaticIp6("").empty());
+
+	ATF_REQUIRE_EQ(SpecPure::validateGateway4("192.168.1.1"), std::string());
+	ATF_REQUIRE(!SpecPure::validateGateway4("192.168.1.1/24").empty());
+	ATF_REQUIRE(!SpecPure::validateGateway4("gw.local").empty());
+	ATF_REQUIRE(!SpecPure::validateGateway4("").empty());
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
 	// 0.8.17: top-level network shorthand
@@ -688,4 +715,5 @@ ATF_INIT_TEST_CASES(tcs)
 	// terminal devfs
 	ATF_ADD_TEST_CASE(tcs, terminal_devfs_too_large_throws);
 	ATF_ADD_TEST_CASE(tcs, terminal_devfs_default_ok);
+	ATF_ADD_TEST_CASE(tcs, net_address_validators);
 }

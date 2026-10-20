@@ -6,6 +6,138 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.44] — 2026-10-19
+
+**TODO §3 tail: MAC portacl stops clobbering the host list, `crate
+stats` shows network I/O on FreeBSD, and the options/net fields are
+validated where they are written.** ⚠️ Specs with a malformed
+`options/net/ip`, `gateway`, `ip6` or `extra[].interface` are now
+rejected at parse time instead of failing (or misbehaving) at jail start.
+
+- **MAC portacl rules merged, not overwritten.** `crate run` wrote
+  `security.mac.portacl.rules` wholesale with the current container's
+  `mac_portacl/allow_ports`, deleting every other container's and the
+  operator's rules, and never restored anything. `MacOps::
+  addPortaclRules` now merges into the live list (`MacPure::
+  mergePortaclRules`, no duplicates) and a `RunAtEnd` takes exactly this
+  container's rules out again on stop. `crate.5` says so.
+- **`crate stats` network I/O.** `netstat -I <epair> -b --libxo json`
+  was requested and then never parsed — only the tabular fallback set
+  the counters, so on FreeBSD (where libxo works) `net_in`/`net_out`
+  were always "-". `LifecyclePure::parseNetstatIfaceBytesJson` reads
+  `received-bytes`/`sent-bytes` from the interface object.
+- **IPv6 NAT-mode epair addresses.** `fd00:cra7:e::<100+2n+idx>/126`
+  put pairs n and n+1 into one /126 on two host interfaces and printed
+  an invalid hextet past 0xffff. `RunPure::epairIp6` gives each pair
+  its own /126 (`0x100 + 4n`, host +1, jail +2) and spreads the offset
+  over two hextets when needed.
+- **options/net validated at parse time.** `ip` (bare IPv4 or
+  `/0..32`), `gateway` (bare IPv4), `ip6` (bare IPv6 or `/0..128`) and
+  `extra[].interface` (interface-name charset) — `SpecPure::
+  validateStaticIp4/6`, `validateGateway4`, `PrivOpsPure::
+  validateIfaceName`. `run_net.cpp` keeps belt-and-braces guards: an
+  IPv4 prefix > 32 used to be undefined behaviour in `1u << (32 - n)`,
+  an IPv6 prefix token went to `ifconfig` verbatim.
+- **Defensive parsing.** The epair unit from the privops `create_epair`
+  reply is parsed by `RunPure::epairUnit` (a clear error instead of
+  `substr()` throwing `out_of_range`); `net.cpp` checks the dotted-quad
+  vector sizes before indexing; `MacOps::addUgidfwRule` passes one argv
+  word per token (ugidfw parses per argv; the single-token form was
+  rejected — dead path, now correct).
+- **healthcheck `interval: 0`** is rejected (the monitor loop spun
+  without sleeping).
+
+Tests: `mac_pure_test` (new), lifecycle netstat JSON, `run_pure_test`
+epair unit + IPv6 pairs, `spec_validate_test` address validators.
+Version 1.1.44.
+
+## [1.1.43] — 2026-10-19
+
+**TODO §2: the interface-named privops verbs get an owner gate, the
+privops listener caps request size before libnv allocates, and a
+rootless-breaking validator bug is fixed.** ⚠️ Behaviour change for
+per-user callers: naming a host interface (`em0`, `bridge0`, …) in an
+interface verb is now refused.
+
+- **Rootless move was rejected (bug).** `validateConfigureIface`
+  demanded at least one of ipv4/ipv6, but `run_net.cpp`'s
+  `moveToVnetPrivopsOrLocal` sends `configure_iface` with all of them
+  empty for *every* epair and passthrough move under rootless — the
+  "move-only" mode the handler has supported since 0.9.20. Every
+  rootless network setup therefore failed with 400 at the move. Move-
+  only is valid now; the test that pinned the old rule is inverted.
+- **iface→owner registry.** `lib/iface_owner_registry{,_pure}.*`
+  (`/var/db/crate/iface_owners.tsv`, `<ifname>\t<uid>`): both halves
+  recorded at `create_epair` for the peer uid, forgotten at
+  `teardown_iface`, reconciled against the host's live interfaces (the
+  `a` half — the `b` half sits inside a vnet). The authz gate now has
+  `OwnerLookup::byIface` and `Request::ifname`: `configure_iface`
+  (ifname, in addition to the jid), `teardown_iface`, `bridge_add_member`
+  / `bridge_del_member` (member), `reclaim_iface_from_vnet` (in addition
+  to the jail name), `set_iface_up`, `disable_iface_offload`,
+  `set_iface_inet_addr`, `set_iface_mac`. Another operator's epair half
+  → `DenyForeignIface`; a non-epair name → `DenyHostIface` (closes
+  "move any host NIC into my vnet"); an unregistered half → bootstrap
+  Allow like an unknown jid; no registry wired → unchanged. The bridge
+  argument stays shared host state. Root/HTTP-made epairs are not
+  recorded (unknown → Allow).
+- **nvlist request size cap.** `nvlist_recv()` allocates whatever the
+  peer's header announces. The listener now peeks the 19-byte header
+  (`MSG_PEEK|MSG_WAITALL`), decodes it (`PrivOpsNvPure::
+  parseNvlistHeader`, both byte orders) and refuses `413` above 1 MiB
+  or 3 descriptors before libnv reads anything.
+- **HTTP `DELETE /api/v1/containers/:name`** stops through `stopCrate`
+  (the control socket's path) instead of `kill -9 -1` + `jail -r`,
+  which skipped the supervisor's teardown and leaked mounts, epairs and
+  pf anchors; the reply carries `was_running` and `destroyed` is no
+  longer `true` for a container that was not running.
+- **crated.conf:** `role` must be `admin` or `viewer` (a typo such as
+  `Admin` used to demote to viewer silently) for both `auth.tokens[]`
+  and `control_sockets[]`; a top-level `zfs_master_prefix`/… set
+  together with the same key under `rootless:` is reported (top-level
+  wins, as before).
+
+Tests: `iface_owner_registry_pure_test` (shape, serde, fail-closed
+parse, reconcile through the `a` half), authz iface gate (own/foreign/
+unknown/host, configure + reclaim both ends, no-registry unchanged),
+nvlist header parse + limits, move-only accepted. Docs: trust-model
+EN/UK. Version 1.1.43.
+
+## [1.1.42] — 2026-10-19
+
+**TODO §1 tail: GUI compositor/wayvnc through `exec_in_jail`, and
+daemon-started containers get an owner.**
+
+- **`JailExec::spawnInJail`** — a background process inside a jail
+  (stdin `/dev/null`, stdout/stderr inherited) with a uniform handle:
+  root path `fork` + `jail_attach` + `execv` (pid), rootless path
+  `exec_in_jail` (process descriptor + the pid the daemon reports).
+  `signalSpawned` (`kill` / `pdkill`) and `waitSpawned` (`waitpid` /
+  kqueue) hide the difference. `run_gui.cpp` starts the Wayland
+  compositor and `wayvnc` through it instead of a raw `jexec` fork —
+  the last place in crate(1) that exec'd `jexec` directly, so GUI
+  crates are no longer root-only by construction. (Other GUI pieces
+  under rootless — seatd socket nullfs mount, devfs rules — already go
+  through privops; none of it has been exercised unprivileged yet.)
+- **Daemon-started containers are owned.** A `crate run` that `crated`
+  spawns as root for control-socket / HTTP `start` and `restart`
+  creates its jail with `jail_setv` directly, so it never passed
+  `create_jail` and the jid→owner registry did not know it: every
+  tenant's jid-scoped verb got the bootstrap Allow on it, and the
+  operator who asked for the start could not `exec_in_jail`/`console`
+  into it. `Crated::registerSpawnedJailOwner` now watches (detached
+  thread, ≤10 min, reaps the child if it dies first) for the jail
+  whose kernel name ends in `_pid<crate run pid>` — the suffix `crate
+  run` has always used, now composed via `RunPure::jailXnamePidSuffix`
+  on both sides — and records it: control-socket peer uid, or 0
+  (admin-owned) for the bearer-token HTTP path. Effect: the starting
+  operator owns the container; admin-started containers are known as
+  uid 0, so tenants' `set_rctl`/`signal_jail`/… on them now answer 403
+  instead of the unknown-jid Allow.
+
+Tests: `run_pure_test` `jail_xname_pid_suffix`. Full unit suite
+1469/1469. Version 1.1.42.
+
 ## [1.1.41] — 2026-10-19
 
 **Rootless follow-ups to `exec_in_jail`: Ctrl-C reaches the container
@@ -56,7 +188,6 @@ gains an optional `limits` field.
   checked (absent → WARN with the reason, not writable → FAIL, else
   PASS), the root-owned tree and `/var/log/crate` are reported as such,
   and an unreadable `crated.conf` is the expected state.
-
 - **Release workflow fills the Release page.** `.github/workflows/
   release.yml` gained a `notes` job that runs first on a `v*` tag:
   it refuses a tag whose version is not the one compiled into

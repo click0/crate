@@ -144,13 +144,22 @@ privileged operations to crated(8)»*).
 (`set_iface_up`, `add_ipfw_rule`, `configure_ipfw_nat`, `create_epair`)
 діють на спільний host-стан без тенант-специфічної цілі — їх не
 розпулити, лишаються host-wide за задумом. **Інтерфейсно-іменовані**
-верби (`ifname`/`bridge` у `configure_iface`, `teardown_iface`,
+верби (`ifname` у `configure_iface`, `teardown_iface`, `member` у
 `bridge_add_member` / `bridge_del_member`, iface у
-`reclaim_iface_from_vnet`) тенант-сигнал несуть — epair-половинка
-належить тому, чий `create_epair` її створив, — але демон поки не має
-iface→owner-реєстру, щоб його розв'язати, тож вони лишаються host-wide
-(відстежується в `TODO`). Усе інше, що несе operator-controlled
-ownership-сигнал, гейтується. Обробники лишаються uid-сліпими; гейт іде
+`reclaim_iface_from_vnet`, `set_iface_up`, `disable_iface_offload`,
+`set_iface_inet_addr`, `set_iface_mac`) теж несуть тенант-сигнал —
+epair-половинка належить тому, чий `create_epair` її створив, — і з
+1.1.43 демон розв'язує його через **iface→owner-реєстр**
+(`lib/iface_owner_registry.*`, persist у `/var/db/crate/iface_owners.tsv`):
+обидві половинки записуються при `create_epair` на uid піра,
+забуваються при `teardown_iface`, звіряються з живим списком
+інтерфейсів хоста. Per-user викликач може називати лише epair-половинки:
+чужа половинка → `403` (`DenyForeignIface`), хостовий інтерфейс за
+іменем (`em0`, `bridge0`, `vlan…`) → `403` (`DenyHostIface`) — дірка
+«перенести будь-який NIC хоста у свій vnet» закрита, — а незареєстрована
+половинка отримує ту ж bootstrap-поступку, що й невідомий jid. Bridge у
+`bridge_*_member` / `configure_iface` лишається спільним станом хоста.
+Усе інше, що несе operator-controlled ownership-сигнал, гейтується. Обробники лишаються uid-сліпими; гейт іде
 попереду них.
 
 > Наслідок: будь-хто, хто має доступ до privops — `admin` bearer-токен
@@ -394,9 +403,8 @@ privops безпечним для **взаємно недовірливих** о
 Те, що лишається host-wide після (1)–(3), — це **задум**, а не
 відкладений гейт: справді host-глобальні верби (`set_iface_up`,
 `add_ipfw_rule`, `configure_ipfw_nat`, `create_epair` — спільний стан
-хоста без тенант-цілі), інтерфейсно-іменовані верби до появи
-iface→owner-реєстру (`teardown_iface`, `bridge_*`, `ifname` у
-`configure_iface`), `admin`-only HTTP-транспорт (без uid піра) і bootstrap-
+хоста без тенант-цілі; інтерфейсно-іменовані верби гейтуються з
+1.1.43), `admin`-only HTTP-транспорт (без uid піра) і bootstrap-
 поступка, що пропускає jid-и / імена, відсутні в реєстрі (для шляхів
 з 1.1.35 вона обмежена власним префіксом викликача). Мультитенантне
 розгортання, яке має тримати операторів подалі від цієї поверхні, досі

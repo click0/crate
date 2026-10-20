@@ -14,6 +14,8 @@
 
 #include "util.h"   // Util::toUInt
 #include "err.h"
+#include "netaddr_pure.h"   // 1.1.44: isV4 / isV6
+#include "privops_pure.h"   // 1.1.44: validateIpv4Cidr / validateIpv6Cidr
 
 namespace SpecPure {
 
@@ -416,6 +418,32 @@ void Spec::validate() const {
         ERR("options/ipsec/conn: " << reason)
     }
   }
+
 }
 
 #undef ERR
+
+// --- 1.1.44: options/net address validators ---
+
+std::string SpecPure::validateStaticIp4(const std::string &v) {
+  if (v.empty()) return "address is empty";
+  if (v.find('/') == std::string::npos)
+    return NetAddrPure::isV4(v) ? "" : "'" + v + "' is not an IPv4 address";
+  // a.b.c.d/N — PrivOpsPure checks the octets and 0..32
+  if (auto e = PrivOpsPure::validateIpv4Cidr(v); !e.empty()) return "'" + v + "': " + e;
+  return "";
+}
+
+std::string SpecPure::validateStaticIp6(const std::string &v) {
+  if (v.empty()) return "address is empty";
+  if (v.find('/') == std::string::npos)
+    return NetAddrPure::isV6(v) ? "" : "'" + v + "' is not an IPv6 address";
+  if (auto e = PrivOpsPure::validateIpv6Cidr(v); !e.empty()) return "'" + v + "': " + e;
+  return "";
+}
+
+std::string SpecPure::validateGateway4(const std::string &v) {
+  if (v.empty()) return "gateway is empty";
+  if (v.find('/') != std::string::npos) return "gateway must be a bare IPv4 address, not a CIDR";
+  return NetAddrPure::isV4(v) ? "" : "'" + v + "' is not an IPv4 address";
+}

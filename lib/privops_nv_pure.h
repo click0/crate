@@ -42,6 +42,8 @@
 
 #include "privops_pure.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <map>
 #include <string>
 
@@ -165,6 +167,43 @@ std::string parseDeleteIpfwNat(const FieldMap &m,
                                PrivOpsPure::DeleteIpfwNatReq &out);
 std::string parseCreateBridge(const FieldMap &m,
                               PrivOpsPure::CreateBridgeReq &out);
+
+// --- 1.1.43: request size cap (nvlist header pre-check) ---
+//
+// libnv's nvlist_recv() reads a fixed 19-byte header and then
+// allocates and reads whatever `size` the untrusted peer announced —
+// there is no cap API. The listener therefore peeks the header
+// (MSG_PEEK) and refuses the request before libnv allocates. Layout
+// (sys/contrib/libnv/nvlist_impl.h, __packed):
+//
+//     uint8_t  magic   = 0x6c ('l')
+//     uint8_t  version = 0
+//     uint8_t  flags   (bit 0x80: payload is big-endian)
+//     uint64_t descriptors
+//     uint64_t size    (bytes following the header)
+//
+// parseNvlistHeader() decodes those 19 bytes; the caller compares
+// against kMaxNvlistRequestBytes / kMaxNvlistRequestDescriptors. The
+// biggest legitimate request is exec_in_jail (argv <= 64 KiB plus three
+// descriptors), so 1 MiB / 3 leaves an order of magnitude of headroom.
+constexpr size_t   kNvlistHeaderSize            = 19;
+constexpr uint64_t kMaxNvlistRequestBytes       = 1u << 20;   // 1 MiB
+constexpr uint64_t kMaxNvlistRequestDescriptors = 3;
+
+struct NvlistHeader {
+  bool     bigEndian   = false;
+  uint64_t descriptors = 0;
+  uint64_t size        = 0;
+};
+
+// Returns "" and fills `out` on a well-formed header (magic + version
+// recognised); otherwise a one-line reason. `len` must be at least
+// kNvlistHeaderSize (shorter -> "short header").
+std::string parseNvlistHeader(const unsigned char *buf, size_t len, NvlistHeader &out);
+
+// Policy on top of the parsed header: "" when the request may proceed
+// to nvlist_recv, otherwise the refusal reason (used in the 413 body).
+std::string checkNvlistHeaderLimits(const NvlistHeader &h);
 
 // --- Verb routing ---
 

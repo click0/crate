@@ -657,6 +657,71 @@ ATF_TEST_CASE_BODY(exec_in_jail_fails_closed) {
               != std::string::npos);
 }
 
+// --- 1.1.43: interface-named verbs gated through byIface ---
+
+namespace {
+// jid/name/path all unknown; only byIface answers.
+OwnerLookup ifaceOwner(const std::string &owned, uint32_t uid) {
+  OwnerLookup l = PrivOpsAuthzPure::nullLookup();
+  l.byIface = [owned, uid](const std::string &n) -> Owner {
+    Owner o;
+    if (n == owned) { o.known = true; o.uid = uid; }
+    return o;
+  };
+  return l;
+}
+Request reqIface(std::string n, unsigned jid = 0, std::string jail = "") {
+  Request r; r.ifname = std::move(n); r.jid = jid; r.jailName = std::move(jail); return r;
+}
+} // namespace
+
+ATF_TEST_CASE_WITHOUT_HEAD(iface_verbs_gated_by_epair_owner);
+ATF_TEST_CASE_BODY(iface_verbs_gated_by_epair_owner) {
+  auto e = env1000();
+  const Verb verbs[] = {Verb::TeardownIface, Verb::SetIfaceUp, Verb::DisableIfaceOffload,
+                        Verb::SetIfaceInetAddr, Verb::SetIfaceMac,
+                        Verb::BridgeAddMember, Verb::BridgeDelMember};
+  for (Verb v : verbs) {
+    // own epair half -> Allow
+    ATF_REQUIRE(authorize(v, reqIface("epair5a"), e, ifaceOwner("epair5a", 1000)) == Decision::Allow);
+    // another tenant's half -> Deny
+    ATF_REQUIRE(authorize(v, reqIface("epair5a"), e, ifaceOwner("epair5a", 1001)) == Decision::DenyForeignIface);
+    // unregistered half (pre-1.1.43 / root-made) -> bootstrap Allow
+    ATF_REQUIRE(authorize(v, reqIface("epair9b"), e, ifaceOwner("epair5a", 1001)) == Decision::Allow);
+    // a host interface by name -> refused outright for a per-user caller
+    ATF_REQUIRE(authorize(v, reqIface("em0"), e, ifaceOwner("epair5a", 1000)) == Decision::DenyHostIface);
+    ATF_REQUIRE(authorize(v, reqIface("bridge0"), e, ifaceOwner("epair5a", 1000)) == Decision::DenyHostIface);
+    ATF_REQUIRE(authorize(v, reqIface(""), e, ifaceOwner("epair5a", 1000)) == Decision::DenyHostIface);
+    // no iface registry wired (byIface null) -> unchanged host-wide behaviour
+    ATF_REQUIRE(authorize(v, reqIface("em0"), e, fixedOwner(77, "web", 1001)) == Decision::Allow);
+  }
+  ATF_REQUIRE(PrivOpsAuthzPure::isEpairIfaceName("epair0a"));
+  ATF_REQUIRE(!PrivOpsAuthzPure::isEpairIfaceName("epair0"));
+  ATF_REQUIRE(!PrivOpsAuthzPure::isEpairIfaceName("em0"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(configure_and_reclaim_gate_both_ends);
+ATF_TEST_CASE_BODY(configure_and_reclaim_gate_both_ends) {
+  auto e = env1000();
+  // configure_iface: own jid + own epair -> Allow; own jid + host NIC
+  // -> DenyHostIface (the passthrough-any-NIC hole); foreign jid wins first.
+  auto l = ifaceOwner("epair5b", 1000);
+  l.byJid = [](unsigned jid) -> Owner { Owner o; if (jid == 77) { o.known = true; o.uid = 1000; } return o; };
+  ATF_REQUIRE(authorize(Verb::ConfigureIface, reqIface("epair5b", 77), e, l) == Decision::Allow);
+  ATF_REQUIRE(authorize(Verb::ConfigureIface, reqIface("em0", 77), e, l) == Decision::DenyHostIface);
+  auto foreignJid = l;
+  foreignJid.byJid = [](unsigned jid) -> Owner { Owner o; if (jid == 77) { o.known = true; o.uid = 1001; } return o; };
+  ATF_REQUIRE(authorize(Verb::ConfigureIface, reqIface("epair5b", 77), e, foreignJid) == Decision::DenyForeignJid);
+  // reclaim_iface_from_vnet: own jail name + own epair -> Allow; own
+  // jail + foreign epair -> DenyForeignIface
+  auto r = ifaceOwner("epair5b", 1001);
+  r.byName = [](const std::string &n) -> Owner { Owner o; if (n == "web") { o.known = true; o.uid = 1000; } return o; };
+  ATF_REQUIRE(authorize(Verb::ReclaimIfaceFromVnet, reqIface("epair5b", 0, "web"), e, r) == Decision::DenyForeignIface);
+  ATF_REQUIRE(authorize(Verb::ReclaimIfaceFromVnet, reqIface("epair6a", 0, "web"), e, r) == Decision::Allow);
+  ATF_REQUIRE(!std::string(decisionReason(Decision::DenyForeignIface)).empty());
+  ATF_REQUIRE(!std::string(decisionReason(Decision::DenyHostIface)).empty());
+}
+
 // --- decisionReason ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(decision_reason_non_empty);
@@ -714,4 +779,6 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, pf_anchor_verbs_name_scoped);
   ATF_ADD_TEST_CASE(tcs, attach_zfs_gates_jid_too);
   ATF_ADD_TEST_CASE(tcs, exec_in_jail_fails_closed);
+  ATF_ADD_TEST_CASE(tcs, iface_verbs_gated_by_epair_owner);
+  ATF_ADD_TEST_CASE(tcs, configure_and_reclaim_gate_both_ends);
 }

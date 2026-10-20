@@ -37,6 +37,15 @@ struct PortaclRule {
   int port;
 };
 
+// Overwrites security.mac.portacl.rules with exactly `rules`. Kept for
+// callers that own the whole list; `crate run` uses the two below.
 void setPortaclRules(const std::vector<PortaclRule> &rules);
+
+// 1.1.44: merge `rules` into the CURRENT sysctl value (other
+// containers' and the operator's rules stay) / remove exactly `rules`
+// from it. Both read the live value first (MacPure does the list
+// arithmetic) and write it back the same way setPortaclRules does.
+void addPortaclRules(const std::vector<PortaclRule> &rules);
+void removePortaclRules(const std::vector<PortaclRule> &rules);
 
 }

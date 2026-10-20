@@ -748,6 +748,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // "no jail created yet, nothing scoped to remove".
   auto macJidShared = std::make_shared<int>(-1);
   RunAtEnd removeMacRules;
+  RunAtEnd removePortaclRulesAtEnd;   // 1.1.44
   if (spec.securityAdvanced) {
     if (!spec.securityAdvanced->macRules.empty()) {
       LOG("loading MAC bsdextended rules")
@@ -796,11 +797,22 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         portaclRules.push_back({0, "tcp", (int)port});
         portaclRules.push_back({0, "udp", (int)port});
       }
+      // 1.1.44: MERGE into the host-wide list and take our rules back
+      // out at exit. setPortaclRules overwrote security.mac.portacl.rules
+      // wholesale — every other container's and the operator's rules
+      // vanished on each run — and nothing restored them.
       try {
-        MacOps::setPortaclRules(portaclRules);
+        MacOps::addPortaclRules(portaclRules);
+        removePortaclRulesAtEnd.reset([portaclRules]() {
+          try { MacOps::removePortaclRules(portaclRules); }
+          catch (const std::exception &ex) {
+            std::cerr << rang::fg::yellow << "MAC portacl: could not remove this container's rules: "
+                      << ex.what() << rang::style::reset << std::endl;
+          }
+        });
       } catch (const std::exception &ex) {
         std::cerr << rang::fg::yellow
-                  << "MAC portacl: setPortaclRules failed: " << ex.what()
+                  << "MAC portacl: addPortaclRules failed: " << ex.what()
                   << " — port restrictions NOT applied; check that "
                   << "mac_portacl is loaded and crate has root."
                   << rang::style::reset << std::endl;
@@ -973,7 +985,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     }
   }
 
-  auto jailXname = STR(nameComponent << "_pid" << ::getpid());
+  // 1.1.42: suffix via RunPure so crated (which knows our pid after
+  // spawning us) can find this jail and record its owner.
+  auto jailXname = STR(nameComponent << RunPure::jailXnamePidSuffix(::getpid()));
 
   // environment in jail
   std::string jailEnv;
@@ -1812,12 +1826,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     // IPv6 pass-through networking
     std::string epipeIp6A, epipeIp6B;
     if (optionNet->ipv6) {
-      auto numToIp6 = [](unsigned epairNum, unsigned idx) {
-        unsigned addr = 100 + 2 * epairNum + idx;
-        return STR("fd00:cra7:e::" << std::hex << addr);
-      };
-      epipeIp6A = numToIp6(epair.num, 0);
-      epipeIp6B = numToIp6(epair.num, 1);
+      // 1.1.44: one /126 per pair (RunPure::epairIp6); the old
+      // 100+2*num layout shared a /126 between pairs n and n+1.
+      epipeIp6A = RunPure::epairIp6(epair.num, 0);
+      epipeIp6B = RunPure::epairIp6(epair.num, 1);
 
       execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet6", "::1", "prefixlen", "128"}, "set up lo0 IPv6 in jail");
       Util::execCommand({CRATE_PATH_IFCONFIG, epair.ifaceA, "inet6", epipeIp6A, "prefixlen", "126"},

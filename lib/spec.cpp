@@ -4,6 +4,7 @@
 #include "spec.h"
 #include "spec_pure.h"
 #include "compositor_pure.h"
+#include "privops_pure.h"   // 1.1.44: validateIfaceName for options/net/extra[]/interface
 #include "config.h"
 #include "util.h"
 #include "err.h"
@@ -645,11 +646,16 @@ static Spec parseSpecFromNode(YAML::Node top) {
                     else if (ipStr == "none")
                       optNetDetails->ipMode = Spec::NetOptDetails::IpMode::None;
                     else {
+                      // 1.1.44: validate here, not at jail start
+                      if (auto e = SpecPure::validateStaticIp4(ipStr); !e.empty())
+                        ERR("options/net/ip: " << e)
                       optNetDetails->ipMode = Spec::NetOptDetails::IpMode::Static;
                       optNetDetails->staticIp = ipStr;
                     }
                   } else if (AsString(netOpt.first) == "gateway") {
                     optNetDetails->gateway = AsString(netOpt.second);
+                    if (auto e = SpecPure::validateGateway4(optNetDetails->gateway); !e.empty())
+                      ERR("options/net/gateway: " << e)
                   } else if (AsString(netOpt.first) == "ip6") {
                     auto v6str = AsString(netOpt.second);
                     if (v6str == "slaac")
@@ -657,6 +663,8 @@ static Spec parseSpecFromNode(YAML::Node top) {
                     else if (v6str == "none")
                       optNetDetails->ip6Mode = Spec::NetOptDetails::Ip6Mode::None;
                     else {
+                      if (auto e = SpecPure::validateStaticIp6(v6str); !e.empty())
+                        ERR("options/net/ip6: " << e)
                       optNetDetails->ip6Mode = Spec::NetOptDetails::Ip6Mode::Static;
                       optNetDetails->staticIp6 = v6str;
                     }
@@ -689,18 +697,30 @@ static Spec parseSpecFromNode(YAML::Node top) {
                         } else if (eKey == "interface") {
                           extra.passthroughIface = AsString(e.second);
                           extra.netgraphIface = AsString(e.second);
+                          if (auto err = PrivOpsPure::validateIfaceName(extra.passthroughIface); !err.empty())
+                            ERR("options/net/extra[]/interface: " << err)   // 1.1.44
                         } else if (eKey == "ip") {
                           auto ipStr = AsString(e.second);
                           if (ipStr == "dhcp") extra.ipMode = Spec::NetOptDetails::IpMode::Dhcp;
                           else if (ipStr == "none") extra.ipMode = Spec::NetOptDetails::IpMode::None;
-                          else { extra.ipMode = Spec::NetOptDetails::IpMode::Static; extra.staticIp = ipStr; }
+                          else {
+                            if (auto err = SpecPure::validateStaticIp4(ipStr); !err.empty())
+                              ERR("options/net/extra[]/ip: " << err)   // 1.1.44
+                            extra.ipMode = Spec::NetOptDetails::IpMode::Static; extra.staticIp = ipStr;
+                          }
                         } else if (eKey == "gateway") {
                           extra.gateway = AsString(e.second);
+                          if (auto err = SpecPure::validateGateway4(extra.gateway); !err.empty())
+                            ERR("options/net/extra[]/gateway: " << err)   // 1.1.44
                         } else if (eKey == "ip6") {
                           auto v6 = AsString(e.second);
                           if (v6 == "slaac") extra.ip6Mode = Spec::NetOptDetails::Ip6Mode::Slaac;
                           else if (v6 == "none") extra.ip6Mode = Spec::NetOptDetails::Ip6Mode::None;
-                          else { extra.ip6Mode = Spec::NetOptDetails::Ip6Mode::Static; extra.staticIp6 = v6; }
+                          else {
+                            if (auto err = SpecPure::validateStaticIp6(v6); !err.empty())
+                              ERR("options/net/extra[]/ip6: " << err)   // 1.1.44
+                            extra.ip6Mode = Spec::NetOptDetails::Ip6Mode::Static; extra.staticIp6 = v6;
+                          }
                         } else if (eKey == "static-mac") {
                           if (!YAML::convert<bool>::decode(e.second, extra.staticMac))
                             ERR("options/net/extra[]/static-mac must be a boolean")
@@ -1244,6 +1264,9 @@ static Spec parseSpecFromNode(YAML::Node top) {
             scalar(b.second, spec.healthcheck->test, "healthcheck/test");
           else if (isKey(b, "interval")) {
             spec.healthcheck->intervalSec = Util::toUInt(AsString(b.second));
+            // 1.1.44: 0 made the monitor loop spin without sleeping.
+            if (spec.healthcheck->intervalSec == 0)
+              ERR("healthcheck/interval must be at least 1 second")
           } else if (isKey(b, "timeout")) {
             spec.healthcheck->timeoutSec = Util::toUInt(AsString(b.second));
           } else if (isKey(b, "retries")) {

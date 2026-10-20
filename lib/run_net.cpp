@@ -274,7 +274,10 @@ EpairInfo createEpair(int jid, const std::string &jidStr,
   auto epairPair = createEpairPrivopsOrLocal();
   info.ifaceA = epairPair.first;
   info.ifaceB = epairPair.second;
-  info.num = Util::toUInt(info.ifaceA.substr(5/*skip epair*/, info.ifaceA.size()-5-1));
+  // 1.1.44: the names come from the privops reply (another process) —
+  // parse the unit defensively instead of substr()ing blindly.
+  if (!RunPure::epairUnit(info.ifaceA, info.num))
+    ERR2("run_net", "create_epair returned an unexpected interface name '" << info.ifaceA << "'")
 
   info.ipA = epairNumToIp(info.num, 0);
   info.ipB = epairNumToIp(info.num, 1);
@@ -649,7 +652,8 @@ BridgeInfo createBridgeEpair(int jid, const std::string &jidStr,
   auto epairPair = createEpairPrivopsOrLocal();
   info.ifaceA = epairPair.first;
   info.ifaceB = epairPair.second;
-  info.num = Util::toUInt(info.ifaceA.substr(5, info.ifaceA.size()-5-1));
+  if (!RunPure::epairUnit(info.ifaceA, info.num))   // 1.1.44
+    ERR2("run_net", "create_epair returned an unexpected interface name '" << info.ifaceA << "'")
 
   // disable checksum offload (FreeBSD 15 workaround)
   disableOffloadPrivopsOrLocal(info.ifaceA);
@@ -699,8 +703,15 @@ void configureStaticIp(const std::string &jailSideIface,
   if (slashPos != std::string::npos) {
     addr = ip.substr(0, slashPos);
     auto prefixLen = Util::toUInt(ip.substr(slashPos + 1));
+    // 1.1.44: `1u << (32 - prefixLen)` is undefined for prefixLen > 32
+    // (and 32 itself needs the full mask) — the spec validator rejects
+    // these now, this is the belt to its braces.
+    if (prefixLen > 32)
+      ERR2("run_net", "static IPv4 prefix length out of range (0..32): " << ip)
     // Convert prefix length to hex netmask
-    uint32_t mask = prefixLen > 0 ? ~((1u << (32 - prefixLen)) - 1) : 0;
+    uint32_t mask = prefixLen == 0 ? 0u
+                  : prefixLen >= 32 ? 0xffffffffu
+                  : ~((1u << (32 - prefixLen)) - 1);
     netmask = STR("0x" << std::hex << mask);
   } else {
     addr = ip;
@@ -748,6 +759,11 @@ void configureStaticIp6(const std::string &jailSideIface,
   if (slashPos != std::string::npos) {
     addr = ip6.substr(0, slashPos);
     prefixLen = ip6.substr(slashPos + 1);
+    // 1.1.44: a bounded number, not an arbitrary token handed to ifconfig.
+    if (prefixLen.empty() || prefixLen.size() > 3 ||
+        prefixLen.find_first_not_of("0123456789") != std::string::npos ||
+        Util::toUInt(prefixLen) > 128)
+      ERR2("run_net", "static IPv6 prefix length out of range (0..128): " << ip6)
   } else {
     addr = ip6;
   }

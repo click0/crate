@@ -35,6 +35,7 @@
 
 #include "control_socket.h"
 #include "control_socket_pure.h"
+#include "privops_handlers.h"   // 1.1.42: registerSpawnedJailOwner
 #include "rate_limit.h"
 #include "rate_limit_pure.h"
 #include "sandbox.h"
@@ -255,7 +256,12 @@ pid_t spawnCrateRun(const std::string &cratePath) {
   return pid;
 }
 
-void handleStart(std::string &resBody, int &status, const std::string &name) {
+// 1.1.42: `peerUid` is the control-socket peer (getpeereid); the jail
+// the spawned `crate run` creates is recorded as owned by it, so the
+// operator who started the container can exec/console into it and
+// other tenants cannot. -1 (unknown peer) records uid 0 (admin-owned).
+void handleStart(std::string &resBody, int &status, const std::string &name,
+                 long peerUid) {
   // If the jail is already running, reply 409 Conflict so the
   // operator gets a clear "no-op" rather than a 200 that creates
   // false confidence.
@@ -301,6 +307,7 @@ void handleStart(std::string &resBody, int &status, const std::string &name) {
       std::string("fork failed: ") + std::strerror(errno));
     return;
   }
+  Crated::registerSpawnedJailOwner(pid, peerUid > 0 ? (uint32_t)peerUid : 0u, name);
   // Parent: don't wait — the child runs the jail's foreground
   // supervisor for as long as the jail is up, which can be hours.
   // We reply 202 immediately and let the operator poll
@@ -342,7 +349,8 @@ void handleStop(std::string &resBody, int &status, const std::string &name) {
 // thread and fd were pinned for the jail's lifetime and runCrate's
 // signal handlers / getpid()-keyed firewall slots applied to crated.
 // Replies 202 like `start`; poll GET /v1/control/containers/<name>.
-void handleRestart(std::string &resBody, int &status, const std::string &name) {
+void handleRestart(std::string &resBody, int &status, const std::string &name,
+                   long peerUid) {
   auto j = JailQuery::getJailByName(name);
   if (!j) {
     status  = 404;
@@ -394,6 +402,7 @@ void handleRestart(std::string &resBody, int &status, const std::string &name) {
       std::string("stopped, but fork for restart failed: ") + std::strerror(errno));
     return;
   }
+  Crated::registerSpawnedJailOwner(pid, peerUid > 0 ? (uint32_t)peerUid : 0u, name);
   status  = 202;
   resBody = R"({"status":"restarting","container":")" + name +
             R"(","crate_path":")" + cratePath + R"("})";
@@ -581,11 +590,11 @@ void handleConnection(int connFd,
     handleStop(resBody, status, route.container);
     break;
   case ControlSocketPure::Action::PostRestart:
-    handleRestart(resBody, status, route.container);
+    handleRestart(resBody, status, route.container, peerUid);
     break;
   case ControlSocketPure::Action::PostStart:
     // 0.8.21: spec-registry-backed start (replaces the 0.8.13 501 stub).
-    handleStart(resBody, status, route.container);
+    handleStart(resBody, status, route.container, peerUid);
     break;
   case ControlSocketPure::Action::Unknown:
     // unreachable: filtered by authorize() above

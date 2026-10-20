@@ -43,6 +43,10 @@ std::vector<IpInfo> getIfaceIp4Addresses(const std::string &ifaceName) {
   auto netFromHostAndNatmaskV4 = [countBits](const std::string &host, const std::string &netmask) {
     auto hostVec =    Util::splitString(host, ".");
     auto netmaskVec = Util::splitString(netmask, ".");
+    // 1.1.44: getnameinfo() output is dotted-quad for AF_INET, but index
+    // [i] below used to trust that without looking.
+    if (hostVec.size() != 4 || netmaskVec.size() != 4)
+      return host + "/32";
     unsigned nbits = 0;
     std::ostringstream ss;
     for (int i = 0; i < 4; i++) {

@@ -64,16 +64,22 @@ The bhyve/VM track is in TODO2.
   (plain file, one link, owner root or the operator) and chowned to
   the operator so the "operator-readable copy" is readable.
 
+  [FIXED in 1.1.42] GUI compositor + wayvnc start through
+  JailExec::spawnInJail (root: fork+jail_attach; rootless: exec_in_jail
+  with a process descriptor; signalSpawned/waitSpawned hide the
+  difference) — the last raw `jexec` in crate(1). Daemon-started
+  containers (control-socket / HTTP `start`+`restart`) are now recorded
+  in the jid→owner registry: crated watches for the jail whose kernel
+  name ends in `_pid<crate run pid>` (RunPure::jailXnameHasPid) and
+  records the control-socket peer uid (0 = admin for the bearer-token
+  HTTP path). The operator who started a container can exec/console
+  into it; other tenants lose the bootstrap Allow on it.
+
 * (HIGH) exec_in_jail follow-ups:
     - no on-hardware run yet: the whole rootless `crate run` path
       (ensure_user_root → create_jail → mounts → exec_in_jail …) has
       never been exercised end to end; docs/on-hardware-validation.md
       §4.1 is the first thing to run.
-    - lib/run_gui.cpp:1073-1149 compositor and seatd helpers still
-      exec `jexec` directly (root-only) — GUI crates stay root-only
-      until JailExec grows a non-blocking "spawn in jail, keep the
-      handle" variant (exec_in_jail already returns a pd; the client
-      side just needs to hand it back instead of waiting).
     - the daemon's child inherits crated's rlimits and cpuset; RCTL
       rules on the jail still apply (they key on the jail), but
       per-process limits should come from the jail, not the daemon.
@@ -106,13 +112,6 @@ The bhyve/VM track is in TODO2.
       with auto_create_bridge and a renamed bridge (e.g. "lan0") gets a
       clear 400 under rootless — needs create + `name` rename in the
       daemon if that is wanted.
-    - daemon/routes.cpp spawnCrateRun and control_socket.cpp exec
-      `crate run` as uid 0 — the jid registry records those creates as
-      unowned, so a tenant cannot exec_in_jail into a container the
-      daemon started for them over HTTP/control-socket `start`. Carry
-      the requesting operator's uid into that spawn (and into
-      create_jail's registry entry) or document that daemon-started
-      containers are admin-owned.
 
 === 2. crated privops / HTTP — security ===
 
@@ -142,19 +141,20 @@ The bhyve/VM track is in TODO2.
   jid→owner registry reconciled against live jails at startup and on
   every lookup hit; destroy_jail forgets by pre-resolved jid.
 
-* (MED) Interface-named verbs still host-global
-  (lib/privops_authz_pure.cpp default arm): configure_iface gates `jid`
-  but not ifname/bridge (any host NIC can be moved into the caller's
-  vnet); teardown_iface / bridge_add_member / bridge_del_member and the
-  iface of reclaim_iface_from_vnet accept other tenants' epairs. An
-  epair half belongs to whoever's create_epair made it, so the fix is
-  an iface→owner registry of the same shape as jid_owner_registry:
-  record `epairNa`/`epairNb` → uid on a successful create_epair
-  (privops_handlers.cpp handleCreateEpair), forget on teardown_iface,
-  reconcile against `ifconfig -l`, and gate the four verbs with
-  checkOwnedIface (unknown iface → bootstrap Allow, like jid). Non-epair
-  ifnames (host NICs) should be denied for per-user callers outright.
-  trust-model.md names this as the remaining gap.
+  [FIXED in 1.1.43] interface-named verbs gated: iface→owner registry
+  (lib/iface_owner_registry{,_pure}.*, /var/db/crate/iface_owners.tsv)
+  fed by create_epair / teardown_iface, reconciled against the host's
+  `a` halves; checkOwnedIface on configure_iface's ifname,
+  teardown_iface, bridge_*_member's member, reclaim's iface,
+  set_iface_up/disable_iface_offload/set_iface_inet_addr/set_iface_mac.
+  Non-epair names → DenyHostIface for per-user callers; unknown epair →
+  bootstrap Allow. Also: validateConfigureIface rejected the move-only
+  request run_net.cpp sends for EVERY rootless move (400) — fixed;
+  nvlist header peeked before nvlist_recv (1 MiB / 3 descriptors);
+  HTTP DELETE /containers/:name goes through stopCrate (no more
+  kill -9 + jail -r leaking mounts/epairs/anchors) and reports
+  was_running; crated.conf role values validated, top-level vs
+  rootless.* override warned.
 
 * (by design, documented) a pool-scoped ADMIN token can POST
   /imports/:name + /containers/:name/start for a name in its pool and
@@ -173,15 +173,6 @@ The bhyve/VM track is in TODO2.
   control-socket restart = bounded stop + detached spawnCrateRun;
   configure_iface shape check before moveToVnet.
 
-* (MED, residual) privops_listener.cpp `nvlist_recv(connFd, 0)` still
-  lets libnv allocate whatever size the untrusted header announces
-  (the 1.1.37 timeout + cap bound the thread/fd exhaustion, not the
-  per-request allocation). libnv exposes no size cap; options: peek
-  the 19-byte nvlist header (magic, version, flags, descriptors, size)
-  with MSG_PEEK and refuse > N MiB before nvlist_recv, or move to
-  nvlist_unpack over a bounded recv buffer. Needs a FreeBSD build to
-  validate against the header layout.
-
 * (MED) Synchronous HTTP handlers remain synchronous — by choice in
   1.1.37 (the worker pool now absorbs them): routes.cpp stop (≤ 11 s),
   restart (stop phase ≤ 11 s, then spawn), export (`tar | xz --extreme`
@@ -192,20 +183,13 @@ The bhyve/VM track is in TODO2.
   wait/KILL child, but that changes the documented `stopped:true`
   contract. Decide API shape first, then do both ends.
 
-* (LOW) privops_handlers.cpp handleConfigureIface comment describes a
-  "move-only" mode (all of ipv4/ipv6/mac empty) that
-  validateConfigureIface (privops_pure.cpp:490-491) rejects — either
-  allow it in the validator or drop the comment.
 * (LOW) Registry write happens after `jail -c` returns (:663-671);
   until then the new jid/path are unowned (bootstrap Allow).
-* (LOW) DELETE /api/v1/containers/:name (routes.cpp:348-371) only
-  `kill -9` + `jail -r`; crated.8:135-136 says it removes the dataset.
-  Returns destroyed:true even when nothing was running. Stop/destroy
-  bypass crate's own teardown (mounts, epairs, anchors) → leaks.
-* (LOW) daemon/config.cpp:165-176 top-level zfs_master_prefix etc.
-  silently override the nested `rootless:` block; `role` is
-  unvalidated (a typo such as `Admin` silently demotes to viewer);
-  privops_socket_mode gets no tightness warning unlike listen.unix_mode.
+* (LOW) crated.8:135-136 says DELETE /containers/:name removes the
+  dataset; it stops the container (via stopCrate since 1.1.43) and
+  nothing else — fix the man page or implement the dataset removal.
+* (LOW) privops_socket_mode gets no tightness warning unlike
+  listen.unix_mode.
 * (LOW) handlers at privops_handlers.cpp :171,560,577 return raw
   strerror/e.what() that may echo host paths. (jsonError escaping
   fixed in 1.1.35.)
@@ -226,33 +210,27 @@ The bhyve/VM track is in TODO2.
   (network_pool_user_bits, default 8; v6: network_pool6_user_bits 16),
   addresses keep the pool prefix/gateway.
 
-* (MED) MAC portacl rules are host-wide, clobbered per run, never
-  removed: run.cpp:724-731 writes security.mac.portacl.rules via
-  MacOps::setPortaclRules (mac_ops.cpp:129-145), replacing any other
-  container's or the operator's rules; no RunAtEnd restores them.
+  [FIXED in 1.1.44] MAC portacl rules merged into the host-wide list on
+  start and removed on stop (MacPure::merge/removePortaclRules,
+  MacOps::add/removePortaclRules, RunAtEnd); `crate stats` parses the
+  netstat --libxo JSON (LifecyclePure::parseNetstatIfaceBytesJson);
+  IPv6 epair pairs one /126 each with two-hextet overflow
+  (RunPure::epairIp6); options/net ip / gateway / ip6 / extra[]
+  interface validated at spec parse (SpecPure::validateStaticIp4/6,
+  validateGateway4; PrivOpsPure::validateIfaceName); run_net.cpp
+  prefix-length guards (v4 ≤ 32, v6 numeric ≤ 128); epair unit parsed
+  defensively (RunPure::epairUnit) instead of substr(); net.cpp
+  netmask vector size check; ugidfw add argv split per word;
+  healthcheck interval 0 rejected.
 
-* (MED) `crate stats` network I/O is always "-" on FreeBSD:
-  lib/lifecycle.cpp:142-146 runs `netstat --libxo json`, and when the
-  output IS JSON nothing parses it — only the non-JSON fallback branch
-  (:147-171) extracts bytes. Drop the libxo attempt or parse it.
-
-* (LOW) run.cpp:1587-1598 IPv6 epair pairs fd00:cra7:e::<100+2n>/126:
-  n and n+1 share one /126 on different host interfaces; std::hex of
-  > 0xffff yields an invalid literal. (plausible)
-* (LOW) spec.cpp:649,652,696 store `ip` / `gateway` / `interface`
-  unvalidated (no inet_pton in spec/validate); run_net.cpp:678
-  `1u << (32 - prefixLen)` is UB for prefix > 32; run_net.cpp:725
-  passes an arbitrary prefixlen token to ifconfig.
-* (LOW) run_net.cpp:277,627 substr(5, size-6) throws
-  std::out_of_range on an unexpected epair name from privops;
-  ipfw_ops.cpp:85 treats EINVAL as "native API available";
-  net.cpp:51 indexes netmaskVec[i] without a size check.
-* (LOW) mac_ops.cpp:88 addUgidfwRule passes the whole rule as one
-  argv token (ugidfw parses per-argv) — would fail; no callers (dead).
-  mac_ops.cpp:103-115 deletes by list-line index.
-* (LOW) healthcheck: run.cpp:256 `retries: 0` flags UNHEALTHY on
-  every failure; `interval: 0` busy-loops at :209 (spec.cpp:1246
-  accepts 0).
+* (LOW) ipfw_ops.cpp:85 treats EINVAL from IP_FW_XGET as "native API
+  available" — EINVAL can also mean an unsupported opcode on an older
+  kernel; needs a FreeBSD check before changing.
+* (LOW) mac_ops.cpp removeUgidfwRules deletes by list-line index (a
+  concurrent add shifts indexes); the native path should match rules
+  by content.
+* (LOW) healthcheck `retries: 0` means the first failure is UNHEALTHY —
+  that is the documented meaning of zero retries; left as is.
 
 === 4. crate stack ===
 

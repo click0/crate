@@ -136,6 +136,49 @@ ATF_TEST_CASE_BODY(crate_file_jail_name_rejected)
 	ATF_REQUIRE(e.find("rename the file") != std::string::npos);
 }
 
+// --- 1.1.42: jail xname pid suffix (shared by crate run and crated) ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(jail_xname_pid_suffix);
+ATF_TEST_CASE_BODY(jail_xname_pid_suffix) {
+	ATF_REQUIRE_EQ(RunPure::jailXnamePidSuffix(4242), std::string("_pid4242"));
+	ATF_REQUIRE(RunPure::jailXnameHasPid("web_pid4242", 4242));
+	ATF_REQUIRE(RunPure::jailXnameHasPid("my.app-2_pid1", 1));
+	// a different pid, a pid that is only a prefix of the real one, no
+	// <name> part at all, or the suffix in the middle -> no match
+	ATF_REQUIRE(!RunPure::jailXnameHasPid("web_pid4242", 424));
+	ATF_REQUIRE(!RunPure::jailXnameHasPid("web_pid42420", 4242));
+	ATF_REQUIRE(!RunPure::jailXnameHasPid("_pid4242", 4242));
+	ATF_REQUIRE(!RunPure::jailXnameHasPid("web_pid4242_x", 4242));
+	ATF_REQUIRE(!RunPure::jailXnameHasPid("", 4242));
+}
+
+// --- 1.1.44: epair unit parsing + IPv6 pair addresses ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(epair_unit_and_ip6);
+ATF_TEST_CASE_BODY(epair_unit_and_ip6) {
+	unsigned u = 99;
+	ATF_REQUIRE(RunPure::epairUnit("epair0a", u));   ATF_REQUIRE_EQ(u, 0u);
+	ATF_REQUIRE(RunPure::epairUnit("epair12b", u));  ATF_REQUIRE_EQ(u, 12u);
+	ATF_REQUIRE(!RunPure::epairUnit("epair", u));
+	ATF_REQUIRE(!RunPure::epairUnit("epaira", u));
+	ATF_REQUIRE(!RunPure::epairUnit("epair1", u));
+	ATF_REQUIRE(!RunPure::epairUnit("epair1c", u));
+	ATF_REQUIRE(!RunPure::epairUnit("em0", u));
+	ATF_REQUIRE(!RunPure::epairUnit("", u));
+	ATF_REQUIRE(!RunPure::epairUnit("epair1234567890a", u));   // too many digits
+
+	// one /126 per pair: pair 0 -> 0x101/0x102, pair 1 -> 0x105/0x106 (never
+	// shares a /126 block with pair 0: 0x100..0x103 vs 0x104..0x107)
+	ATF_REQUIRE_EQ(RunPure::epairIp6(0, 0), std::string("fd00:cra7:e::101"));
+	ATF_REQUIRE_EQ(RunPure::epairIp6(0, 1), std::string("fd00:cra7:e::102"));
+	ATF_REQUIRE_EQ(RunPure::epairIp6(1, 0), std::string("fd00:cra7:e::105"));
+	ATF_REQUIRE_EQ(RunPure::epairIp6(1, 1), std::string("fd00:cra7:e::106"));
+	// past 0xffff the offset spreads over two hextets instead of printing
+	// an invalid 5-digit group
+	ATF_REQUIRE_EQ(RunPure::epairIp6(0x4000, 0), std::string("fd00:cra7:e::1:101"));
+	ATF_REQUIRE_EQ(RunPure::epairIp6(0x4000, 1), std::string("fd00:cra7:e::1:102"));
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
 	ATF_ADD_TEST_CASE(tcs, argsToString_empty);
@@ -150,4 +193,6 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, cron_user_injection_rejected);
 	ATF_ADD_TEST_CASE(tcs, crate_file_jail_name_valid);
 	ATF_ADD_TEST_CASE(tcs, crate_file_jail_name_rejected);
+	ATF_ADD_TEST_CASE(tcs, jail_xname_pid_suffix);
+	ATF_ADD_TEST_CASE(tcs, epair_unit_and_ip6);
 }

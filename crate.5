@@ -411,6 +411,11 @@ Enable Capsicum capability mode.
 List of ugidfw rules.
 .It Sy security_advanced/mac_portacl/allow_ports
 Port binding restrictions.
+The rules are merged into the host-wide
+.Va security.mac.portacl.rules
+list when the container starts and removed from it again when it
+stops; rules other containers or the operator added are left alone
+(since 1.1.44 — earlier releases overwrote the whole list).
 .It Sy security_advanced/hide_other_jails
 Prevent enumeration of other jails.
 .El

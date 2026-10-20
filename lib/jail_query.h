@@ -75,4 +75,21 @@ void execInJailChecked(int jid, const std::vector<std::string> &argv,
 // ignores the signal.
 void forwardSignalToPrivopsChildren(int sig);
 
+// 1.1.42: a long-running background process inside a jail (GUI
+// compositor, wayvnc). stdin is /dev/null, stdout/stderr are inherited.
+// Root path: fork + jail_attach + execv, handle = pid. Rootless path:
+// exec_in_jail, handle = process descriptor (+ the pid the daemon
+// reported). signalSpawned/waitSpawned hide the difference; wait closes
+// the descriptor. spawnInJail throws on failure.
+struct Spawned {
+  pid_t pid = -1;
+  int   pd  = -1;
+  bool valid() const { return pid > 0; }
+};
+Spawned spawnInJail(int jid, const std::vector<std::string> &argv,
+                    const std::string &user = "root",
+                    const std::string &what = "spawn in jail");
+void signalSpawned(const Spawned &s, int sig);
+int  waitSpawned(Spawned &s);
+
 }

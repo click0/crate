@@ -359,6 +359,56 @@ ATF_TEST_CASE_BODY(parse_1141_verbs_and_rctl_limits) {
   ATF_REQUIRE(q.limits);
 }
 
+// --- 1.1.43: nvlist header pre-check ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(nvlist_header_parse_and_limits);
+ATF_TEST_CASE_BODY(nvlist_header_parse_and_limits) {
+  using PrivOpsNvPure::NvlistHeader;
+  using PrivOpsNvPure::parseNvlistHeader;
+  using PrivOpsNvPure::checkNvlistHeaderLimits;
+  // little-endian sender: magic 'l', version 0, flags 0, descriptors=3, size=0x1234
+  unsigned char le[19] = {0x6c, 0x00, 0x00,
+                          3,0,0,0,0,0,0,0,
+                          0x34,0x12,0,0,0,0,0,0};
+  NvlistHeader h;
+  ATF_REQUIRE_EQ(parseNvlistHeader(le, sizeof le, h), std::string());
+  ATF_REQUIRE(!h.bigEndian);
+  ATF_REQUIRE_EQ(h.descriptors, 3u);
+  ATF_REQUIRE_EQ(h.size, 0x1234u);
+  ATF_REQUIRE_EQ(checkNvlistHeaderLimits(h), std::string());
+
+  // big-endian sender (flag 0x80): same values, byte-swapped
+  unsigned char be[19] = {0x6c, 0x00, 0x80,
+                          0,0,0,0,0,0,0,3,
+                          0,0,0,0,0,0,0x12,0x34};
+  ATF_REQUIRE_EQ(parseNvlistHeader(be, sizeof be, h), std::string());
+  ATF_REQUIRE(h.bigEndian);
+  ATF_REQUIRE_EQ(h.descriptors, 3u);
+  ATF_REQUIRE_EQ(h.size, 0x1234u);
+
+  // over the byte cap / descriptor cap
+  unsigned char big[19] = {0x6c, 0x00, 0x00, 0,0,0,0,0,0,0,0, 0x01,0x00,0x10,0,0,0,0,0};  // 1 MiB + 1
+  ATF_REQUIRE_EQ(parseNvlistHeader(big, sizeof big, h), std::string());
+  ATF_REQUIRE_EQ(h.size, (1u << 20) + 1);
+  ATF_REQUIRE(checkNvlistHeaderLimits(h).find("too large") != std::string::npos);
+  unsigned char fds[19] = {0x6c, 0x00, 0x00, 4,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0};
+  ATF_REQUIRE_EQ(parseNvlistHeader(fds, sizeof fds, h), std::string());
+  ATF_REQUIRE(checkNvlistHeaderLimits(h).find("descriptors") != std::string::npos);
+  // exactly at the caps is fine
+  unsigned char edge[19] = {0x6c, 0x00, 0x00, 3,0,0,0,0,0,0,0, 0x00,0x00,0x10,0,0,0,0,0};
+  ATF_REQUIRE_EQ(parseNvlistHeader(edge, sizeof edge, h), std::string());
+  ATF_REQUIRE_EQ(checkNvlistHeaderLimits(h), std::string());
+
+  // malformed: short, bad magic, bad version
+  ATF_REQUIRE(!parseNvlistHeader(le, 18, h).empty());
+  ATF_REQUIRE(!parseNvlistHeader(nullptr, 19, h).empty());
+  unsigned char badMagic[19] = {0x00, 0x00, 0x00, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0};
+  ATF_REQUIRE(parseNvlistHeader(badMagic, 19, h).find("magic") != std::string::npos);
+  unsigned char badVer[19] = {0x6c, 0x01, 0x00, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0};
+  ATF_REQUIRE(parseNvlistHeader(badVer, 19, h).find("version") != std::string::npos);
+  ATF_REQUIRE_EQ(PrivOpsNvPure::kNvlistHeaderSize, 19u);
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, require_string_present_absent);
   ATF_ADD_TEST_CASE(tcs, require_long_typical);
@@ -384,4 +434,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, parsers_same_required_field_set_as_json);
   ATF_ADD_TEST_CASE(tcs, parse_exec_in_jail);
   ATF_ADD_TEST_CASE(tcs, parse_1141_verbs_and_rctl_limits);
+  ATF_ADD_TEST_CASE(tcs, nvlist_header_parse_and_limits);
 }

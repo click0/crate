@@ -3,6 +3,7 @@
 // MAC framework: ugidfw via /dev/ugidfw ioctl, portacl via sysctl.
 
 #include "mac_ops.h"
+#include "mac_pure.h"     // 1.1.44: portacl list merge/remove
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
@@ -85,7 +86,12 @@ void addUgidfwRule(const UgidfwRule &rule) {
     if (rule.mode & 1) ss << "x";
   }
 
-  Util::execCommand({CRATE_PATH_UGIDFW, ss.str()}, "add ugidfw rule");
+  // 1.1.44: ugidfw(8) parses per argv — one token per word, not the
+  // whole rule as a single argument (which it rejected).
+  auto words = Util::splitString(ss.str(), " ");
+  std::vector<std::string> argv{CRATE_PATH_UGIDFW};
+  argv.insert(argv.end(), words.begin(), words.end());
+  Util::execCommand(argv, "add ugidfw rule");
 }
 
 void addUgidfwRuleRaw(const std::string &ruleStr) {
@@ -126,22 +132,42 @@ void listUgidfwRules(std::vector<std::string> &output) {
   } catch (...) {}
 }
 
-void setPortaclRules(const std::vector<PortaclRule> &rules) {
-  std::ostringstream ss;
-  for (size_t i = 0; i < rules.size(); i++) {
-    if (i > 0) ss << ",";
-    ss << "uid:" << rules[i].uid << ":" << rules[i].proto << ":" << rules[i].port;
-  }
-  auto rulesStr = ss.str();
-  Util::setSysctlInt("security.mac.portacl.suser_exempt", 1);
+static std::vector<std::string> portaclTokens(const std::vector<PortaclRule> &rules) {
+  std::vector<std::string> out;
+  for (const auto &r : rules)
+    out.push_back(MacPure::formatPortaclRule(r.uid, r.proto, r.port));
+  return out;
+}
 
-  auto value = rulesStr;
+static void writePortaclRules(const std::string &rulesStr) {
+  Util::setSysctlInt("security.mac.portacl.suser_exempt", 1);
   if (::sysctlbyname("security.mac.portacl.rules", nullptr, nullptr,
-                      value.c_str(), value.size()) != 0) {
+                      rulesStr.c_str(), rulesStr.size()) != 0) {
     // Fallback: sysctl command
     Util::execCommand({CRATE_PATH_SYSCTL, STR("security.mac.portacl.rules=" << rulesStr)},
       "set portacl rules");
   }
+}
+
+void setPortaclRules(const std::vector<PortaclRule> &rules) {
+  std::string joined;
+  for (const auto &t : portaclTokens(rules)) {
+    if (!joined.empty()) joined += ',';
+    joined += t;
+  }
+  writePortaclRules(joined);
+}
+
+void addPortaclRules(const std::vector<PortaclRule> &rules) {
+  std::string current;
+  try { current = Util::getSysctlString("security.mac.portacl.rules"); } catch (...) {}
+  writePortaclRules(MacPure::mergePortaclRules(current, portaclTokens(rules)));
+}
+
+void removePortaclRules(const std::vector<PortaclRule> &rules) {
+  std::string current;
+  try { current = Util::getSysctlString("security.mac.portacl.rules"); } catch (...) {}
+  writePortaclRules(MacPure::removePortaclRules(current, portaclTokens(rules)));
 }
 
 }
