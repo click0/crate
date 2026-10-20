@@ -10,9 +10,11 @@ listen:
 
     ## 0.8.19: filesystem-perm gate on the unix socket. Operators
     ## who want to scope access to a custom group (instead of the
-    ## default umask-driven root:wheel 0660) set these. All three
-    ## are optional; empty owner/group leaves the bind-time state
-    ## intact, missing unix_mode keeps the 0660 default.
+    ## default root:wheel 0660) set these. All three are optional;
+    ## empty owner/group leaves the bind-time owner (root, root's
+    ## primary group) intact, missing unix_mode keeps the 0660 default.
+    ## 1.1.55: owner/group/mode are applied between bind(2) and
+    ## accept — the socket is never reachable at a looser mode.
     ##
     ## NOTE: this is filesystem-perm enforcement, NOT cryptographic
     ## peer-credential verification. cpp-httplib doesn't expose the

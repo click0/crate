@@ -1,5 +1,5 @@
 PORTNAME=	crate
-PORTVERSION=	0.8.48
+PORTVERSION=	1.1.55
 CATEGORIES=	sysutils
 MASTER_SITES=	GH
 GH_ACCOUNT=	click0
@@ -12,6 +12,8 @@ WWW=		https://github.com/click0/crate
 LICENSE=	BSD3CLAUSE
 LICENSE_FILE=	${WRKSRC}/LICENSE
 
+# 1.1.52: rang is a header-only build dependency the port never listed.
+BUILD_DEPENDS=	rang>0:devel/rang
 LIB_DEPENDS=	libyaml-cpp.so:devel/yaml-cpp
 
 USES=		compiler:c++17-lang pkgconfig
@@ -23,7 +25,7 @@ OPTIONS_SUB=	yes
 
 # --- OPTIONS ---
 
-OPTIONS_DEFINE=		DAEMON SNMPD EXAMPLES COMPLETIONS \
+OPTIONS_DEFINE=		DAEMON SNMPD HUB EXAMPLES COMPLETIONS \
 			ZFS IFCONFIG PFCTL CAPSICUM \
 			LIBVIRT X11 VNCSERVER LIBSEAT
 
@@ -33,6 +35,7 @@ OPTIONS_DEFAULT=	DAEMON SNMPD EXAMPLES \
 
 DAEMON_DESC=		Container lifecycle daemon (crated)
 SNMPD_DESC=		SNMP monitoring agent (crate-snmpd)
+HUB_DESC=		Multi-node aggregator and web dashboard (crate-hub)
 EXAMPLES_DESC=		Example container specifications
 COMPLETIONS_DESC=	Bash/ZSH shell completions
 ZFS_DESC=		Native ZFS API (libzfs)
@@ -65,7 +68,13 @@ VNCSERVER_MAKE_ARGS=	WITH_LIBVNCSERVER=1
 LIBSEAT_LIB_DEPENDS=	libseat.so:sysutils/seatd
 LIBSEAT_MAKE_ARGS=	WITH_LIBSEAT=1
 
+# cpp-httplib is header-only: a build dependency for crated and crate-hub.
 DAEMON_USES=		ssl
+DAEMON_BUILD_DEPENDS=	cpp-httplib>0:www/cpp-httplib
+
+HUB_USES=		ssl
+HUB_BUILD_DEPENDS=	cpp-httplib>0:www/cpp-httplib
+HUB_LIB_DEPENDS=	libsqlite3.so:databases/sqlite3
 
 # --- Build / Install ---
 
@@ -77,6 +86,9 @@ do-build:
 .if ${PORT_OPTIONS:MSNMPD}
 	cd ${WRKSRC} && ${MAKE_CMD} ${MAKE_ARGS} crate-snmpd
 .endif
+.if ${PORT_OPTIONS:MHUB}
+	cd ${WRKSRC} && ${MAKE_CMD} ${MAKE_ARGS} crate-hub
+.endif
 
 do-install:
 	cd ${WRKSRC} && ${MAKE_CMD} ${MAKE_ARGS} install
@@ -85,6 +97,9 @@ do-install:
 .endif
 .if ${PORT_OPTIONS:MSNMPD}
 	cd ${WRKSRC} && ${MAKE_CMD} ${MAKE_ARGS} install-snmpd
+.endif
+.if ${PORT_OPTIONS:MHUB}
+	cd ${WRKSRC} && ${MAKE_CMD} ${MAKE_ARGS} install-hub
 .endif
 .if ${PORT_OPTIONS:MEXAMPLES}
 	cd ${WRKSRC} && ${MAKE_CMD} ${MAKE_ARGS} install-examples

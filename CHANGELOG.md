@@ -6,6 +6,454 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.55] — 2026-10-20
+
+**TODO §16 hygiene item: the crated.sock bind→chmod race is closed.**
+⚠️ Behaviour change for the default config: `crated.sock` now really
+gets `listen.unix_mode` (0660 by default, group = root's primary
+group) — before, a config without `unix_owner`/`unix_group` and with
+the default mode never ran the chmod at all, so the socket kept the
+process umask's default mode (root-only under umask 022). Members of
+the socket's group can now connect, as crated.8 always said.
+
+- `daemon/server.cpp`: the main-API unix socket is bound
+  synchronously under `umask(0077)` (file created 0700), then
+  chown/chmod to the configured owner/group/mode, and only then does
+  the accept loop start (`bind_to_port` / `listen_after_bind`). The
+  0.8.19 detached "poll for the socket file, then chmod" thread and
+  its documented race window are gone; a bind failure is reported
+  instead of silently leaving no listener.
+- docs/getpeereid-main-api-refactor.md §3.1 marked done, crated.8
+  CAVEATS updated; TODO §16 notes that §14/§16 features wait for
+  operator design input.
+
+Version 1.1.55.
+
+## [1.1.54] — 2026-10-20
+
+**TODO §13: unit-test gaps, and a test bug ASan CI caught.**
+
+- `privops_wire_pure_test` `escape_round_trips_control_bytes` (new in
+  1.1.51) built its input with an explicit length of 28 over a
+  25-byte literal — a global-buffer-overflow read that only the
+  Linux ASan+UBSan job saw (kyua on Linux and FreeBSD passed). Fixed;
+  the length is asserted.
+- New tests: `throttle_pure` jid bound for the rule/pipe id space
+  (0, 1, 4999, 5000; ids stay below the auto-fw NAT block);
+  `util_test` `fileExists`/`dirExists` on a UNIX socket (the 1.1.46
+  `S_ISREG`/`S_ISDIR` fix was untested), plus file/dir/missing;
+  `auth_pure` pin of the WebSocket-console gate (`checkBearerAuthFull`
+  with `admin`: viewer, out-of-scope admin, no header and a non-Bearer
+  scheme are all rejected).
+- TODO §13 audited against the suite: the privops `parameters`
+  tokens, authz Mount/devfs/AttachZfs/anchor/iface cases, registry
+  reconciliation, backup-prune chains, `foo..bar`, `parseHumanSize`,
+  `humanBytes` edges, the real hub envelope, the snmpd decoder cases
+  and inter-dns `_pid`/comma inputs were already covered by 1.1.35 →
+  1.1.50; the remaining items need `lib/spec.cpp` (yaml-cpp) linked
+  into the tests and are listed as such.
+
+Tests: 1490 cases. Version 1.1.54.
+
+## [1.1.53] — 2026-10-20
+
+**TODO §12: documentation debt.**
+
+- **crate.5** now documents every command (31, was 11) and the spec
+  keys that had no entry: `healthcheck`, `restart`/`restart_policy`,
+  `depends`, `base_container`, `zfs/datasets`, `limits/disk_quota`,
+  the top-level `x11:` map, `gui/mode: compositor` with `gui/backend`,
+  `gui/compositor`, `gui/vnc_bind`, `gui/vnc_native`, and the
+  `wireguard` / `ipsec` options with their sub-keys. New **STACK
+  FILES** section: `containers` (`spec`/`crate`, `template`,
+  `depends`, `vars` incl. `from_file`, `volumes`), `volumes`,
+  `networks` (`bridge`, `subnet`, `gateway`, `ip_range`, `dns`),
+  `network_policy`, and the exact-name rule of `stack exec`.
+- **crate-snmpd.8** written (it was referenced from crated.8 but did
+  not exist): options, reconnect behaviour, the four scalars served,
+  and an explicit statement that the container table and traps in
+  `CRATE-MIB.txt` are not implemented. Installed by `make
+  install-snmpd`, in the port plist and the release tarball.
+- **crated.8**: `DELETE /api/v1/containers/:name` describes what it
+  does since 1.1.43 (stop + `was_running`; dataset kept) instead of
+  "remove its dataset".
+- **README**: command count/list; the snmpd paragraph says what is
+  actually exposed.
+- **docs/trust-model.md(.uk.md)**: the gate range reads 1.1.12 →
+  1.1.43; §2a states that the pool ACL confines *which* jails an
+  `admin` control socket may start, not what a started `.crate` does
+  as root.
+- Stale "runs as root" comments in `lib/gui.cpp` reworded for the
+  rootless model.
+
+Version 1.1.53.
+
+## [1.1.52] — 2026-10-20
+
+**TODO §11: build, CI, packaging — crate-hub is built, shipped and
+version-checked like the other binaries.**
+
+- **`make crate-hub` / `make install-hub`** (`Makefile`). The hub had no
+  build target anywhere: its runtime files were compiled by nothing, so
+  the 1.1.49 TLS poller did not even compile (`httplib::SSLClient` is
+  not a `Client`; now `httplib::Client("https://host:port")`, IPv6
+  literals bracketed). First end-to-end run of the hub against a mock
+  crated: every `/api/v1/*` endpoint, `/metrics`, the dashboard mount
+  and `admin/prune` answer. `install-hub` installs the binary, the web
+  dashboard and the man page; `install-snmpd` creates `sbin` first;
+  `install-daemon` no longer seeds `etc/crated.conf` into a staged
+  `DESTDIR` (port plist). `crate-hub -V/--version`; `db_path:` config
+  key; a store that cannot be opened is reported before daemonising
+  instead of `std::terminate` in the detached child.
+- **One version source.** `VERSION` holds the release number; the
+  Makefile generates `lib/version.h` (`CRATE_VERSION`) for `crate
+  --version`, `crate-snmpd` (`g_version`) and `crate-hub`;
+  `make check-version` verifies `port/Makefile` `PORTVERSION` and the
+  `CHANGELOG.md` section agree. `release.yml` checks the tag against
+  `VERSION` and runs it before publishing.
+- **Release tarball** now holds `sbin/crate-hub`, `crated.8.gz`,
+  `crate-hub.8.gz` and the hub web dir; the `|| true` copies are gone
+  (a missing file fails the build instead of shipping silently); both
+  binaries' `--version` is checked against the tag.
+- **CI**: lite links `crate-hub` on every push and runs
+  `check-version`; the smoke step compares `./crate --version` with
+  `VERSION` and runs `crate validate examples/nginx.yml` as the
+  unprivileged user; `System info` has `set -ex`; `crated.8` /
+  `crate-hub.8` join `paths-ignore`; the full workflow builds the three
+  daemons too; `sqlite3` added to every FreeBSD dependency list.
+- **Port**: `BUILD_DEPENDS` rang (never listed), `cpp-httplib` for the
+  DAEMON option, new `HUB` option (cpp-httplib + sqlite3), plist: no
+  more `@mode 04755` on `bin/crate` (setuid went away in 1.0.0),
+  `crated.8.gz`, the hub files.
+- `hub/ha_pure` name cap = `NameLimits::kJailName` (was a private 64).
+
+Tests: unit suite unchanged (1487). Version 1.1.52.
+
+## [1.1.51] — 2026-10-20
+
+**TODO §10: the carried-over `crate run` / `stack up` correctness
+items.**
+
+- **`crate run` teardown on the failure path** (`lib/run.cpp`). The
+  network / lease / firewall `RunAtEnd` handlers were declared *after*
+  `destroyJail`, so on a throw they ran before the jail was removed
+  (interfaces torn out from under a live jail, MAC rules removed
+  against a recycled jid). They are now declared before `destroyJail`
+  and fire in the same order as the explicit happy-path `doNow()`
+  sequence: jail → mounts → net → leases → firewall slot.
+- **Handlers registered at acquisition, not later.** `releaseLeaseAtEnd`
+  / `releaseLease6AtEnd` are armed right after `allocateFor` (a lease
+  row used to stay forever when `configureStaticIp` or a copy threw in
+  between); `destroyBridgeEpairAtEnd` right after `createBridgeEpair`;
+  a new `destroyAutoBridgeAtEnd` destroys an auto-created bridge that
+  `setUp` / `createBridgeEpair` then fail on. The happy path also
+  destroys the auto-bridge explicitly.
+- **`stack up` spawns each `crate run`** (`lib/stack.cpp`) in its own
+  setsid'd process (`spawnCrateRunDetached`) and waits for the jail to
+  appear (`waitForStackJail`, 120 s) instead of calling `runCrate()`
+  in-process: a service-only first container never returned, so the
+  second container of a stack was never started. `ip_range` bounds are
+  now checked with `inet_pton` and a reversed range is rejected.
+- **cron: one crontab per user.** All entries used to be written into
+  the crontab of the user of the *first* entry; `user:` on later
+  entries was silently ignored. Entries are grouped by user.
+- **privops wire JSON** (`lib/privops_wire_pure.cpp`): `escape()`
+  delegates to `JsonPure::escape` (control bytes in an error message
+  used to be emitted raw — invalid JSON); the decoder understands
+  `\uXXXX` (UTF-8 output, malformed sequences keep the text).
+- LOW batch: `execPipelineImpl` kills and reaps children `0..i-1` when
+  the `fork()` for child `i` fails; `jail_query.cpp` root paths retry
+  `waitpid` on `EINTR` and never decode an uninitialised status;
+  `run.cpp` joins the healthcheck thread through an `HcGuard` so an
+  exception from `execInJail` no longer hits `std::terminate` (which
+  skipped every `RunAtEnd`).
+
+Tests: `privops_wire_pure_test` escape round-trip incl. control bytes
+and `\u` decoding. Version 1.1.51.
+
+## [1.1.50] — 2026-10-20
+
+**TODO §9: crate-snmpd survives a master restart and speaks AgentX by
+the RFC.**
+
+- **100 % CPU spin, no reconnect.** After bsnmpd/snmpd closed the
+  socket, `select()` was readable forever, `read()` returned 0 and the
+  main loop called `dispatchOnce` again with no delay, with the dead fd
+  kept open — monitoring was gone for good and a core was pinned.
+  `dispatchOnce` now drops the connection on EOF/error;
+  `agentxConnected()` tells `main()`, which reconnects with a 1 → 30 s
+  backoff and re-registers the MIB.
+- **Session id.** The subagent set `sessionId = transactionId` (= 1)
+  instead of taking it from the Open Response header, so every later
+  Register/Close carried a session the master never assigned (RFC 2741
+  `notOpen`) on any master that does not hand out 1. `readResponse`
+  returns the decoded header and the Open path uses its `sessionId`.
+- **OctetString length overflow** (`mib_pure.cpp`): `n + 3` wrapped for
+  `n >= 0xFFFFFFFD`, the bounds check passed and `out.assign(ptr, n)`
+  read ~4 GB past the buffer — reachable through the NON_DEFAULT_CONTEXT
+  string from a hostile or buggy master. Lengths are compared in
+  `size_t` against what is actually present.
+- **Little-endian masters**: only the header honoured the byte-order
+  flag; OID sub-ids and string lengths were always read big-endian.
+  `decodeOid` / `decodeOctetString` / `decodeSearchRange` take the flag,
+  `decodeGetRequest` passes it down.
+- Payload length capped at 1 MiB (`MibPure::kMaxPayloadLen`) in the
+  dispatcher and in `readResponse` (unbounded `std::vector` allocation,
+  uncaught `bad_alloc`); full-length `read`/`write` helpers (a short
+  `read()` was taken as a whole PDU; `write()` return was ignored);
+  `SIGPIPE` ignored; a Response PDU from the master is no longer
+  answered with a Response; only the root subtree is registered (the
+  two overlapping children were `duplicateRegistration`); `-i 0`
+  rejected (it ran `jls`/`rctl` every 100 ms); `g_version` and
+  `port/Makefile` `PORTVERSION` say 1.1.50 (both were 0.8.48).
+
+Tests: `snmpd_mib_test` length overflow / short input, little-endian
+decoding incl. through `decodeGetRequest`. Version 1.1.50.
+
+## [1.1.49] — 2026-10-20
+
+**TODO §8: crate-hub actually sees containers, actually polls when
+daemonised, and stops exposing an unauthenticated API to the world.**
+⚠️ The hub binds `127.0.0.1` by default (`-b`/`listen_host` to widen);
+`POST /api/v1/admin/prune` is loopback-only; `/api/v1/containers`
+embeds the container array instead of a string.
+
+- **Container data path was dead end to end.** crated answers
+  `{"status":"ok","data":<jls --libxo json>}` where `data` is an
+  *object*; the hub stored the whole envelope, `countTopLevelObjects`
+  wants an array and returned 0, so `/aggregate`, `/datacenters` and
+  `/scheduling/least-loaded` saw zero containers on every node (the
+  scheduler was always a tie) and the dashboard's `JSON.parse` of an
+  already-parsed object threw "No containers" forever.
+  `AggregatorPure::extractContainerArray` unwraps the envelope and
+  `jail-information.jail`; the poller stores the bare array; `app.js`
+  accepts an embedded array.
+- **Daemonised hub never polled.** The poller thread was started before
+  `fork()`; the child had only the forking thread, so no poll loop ran
+  unless `-f` was given, and shutdown `join()`ed a thread that did not
+  exist in that process. Fork first.
+- **Dashboard action buttons targeted the wrong host**: the Datacenter
+  column was inserted at index 1, so every start/stop/restart/destroy
+  went to `https://default/...`. The host is read from column 2.
+- **Unauthenticated API on 0.0.0.0** → default bind `127.0.0.1`
+  (`-b`/`--bind`, `listen_host`); `listen_port` is finally read; long
+  options as the man page always claimed; `/admin/prune` (destructive,
+  CSRF-able) accepted from loopback only; new SECURITY section in
+  `crate-hub.8`.
+- **Node polling TLS**: `SSLClient` only existed with a client cert and
+  never verified the server; `CPPHTTPLIB_OPENSSL_SUPPORT` was not even
+  defined for the hub. `tls: true` / `ca_cert:` per node, server
+  certificate verification always on under TLS.
+- JSON output goes through `JsonPure::quote` (a node name or error with
+  a quote broke the document; a non-JSON node body is normalised to
+  `[]`); Prometheus label values escaped; `/api/v1/nodes` carries
+  `datacenter` and `stale`.
+- Poller: every status write under the mutex (data race on
+  `std::string` with `getNodeStatuses()`); a failed poll keeps the
+  previous container list but flags it `stale` and is not recorded as a
+  fresh sample; IPv6 node hosts (`[::1]:9800`, `::1`) via
+  `splitHostPort`; a node entry without `host` is skipped instead of
+  aborting the rest; documented `port:` key honoured.
+- `-p` validated (uncaught `stoi`), `/var/db/crate-hub` created, a
+  failed `listen()` exits non-zero instead of sleeping forever.
+
+Known: the hub still has **no build target** — only its pure modules
+are compiled (by the unit tests); the runtime files are syntax-checked
+here with the httplib/sqlite headers absent. See TODO §8.
+
+Tests: `hub_aggregator_pure_test` envelope unwrapping (crated shape,
+bare array, garbage) and host:port forms. Full suite 1484/1484.
+Version 1.1.49.
+
+## [1.1.48] — 2026-10-20
+
+**TODO §7: snapshot restore no longer crashes, `crate export` no longer
+leaks the host into the archive, inter-dns works, and a batch of
+lifecycle/GUI/migrate hardening.** ⚠️ `crate export` output changes
+(mounted shares are excluded); x11vnc and the embedded VNC server now
+bind to 127.0.0.1 unless `gui/vnc_bind` says otherwise; `crate stop`
+exits non-zero when the jail survived.
+
+- **`crate snapshot restore` SIGSEGV under libzfs.** `zfs_rollback`
+  takes `(fs, snap, force)`; the code passed the snapshot handle as `fs`
+  and `nullptr` as `snap`, which libzfs dereferences. Same shape in
+  `zfs diff`: `zfs_show_diffs` got the snap1 handle, snap2 as `fromsnap`
+  and no `tosnap`, i.e. it showed snap2 → live. Both open the parent
+  dataset for the handle and pass the snapshots where they belong.
+- **`crate export` archived every filesystem mounted inside the jail
+  root** (dirs/files shares, X11/Wayland/Pulse sockets, devfs) — a spec
+  sharing `$HOME` exported the operator's home into a shareable
+  `.crate`. `tar --one-file-system`; `crate.5` says so. The target
+  lookup also matches the kernel name exactly instead of a `jail-<t>-`
+  prefix (`web` matched `web-2`).
+- **`crate inter-dns` was dead**: the kernel jail name is
+  `<name>_pid<N>` and the hostname rule rejects `_`, so no crate jail was
+  ever emitted (empty `/etc/hosts` block, bare unbound zone). The suffix
+  is stripped (`InterDnsPure::hostnameFromJailName`) and the first
+  address of a comma-joined `ip4.addr` list is used.
+- **Backup chain corruption after a failed send**: the `@backup-<ts>`
+  snapshot was taken before `zfs send` and stayed behind on failure, so
+  the next `--auto-incremental` run based itself on a snapshot no stream
+  holds. The snapshot and the partial stream file are removed on
+  failure. `ZfsOps::send`/`recv` report `fork()` failure (pid −1 used to
+  "succeed") and check `waitpid`.
+- **Scratch files under `/tmp` with fixed names** (`crate-vncpw-<N>`,
+  `crate-xorg-<N>.conf`, `crate-clipboard-<name>.sh`) are `mkstemp`
+  0600 now — a pre-created attacker-owned file received the VNC
+  password / could rewrite the Xorg config between write and exec.
+- **Unauthenticated VNC on all interfaces**: x11vnc ran with no
+  `-listen` and libvncserver defaulted to INADDR_ANY. Both bind to
+  loopback by default; `gui/vnc_bind` widens it with a warning, like
+  the compositor path already did.
+- **Migrate token in `ps`**: `Authorization: Bearer <token>` was a curl
+  argv element for the whole transfer. It is written to a 0600
+  `mkstemp` file and passed as `-H @file`; the work directory is
+  `mkdtemp` instead of `/tmp/crate-migrate-<pid>`.
+- `crate stop` returns false with a red message when the jail is still
+  there after `destroy_jail` soft-failed (it printed "stopped", exited
+  0, and `crate restart` started a second instance); `crate restart`
+  forwards `--var`; `crate logs TARGET` validates the name (it was a
+  path component: `../../x`); `crate list` / `crate info` strip control
+  characters from kernel-controlled names and hostnames
+  (`allow.set_hostname` let a jail inject escape sequences into the
+  operator's terminal); the in-process `execInJail` exits 124 on a
+  failed user switch instead of continuing as root.
+
+Tests: `inter_dns_pure_test` (jail name → hostname, first address),
+`list_pure_test` (terminal sanitiser). Full suite 1482/1482. Version
+1.1.48.
+
+## [1.1.47] — 2026-10-20
+
+**TODO §6: `crate doctor` stops failing every FreeBSD host.**
+
+- **Wrong hand-typed paths.** The required-command table said
+  `/usr/bin/jls`, `/sbin/jail` and `/sbin/rctl`; the real binaries are
+  `/usr/sbin/jls`, `/usr/sbin/jail`, `/usr/bin/rctl` — exactly what
+  `pathnames.h` has had all along. So `crate doctor` reported a
+  required-command FAIL (exit 2) on every host and always skipped the
+  RCTL presence check. The table uses the `CRATE_PATH_*` constants now.
+- **racct is a kernel option, not a module.** `kldstat -n racct` fails
+  everywhere, which made the exit code permanently ≥ 1. `checkRacct`
+  reads `kern.racct.enable`: absent → WARN (kernel without RACCT), 0 →
+  WARN with the loader.conf hint, 1 → PASS.
+- **Firewall check** replaces the `ipfw` module entry (which warned on
+  every pf-only host; pf is compiled into GENERIC and never shows in
+  `kldstat`): pf via `/dev/pf`, ipfw via `net.inet.ip.fw.enable`;
+  `firewall_backend: pf|ipfw` makes a missing one a FAIL, `auto` warns
+  only when neither is there, `none` just reports.
+- `audit.log` and the logs-directory check honour crate.yml `logs`
+  instead of a hardcoded `/var/log/crate`; the rotation threshold is
+  50 MB as the section header says (was 100).
+
+Version 1.1.47.
+
+## [1.1.46] — 2026-10-20
+
+**TODO §5: spec parsing, crate.yml and the registries stop accepting
+what they cannot use and start rejecting what they used to drop.**
+⚠️ Specs with an unknown option name in the `options:` map form, a port
+outside 1..65535, a reversed port range, `restart/delay: 0`, a non-list
+`files/share`, a non-map `x11:`, or a multi-line cron entry are now
+rejected at parse time. `restart: always` no longer restarts after
+Ctrl-C / `crate stop`.
+
+- **Unknown options in the map form** (`options: {nett: {...}}`) were
+  collected and then dropped — only the list form was checked. Both
+  forms reject unknown names now.
+- **`security/securelevel: -1` and `enforce_statfs: -1`** are documented
+  and were unparseable (`Util::toUInt` refuses a leading `-`), so the
+  "auto" branches were dead. `SpecPure::parseIntInRange` parses signed
+  bounded integers; also used for `vlan` (1..4094, was `as<int>()` →
+  "internal error (std::exception)").
+- **Ports.** `SpecPure::parsePort` (1..65535) for net inbound ranges,
+  `firewall/allow-tcp|udp`, `mac_portacl/allow_ports`, `gui/vnc_port`;
+  `parsePortRange` rejects reversed `90-80`. Port 0 / 70000 used to go
+  straight into pf/ipfw rule text.
+- **`restart: always` looped forever after Ctrl-C / `crate stop`**:
+  `runCrate` reports a signalled run as 128+sig and the outer loop in
+  `cli/main.cpp` never looked. It breaks on SIGINT/SIGTERM now; an
+  unknown policy in an old `.crate` is reported and treated as `no`
+  (it silently meant "run once"); `delay: 0` is rejected by the spec
+  parser and clamped to 1 s in the loop.
+- **Spec registry name rule** capped at 63 chars and forbade `.`, while
+  a jail name may be 128 chars with dots: `my.app` started fine but
+  `upsert` threw, so `SpecRegistry::lookup` and the daemon's `start`
+  never found its spec. Same rule as the jail name now
+  (`NameLimits::kJailName`).
+- **Lock on a renamed inode.** The spec registry and both network
+  lease files `flock`ed the data file, then `writeAllAtomic` renamed a
+  fresh inode over it — a second process holding the old inode's lock
+  was not serialised against the first and could read a stale snapshot
+  or write over a newer one. All three lock a stable `<path>.lock`
+  companion file.
+- **crate.yml applied all-or-nothing** per file: a bad value used to
+  apply the keys before it and skip the rest (tier precedence depended
+  on key order). Unknown keys are reported. `securelevel` /
+  `children_max` had no consumer; they are now the defaults for specs
+  that leave `security/securelevel` / `children_max` at -1, and default
+  to unset (-1) so nothing changes until configured (`crate.5`).
+- `fileExists`/`dirExists` use `S_ISREG`/`S_ISDIR` instead of a bitmask
+  (a UNIX socket satisfied both); `$HOME` alone is substituted and
+  `$HOMER/x` is not; the audit file write loops to completion (a long
+  argv could leave a truncated JSONL line); `files/` rejects unknown
+  sub-keys and a non-list `share`; `x11:` must be a map; cron
+  `schedule`/`command` must be single-line and the schedule five fields
+  or an `@keyword`; `crate validate` recommends `gui/mode=headless`
+  (`x11/mode` has no `headless`) and drops the dead `gui/mode ==
+  "shared"` branch.
+
+Tests: `spec_validate_test` bounded ints / ports / ranges,
+`spec_registry_pure_test` name rule (dotted, 128/129). Version 1.1.46.
+
+## [1.1.45] — 2026-10-20
+
+**TODO §4: `crate stack` stops guessing — exact jail matching, real
+`stack down`, collision-free network_policy numbering, and the overlay
+fields mergeSpecs used to drop.** ⚠️ `stack down` now stops the
+containers (it printed "scheduled for cleanup" and did nothing); a
+`crate:` entry no longer receives a pool IP.
+
+- **`stack exec` / `stack status` matched jails by substring**, so
+  container `db` matched jail `mydb_pid…` and `stack exec db` ran the
+  command as root in the wrong container. `StackPure::
+  jailNameMatchesContainer` requires exactly `<name>_pid<digits>`.
+- **`stack down` stops the containers**: every jail matching an entry
+  goes through `stopCrate` (signal, wait, force-destroy on timeout; the
+  supervisor's cleanup chain runs). It also deletes the stack bridges'
+  network_policy rules left by a killed `stack up`
+  (`StackPure::policyRulesForBridge`), then stops the per-stack DNS as
+  before.
+- **network_policy rule numbers**: the block in 30000..39999 was a
+  per-process counter that restarted at 0, so every stack used 30000+
+  and one stack's cleanup (`ipfw delete 30000`) removed another's. The
+  block is now the first free one in the live `ipfw list`
+  (`StackPure::freePolicySlot`); the cleanup `RunAtEnd` is armed before
+  the first `addRule` (a mid-loop failure no longer leaks rules);
+  `otherStackSubnets` — never passed, so the advertised isolation was
+  dead code — is now the stack's other networks; `net.link.bridge.ipfw`
+  is set to 1 when a policy is applied (host ipfw does not see bridged
+  L2 traffic otherwise).
+- **Pool IPs for `crate:` entries** were allocated and published in
+  unbound and `/etc/hosts` but never applied (only the `spec:` path
+  writes the address into the spec), so other containers resolved the
+  name to an address nothing listened on. Prebuilt entries get no pool
+  IP and a warning; they join stack DNS only through their own static
+  `ip`.
+- **mergeSpecs** (used by `crate stack` templates and `crate create
+  --template`) silently dropped an overlay's `limits.disk_quota`,
+  `securelevel`, `children_max`, `cpuset`, `cron:` jobs, `depends` and
+  an explicit `services/auto_start: false` (new
+  `servicesAutoStartExplicit`). All carried now.
+- Stack `subnet` must be an IPv4 CIDR at parse time (a value without
+  `/N` used to be caught only after the bridge was created); the unbound
+  early-exit message decodes the wait status properly;
+  `validateStackName` uses `NameLimits::kJailName` (128) instead of a
+  drifted 64.
+
+Tests: `stack_test` exact matching, rule-number parsing / free slot /
+per-bridge rules, name cap. Version 1.1.45.
+
 ## [1.1.44] — 2026-10-19
 
 **TODO §3 tail: MAC portacl stops clobbering the host list, `crate

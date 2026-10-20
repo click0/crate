@@ -83,7 +83,18 @@ bool backupCrate(const Args &args) {
   auto sendArgv = BackupPure::buildSendArgv(
     dataset, suffix,
     plan.kind == BackupPure::Plan::Kind::Incremental ? plan.sinceSuffix : "");
-  Util::execPipeline({sendArgv}, "zfs send to file", "", streamFile);
+  // 1.1.48: the snapshot is taken BEFORE the send; if the send fails the
+  // @backup-<ts> snapshot used to stay behind, and findLatestBackupSuffix
+  // then picked it as the next incremental base although no stream holds
+  // it (unrestorable chain). Destroy it and drop the partial file.
+  try {
+    Util::execPipeline({sendArgv}, "zfs send to file", "", streamFile);
+  } catch (...) {
+    try { Util::execCommand(BackupPure::buildDestroySnapshotArgv(dataset, suffix), "zfs destroy snapshot"); }
+    catch (...) {}
+    ::unlink(streamFile.c_str());
+    throw;
+  }
 
   // Report file size for operator confirmation.
   struct stat st{};

@@ -31,7 +31,9 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <fcntl.h>   // 1.1.51: /dev/null for the detached supervisor
 #include <signal.h>
+#include <unistd.h>
 #include <sys/wait.h>
 
 #define ERR(msg...) ERR2("stack", msg)
@@ -70,6 +72,54 @@ struct StackEntry {
   std::vector<VolumeMountEntry> volumeMounts;  // named volume mounts
 };
 
+// 1.1.51: start a container as a detached `crate run -f` child instead of
+// calling runCrate() in-process. runCrate() is the jail's foreground
+// supervisor and returns only when the jail exits — so a service-only
+// first container meant the second was never started. The child is
+// spawned like daemon/routes.cpp spawnCrateRun (setsid, stdio to
+// /dev/null); we then wait for its jail "<name>_pid<pid>" to appear so
+// `depends:` ordering still means "the previous one is up".
+static pid_t spawnCrateRunDetached(const std::string &crateFile,
+                                   const std::map<std::string, std::string> &vars,
+                                   bool logProgress) {
+  std::vector<std::string> argv = {CRATE_PATH_CRATE, "run"};
+  if (logProgress) argv.push_back("--log-progress");
+  for (auto &kv : vars) { argv.push_back("--var"); argv.push_back(kv.first + "=" + kv.second); }
+  argv.push_back("-f");
+  argv.push_back(crateFile);
+  pid_t pid = ::fork();
+  if (pid < 0) return -1;
+  if (pid == 0) {
+    ::setsid();
+    ::close(0); ::close(1); ::close(2);
+    ::open("/dev/null", O_RDONLY);
+    ::open("/dev/null", O_WRONLY);
+    ::open("/dev/null", O_WRONLY);
+    std::vector<char*> cargv;
+    for (auto &a : argv) cargv.push_back(const_cast<char*>(a.c_str()));
+    cargv.push_back(nullptr);
+    ::execv(CRATE_PATH_CRATE, cargv.data());
+    ::_exit(127);
+  }
+  return pid;
+}
+
+// Wait up to `timeoutSec` for the jail of container `name` started by
+// `pid` to appear. Returns false when the child exited first or the
+// time ran out.
+static bool waitForStackJail(const std::string &name, pid_t pid, unsigned timeoutSec) {
+  for (unsigned i = 0; i < timeoutSec * 10; i++) {
+    try {
+      for (auto &j : JailQuery::getAllJails(true))
+        if (!j.dying && StackPure::jailNameMatchesContainer(j.name, name)) return true;
+    } catch (...) {}
+    int st = 0;
+    if (::waitpid(pid, &st, WNOHANG) == pid) return false;   // supervisor died before its jail
+    ::usleep(100000);
+  }
+  return false;
+}
+
 // Parse networks section from a stack YAML
 static std::vector<StackNetwork> parseNetworks(const YAML::Node &top) {
   std::vector<StackNetwork> networks;
@@ -90,8 +140,15 @@ static std::vector<StackNetwork> parseNetworks(const YAML::Node &top) {
       net.bridge = n.second["bridge"].as<std::string>();
     else
       ERR("networks/" << net.name << " requires 'bridge' field")
-    if (n.second["subnet"])
+    if (n.second["subnet"]) {
       net.subnet = n.second["subnet"].as<std::string>();
+      // 1.1.45: a subnet without "/N" used to pass here and blow up
+      // after the bridge was already created (find('/')+1 == 0 → the
+      // whole subnet appended to the gateway).
+      uint32_t base = 0; unsigned plen = 0;
+      if (!StackPure::parseCidr(net.subnet, base, plen))
+        ERR("networks/" << net.name << "/subnet: '" << net.subnet << "' is not an IPv4 CIDR (a.b.c.d/N)")
+    }
     if (n.second["gateway"]) {
       net.gateway = n.second["gateway"].as<std::string>();
       // 1.1.25: the gateway is interpolated into a `printf 'nameserver …'`
@@ -143,10 +200,15 @@ static std::map<std::string, std::string> allocateIpPool(
     auto dashPos = network.ipRange.find('-');
     if (dashPos != std::string::npos) {
       struct in_addr s, e;
-      inet_pton(AF_INET, network.ipRange.substr(0, dashPos).c_str(), &s);
-      inet_pton(AF_INET, network.ipRange.substr(dashPos + 1).c_str(), &e);
+      // 1.1.51: a malformed ip_range used to leave s/e uninitialised.
+      if (inet_pton(AF_INET, network.ipRange.substr(0, dashPos).c_str(), &s) != 1 ||
+          inet_pton(AF_INET, network.ipRange.substr(dashPos + 1).c_str(), &e) != 1)
+        ERR("networks/" << network.name << "/ip_range '" << network.ipRange
+            << "' must be a.b.c.d-a.b.c.d")
       poolStart = ntohl(s.s_addr);
       poolEnd = ntohl(e.s_addr);
+      if (poolStart > poolEnd)
+        ERR("networks/" << network.name << "/ip_range '" << network.ipRange << "' is reversed")
     } else {
       poolStart = (baseAddr & ~((1u << (32 - prefixLen)) - 1)) + 2;
       poolEnd = (baseAddr | ((1u << (32 - prefixLen)) - 1)) - 1;
@@ -177,6 +239,17 @@ static std::map<std::string, std::string> allocateIpPool(
   for (auto &e : entries) {
     if (result.count(e.name))
       continue; // already has an IP
+    // 1.1.45: a prebuilt `crate:` entry runs with the network its own
+    // spec carries — the stack cannot inject an address into it. It
+    // used to get a pool IP anyway, which only ever reached unbound and
+    // /etc/hosts: every other container resolved the name to an address
+    // nothing listened on.
+    if (!e.crateFile.empty()) {
+      WARN("stack network '" << network.name << "': container '" << e.name
+           << "' is a prebuilt .crate — no pool IP assigned; it is not in stack DNS/hosts "
+           "unless its own spec sets a static ip")
+      continue;
+    }
 
     while (nextIp <= poolEnd && usedIps.count(nextIp))
       nextIp++;
@@ -304,7 +377,10 @@ static pid_t startStackDns(
   if (ret > 0) {
     // Child already exited — unbound failed to start
     WARN("stack DNS (unbound) for network '" << network.name
-         << "' exited immediately (status=" << WEXITSTATUS(status) << ")")
+         << "' exited immediately ("
+         << (WIFEXITED(status) ? "status=" + std::to_string(WEXITSTATUS(status))
+             : WIFSIGNALED(status) ? "signal=" + std::to_string(WTERMSIG(status))
+             : std::string("unknown wait status")) << ")")
     return -1;
   }
 
@@ -394,12 +470,44 @@ static RunAtEnd applyNetworkPolicies(
   if (policy.rules.empty() && policy.defaultAction == "allow")
     return RunAtEnd();
 
-  // Use a high rule number range for stack policies: 30000-39999
-  static const unsigned policyRuleBase = 30000;
-  static unsigned nextPolicySlot = 0;
-  unsigned slotBase = policyRuleBase + (nextPolicySlot++) * 100;
+  // Use a high rule number range for stack policies: 30000-39999.
+  // 1.1.45: the block is chosen from the LIVE rule list, not from a
+  // per-process counter (which restarted at 30000 in every `stack up`,
+  // so two stacks shared numbers and one's cleanup deleted the other's).
+  unsigned slotBase = 0;
+  try {
+    auto listing = Util::execCommandGetOutput({CRATE_PATH_IPFW, "list"}, "ipfw list");
+    slotBase = StackPure::freePolicySlot(StackPure::ipfwRuleNumbers(listing));
+  } catch (const std::exception &e) {
+    ERR("network_policy: cannot read the ipfw rule list to pick a free slot: " << e.what())
+  }
+  if (slotBase == 0)
+    ERR("network_policy: no free 100-rule block in 30000..39999 — run `crate stack down` "
+        "for stacks that are gone, or `ipfw list` and clean up by hand")
 
-  std::vector<unsigned> addedRules;
+  // Host ipfw only sees bridged (L2) traffic when the bridge hands it
+  // to the firewall; otherwise every `via bridgeN` rule below is dead.
+  try {
+    if (Util::getSysctlInt("net.link.bridge.ipfw") == 0) {
+      if (logProgress)
+        std::cerr << rang::fg::gray
+                  << "network policy: enabling net.link.bridge.ipfw=1 (bridge traffic through ipfw)"
+                  << rang::style::reset << std::endl;
+      Util::setSysctlInt("net.link.bridge.ipfw", 1);
+    }
+  } catch (const std::exception &e) {
+    WARN("network_policy: could not set net.link.bridge.ipfw=1: " << e.what()
+         << " — policy rules may not see jail<->jail traffic")
+  }
+
+  // Rules already added are cleaned up even if a later addRule throws
+  // (the RunAtEnd used to be built only after the loop).
+  auto addedRules = std::make_shared<std::vector<unsigned>>();
+  RunAtEnd cleanup([addedRules]() {
+    for (auto r : *addedRules) {
+      try { IpfwOps::deleteRule(r); } catch (...) {}
+    }
+  });
   unsigned ruleNum = slotBase;
 
   // Apply explicit rules first
@@ -423,7 +531,7 @@ static RunAtEnd applyNetworkPolicies(
                          << " to " << toIt->second << " " << port
                          << " via " << bridgeIface);
       IpfwOps::addRule(ruleNum, ruleStr);
-      addedRules.push_back(ruleNum);
+      addedRules->push_back(ruleNum);
       ruleNum++;
 
       if (logProgress)
@@ -440,7 +548,7 @@ static RunAtEnd applyNetworkPolicies(
     for (auto &kv : nameToIp) {
       auto ruleStr = STR("deny ip from " << kv.second << " to any via " << bridgeIface);
       IpfwOps::addRule(ruleNum, ruleStr);
-      addedRules.push_back(ruleNum);
+      addedRules->push_back(ruleNum);
       ruleNum++;
     }
 
@@ -450,7 +558,7 @@ static RunAtEnd applyNetworkPolicies(
     for (auto &foreignSubnet : otherStackSubnets) {
       auto ruleStr = STR("deny ip from " << foreignSubnet << " to any via " << bridgeIface);
       IpfwOps::addRule(ruleNum, ruleStr);
-      addedRules.push_back(ruleNum);
+      addedRules->push_back(ruleNum);
       ruleNum++;
       if (logProgress)
         std::cerr << rang::fg::gray << "network policy: blocking foreign subnet "
@@ -463,11 +571,7 @@ static RunAtEnd applyNetworkPolicies(
                 << bridgeIface << rang::style::reset << std::endl;
   }
 
-  return RunAtEnd([addedRules]() {
-    for (auto r : addedRules) {
-      try { IpfwOps::deleteRule(r); } catch (...) {}
-    }
-  });
+  return cleanup;
 }
 
 // ipFromCidr moved to lib/stack_pure.cpp
@@ -685,7 +789,7 @@ static void printStackStatus(const std::vector<StackEntry> &entries) {
     std::string ipStr = "-";
 
     for (auto &j : jails) {
-      if (j.name.find(e.name) != std::string::npos) {
+      if (StackPure::jailNameMatchesContainer(j.name, e.name)) {   // 1.1.45: exact, not substring
         state = j.dying ? "dying" : "running";
         jidStr = std::to_string(j.jid);
         ipStr = j.ip4.empty() ? "-" : j.ip4;
@@ -818,8 +922,14 @@ bool stackCommand(const Args &args) {
     // Apply network policies
     for (auto &net : networks) {
       if (!networkPolicy.rules.empty() || networkPolicy.defaultAction == "deny") {
+        // 1.1.45: the other networks of this stack are the "foreign"
+        // subnets a default-deny bridge must not accept traffic from
+        // (the parameter was never passed, so the isolation was dead code).
+        std::vector<std::string> otherSubnets;
+        for (auto &o : networks)
+          if (&o != &net && !o.subnet.empty()) otherSubnets.push_back(o.subnet);
         auto cleanup = applyNetworkPolicies(networkPolicy, containerIPs,
-                                             net.bridge, args.logProgress);
+                                             net.bridge, args.logProgress, otherSubnets);
         policyCleanups.push_back(std::move(cleanup));
       }
     }
@@ -861,15 +971,8 @@ bool stackCommand(const Args &args) {
         for (auto &a : runArgs) runArgv.push_back(const_cast<char*>(a.c_str()));
         runArgv.push_back(nullptr);
 
-        Args runCmdArgs;
-        runCmdArgs.cmd = CmdRun;
-        runCmdArgs.runCrateFile = e.crateFile;
-        runCmdArgs.logProgress = args.logProgress;
-        runCmdArgs.vars = e.vars;
-
-        int returnCode = 0;
-        bool ok = runCrate(runCmdArgs, 0, nullptr, returnCode);
-        if (!ok) {
+        pid_t pid = spawnCrateRunDetached(e.crateFile, e.vars, args.logProgress);
+        if (pid < 0 || !waitForStackJail(e.name, pid, 120)) {
           std::cerr << rang::fg::red << "  [stack] Failed to start: " << e.name
                     << rang::style::reset << std::endl;
           return false;
@@ -966,16 +1069,9 @@ bool stackCommand(const Args &args) {
           return false;
         }
 
-        // Now run the created crate
-        Args runCmdArgs;
-        runCmdArgs.cmd = CmdRun;
-        runCmdArgs.runCrateFile = crateOutput;
-        runCmdArgs.logProgress = args.logProgress;
-        runCmdArgs.vars = e.vars;
-
-        int returnCode = 0;
-        ok = runCrate(runCmdArgs, 0, nullptr, returnCode);
-        if (!ok) {
+        // Now run the created crate (detached supervisor, 1.1.51)
+        pid_t pid = spawnCrateRunDetached(crateOutput, e.vars, args.logProgress);
+        if (pid < 0 || !waitForStackJail(e.name, pid, 120)) {
           std::cerr << rang::fg::red << "  [stack] Failed to run: " << e.name
                     << rang::style::reset << std::endl;
           return false;
@@ -1020,14 +1116,56 @@ bool stackCommand(const Args &args) {
     std::cout << std::endl;
 
     bool allOk = true;
-    for (auto &e : sorted) {
-      std::cout << rang::fg::cyan << "  [stack] " << rang::style::reset
-                << "Stopping: " << e.name << std::endl;
-      // Note: actual jail removal would need to find the jail by name.
-      // For now, we print the intent. Full integration with crate clean/jail removal
-      // will come when crated tracks running stacks.
-      std::cout << rang::fg::yellow << "  [stack] " << rang::style::reset
-                << "Container " << e.name << " scheduled for cleanup" << std::endl;
+    // 1.1.45: actually stop the containers (this printed "scheduled for
+    // cleanup" and did nothing). Each entry's jail is "<name>_pid<N>";
+    // stopCrate signals it, waits, force-destroys on timeout, and the
+    // supervisor's RunAtEnd chain cleans up behind it.
+    {
+      auto jails = JailQuery::getAllJails(true);
+      for (auto &e : sorted) {
+        std::cout << rang::fg::cyan << "  [stack] " << rang::style::reset
+                  << "Stopping: " << e.name << std::endl;
+        bool any = false;
+        for (auto &j : jails) {
+          if (!StackPure::jailNameMatchesContainer(j.name, e.name)) continue;
+          any = true;
+          Args stopArgs;
+          stopArgs.cmd = CmdStop;
+          stopArgs.stopTarget = j.name;
+          try {
+            if (!stopCrate(stopArgs)) {
+              std::cerr << rang::fg::red << "  [stack] stop returned failure for " << j.name
+                        << rang::style::reset << std::endl;
+              allOk = false;
+            }
+          } catch (const std::exception &ex) {
+            std::cerr << rang::fg::red << "  [stack] stop failed for " << j.name << ": "
+                      << ex.what() << rang::style::reset << std::endl;
+            allOk = false;
+          }
+        }
+        if (!any)
+          std::cout << rang::fg::gray << "  [stack] " << rang::style::reset
+                    << e.name << " is not running" << std::endl;
+      }
+    }
+
+    // 1.1.45: network_policy rules of this stack's bridges. They are
+    // deleted by `stack up`'s own exit path, but a killed `stack up`
+    // (or one from a previous boot's layout) leaves them behind.
+    for (auto &net : downNetworks) {
+      if (net.bridge.empty()) continue;
+      try {
+        auto listing = Util::execCommandGetOutput({CRATE_PATH_IPFW, "list"}, "ipfw list");
+        for (auto r : StackPure::policyRulesForBridge(listing, net.bridge)) {
+          try { IpfwOps::deleteRule(r); } catch (...) {}
+          std::cout << rang::fg::cyan << "  [stack] " << rang::style::reset
+                    << "Removed network_policy rule " << r << " (via " << net.bridge << ")" << std::endl;
+        }
+      } catch (const std::exception &ex) {
+        std::cerr << rang::fg::yellow << "  [stack] could not read ipfw rules for "
+                  << net.bridge << ": " << ex.what() << rang::style::reset << std::endl;
+      }
     }
 
     // Stop per-stack DNS services
@@ -1067,7 +1205,9 @@ bool stackCommand(const Args &args) {
     auto jails = JailQuery::getAllJails(true);
     int jid = -1;
     for (auto &j : jails) {
-      if (j.name.find(args.stackExecContainer) != std::string::npos) {
+      // 1.1.45: exact "<name>_pid<N>" match — a substring search made
+      // `stack exec db` run the command (as root) in jail "mydb_pid…".
+      if (StackPure::jailNameMatchesContainer(j.name, args.stackExecContainer)) {
         jid = j.jid;
         break;
       }

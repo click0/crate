@@ -102,6 +102,53 @@ ATF_TEST_CASE_BODY(count_malformed_returns_zero) {
   ATF_REQUIRE_EQ(countTopLevelObjects("{}"),         (unsigned)0);
 }
 
+// --- 1.1.49: crated envelope unwrapping + host:port splitting ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(extract_container_array_from_crated_envelope);
+ATF_TEST_CASE_BODY(extract_container_array_from_crated_envelope) {
+  using AggregatorPure::extractContainerArray;
+  using AggregatorPure::countTopLevelObjects;
+  // what crated actually returns: envelope + jls --libxo json object
+  const std::string crated =
+    R"({"status":"ok","data":{"__version":"2","jail-information":{"jail":[)"
+    R"({"jid":3,"hostname":"web.local","path":"/var/run/crate/jail-web-1a2b","name":"web_pid100"},)"
+    R"({"jid":4,"hostname":"db.local","path":"/var/run/crate/jail-db-3c4d","name":"db_pid200"}]}}})";
+  auto arr = extractContainerArray(crated);
+  ATF_REQUIRE_EQ(arr.front(), '[');
+  ATF_REQUIRE_EQ(arr.back(), ']');
+  ATF_REQUIRE_EQ(countTopLevelObjects(arr), 2u);     // used to be 0 on every node
+  // data already an array
+  ATF_REQUIRE_EQ(extractContainerArray(R"({"status":"ok","data":[{"a":1}]})"), std::string(R"([{"a":1}])"));
+  // bare jls object, bare array, empty jail list
+  ATF_REQUIRE_EQ(extractContainerArray(R"({"jail-information":{"jail":[{"jid":1}]}})"), std::string(R"([{"jid":1}])"));
+  ATF_REQUIRE_EQ(extractContainerArray("  [ {\"x\":\"]\"} ]"), std::string("[ {\"x\":\"]\"} ]"));
+  ATF_REQUIRE_EQ(extractContainerArray(R"({"status":"ok","data":{"jail-information":{"jail":[]}}})"), std::string("[]"));
+  // garbage (reverse-proxy error page), empty, unbalanced -> []
+  ATF_REQUIRE_EQ(extractContainerArray("<html>502 Bad Gateway</html>"), std::string("[]"));
+  ATF_REQUIRE_EQ(extractContainerArray(""), std::string("[]"));
+  ATF_REQUIRE_EQ(extractContainerArray(R"({"status":"ok","data":[{"a":1})"), std::string("[]"));
+  ATF_REQUIRE_EQ(extractContainerArray(R"({"status":"error","error":"x"})"), std::string("[]"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(split_host_port_forms);
+ATF_TEST_CASE_BODY(split_host_port_forms) {
+  using AggregatorPure::splitHostPort;
+  std::string h; int p = 0;
+  ATF_REQUIRE(splitHostPort("alpha.example.com:9800", h, p)); ATF_REQUIRE_EQ(h, std::string("alpha.example.com")); ATF_REQUIRE_EQ(p, 9800);
+  ATF_REQUIRE(splitHostPort("alpha", h, p, 9800));             ATF_REQUIRE_EQ(h, std::string("alpha")); ATF_REQUIRE_EQ(p, 9800);
+  ATF_REQUIRE(splitHostPort("[::1]:9801", h, p));              ATF_REQUIRE_EQ(h, std::string("::1")); ATF_REQUIRE_EQ(p, 9801);
+  ATF_REQUIRE(splitHostPort("[fd00::5]", h, p));               ATF_REQUIRE_EQ(h, std::string("fd00::5")); ATF_REQUIRE_EQ(p, 9800);
+  ATF_REQUIRE(splitHostPort("fd00::5", h, p));                 ATF_REQUIRE_EQ(h, std::string("fd00::5")); ATF_REQUIRE_EQ(p, 9800);
+  ATF_REQUIRE(splitHostPort("10.0.0.1:1", h, p));              ATF_REQUIRE_EQ(p, 1);
+  ATF_REQUIRE(!splitHostPort("", h, p));
+  ATF_REQUIRE(!splitHostPort("alpha:", h, p));                 // empty port
+  ATF_REQUIRE(!splitHostPort("alpha:abc", h, p));
+  ATF_REQUIRE(!splitHostPort("alpha:70000", h, p));
+  ATF_REQUIRE(!splitHostPort("[::1", h, p));                   // unbalanced
+  ATF_REQUIRE(!splitHostPort("[::1]9800", h, p));              // missing ':'
+  ATF_REQUIRE(!splitHostPort(":9800", h, p));                  // empty host
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, summarise_empty);
   ATF_ADD_TEST_CASE(tcs, summarise_mixed_reachability);
@@ -112,4 +159,6 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, count_nested_objects_only_top_level);
   ATF_ADD_TEST_CASE(tcs, count_ignores_braces_in_strings);
   ATF_ADD_TEST_CASE(tcs, count_malformed_returns_zero);
+  ATF_ADD_TEST_CASE(tcs, extract_container_array_from_crated_envelope);
+  ATF_ADD_TEST_CASE(tcs, split_host_port_forms);
 }

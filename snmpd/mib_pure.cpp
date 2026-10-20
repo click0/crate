@@ -90,7 +90,8 @@ int decodeHeader(const std::vector<uint8_t> &buf, size_t offset, Header &out) {
 }
 
 int decodeOid(const std::vector<uint8_t> &buf, size_t offset,
-              std::vector<uint32_t> &out, bool *include) {
+              std::vector<uint32_t> &out, bool *include, bool bigEndian) {
+  auto load = bigEndian ? loadU32be : loadU32le;
   if (buf.size() < offset + 4) return 0;
   uint8_t nSubid = buf[offset];
   uint8_t prefix = buf[offset + 1];
@@ -105,16 +106,20 @@ int decodeOid(const std::vector<uint8_t> &buf, size_t offset,
     out.push_back(1); out.push_back(prefix);
   }
   for (size_t i = 0; i < nSubid; i++)
-    out.push_back(loadU32be(buf.data() + offset + 4 + i * 4));
+    out.push_back(load(buf.data() + offset + 4 + i * 4));
   if (include) *include = inc;
   return (int)bytes;
 }
 
 int decodeOctetString(const std::vector<uint8_t> &buf, size_t offset,
-                      std::string &out) {
+                      std::string &out, bool bigEndian) {
   if (buf.size() < offset + 4) return 0;
-  uint32_t n = loadU32be(buf.data() + offset);
-  size_t padded = ((n + 3) / 4) * 4;
+  uint32_t n = bigEndian ? loadU32be(buf.data() + offset) : loadU32le(buf.data() + offset);
+  // 1.1.50: `(n + 3)` wrapped for n >= 0xFFFFFFFD → padded 0 → bounds
+  // check passed → out.assign(ptr, n) read ~4 GB past the buffer. Compare
+  // in size_t and against what is actually there first.
+  if ((size_t)n > buf.size() - offset - 4) return 0;
+  size_t padded = (((size_t)n + 3) / 4) * 4;
   if (buf.size() < offset + 4 + padded) return 0;
   out.assign((const char *)(buf.data() + offset + 4), n);
   return (int)(4 + padded);
@@ -123,13 +128,13 @@ int decodeOctetString(const std::vector<uint8_t> &buf, size_t offset,
 int decodeSearchRange(const std::vector<uint8_t> &buf, size_t offset,
                       std::vector<uint32_t> &startOid,
                       std::vector<uint32_t> &endOid,
-                      bool *startInclude) {
+                      bool *startInclude, bool bigEndian) {
   size_t pos = offset;
   bool inc = false;
-  int n = decodeOid(buf, pos, startOid, &inc);
+  int n = decodeOid(buf, pos, startOid, &inc, bigEndian);
   if (n <= 0) return 0;
   pos += (size_t)n;
-  n = decodeOid(buf, pos, endOid);
+  n = decodeOid(buf, pos, endOid, nullptr, bigEndian);
   if (n <= 0) return 0;
   pos += (size_t)n;
   if (startInclude) *startInclude = inc;
@@ -140,17 +145,18 @@ int decodeGetRequest(const std::vector<uint8_t> &buf, size_t offset,
                      uint8_t flags,
                      std::vector<std::vector<uint32_t>> &out) {
   size_t pos = offset;
+  const bool be = (flags & 0x10) != 0;   // 1.1.50: NETWORK_BYTE_ORDER
   // NON_DEFAULT_CONTEXT bit (0x08): a context octet-string precedes
   // the SearchRangeList.
   if (flags & 0x08) {
     std::string ctx;
-    int n = decodeOctetString(buf, pos, ctx);
+    int n = decodeOctetString(buf, pos, ctx, be);
     if (n <= 0) return 0;
     pos += (size_t)n;
   }
   while (pos < buf.size()) {
     std::vector<uint32_t> startOid, endOid;
-    int n = decodeSearchRange(buf, pos, startOid, endOid);
+    int n = decodeSearchRange(buf, pos, startOid, endOid, nullptr, be);
     if (n <= 0) return 0;
     pos += (size_t)n;
     out.push_back(std::move(startOid));

@@ -11,7 +11,7 @@ Crate containers contain everything needed to run the containerized software —
 ## Features
 
 ### Container Management
-* **11 commands**: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`, `gui`
+* **31 commands**: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`, `gui`, `stack`, `stats`, `logs`, `stop`, `restart`, `top`, `inter-dns`, `vpn`, `inspect`, `migrate`, `backup`, `backup-prune`, `restore`, `replicate`, `template`, `retune`, `throttle`, `doctor`, `vm-wrap`, `update` — all described in `crate(5)`
 * **YAML specification** with template inheritance (`--template`)
 * **ZFS integration**: snapshots (create/list/restore/delete/diff), COW clones, encryption (AES-256-GCM/CCM, AES-128), dataset attachment
 * **Copy-on-Write**: ephemeral or persistent modes via ZFS clone or unionfs
@@ -620,7 +620,11 @@ cd /usr/ports/sysutils/crate && make config && make install clean
 make && sudo make install
 ```
 
-**Dependencies:** yaml-cpp, libjail
+**Dependencies:** yaml-cpp, rang (header-only), libjail / libnv / libnetgraph (base).
+`crated` additionally needs cpp-httplib (header-only); `crate-hub` needs
+cpp-httplib and sqlite3. The release number lives in the `VERSION` file:
+the build generates `lib/version.h` from it, and `make check-version`
+confirms `port/Makefile` and `CHANGELOG.md` agree with it.
 
 **Compile-time feature flags** (set `=0` to disable):
 
@@ -638,9 +642,12 @@ All native API wrappers fall back to shell commands when compiled without the co
 | `make` | Build `crate` CLI |
 | `make all-daemon` | Build `crate` + `crated` daemon |
 | `make all-snmpd` | Build `crate` + `crate-snmpd` agent |
+| `make all-hub` | Build `crate` + `crate-hub` aggregator |
 | `make install` | Install crate CLI + man pages |
 | `make install-daemon` | Install crated, RC script, config |
 | `make install-snmpd` | Install crate-snmpd + MIB file |
+| `make install-hub` | Install crate-hub, its web dashboard and man page |
+| `make check-version` | Verify `VERSION`, `port/Makefile` and `CHANGELOG.md` agree |
 | `make install-examples` | Install example specs to `/usr/local/share/examples/crate/` |
 | `make install-completions` | Install shell completions |
 | `make test` | Compile unit tests and run via kyua |
@@ -760,7 +767,7 @@ service crated status
 
 ## crate-snmpd — SNMP Monitoring Agent
 
-`crate-snmpd` is an AgentX subagent that exposes container metrics via SNMP. It collects data from `jls`/`rctl` and registers a `CRATE-MIB` (installed to `/usr/local/share/snmp/mibs/`).
+`crate-snmpd` is an AgentX subagent that exposes crate counters via SNMP under `.1.3.6.1.4.1.59999`. Today it serves four scalars — container count, running count, crate version and hostname; the per-container table that `CRATE-MIB.txt` (installed to `/usr/local/share/snmp/mibs/`) also defines is not implemented yet (use `crated`'s `/metrics` for per-container figures). See `crate-snmpd(8)`.
 
 ```sh
 make all-snmpd && sudo make install-snmpd

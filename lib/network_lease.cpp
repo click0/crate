@@ -53,18 +53,31 @@ const std::string &effectivePath() {
 
 // Open (creating) the lease file and acquire an exclusive lock.
 // Returns the fd. Caller must ::close() it.
-int openLocked() {
-  int fd = ::open(effectivePath().c_str(),
-                  O_RDWR | O_CREAT | O_CLOEXEC,
-                  0640);
-  if (fd < 0)
-    ERR("cannot open "  << effectivePath() << ": " << std::strerror(errno))
-  if (::flock(fd, LOCK_EX) != 0) {
+// 1.1.46: the lock lives on a STABLE companion file, not on the data
+// file's inode. writeAllAtomic() renames a fresh inode over the data
+// file, so a second process that opened the old inode held a lock
+// nobody else looked at and could read a stale snapshot / write over a
+// newer one. Both fds are returned: the caller closes both (closing the
+// lock fd releases the flock).
+struct LockedFile { int lockFd = -1; int fd = -1; };
+
+LockedFile openLocked() {
+  const std::string lockPath = effectivePath() + ".lock";
+  int lockFd = ::open(lockPath.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0640);
+  if (lockFd < 0)
+    ERR("cannot open " << lockPath << ": " << std::strerror(errno))
+  if (::flock(lockFd, LOCK_EX) != 0) {
     int e = errno;
-    ::close(fd);
-    ERR("flock "  << effectivePath() << ": " << std::strerror(e))
+    ::close(lockFd);
+    ERR("flock " << lockPath << ": " << std::strerror(e))
   }
-  return fd;
+  int fd = ::open(effectivePath().c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0640);
+  if (fd < 0) {
+    int e = errno;
+    ::close(lockFd);
+    ERR("cannot open " << effectivePath() << ": " << std::strerror(e))
+  }
+  return LockedFile{lockFd, fd};
 }
 
 // Read the whole locked fd into memory.
@@ -167,10 +180,10 @@ std::vector<IpAllocPure::Lease> readAll() {
 
 uint32_t allocateFor(const std::string &jail,
                      const IpAllocPure::Network &pool) {
-  int fd = openLocked();
-  // RAII close — but we don't have a scope guard; use a tiny inline
-  // class.
-  struct Closer { int f; ~Closer(){ if (f >= 0) ::close(f); } } c{fd};
+  auto lf = openLocked();
+  int fd = lf.fd;
+  // Close the data fd, then the lock fd (releases the flock) — 1.1.46.
+  struct Closer { int f, l; ~Closer(){ if (f >= 0) ::close(f); if (l >= 0) ::close(l); } } c{lf.fd, lf.lockFd};
 
   auto buf = readAllFd(fd);
   auto leases = parseAll(buf);
@@ -199,8 +212,10 @@ uint32_t allocateFor(const std::string &jail,
 }
 
 void releaseFor(const std::string &jail) {
-  int fd = openLocked();
-  struct Closer { int f; ~Closer(){ if (f >= 0) ::close(f); } } c{fd};
+  auto lf = openLocked();
+  int fd = lf.fd;
+  // Close the data fd, then the lock fd (releases the flock) — 1.1.46.
+  struct Closer { int f, l; ~Closer(){ if (f >= 0) ::close(f); if (l >= 0) ::close(l); } } c{lf.fd, lf.lockFd};
 
   auto buf = readAllFd(fd);
   auto leases = parseAll(buf);

@@ -198,6 +198,25 @@ ATF_TEST_CASE_BODY(replace_recovers_from_truncated_block) {
   ATF_REQUIRE(out.find("# <<< crate inter-container DNS >>>") != std::string::npos);
 }
 
+// --- 1.1.48: kernel jail name -> hostname, first address ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(hostname_from_jail_name_and_first_address);
+ATF_TEST_CASE_BODY(hostname_from_jail_name_and_first_address) {
+  ATF_REQUIRE_EQ(InterDnsPure::hostnameFromJailName("web_pid4242"), std::string("web"));
+  ATF_REQUIRE_EQ(InterDnsPure::hostnameFromJailName("my-app_pid1"), std::string("my-app"));
+  ATF_REQUIRE_EQ(InterDnsPure::hostnameFromJailName("web"), std::string());          // no suffix
+  ATF_REQUIRE_EQ(InterDnsPure::hostnameFromJailName("_pid42"), std::string());       // no name
+  ATF_REQUIRE_EQ(InterDnsPure::hostnameFromJailName("web_pid"), std::string());      // no digits
+  ATF_REQUIRE_EQ(InterDnsPure::hostnameFromJailName("web_pid4x"), std::string());
+  // the stripped name passes the hostname rule the raw kernel name failed
+  ATF_REQUIRE(!validateHostname("web_pid4242").empty());
+  ATF_REQUIRE_EQ(validateHostname(InterDnsPure::hostnameFromJailName("web_pid4242")), std::string());
+
+  ATF_REQUIRE_EQ(InterDnsPure::firstAddress("10.0.0.1,10.0.0.2"), std::string("10.0.0.1"));
+  ATF_REQUIRE_EQ(InterDnsPure::firstAddress("10.0.0.1"), std::string("10.0.0.1"));
+  ATF_REQUIRE_EQ(InterDnsPure::firstAddress(""), std::string());
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, hostname_empty_rejected);
   ATF_ADD_TEST_CASE(tcs, hostname_too_long_rejected);
@@ -218,4 +237,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, replace_appends_when_missing);
   ATF_ADD_TEST_CASE(tcs, replace_preserves_surrounding_lines);
   ATF_ADD_TEST_CASE(tcs, replace_recovers_from_truncated_block);
+  ATF_ADD_TEST_CASE(tcs, hostname_from_jail_name_and_first_address);
 }

@@ -168,8 +168,10 @@ static bool guiAttach(const Args &args) {
   std::cout << "Connecting VNC viewer to :" << e.displayNum
             << " (port " << e.vncPort << ")..." << std::endl;
 
-  // Try known absolute paths for VNC viewers (CWE-426: no PATH search in a
-  // privileged process — this command runs as root, the GUI registry is root-only)
+  // Try known absolute paths for VNC viewers (CWE-426: no PATH search).
+  // 1.1.53: the rule predates the 1.0.0 setuid removal (it ran with root's
+  // EUID then); it is kept because the viewer still gets a VNC password
+  // from the registry and must not be whatever `vncviewer` is on PATH.
   auto host = STR("localhost:" << e.vncPort);
   struct stat st;
   const char *viewers[] = {
@@ -326,10 +328,11 @@ static bool guiScreenshot(const Args &args) {
   // 1.1.25: scratch files go into a private mkdtemp(3) directory — mode
   // 0700, random name — instead of the old predictable
   // /tmp/crate-screenshot-<displayNum>.{ppm,xwd}. displayNum is small
-  // and guessable (allocation starts at 10) and this command runs with
-  // root's EUID (the GUI registry is root-only), so a local user could
-  // pre-plant a symlink at that name and have root truncate/overwrite an
-  // arbitrary file via fopen/`xwd -out` (CWE-59). Nobody else can write
+  // and guessable (allocation starts at 10); before the 1.0.0 setuid
+  // removal this ran with root's EUID, so a local user could pre-plant a
+  // symlink at that name and have root truncate/overwrite an arbitrary
+  // file via fopen/`xwd -out` (CWE-59). Still worth it as the operator:
+  // the symlink would now clobber the operator's own files. Nobody else can write
   // into our 0700 dir, so no link can be planted inside it. The dir and
   // whatever is left in it are removed on every exit path.
   char tmpDirTemplate[] = "/tmp/crate-screenshot-XXXXXX";

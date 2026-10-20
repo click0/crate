@@ -295,8 +295,34 @@ ATF_TEST_CASE_BODY(checkBearerFull_unexpired_no_scope_ok)
 		"Bearer secret-A", toks, "admin", "/api/v1/host", 1700000000L, fakeSha));
 }
 
+// 1.1.54 (TODO §13): pins the gate daemon/ws_console.cpp uses for the
+// WebSocket console — checkBearerAuthFull with requiredRole "admin". A
+// viewer token, a token scoped elsewhere, or a missing header must all
+// be rejected for the console path; an unscoped admin passes.
+ATF_TEST_CASE_WITHOUT_HEAD(checkBearerFull_ws_console_requires_admin);
+ATF_TEST_CASE_BODY(checkBearerFull_ws_console_requires_admin)
+{
+	const std::string consolePath = "/api/v1/containers/myjail/console";
+	std::vector<Crated::AuthToken> toks = {
+		{"ops",    "sha256:secret-admin",  "admin",  0, {}},
+		{"ro",     "sha256:secret-viewer", "viewer", 0, {}},
+		{"narrow", "sha256:secret-narrow", "admin",  0, {"/api/v1/host"}},
+	};
+	ATF_REQUIRE( AuthPure::checkBearerAuthFull(
+		"Bearer secret-admin", toks, "admin", consolePath, 0, fakeSha));
+	ATF_REQUIRE(!AuthPure::checkBearerAuthFull(
+		"Bearer secret-viewer", toks, "admin", consolePath, 0, fakeSha));
+	ATF_REQUIRE(!AuthPure::checkBearerAuthFull(
+		"Bearer secret-narrow", toks, "admin", consolePath, 0, fakeSha));
+	ATF_REQUIRE(!AuthPure::checkBearerAuthFull(
+		"", toks, "admin", consolePath, 0, fakeSha));
+	ATF_REQUIRE(!AuthPure::checkBearerAuthFull(
+		"Basic c2VjcmV0", toks, "admin", consolePath, 0, fakeSha));
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
+	ATF_ADD_TEST_CASE(tcs, checkBearerFull_ws_console_requires_admin);
 	ATF_ADD_TEST_CASE(tcs, parseBearer_basic);
 	ATF_ADD_TEST_CASE(tcs, parseBearer_empty);
 	ATF_ADD_TEST_CASE(tcs, parseBearer_just_prefix);

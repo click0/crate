@@ -4,7 +4,9 @@ crate
 crate.x
 crated
 crate-snmpd
+crate-hub
 lib/lst-all-script-sections.h
+lib/version.h
 # Compiled unit-test binaries (sources are *_test.cpp, kept; binaries are not).
 tests/unit/*_test
 tests/unit/util_test

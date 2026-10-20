@@ -15,6 +15,7 @@
 #include <paths.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <signal.h>   // 1.1.46: SIGINT/SIGTERM in the restart loop
 #include <sys/stat.h>
 
 #include <iostream>
@@ -191,6 +192,16 @@ static int mainGuarded(int argc, char** argv) {
           if (specNode[key]["delay"])
             restartPolicy->delaySec = specNode[key]["delay"].as<unsigned>();
         }
+        // 1.1.46: the embedded spec was validated at create time, but an
+        // older .crate may carry a typo — say so instead of "run once".
+        const auto &pol = restartPolicy->policy;
+        if (pol != "no" && pol != "on-failure" && pol != "always" && pol != "unless-stopped") {
+          std::cerr << rang::fg::yellow << "restart policy '" << pol
+                    << "' is not one of no/on-failure/always/unless-stopped — treating as 'no'"
+                    << rang::style::reset << std::endl;
+          restartPolicy->policy = "no";
+        }
+        if (restartPolicy->delaySec == 0) restartPolicy->delaySec = 1;   // never a tight loop
       }
     } catch (...) {
       // If spec extraction fails, no restart policy — run once.
@@ -203,6 +214,17 @@ static int mainGuarded(int argc, char** argv) {
 
       if (!restartPolicy || restartPolicy->policy == "no")
         break;
+
+      // 1.1.46: a run that ended because WE were signalled (Ctrl-C,
+      // `crate stop`, service stop) must not be restarted — runCrate
+      // reports that as 128+signal (lib/run.cpp). The comment below
+      // always promised this; the check was missing, so `restart:
+      // always` looped forever after Ctrl-C.
+      if (returnCode == 128 + SIGINT || returnCode == 128 + SIGTERM) {
+        std::cerr << rang::fg::yellow << "restart policy (" << restartPolicy->policy
+                  << "): stopped by signal, not restarting" << rang::style::reset << std::endl;
+        break;
+      }
 
       // "always" restarts on any exit (except explicit crate stop via SIGTERM)
       // "on-failure" restarts only on non-zero exit

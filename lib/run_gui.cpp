@@ -33,6 +33,32 @@
 
 #define ERR(msg...) ERR2("gui", msg)
 
+
+// 1.1.48: private scratch file. The old fixed names under /tmp
+// (/tmp/crate-vncpw-<N>, crate-xorg-<N>.conf, crate-clipboard-<name>.sh)
+// could be pre-created by any local user: Util::Fs::writeFile is
+// O_NOFOLLOW|O_TRUNC, so a symlink was blocked, but an attacker-owned
+// 0666 regular file was truncated and written (the VNC password landed in
+// their file), the Xorg conf could be rewritten between write and exec,
+// and a FIFO blocked open() forever. mkstemp() creates the file 0600 with
+// an unpredictable name; the caller still unlinks it when done.
+static std::string writePrivateScratch(const std::string &content, const char *prefix, mode_t mode) {
+  std::string tmpl = std::string("/tmp/") + prefix + ".XXXXXX";
+  std::vector<char> buf(tmpl.begin(), tmpl.end());
+  buf.push_back('\0');
+  int fd = ::mkstemp(buf.data());
+  if (fd < 0) ERR("mkstemp " << tmpl << ": " << strerror(errno))
+  if (::fchmod(fd, mode) != 0) { int e = errno; ::close(fd); ::unlink(buf.data()); ERR("fchmod: " << strerror(e)) }
+  size_t off = 0;
+  while (off < content.size()) {
+    ssize_t n = ::write(fd, content.data() + off, content.size() - off);
+    if (n < 0) { if (errno == EINTR) continue; int e = errno; ::close(fd); ::unlink(buf.data()); ERR("write scratch: " << strerror(e)) }
+    off += (size_t)n;
+  }
+  ::close(fd);
+  return std::string(buf.data());
+}
+
 namespace RunGui {
 
 // Check if a required external tool exists, abort with helpful message if not
@@ -182,7 +208,11 @@ static RunAtEnd startVnc(unsigned displayNum, unsigned &vncPort,
       port = spec.guiOptions->vncPort;
     port = findAvailablePort(port);
     auto password = (spec.guiOptions ? spec.guiOptions->vncPassword : std::string());
-    unsigned actual = VncServer::start(displayNum, port, password);
+    std::string nativeBind, nativeBindErr;
+    if (!CompositorPure::resolveVncBind(spec.guiOptions ? spec.guiOptions->vncBind : std::string(),
+                                        nativeBind, nativeBindErr))
+      ERR("gui.vnc_bind: " << nativeBindErr)
+    unsigned actual = VncServer::start(displayNum, port, password, nativeBind);   // 1.1.48: loopback by default
     if (actual == 0) {
       std::cerr << rang::fg::yellow
                 << "gui.vnc_native: VncServer::start() returned 0 — "
@@ -212,10 +242,23 @@ static RunAtEnd startVnc(unsigned displayNum, unsigned &vncPort,
   port = findAvailablePort(port);
 
   auto dispStr = STR(":" << displayNum);
+  // 1.1.48: bind to loopback unless gui.vnc_bind says otherwise — x11vnc
+  // listened on every interface with no password by default, while the
+  // compositor path already defaulted to 127.0.0.1.
+  std::string vncBind, vncBindErr;
+  if (!CompositorPure::resolveVncBind(spec.guiOptions ? spec.guiOptions->vncBind : std::string(),
+                                      vncBind, vncBindErr))
+    ERR("gui.vnc_bind: " << vncBindErr)
+  if (CompositorPure::vncBindIsPublic(vncBind))
+    std::cerr << rang::fg::yellow << "gui: x11vnc bound to " << vncBind
+              << " — the VNC stream is reachable beyond loopback; prefer the default "
+                 "(127.0.0.1) + an SSH tunnel, or set gui/vnc_password"
+              << rang::style::reset << std::endl;
   std::vector<std::string> vncArgs = {
     CRATE_PATH_X11VNC,
     "-display", dispStr,
     "-rfbport", std::to_string(port),
+    "-listen", vncBind,
     "-shared", "-forever",
     "-nopw"
   };
@@ -224,9 +267,7 @@ static RunAtEnd startVnc(unsigned displayNum, unsigned &vncPort,
   std::string passwdFile;
   if (spec.guiOptions && !spec.guiOptions->vncPassword.empty()) {
     vncArgs.pop_back(); // remove -nopw
-    passwdFile = STR("/tmp/crate-vncpw-" << displayNum);
-    Util::Fs::writeFile(spec.guiOptions->vncPassword, passwdFile);
-    Util::Fs::chmod(passwdFile, 0600);
+    passwdFile = writePrivateScratch(spec.guiOptions->vncPassword, "crate-vncpw", 0600);   // 1.1.48
     vncArgs.push_back("-passwdfile");
     vncArgs.push_back(passwdFile);
   }
@@ -472,8 +513,7 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
 
     // Generate temporary xorg.conf
     auto xorgConf = generateGpuXorgConf(dispNum, resolution, gpuDriver, gpuDevice);
-    auto confPath = STR("/tmp/crate-xorg-" << dispNum << ".conf");
-    Util::Fs::writeFile(xorgConf, confPath);
+    auto confPath = writePrivateScratch(xorgConf, "crate-xorg", 0600);   // 1.1.48: was a fixed /tmp name
 
     if (logProgress) {
       std::cerr << rang::fg::gray << "gpu mode: starting Xorg at " << resolution
@@ -930,9 +970,7 @@ RunAtEnd setupClipboard(const Spec &spec, const std::string &jailXname,
   proxyScript << "  sleep 1" << std::endl;
   proxyScript << "done" << std::endl;
 
-  auto proxyFile = STR("/tmp/crate-clipboard-" << jailXname << ".sh");
-  Util::Fs::writeFile(proxyScript.str(), proxyFile);
-  Util::Fs::chmod(proxyFile, 0700);
+  auto proxyFile = writePrivateScratch(proxyScript.str(), "crate-clipboard", 0700);   // 1.1.48
   pid_t clipPid = ::fork();
   if (clipPid == 0) {
     ::execl(CRATE_PATH_SH, CRATE_PATH_SH, proxyFile.c_str(), nullptr);

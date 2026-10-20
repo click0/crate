@@ -46,6 +46,29 @@ std::string validateStackName(const std::string &name);
 // success.
 std::string validateStackIp(const std::string &ip);
 
+// 1.1.45: does kernel jail `jailName` belong to stack container
+// `container`? crate run names the jail "<name>_pid<pid>", so the test is
+// an exact "<container>_pid<digits>" match — NOT a substring search,
+// which made `stack exec db` pick jail "mydb_pid…".
+bool jailNameMatchesContainer(const std::string &jailName, const std::string &container);
+
+// 1.1.45: network_policy rule numbering. Rules live in 30000..39999 in
+// blocks of `width`; the block is chosen from the LIVE rule list so two
+// stacks (two processes) never share numbers — the old static counter
+// restarted at 0 in every process, and `ipfw delete 30000` then removed
+// another stack's rules.
+//   ipfwRuleNumbers():   leading rule number of every `ipfw list` line
+//   freePolicySlot():    first block base in [base, end] with no rule
+//                        inside it; 0 when the range is full
+//   policyRulesForBridge(): rule numbers in [lo, hi] whose text ends the
+//                        match "via <bridge>" — what `stack down` deletes
+std::vector<unsigned> ipfwRuleNumbers(const std::string &ipfwListOutput);
+unsigned freePolicySlot(const std::vector<unsigned> &used,
+                        unsigned base = 30000, unsigned end = 39999, unsigned width = 100);
+std::vector<unsigned> policyRulesForBridge(const std::string &ipfwListOutput,
+                                           const std::string &bridge,
+                                           unsigned lo = 30000, unsigned hi = 39999);
+
 // Lightweight stack-entry view used by the tests.
 struct StackEntry {
   std::string name;

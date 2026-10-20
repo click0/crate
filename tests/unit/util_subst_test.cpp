@@ -54,10 +54,12 @@ ATF_TEST_CASE_BODY(pathSubst_home_only_at_start)
 ATF_TEST_CASE_WITHOUT_HEAD(pathSubst_short_input);
 ATF_TEST_CASE_BODY(pathSubst_short_input)
 {
-	// "$HOME" alone is exactly 5 chars; the `> 5` check means it stays.
-	// This documents the current (slightly counter-intuitive) behaviour.
-	ATF_REQUIRE_EQ(Util::pathSubstituteVarsInPath("$HOME"), "$HOME");
+	// 1.1.46: "$HOME" alone IS the home directory (the old `> 5` check
+	// left it unexpanded); "$HOM" and "$HOMER/x" are not the variable.
+	ATF_REQUIRE(Util::pathSubstituteVarsInPath("$HOME") != "$HOME");
+	ATF_REQUIRE(Util::pathSubstituteVarsInPath("$HOME").front() == '/');
 	ATF_REQUIRE_EQ(Util::pathSubstituteVarsInPath("$HOM"), "$HOM");
+	ATF_REQUIRE_EQ(Util::pathSubstituteVarsInPath("$HOMER/x"), "$HOMER/x");
 }
 
 // ===================================================================

@@ -32,9 +32,10 @@ ATF_TEST_CASE_BODY(parsePortRange_range)
 ATF_TEST_CASE_WITHOUT_HEAD(parsePortRange_zero);
 ATF_TEST_CASE_BODY(parsePortRange_zero)
 {
-	auto r = parsePortRange("0");
-	ATF_REQUIRE_EQ(r.first, 0u);
-	ATF_REQUIRE_EQ(r.second, 0u);
+	// 1.1.46: port 0 is not a port — it used to pass straight into pf/ipfw
+	// rule text; now rejected like any value outside 1..65535.
+	ATF_REQUIRE_THROW(Exception, parsePortRange("0"));
+	ATF_REQUIRE_THROW(Exception, parsePortRange("0-80"));
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(parsePortRange_max_port);

@@ -79,10 +79,18 @@ void rollback(const std::string &snapName) {
 #ifdef HAVE_LIBZFS
   auto *h = getHandle();
   if (h) {
-    zfs_handle_t *zhp = zfs_open(h, snapName.c_str(), ZFS_TYPE_SNAPSHOT);
-    if (zhp) {
-      int err = zfs_rollback(zhp, nullptr, B_FALSE);
-      zfs_close(zhp);
+    // 1.1.48: zfs_rollback(fs, snap, force) — the FILESYSTEM handle first,
+    // the snapshot second. The old call passed the snapshot as `fs` and
+    // nullptr as `snap`, which libzfs dereferences unconditionally →
+    // SIGSEGV before the zfs(8) fallback could run.
+    auto at = snapName.find('@');
+    if (at != std::string::npos) {
+      zfs_handle_t *fs = zfs_open(h, snapName.substr(0, at).c_str(), ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME);
+      zfs_handle_t *snap = zfs_open(h, snapName.c_str(), ZFS_TYPE_SNAPSHOT);
+      int err = -1;
+      if (fs && snap) err = zfs_rollback(fs, snap, B_FALSE);
+      if (snap) zfs_close(snap);
+      if (fs) zfs_close(fs);
       if (err == 0) return;
     }
   }
@@ -343,12 +351,17 @@ void diff(const std::string &snap1, const std::string &snap2, int outFd) {
 #ifdef HAVE_LIBZFS
   auto *h = getHandle();
   if (h) {
-    zfs_handle_t *zhp = zfs_open(h, snap1.c_str(), ZFS_TYPE_SNAPSHOT);
-    if (zhp) {
-      // zfs_show_diffs writes to outFd
-      int err = zfs_show_diffs(zhp, outFd, snap2.c_str(), nullptr, 0);
-      zfs_close(zhp);
-      if (err == 0) return;
+    // 1.1.48: zfs_show_diffs(fs, outfd, fromsnap, tosnap, flags) wants the
+    // FILESYSTEM handle and snap1 → snap2. It used to get the snap1 handle
+    // with snap2 as `fromsnap` and no `tosnap`, i.e. "snap2 → live".
+    auto at = snap1.find('@');
+    if (at != std::string::npos) {
+      zfs_handle_t *fs = zfs_open(h, snap1.substr(0, at).c_str(), ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME);
+      if (fs) {
+        int err = zfs_show_diffs(fs, outFd, snap1.c_str(), snap2.c_str(), 0);
+        zfs_close(fs);
+        if (err == 0) return;
+      }
     }
   }
 #endif
@@ -359,7 +372,12 @@ void diff(const std::string &snap1, const std::string &snap2, int outFd) {
   if (outFd == STDOUT_FILENO) {
     std::cout << output;
   } else {
-    ::write(outFd, output.data(), output.size());
+    size_t off = 0;   // 1.1.48: short writes / errors were ignored
+    while (off < output.size()) {
+      ssize_t n = ::write(outFd, output.data() + off, output.size() - off);
+      if (n < 0) { if (errno == EINTR) continue; ERR("write diff output: " << strerror(errno)) }
+      off += (size_t)n;
+    }
   }
 }
 
@@ -391,12 +409,14 @@ void send(const std::string &snapName, int fd) {
     ::execlp(CRATE_PATH_ZFS, "zfs", "send", snapName.c_str(), nullptr);
     ::_exit(127);
   }
-  if (pid > 0) {
-    int status;
-    ::waitpid(pid, &status, 0);
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-      ERR("zfs send failed for " << snapName)
+  // 1.1.48: pid == -1 matched neither branch and "succeeded" silently.
+  if (pid < 0) ERR("zfs send: fork failed: " << strerror(errno))
+  int status = 0;
+  while (::waitpid(pid, &status, 0) == -1) {
+    if (errno != EINTR) ERR("zfs send: waitpid failed: " << strerror(errno))
   }
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+    ERR("zfs send failed for " << snapName)
 }
 
 void recv(const std::string &targetDataset, int fd) {
@@ -419,12 +439,13 @@ void recv(const std::string &targetDataset, int fd) {
     ::execlp(CRATE_PATH_ZFS, "zfs", "recv", targetDataset.c_str(), nullptr);
     ::_exit(127);
   }
-  if (pid > 0) {
-    int status;
-    ::waitpid(pid, &status, 0);
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-      ERR("zfs recv failed for " << targetDataset)
+  if (pid < 0) ERR("zfs recv: fork failed: " << strerror(errno))   // 1.1.48
+  int status = 0;
+  while (::waitpid(pid, &status, 0) == -1) {
+    if (errno != EINTR) ERR("zfs recv: waitpid failed: " << strerror(errno))
   }
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+    ERR("zfs recv failed for " << targetDataset)
 }
 
 // ---------------------------------------------------------------------------

@@ -31,4 +31,10 @@ void renderTable(std::ostream &out, const std::vector<Entry> &entries);
 std::string renderJsonStr(const std::vector<Entry> &entries);
 std::string renderTableStr(const std::vector<Entry> &entries);
 
+// 1.1.48: control characters (< 0x20, 0x7f) replaced by '?'. The kernel
+// host.hostname is spec-controllable (allow.set_hostname) and non-crate
+// jails have arbitrary names; both used to reach the operator's terminal
+// raw, so a jail could inject escape sequences into `crate list`.
+std::string sanitizeForTerminal(const std::string &s);
+
 }

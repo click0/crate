@@ -422,12 +422,13 @@ int execInJail(int jid, const std::vector<std::string> &argv,
 
     // Switch user if needed
     if (!user.empty() && user != "root") {
+      // 1.1.48: an unknown user or a failed switch used to run the
+      // command as root inside the jail; exit 124 like the daemon path.
       struct passwd *pw = ::getpwnam(user.c_str());
-      if (pw) {
-        ::initgroups(user.c_str(), pw->pw_gid);
-        ::setgid(pw->pw_gid);
-        ::setuid(pw->pw_uid);
-      }
+      if (!pw) ::_exit(124);
+      if (::initgroups(user.c_str(), pw->pw_gid) != 0 || ::setgid(pw->pw_gid) != 0 ||
+          ::setuid(pw->pw_uid) != 0)
+        ::_exit(124);
     }
 
     auto cargv = buildArgv(argv);
@@ -435,9 +436,12 @@ int execInJail(int jid, const std::vector<std::string> &argv,
     ::_exit(127); // exec failed
   }
 
-  // Parent: wait for child
-  int status;
-  ::waitpid(pid, &status, 0);
+  // Parent: wait for child. 1.1.51: EINTR-safe and status initialised
+  // (a failed waitpid used to decode an uninitialised int).
+  int status = 0;
+  while (::waitpid(pid, &status, 0) == -1) {
+    if (errno != EINTR) ERR("waitpid: " << strerror(errno))
+  }
 
   // If child exited with 126, jail_attach failed — use jexec fallback
   if (WIFEXITED(status) && WEXITSTATUS(status) == 126)
@@ -510,12 +514,13 @@ std::string execInJailGetOutput(int jid, const std::vector<std::string> &argv,
       ::_exit(126);
 
     if (!user.empty() && user != "root") {
+      // 1.1.48: an unknown user or a failed switch used to run the
+      // command as root inside the jail; exit 124 like the daemon path.
       struct passwd *pw = ::getpwnam(user.c_str());
-      if (pw) {
-        ::initgroups(user.c_str(), pw->pw_gid);
-        ::setgid(pw->pw_gid);
-        ::setuid(pw->pw_uid);
-      }
+      if (!pw) ::_exit(124);
+      if (::initgroups(user.c_str(), pw->pw_gid) != 0 || ::setgid(pw->pw_gid) != 0 ||
+          ::setuid(pw->pw_uid) != 0)
+        ::_exit(124);
     }
 
     auto cargv = buildArgv(argv);
@@ -533,8 +538,10 @@ std::string execInJailGetOutput(int jid, const std::vector<std::string> &argv,
     output.append(buf, n);
   ::close(pipefd[0]);
 
-  int status;
-  ::waitpid(pid, &status, 0);
+  int status = 0;
+  while (::waitpid(pid, &status, 0) == -1) {   // 1.1.51
+    if (errno != EINTR) ERR("waitpid: " << strerror(errno))
+  }
 
   // Fallback if jail_attach failed
   if (WIFEXITED(status) && WEXITSTATUS(status) == 126) {

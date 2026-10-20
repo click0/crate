@@ -33,6 +33,7 @@ What is missing:
    post-listen `chmod` runs (~ms but measurable), the socket sits at
    the umask-default mode. A concurrent attacker could connect during
    the window. The 0.8.19 code knows about this gap (`server.cpp:82-89`).
+   *Closed in 1.1.55 — see §3.1.*
 
 ---
 
@@ -76,6 +77,17 @@ These are tractable as one- or two-PR follow-ups; they don't fix
 (a) or (c), but they do address (b) and improve hygiene.
 
 ### 3.1 Close the bind→chmod race via an "outer listener"
+
+> **Done in 1.1.55**, without an outer listener: cpp-httplib's
+> `bind_to_port()` / `listen_after_bind()` split lets `Server::start()`
+> bind synchronously under `umask(0077)` (the socket file is born 0700,
+> nobody but root can `connect(2)`), apply `unix_owner` / `unix_group` /
+> `unix_mode`, and only then start the accept loop. The detached
+> "poll for the file, then chmod" thread is gone, and the fixup now
+> also runs for the default config — before 1.1.55 a config without
+> `unix_owner`/`unix_group` and with the default `unix_mode` never got
+> chmod'ed at all, so the documented root:wheel 0660 was whatever the
+> process umask produced. The text below is the original proposal.
 
 Replace the cpp-httplib UDS code path with a thin wrapper that:
 
@@ -173,9 +185,9 @@ removes one more cpp-httplib dependency. Plan it as a 3-PR series:
 - **Now:** do nothing big. The trust-model deliberately treats the
   main API as single trust domain; the privops authz series (#211..#213)
   covered the actual tenant-isolation surface.
-- **Soonish (1.1.x):** consider §3.1 (race-window close via
-  `set_socket`) as a small hygiene PR if httplib's API allows it. ~50
-  LOC. Worth doing.
+- **Soonish (1.1.x):** ~~consider §3.1 (race-window close) as a small
+  hygiene PR~~ — done in 1.1.55 via `bind_to_port` + `umask(0077)` +
+  `listen_after_bind`.
 - **Later (1.2.x+):** if/when a concrete feature wants per-tenant
   access on the main HTTP API, execute Plan B in the 3-phase
   migration. Until then, the architectural choice is: **new

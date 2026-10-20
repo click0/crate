@@ -2,6 +2,7 @@
 
 #include "ha_pure.h"
 #include "../lib/json_pure.h"
+#include "../lib/name_limits.h"   // 1.1.52: NameLimits::kJailName
 
 #include <set>
 #include <sstream>
@@ -23,7 +24,8 @@ bool isAlnum(char c) {
 }
 
 bool isValidName(const std::string &s) {
-  if (s.empty() || s.size() > 64) return false;
+  // 1.1.52: same cap as a jail name (was a private 64 while crate allows 128).
+  if (s.empty() || s.size() > NameLimits::kJailName) return false;
   for (char c : s)
     if (!isAlnum(c) && c != '.' && c != '_' && c != '-')
       return false;

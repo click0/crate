@@ -10,6 +10,8 @@
 
 #include <httplib.h>
 
+#include "../lib/json_pure.h"   // 1.1.49: quote() — no more hand-spliced strings
+
 #include <ctime>
 #include <sstream>
 
@@ -30,11 +32,15 @@ void registerApiRoutes(httplib::Server &srv, Store &store, Poller &poller,
     ss << "[";
     for (size_t i = 0; i < statuses.size(); i++) {
       auto &s = statuses[i];
-      ss << "{\"name\":\"" << s.name << "\""
-         << ",\"host\":\"" << s.host << "\""
-         << ",\"reachable\":" << (s.reachable ? "true" : "false");
+      // 1.1.49: JSON-escaped (a node name/host/error with a quote broke
+      // the whole document); datacenter and stale flag added.
+      ss << "{\"name\":" << JsonPure::quote(s.name)
+         << ",\"host\":" << JsonPure::quote(s.host)
+         << ",\"datacenter\":" << JsonPure::quote(s.datacenter.empty() ? "default" : s.datacenter)
+         << ",\"reachable\":" << (s.reachable ? "true" : "false")
+         << ",\"stale\":" << (s.containersStale ? "true" : "false");
       if (!s.lastError.empty())
-        ss << ",\"error\":\"" << s.lastError << "\"";
+        ss << ",\"error\":" << JsonPure::quote(s.lastError);
       ss << "}";
       if (i + 1 < statuses.size()) ss << ",";
     }
@@ -71,7 +77,10 @@ void registerApiRoutes(httplib::Server &srv, Store &store, Poller &poller,
         // Inject node name into container data
         // For now, return raw arrays wrapped with node info
         if (!first) ss << ",";
-        ss << "{\"node\":\"" << s.name << "\",\"containers\":" << s.containers << "}";
+        // s.containers is a normalised JSON array (poller, 1.1.49)
+        ss << "{\"node\":" << JsonPure::quote(s.name)
+           << ",\"stale\":" << (s.containersStale ? "true" : "false")
+           << ",\"containers\":" << AggregatorPure::extractContainerArray(s.containers) << "}";
         first = false;
       }
     }
@@ -95,7 +104,14 @@ void registerApiRoutes(httplib::Server &srv, Store &store, Poller &poller,
        << "crate_hub_nodes_reachable " << reachable << "\n";
 
     for (auto &s : statuses) {
-      ss << "crate_hub_node_up{host=\"" << s.name << "\"} "
+      // Prometheus label values: escape backslash, quote, newline.
+      std::string lbl;
+      for (char c : s.name) {
+        if (c == '\\' || c == '"') { lbl += '\\'; lbl += c; }
+        else if (c == '\n') lbl += "\\n";
+        else lbl += c;
+      }
+      ss << "crate_hub_node_up{host=\"" << lbl << "\"} "
          << (s.reachable ? 1 : 0) << "\n";
     }
 
@@ -185,8 +201,7 @@ void registerApiRoutes(httplib::Server &srv, Store &store, Poller &poller,
   //                      (avoids ping-pong migrations).
   //
   // Operator workflow:
-  //   target=$(curl -s http://hub:9001/api/v1/scheduling/least-loaded \
-  //              | jq -r .data.host)
+  //   target=$(curl -s http://hub:9810/api/v1/scheduling/least-loaded | jq -r .data.host)
   //   crate migrate myjail --to "$target" ...
   srv.Get("/api/v1/scheduling/least-loaded",
           [&poller](const httplib::Request &req, httplib::Response &res) {
@@ -209,8 +224,16 @@ void registerApiRoutes(httplib::Server &srv, Store &store, Poller &poller,
                     "application/json");
   });
 
-  // Prune old data periodically (called by main loop or as endpoint)
-  srv.Post("/api/v1/admin/prune", [&store](const httplib::Request &, httplib::Response &res) {
+  // Prune old data periodically (called by main loop or as endpoint).
+  // 1.1.49: destructive and CSRF-able from any web page when the hub is
+  // reachable — accept it only from loopback.
+  srv.Post("/api/v1/admin/prune", [&store](const httplib::Request &req, httplib::Response &res) {
+    if (req.remote_addr != "127.0.0.1" && req.remote_addr != "::1") {
+      res.status = 403;
+      res.set_content("{\"status\":\"error\",\"error\":\"admin endpoints are loopback-only\"}",
+                      "application/json");
+      return;
+    }
     store.prune(48);
     res.set_content("{\"status\":\"ok\"}", "application/json");
   });

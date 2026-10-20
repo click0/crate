@@ -12,6 +12,7 @@
 #include <dirent.h>
 #include <string>
 #include <vector>
+#include <iostream>   // 1.1.46: unknown-key report
 
 namespace Config {
 
@@ -30,17 +31,43 @@ static Settings defaults() {
   s.defaultBridge = "";
   s.staticMacDefault = false;
   s.bootstrapMethod = "base_txz";
-  s.securelevel = 2;
-  s.childrenMax = 0;
+  // 1.1.46: -1 = unset. These are now the defaults for specs that leave
+  // security/securelevel and security/children_max at -1 (auto); they
+  // had no consumer at all before, and a hard default of 2/0 would have
+  // changed every existing container the moment they were wired in.
+  s.securelevel = -1;
+  s.childrenMax = -1;
   s.searchPath = {".", STR(Util::Fs::getUserHomeDir() << "/.local/share/crate"),
                   "/usr/local/share/crate"};
   s.compressXzOptions = "-T0";
   return s;
 }
 
-static void applyYaml(Settings &s, const YAML::Node &cfg) {
+// 1.1.46: all-or-nothing. load() catches per file; before this the keys
+// parsed before a bad one were already applied and the ones after it
+// skipped, so tier precedence depended on key order. Work on a copy and
+// commit it only when every key parsed. Unknown keys are reported (they
+// used to be ignored, so a typo such as `network_pool6_user_bit` was
+// silently a no-op).
+static const char *const kKnownKeys[] = {
+  "prefix", "cache", "logs", "zfs_enable", "zfs_zpool", "zfs_options",
+  "network_interface", "default_bridge", "static_mac_default", "network_pool",
+  "network_pool_user_bits", "network_pool6_user_bits", "network_pool6",
+  "firewall_backend", "bootstrap_method", "securelevel", "children_max",
+  "search_path", "compress_xz_options", "audit_syslog", "networks",
+};
+
+static void applyYaml(Settings &sOut, const YAML::Node &cfg) {
   if (!cfg.IsMap())
     return;
+  for (auto kv : cfg) {
+    std::string key = kv.first.as<std::string>();
+    bool known = false;
+    for (const char *k : kKnownKeys) if (key == k) { known = true; break; }
+    if (!known)
+      std::cerr << "crate.yml: unknown key '" << key << "' ignored" << std::endl;
+  }
+  Settings s = sOut;
 
   if (cfg["prefix"])           s.prefix = cfg["prefix"].as<std::string>();
   if (cfg["cache"])            s.cache = cfg["cache"].as<std::string>();
@@ -121,6 +148,7 @@ static void applyYaml(Settings &s, const YAML::Node &cfg) {
       s.networks[name] = std::move(def);
     }
   }
+  sOut = std::move(s);   // 1.1.46: commit only after every key parsed
 }
 
 const Settings& load() {

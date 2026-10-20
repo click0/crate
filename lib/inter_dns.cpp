@@ -75,10 +75,16 @@ std::vector<InterDnsPure::Entry> collectEntries() {
   std::vector<InterDnsPure::Entry> entries;
   for (auto &j : JailQuery::getAllJails(true /*crateOnly*/)) {
     if (j.dying) continue;
-    if (!InterDnsPure::validateHostname(j.name).empty()) continue;
+    // 1.1.48: the kernel name is "<name>_pid<N>"; validateHostname
+    // rejects '_', so NO crate jail ever made it in and the feature was
+    // dead. Use the <name> part, and the first ip4 address (jailparam
+    // comma-joins arrays, which unbound/hosts would choke on).
+    std::string host = InterDnsPure::hostnameFromJailName(j.name);
+    if (host.empty()) host = j.name;
+    if (!InterDnsPure::validateHostname(host).empty()) continue;
     InterDnsPure::Entry e;
-    e.name = j.name;
-    e.ip4  = j.ip4;
+    e.name = host;
+    e.ip4  = InterDnsPure::firstAddress(j.ip4);
     // Jail v6 isn't surfaced by JailInfo today; left empty.
     entries.push_back(std::move(e));
   }

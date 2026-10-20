@@ -120,8 +120,12 @@ function renderContainers(grouped) {
   for (const g of grouped) {
     const nodeName = g.node;
     let containers = [];
+    // 1.1.49: the hub embeds the container ARRAY as JSON; older hubs
+    // returned it as a string. Accept both.
     try {
-      containers = JSON.parse(g.containers || '[]');
+      containers = typeof g.containers === 'string'
+        ? JSON.parse(g.containers || '[]')
+        : (g.containers || []);
     } catch (_) { /* ignore */ }
     if (!Array.isArray(containers)) continue;
     for (const c of containers) {
@@ -167,8 +171,10 @@ document.addEventListener('click', (ev) => {
   let host = null;
   for (const row of $('nodes-body').querySelectorAll('tr')) {
     const cells = row.querySelectorAll('td');
-    if (cells.length >= 2 && cells[0].textContent.trim() === wantedNode) {
-      host = cells[1].textContent.trim();
+    // 1.1.49: cells[1] is the Datacenter column since it was inserted;
+    // the host is cells[2] (every action used to go to https://default/).
+    if (cells.length >= 3 && cells[0].textContent.trim() === wantedNode) {
+      host = cells[2].textContent.trim();
       break;
     }
   }

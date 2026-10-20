@@ -11,9 +11,13 @@
 // operators don't need a separate package.
 
 #include "poller.h"
+
+#include <yaml-cpp/yaml.h>   // 1.1.49: listen_port / listen_host
+#include <sys/stat.h>        // mkdir
 #include "store.h"
 #include "api.h"
 #include "scheduling_pure.h"
+#include "version.h"          // 1.1.52: generated from VERSION by the Makefile
 
 #include <httplib.h>
 
@@ -24,6 +28,7 @@
 #include <cstring>
 #include <iostream>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -165,21 +170,53 @@ int main(int argc, char **argv) {
   if (argc >= 2 && std::strcmp(argv[1], "schedule") == 0)
     return scheduleSubcommand(argc, argv);
 
-  unsigned port = 9810;
+  unsigned port = 0;                 // 0 = not given on the command line
+  std::string bindHost;              // "" = not given on the command line
   std::string configPath = "/usr/local/etc/crate-hub.conf";
   std::string webDir = "/usr/local/share/crate-hub/web";
   bool foreground = false;
 
+  // 1.1.49: long options as documented in crate-hub.8 too; -p parsed
+  // defensively (std::stoi threw out of main on garbage).
   for (int i = 1; i < argc; i++) {
     std::string arg = argv[i];
-    if (arg == "-f") foreground = true;
-    else if (arg == "-c" && i + 1 < argc) configPath = argv[++i];
-    else if (arg == "-p" && i + 1 < argc) port = std::stoi(argv[++i]);
-    else if (arg == "-w" && i + 1 < argc) webDir = argv[++i];
-    else if (arg == "-h") {
-      std::cout << "Usage: crate-hub [-f] [-c config] [-p port] [-w webdir]\n";
-      return 0;
+    if (arg == "-f" || arg == "--foreground") foreground = true;
+    else if ((arg == "-c" || arg == "--config") && i + 1 < argc) configPath = argv[++i];
+    else if ((arg == "-p" || arg == "--port") && i + 1 < argc) {
+      std::string v = argv[++i];
+      if (v.empty() || v.size() > 5 || v.find_first_not_of("0123456789") != std::string::npos ||
+          std::stoul(v) < 1 || std::stoul(v) > 65535) {
+        std::cerr << "crate-hub: -p expects a port number 1..65535, got '" << v << "'" << std::endl;
+        return 1;
+      }
+      port = (unsigned)std::stoul(v);
     }
+    else if ((arg == "-b" || arg == "--bind") && i + 1 < argc) bindHost = argv[++i];
+    else if ((arg == "-w" || arg == "--webdir") && i + 1 < argc) webDir = argv[++i];
+    else if (arg == "-h" || arg == "--help") {
+      std::cout << "Usage: crate-hub [-f] [-c config] [-p port] [-b bind-address] [-w webdir]\n";
+      return 0;
+    } else if (arg == "-V" || arg == "--version") {   // 1.1.52: shared version.h
+      std::cout << "crate-hub " << CRATE_VERSION << std::endl;
+      return 0;
+    } else {
+      std::cerr << "crate-hub: unknown argument '" << arg << "'" << std::endl;
+      return 1;
+    }
+  }
+
+  // Config-file listen settings (listen_port / listen_host, crate-hub.8);
+  // command line wins. 1.1.49: the man page documented listen_port but
+  // nothing read it. The hub API is unauthenticated, so the default
+  // bind is loopback — put a TLS reverse proxy in front for remote use.
+  {
+    try {
+      YAML::Node root = YAML::LoadFile(configPath);
+      if (port == 0 && root["listen_port"]) port = root["listen_port"].as<unsigned>();
+      if (bindHost.empty() && root["listen_host"]) bindHost = root["listen_host"].as<std::string>();
+    } catch (...) {}
+    if (port == 0) port = 9810;
+    if (bindHost.empty()) bindHost = "127.0.0.1";
   }
 
   ::signal(SIGINT, signalHandler);
@@ -202,8 +239,39 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // Initialize SQLite store
-  CrateHub::Store store("/var/db/crate-hub/metrics.db");
+  // 1.1.49: daemonise BEFORE any thread exists. The poller thread used
+  // to be started first and fork() then produced a child with only the
+  // forking thread — no poll loop ever ran in the default mode, and the
+  // final pollerThread.join() joined a thread that did not exist in
+  // that process.
+  // 1.1.52: open the SQLite store BEFORE daemonising so a failure is
+  // reported on the operator's terminal instead of being an uncaught
+  // exception (std::terminate, "unable to open database file" with no
+  // path) in a detached child. `db_path:` in the config overrides the
+  // default; the parent directory is created when missing.
+  std::string dbPath = "/var/db/crate-hub/metrics.db";
+  try {
+    YAML::Node root = YAML::LoadFile(configPath);
+    if (root["db_path"]) dbPath = root["db_path"].as<std::string>();
+  } catch (...) {}
+  std::unique_ptr<CrateHub::Store> storePtr;
+  try {
+    auto slash = dbPath.find_last_of('/');
+    if (slash != std::string::npos && slash > 0)
+      ::mkdir(dbPath.substr(0, slash).c_str(), 0750);
+    storePtr = std::make_unique<CrateHub::Store>(dbPath);
+  } catch (const std::exception &e) {
+    std::cerr << "crate-hub: " << e.what() << " (" << dbPath << ")" << std::endl;
+    return 1;
+  }
+  CrateHub::Store &store = *storePtr;
+
+  if (!foreground) {
+    pid_t pid = ::fork();
+    if (pid < 0) { std::cerr << "fork failed\n"; return 1; }
+    if (pid > 0) ::_exit(0);
+    ::setsid();
+  }
 
   // Start poller thread
   CrateHub::Poller poller(nodes, store, pollIntervalSec);
@@ -216,18 +284,19 @@ int main(int argc, char **argv) {
   // Serve static web dashboard
   srv.set_mount_point("/", webDir);
 
-  if (!foreground) {
-    pid_t pid = ::fork();
-    if (pid < 0) { std::cerr << "fork failed\n"; return 1; }
-    if (pid > 0) ::_exit(0);
-    ::setsid();
+  // 1.1.49: bind the configured address and fail loudly — a failed
+  // listen() used to be silent while main slept forever.
+  if (!srv.bind_to_port(bindHost, (int)port)) {
+    std::cerr << "crate-hub: cannot listen on " << bindHost << ":" << port << std::endl;
+    poller.stop();
+    pollerThread.join();
+    return 1;
   }
-
-  std::cerr << "crate-hub: listening on :" << port
+  std::cerr << "crate-hub: listening on " << bindHost << ":" << port
             << ", " << nodes.size() << " nodes configured" << std::endl;
 
-  std::thread srvThread([&srv, port]() {
-    srv.listen("0.0.0.0", port);
+  std::thread srvThread([&srv]() {
+    srv.listen_after_bind();
   });
 
   while (g_running)

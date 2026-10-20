@@ -6,12 +6,13 @@ name: Release binaries
 #      and fills its page from CHANGELOG.md: the `## [X.Y.Z]` section
 #      becomes the release body, plus a download table and a compare
 #      link to the previous tag. Fails fast when the tag does not match
-#      the version compiled into cli/args.cpp or CHANGELOG.md has no
-#      section for it — a mis-tag never reaches the Releases page.
-#   2. `build`  — builds `crate`, `crated` and `crate-snmpd` on a FreeBSD
-#      VM for each supported release, packages a tarball + sha256 and
-#      attaches both to that Release (assets only; the body written by
-#      stage 1 is left alone).
+#      the VERSION file (1.1.52: the one version source — lib/version.h,
+#      the port and the CHANGELOG are checked against it by
+#      `make check-version`) — a mis-tag never reaches the Releases page.
+#   2. `build`  — builds `crate`, `crated`, `crate-snmpd` and `crate-hub`
+#      on a FreeBSD VM for each supported release, packages a tarball +
+#      sha256 and attaches both to that Release (assets only; the body
+#      written by stage 1 is left alone).
 #
 # Expected tag format: v0.3.1, v1.0.0, v1.1.41. A tag with a suffix
 # (v1.2.0-rc1) is published as a pre-release.
@@ -64,18 +65,20 @@ jobs:
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG version=$VERSION prerelease=$PRERELEASE"
 
-      - name: Check the tag matches the compiled version
+      - name: Check the tag matches VERSION, the port and the CHANGELOG
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
-          # cli/args.cpp prints "crate X.Y.Z" for --version; the tag must
-          # name the same release, otherwise the Releases page would lie
-          # about what the attached binaries report.
-          if ! grep -q "\"crate ${VERSION}\"" cli/args.cpp; then
-            echo "::error::cli/args.cpp does not contain \"crate ${VERSION}\" — tag ${{ steps.ver.outputs.tag }} does not match the compiled version:"
-            grep -n '"crate [0-9]' cli/args.cpp || true
+          # 1.1.52: VERSION is the single source — lib/version.h (and so
+          # `crate --version`, crate-snmpd, crate-hub) is generated from it.
+          # The tag must name the same release, otherwise the Releases page
+          # would lie about what the attached binaries report.
+          FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [ "$FILE_VERSION" != "$VERSION" ]; then
+            echo "::error::VERSION file says ${FILE_VERSION} but tag ${{ steps.ver.outputs.tag }} says ${VERSION}"
             exit 1
           fi
-          echo "cli/args.cpp reports crate ${VERSION}"
+          # port/Makefile PORTVERSION and the CHANGELOG section must agree too.
+          make check-version
 
       - name: Build release notes from CHANGELOG.md
         id: notes
@@ -126,7 +129,7 @@ jobs:
             echo "tar -xJf crate-${VERSION}-freebsd-14.2-amd64.tar.xz"
             echo '```'
             echo
-            echo "The tarball holds \`bin/crate\`, \`sbin/crated\`, \`sbin/crate-snmpd\`, \`man/man5/crate.5.gz\`, \`crated.conf.sample\`, \`crated.rc\`, the SNMP MIB and this changelog. Assets appear a few minutes after the Release page (separate build jobs)."
+            echo "The tarball holds \`bin/crate\`, \`sbin/crated\`, \`sbin/crate-snmpd\`, \`sbin/crate-hub\`, the man pages (\`crate.5\`, \`crated.8\`, \`crate-hub.8\`, \`crate-snmpd.8\`), the hub web dashboard (\`share/crate-hub/web\`), \`crated.conf.sample\`, \`crated.rc\`, the SNMP MIB and this changelog. Assets appear a few minutes after the Release page (separate build jobs)."
             echo
             if [ -n "$PREV" ]; then
               echo "**Full changelog:** https://github.com/${REPO}/compare/${PREV}...${TAG}"
@@ -188,7 +191,8 @@ jobs:
             set -ex
 
             echo "::group::Install dependencies"
-            sudo pkg install -y pkgconf yaml-cpp rang gmake cpp-httplib
+            # 1.1.52: sqlite3 for crate-hub's metrics store.
+            sudo pkg install -y pkgconf yaml-cpp rang gmake cpp-httplib sqlite3
             echo "::endgroup::"
 
             echo "::group::System info"
@@ -196,33 +200,43 @@ jobs:
             c++ --version
             echo "::endgroup::"
 
-            echo "::group::Build crate + crated + crate-snmpd"
+            echo "::group::Build crate + crated + crate-snmpd + crate-hub"
             NCPU=$(sysctl -n hw.ncpu)
             JOBS=$(( NCPU < 3 ? NCPU : 2 ))
             gmake -j"$JOBS" crate
             gmake -j"$JOBS" crated
             gmake -j"$JOBS" crate-snmpd
+            gmake -j"$JOBS" crate-hub
             echo "::endgroup::"
 
             echo "::group::Strip and summarize"
-            strip crate crated crate-snmpd
-            ls -la crate crated crate-snmpd
-            file crate crated crate-snmpd || true
-            # The binary must report the version the tag names.
-            ./crate --version | grep -Fx "crate ${{ steps.ver.outputs.version }}"
+            strip crate crated crate-snmpd crate-hub
+            ls -la crate crated crate-snmpd crate-hub
+            file crate crated crate-snmpd crate-hub || true
+            # The binaries must report the version the tag names.
+            ./crate --version     | grep -Fx "crate ${{ steps.ver.outputs.version }}"
+            ./crate-hub --version | grep -Fx "crate-hub ${{ steps.ver.outputs.version }}"
             echo "::endgroup::"
 
             echo "::group::Package tarball"
             PKGDIR="crate-${{ steps.ver.outputs.version }}-freebsd-${{ matrix.freebsd-version }}-amd64"
-            mkdir -p "$PKGDIR/bin" "$PKGDIR/sbin" "$PKGDIR/man/man5" "$PKGDIR/share/examples/crate" "$PKGDIR/share/snmp/mibs"
+            mkdir -p "$PKGDIR/bin" "$PKGDIR/sbin" "$PKGDIR/man/man5" "$PKGDIR/man/man8" \
+                     "$PKGDIR/share/crate-hub/web" "$PKGDIR/share/snmp/mibs"
             cp crate         "$PKGDIR/bin/"
             cp crated        "$PKGDIR/sbin/"
             cp crate-snmpd   "$PKGDIR/sbin/"
-            gzip -9 < crate.5 > "$PKGDIR/man/man5/crate.5.gz"
-            cp daemon/crated.conf.sample "$PKGDIR/" 2>/dev/null || true
-            cp daemon/crated.rc          "$PKGDIR/" 2>/dev/null || true
-            cp snmpd/CRATE-MIB.txt       "$PKGDIR/share/snmp/mibs/" 2>/dev/null || true
-            cp README.md LICENSE CHANGELOG.md "$PKGDIR/" 2>/dev/null || true
+            cp crate-hub     "$PKGDIR/sbin/"
+            gzip -9 < crate.5     > "$PKGDIR/man/man5/crate.5.gz"
+            gzip -9 < crated.8      > "$PKGDIR/man/man8/crated.8.gz"
+            gzip -9 < crate-hub.8   > "$PKGDIR/man/man8/crate-hub.8.gz"
+            gzip -9 < crate-snmpd.8 > "$PKGDIR/man/man8/crate-snmpd.8.gz"
+            # 1.1.52: no `|| true` — every one of these ships in the tarball,
+            # a missing file is a packaging bug, not something to hide.
+            cp daemon/crated.conf.sample "$PKGDIR/"
+            cp daemon/crated.rc          "$PKGDIR/"
+            cp snmpd/CRATE-MIB.txt       "$PKGDIR/share/snmp/mibs/"
+            cp hub/web/index.html hub/web/app.js hub/web/style.css "$PKGDIR/share/crate-hub/web/"
+            cp README.md LICENSE CHANGELOG.md "$PKGDIR/"
 
             TARBALL="${PKGDIR}.tar.xz"
             tar -cJf "$TARBALL" "$PKGDIR"

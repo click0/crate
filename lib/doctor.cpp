@@ -19,6 +19,7 @@
 #include "ipfw_ops.h"
 #include "jail_query.h"
 #include "net_detect.h"
+#include "pathnames.h"   // 1.1.47: CRATE_PATH_* instead of hardcoded paths
 #include "nv_protocol.h"
 #include "pfctl_ops.h"
 #include "run_gui_pure.h"
@@ -70,12 +71,13 @@ const ModuleSpec kModules[] = {
   // Core jail networking — required for any vnet jail.
   {"if_bridge", true,  "vnet jails (bridge interfaces)"},
   {"if_epair",  true,  "vnet jails (paired veth-style links)"},
-  // RCTL is loaded via kernel option on most installs but check anyway.
-  {"racct",     false, "RCTL accounting"},
+  // 1.1.47: racct is a kernel OPTION, not a module — `kldstat -n racct`
+  // failed on every host and made the exit code permanently >= 1. It is
+  // probed through kern.racct.enable in checkRacct() now. ipfw/pf moved
+  // to checkFirewall(): one of the two is enough, and pf is usually
+  // compiled in (kldstat does not list it).
   // dummynet for network throttling (0.7.7).
   {"dummynet",  false, "crate throttle (token-bucket network limits)"},
-  // ipfw if dummynet is wanted; pf is the alternative.
-  {"ipfw",      false, "ipfw firewall (or use pf instead)"},
   // bhyve track (TODO2) — purely informational on systems without it.
   {"vmm",       false, "bhyve micro-VMs (TODO2)"},
   {"nmdm",      false, "bhyve console pairs (TODO2)"},
@@ -112,6 +114,58 @@ void checkKernelModules(Report &r) {
   }
 }
 
+// --- check: RACCT/RCTL accounting (1.1.47) ---
+//
+// RACCT is a kernel option; kern.racct.enable says whether accounting is
+// on. Absent sysctl = kernel built without RACCT (RCTL limits cannot
+// work); 0 = built in but disabled (kern.racct.enable=1 in loader.conf).
+
+void checkRacct(Report &r) {
+  int enabled = -1;
+  try { enabled = Util::getSysctlInt("kern.racct.enable"); } catch (...) {}
+  if (enabled < 0)
+    r.checks.push_back(warnCheck("kernel", "racct",
+      "kern.racct.enable not present — kernel built without RACCT; RCTL limits "
+      "(limits:, crate retune, throttle stats) will not work"));
+  else if (enabled == 0)
+    r.checks.push_back(warnCheck("kernel", "racct",
+      "kern.racct.enable=0 — RCTL accounting disabled; set kern.racct.enable=1 in /boot/loader.conf"));
+  else
+    r.checks.push_back(passCheck("kernel", "racct", "kern.racct.enable=1 — RCTL accounting"));
+}
+
+// --- check: a firewall backend is available (1.1.47) ---
+//
+// pf is usually compiled into GENERIC (not in kldstat); its presence is
+// /dev/pf. ipfw shows up as net.inet.ip.fw.enable once loaded. Either
+// one serves crate; the configured firewall_backend decides whether a
+// missing one is a FAIL or just a note.
+
+void checkFirewall(Report &r) {
+  const bool havePf = ::access("/dev/pf", F_OK) == 0;
+  bool haveIpfw = false;
+  try { (void)Util::getSysctlInt("net.inet.ip.fw.enable"); haveIpfw = true; } catch (...) {}
+  const std::string want = Config::get().firewallBackend;   // "", pf, ipfw, none
+  std::ostringstream have;
+  have << "available:" << (havePf ? " pf" : "") << (haveIpfw ? " ipfw" : "") << ((havePf || haveIpfw) ? "" : " none");
+  if (want == "none") {
+    r.checks.push_back(passCheck("kernel", "firewall", "firewall_backend: none — " + have.str()));
+  } else if (want == "pf" && !havePf) {
+    r.checks.push_back(failCheck("kernel", "firewall",
+      "firewall_backend: pf but /dev/pf is missing — kldload pf (or pf_load=\"YES\" in loader.conf)"));
+  } else if (want == "ipfw" && !haveIpfw) {
+    r.checks.push_back(failCheck("kernel", "firewall",
+      "firewall_backend: ipfw but net.inet.ip.fw.enable is missing — kldload ipfw"));
+  } else if (!havePf && !haveIpfw) {
+    r.checks.push_back(warnCheck("kernel", "firewall",
+      "neither pf nor ipfw is loaded — NAT-mode networking, auto-fw and throttle need one "
+      "(kldload pf, or kldload ipfw + dummynet)"));
+  } else {
+    r.checks.push_back(passCheck("kernel", "firewall",
+      (want.empty() ? "auto" : want) + " — " + have.str()));
+  }
+}
+
 // --- check: required commands in PATH ---
 //
 // We don't trust $PATH in a privileged context (crated runs as root; the
@@ -123,19 +177,23 @@ struct CommandSpec {
   const char *purpose;
 };
 
+// 1.1.47: the SAME constants the rest of crate execs (pathnames.h).
+// Hand-typed copies had /usr/bin/jls (real: /usr/sbin/jls), /sbin/jail
+// (real: /usr/sbin/jail) and /sbin/rctl (real: /usr/bin/rctl), so doctor
+// reported a required-command FAIL on every FreeBSD host.
 const CommandSpec kCommands[] = {
-  {"/sbin/zfs",       true,  "ZFS dataset / snapshot operations"},
-  {"/sbin/jail",      true,  "jail(8) lifecycle"},
-  {"/usr/sbin/jexec", true,  "exec inside jails"},
-  {"/usr/bin/jls",    true,  "list jails"},
-  {"/sbin/ifconfig",  true,  "network interface management"},
-  {"/usr/bin/grep",   true,  "used in many shell-outs"},
-  {"/usr/bin/tar",    true,  "create / run extract .crate archives"},
-  {"/usr/bin/xz",     true,  "compress / decompress .crate"},
-  {"/sbin/rctl",      false, "RCTL limits + crate retune / throttle stats"},
-  {"/sbin/ipfw",      false, "crate throttle / per-jail firewall"},
-  {"/sbin/pfctl",     false, "alternative firewall via pf"},
-  {"/sbin/kldstat",   false, "kernel module checks (this command itself)"},
+  {CRATE_PATH_ZFS,      true,  "ZFS dataset / snapshot operations"},
+  {CRATE_PATH_JAIL,     true,  "jail(8) lifecycle"},
+  {CRATE_PATH_JEXEC,    true,  "exec inside jails"},
+  {CRATE_PATH_JLS,      true,  "list jails"},
+  {CRATE_PATH_IFCONFIG, true,  "network interface management"},
+  {CRATE_PATH_GREP,     true,  "used in many shell-outs"},
+  {CRATE_PATH_TAR,      true,  "create / run extract .crate archives"},
+  {CRATE_PATH_XZ,       true,  "compress / decompress .crate"},
+  {CRATE_PATH_RCTL,     false, "RCTL limits + crate retune / throttle stats"},
+  {CRATE_PATH_IPFW,     false, "crate throttle / per-jail firewall"},
+  {CRATE_PATH_PFCTL,    false, "alternative firewall via pf"},
+  {"/sbin/kldstat",     false, "kernel module checks (this command itself)"},
 };
 
 void checkCommands(Report &r) {
@@ -225,14 +283,14 @@ void checkDirectories(Report &r) {
     }
     r.checks.push_back(passCheck("filesystem", "/var/run/crate",
       "root-owned — writability not checked for an unprivileged doctor"));
-    r.checks.push_back(passCheck("filesystem", "/var/log/crate",
+    r.checks.push_back(passCheck("filesystem", Config::get().logs,
       "root-owned — crate(1) appends its audit events to "
       + RuntimePathsPure::perUserCrateAuditLog((uint32_t)::getuid())));
     return;
   }
   checkOneDirectory(r, "/var/run/crate", 100,
     "crated runtime state (sockets, pid)");
-  checkOneDirectory(r, "/var/log/crate",  50,
+  checkOneDirectory(r, Config::get().logs, 50,   // 1.1.47: crate.yml `logs`, not a hardcoded path
     "audit log + per-jail create logs");
 }
 
@@ -353,7 +411,9 @@ void checkJails(Report &r) {
 // --- check: audit log size (warn at 50MB) ---
 
 void checkAuditLog(Report &r) {
-  const char *path = "/var/log/crate/audit.log";
+  // 1.1.47: honour crate.yml `logs` (was hardcoded /var/log/crate).
+  const std::string pathStr = Config::get().logs + "/audit.log";
+  const char *path = pathStr.c_str();
   struct stat st{};
   if (::stat(path, &st) != 0) {
     r.checks.push_back(passCheck("audit", path,
@@ -363,7 +423,7 @@ void checkAuditLog(Report &r) {
   std::size_t mb = (std::size_t)st.st_size / (1024UL * 1024UL);
   std::ostringstream detail;
   detail << "size = " << mb << " MB";
-  if (mb >= 100) {
+  if (mb >= 50) {   // 1.1.47: 50 MB, as the section says (was 100)
     detail << " — consider rotation (newsyslog or logrotate)";
     r.checks.push_back(warnCheck("audit", path, detail.str()));
   } else {
@@ -461,9 +521,9 @@ void checkIpfwReservedRanges(Report &r) {
 // information rather than an authoritative drift check.
 
 void checkRctlPresence(Report &r) {
-  if (::access("/sbin/rctl", X_OK) != 0) {
+  if (::access(CRATE_PATH_RCTL, X_OK) != 0) {   // 1.1.47: was /sbin/rctl (wrong path → always skipped)
     r.checks.push_back(passCheck("network", "rctl",
-      "/sbin/rctl not present — skipping RCTL presence check"));
+      std::string(CRATE_PATH_RCTL) + " not present — skipping RCTL presence check"));
     return;
   }
   std::vector<JailQuery::JailInfo> jails;
@@ -474,7 +534,7 @@ void checkRctlPresence(Report &r) {
     std::string out;
     try {
       out = Util::execCommandGetOutput(
-        {"/sbin/rctl", "-l", "jail:" + j.name},
+        {CRATE_PATH_RCTL, "-l", "jail:" + j.name},
         "rctl -l jail");
     } catch (...) {
       r.checks.push_back(warnCheck("network", j.name,
@@ -870,6 +930,8 @@ bool doctorCommand(const Args &args) {
 
   Report r;
   checkKernelModules(r);
+  checkRacct(r);        // 1.1.47
+  checkFirewall(r);     // 1.1.47
   checkCommands(r);
   checkDirectories(r);
   checkZfsPools(r);

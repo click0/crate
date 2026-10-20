@@ -102,85 +102,78 @@ void Server::start() {
     registerRoutes(*impl_->udsSrv, config_, /*isUnixListener=*/true);
     applyListenerLimits(*impl_->udsSrv);
     impl_->udsSrv->set_address_family(AF_UNIX);
-    impl_->unixThread = std::thread([this]() {
-      impl_->udsSrv->listen(config_.unixSocket, 0);
-    });
 
-    // 0.8.19: enforce post-bind filesystem perms.
+    // 1.1.55: bind→chmod race closed (docs/getpeereid-main-api-refactor.md
+    // §3.1). 0.8.19 started the accept loop first and a detached thread
+    // polled for the socket file to chmod/chown it; between httplib's
+    // bind(2) and that chmod the file sat at the umask-default mode, and
+    // with the default config (no owner/group, mode 0660) the fixup did
+    // not run at all, so the documented root:wheel 0660 was never applied.
     //
-    // cpp-httplib's listen() returns only on shutdown, so we can't
-    // run perm fixups inline before bind. Instead, poll for the
-    // socket file's existence (httplib creates it inside listen())
-    // for up to ~2s and chmod/chown then. This is a one-shot at
-    // startup; no per-connection cost.
-    //
-    // Race window: from the bind() call inside httplib until the
-    // chmod completes here, the socket has the umask-default mode
-    // (typically 0777 on Linux, 0666 on FreeBSD modulo umask). On
-    // a multi-user host an attacker watching for the socket file
-    // could connect during that window. The pre-0.8.19 code had
-    // the SAME race — this release just narrows it by also
-    // applying owner/group, not by closing it. A full fix
-    // requires the bigger getpeereid refactor (TODO).
-    if (!config_.unixSocketOwner.empty()
-        || !config_.unixSocketGroup.empty()
-        || config_.unixSocketMode != 0660) {
-      std::thread([this]() {
-        // Poll for socket presence, max ~2s.
-        struct stat st{};
-        for (int i = 0; i < 200; i++) {
-          if (::stat(config_.unixSocket.c_str(), &st) == 0)
-            break;
-          std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-        if (st.st_mode == 0) {
-          std::cerr << "crated: unix_socket " << config_.unixSocket
-                    << " did not appear within 2s; perm fixup skipped"
-                    << std::endl;
-          return;
-        }
-
-        // Resolve owner -> uid (empty leaves uid alone via -1).
-        uid_t uid = (uid_t)-1;
-        if (!config_.unixSocketOwner.empty()) {
-          struct passwd *pw = ::getpwnam(config_.unixSocketOwner.c_str());
-          if (pw == nullptr) {
-            std::cerr << "crated: listen.unix_owner '" << config_.unixSocketOwner
-                      << "' not found; perm fixup skipped" << std::endl;
-            return;
-          }
-          uid = pw->pw_uid;
-        }
-        // Resolve group -> gid (empty leaves gid alone via -1).
-        gid_t gid = (gid_t)-1;
-        if (!config_.unixSocketGroup.empty()) {
-          struct group *gr = ::getgrnam(config_.unixSocketGroup.c_str());
-          if (gr == nullptr) {
-            std::cerr << "crated: listen.unix_group '" << config_.unixSocketGroup
-                      << "' not found; perm fixup skipped" << std::endl;
-            return;
-          }
-          gid = gr->gr_gid;
-        }
-
-        if ((uid != (uid_t)-1 || gid != (gid_t)-1)
-            && ::chown(config_.unixSocket.c_str(), uid, gid) != 0) {
-          std::cerr << "crated: chown " << config_.unixSocket
-                    << " failed: " << std::strerror(errno) << std::endl;
-        }
-        if (::chmod(config_.unixSocket.c_str(), config_.unixSocketMode) != 0) {
-          std::cerr << "crated: chmod " << config_.unixSocket
-                    << " failed: " << std::strerror(errno) << std::endl;
-        }
-        if (!SocketPermsPure::isModeTight(config_.unixSocketMode)) {
-          std::cerr << "crated: listen.unix_mode 0"
-                    << std::oct << config_.unixSocketMode << std::dec
-                    << " is looser than 0660 — anyone with filesystem "
-                    << "access can talk to the daemon. Tighten unless "
-                    << "you intend this." << std::endl;
-        }
-      }).detach();
+    // Now: bind synchronously under umask 0077 — the socket file is born
+    // 0700, nobody but root can connect() to it — then chown/chmod to the
+    // configured owner/group/mode, and only then start the accept loop.
+    // umask is process-wide, but this runs once at startup before any
+    // worker thread exists that creates files.
+    mode_t oldMask = ::umask(0077);
+    bool bound = impl_->udsSrv->bind_to_port(config_.unixSocket, 0);
+    ::umask(oldMask);
+    if (!bound) {
+      std::cerr << "crated: cannot bind unix socket " << config_.unixSocket
+                << ": " << std::strerror(errno) << std::endl;
+      impl_->udsSrv.reset();
+      return;
     }
+    applyUnixSocketPerms();
+    impl_->unixThread = std::thread([this]() {
+      impl_->udsSrv->listen_after_bind();
+    });
+  }
+}
+
+// 1.1.55: owner/group/mode of the main-API unix socket, applied between
+// bind(2) and the accept loop (see start()). Failures are reported, not
+// fatal: the socket is still 0700 root-only at this point, which is
+// tighter than anything the config asks for.
+void Server::applyUnixSocketPerms() {
+  // Resolve owner -> uid (empty leaves uid alone via -1).
+  uid_t uid = (uid_t)-1;
+  if (!config_.unixSocketOwner.empty()) {
+    struct passwd *pw = ::getpwnam(config_.unixSocketOwner.c_str());
+    if (pw == nullptr) {
+      std::cerr << "crated: listen.unix_owner '" << config_.unixSocketOwner
+                << "' not found; socket stays root-only (0700)" << std::endl;
+      return;
+    }
+    uid = pw->pw_uid;
+  }
+  // Resolve group -> gid (empty leaves gid alone via -1).
+  gid_t gid = (gid_t)-1;
+  if (!config_.unixSocketGroup.empty()) {
+    struct group *gr = ::getgrnam(config_.unixSocketGroup.c_str());
+    if (gr == nullptr) {
+      std::cerr << "crated: listen.unix_group '" << config_.unixSocketGroup
+                << "' not found; socket stays root-only (0700)" << std::endl;
+      return;
+    }
+    gid = gr->gr_gid;
+  }
+
+  if ((uid != (uid_t)-1 || gid != (gid_t)-1)
+      && ::chown(config_.unixSocket.c_str(), uid, gid) != 0) {
+    std::cerr << "crated: chown " << config_.unixSocket
+              << " failed: " << std::strerror(errno) << std::endl;
+  }
+  if (::chmod(config_.unixSocket.c_str(), config_.unixSocketMode) != 0) {
+    std::cerr << "crated: chmod " << config_.unixSocket
+              << " failed: " << std::strerror(errno) << std::endl;
+  }
+  if (!SocketPermsPure::isModeTight(config_.unixSocketMode)) {
+    std::cerr << "crated: listen.unix_mode 0"
+              << std::oct << config_.unixSocketMode << std::dec
+              << " is looser than 0660 — anyone with filesystem "
+              << "access can talk to the daemon. Tighten unless "
+              << "you intend this." << std::endl;
   }
 }
 

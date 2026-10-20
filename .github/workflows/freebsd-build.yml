@@ -89,7 +89,7 @@ jobs:
 
             echo "::group::Install dependencies"
             # Hard build deps — these MUST install or the job is dead.
-            sudo pkg install -y pkgconf yaml-cpp rang gmake cpp-httplib
+            sudo pkg install -y pkgconf yaml-cpp rang gmake cpp-httplib sqlite3
 
             # ATF: HARD dep, on its own line. It provides (a) the LINKABLE
             # /usr/local/lib/libatf-c{,++}.so the Makefile's `-latf-c++
@@ -155,6 +155,10 @@ jobs:
             gmake -j"$JOBS" crate
             ls -la crate
             file crate || true
+            # 1.1.52: the three daemons too — the lite workflow links them
+            # on every push, the full one should not know less.
+            gmake -j"$JOBS" crated crate-snmpd crate-hub
+            ls -la crated crate-snmpd crate-hub
             echo "::endgroup::"
 
             echo "::group::Install crate(1) so the functional tests can run"

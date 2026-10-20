@@ -170,7 +170,7 @@ remain uid-blind; the gate runs ahead of them.
 > membership in the privops socket's group — still has host-wide control
 > over the **un-gated** surface (firewall, host interface plumbing,
 > other host-global verbs that touch shared state). The
-> 1.1.12 → 1.1.17 gates close cross-tenant ZFS-dataset, RCTL-umbrella,
+> 1.1.12 → 1.1.43 gates close cross-tenant ZFS-dataset, RCTL-umbrella,
 > jid-, name-, path-scoped, create-jail-path, mount-source, and
 > per-jail interface access on the libnv path — every verb that carries
 > an operator-controlled ownership signal in its request is now gated.
@@ -236,7 +236,11 @@ Result: alice's socket (`pools: ["alice"]`) cannot observe, patch, or
 start/stop a jail in bob's pool. This is the mechanism a multi-tenant
 deployment relies on. Note these sockets cover the *control* surface
 only — they do **not** expose `create_jail` / `attach_zfs`, which are
-privops (Plane 1).
+privops (Plane 1). The pool ACL confines *which* jails a socket may
+act on, not what a started container may do: `start` from an `admin`
+socket runs that container's recorded `.crate` as root, with whatever
+host shares and scripts its spec declares. Hand out `admin` sockets
+only to operators you would also trust with the spec.
 
 ### 2b. Remote bearer tokens (0.7.1 scope, 0.7.4 pools) — isolated
 

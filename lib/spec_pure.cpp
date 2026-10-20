@@ -21,10 +21,13 @@ namespace SpecPure {
 
 PortRange parsePortRange(const std::string &str) {
   auto hyphen = str.find('-');
-  return hyphen == std::string::npos
-    ? PortRange(Util::toUInt(str), Util::toUInt(str))
-    : PortRange(Util::toUInt(str.substr(0, hyphen)),
-                Util::toUInt(str.substr(hyphen + 1)));
+  PortRange r = hyphen == std::string::npos
+    ? PortRange(SpecPure::parsePort(str, "port"), SpecPure::parsePort(str, "port"))
+    : PortRange(SpecPure::parsePort(str.substr(0, hyphen), "port range start"),
+                SpecPure::parsePort(str.substr(hyphen + 1), "port range end"));
+  if (r.first > r.second)
+    ERR2("spec", "port range '" << str << "' is reversed (start > end)")
+  return r;
 }
 
 std::string substituteVars(const std::string &input,
@@ -446,4 +449,28 @@ std::string SpecPure::validateGateway4(const std::string &v) {
   if (v.empty()) return "gateway is empty";
   if (v.find('/') != std::string::npos) return "gateway must be a bare IPv4 address, not a CIDR";
   return NetAddrPure::isV4(v) ? "" : "'" + v + "' is not an IPv4 address";
+}
+
+// --- 1.1.46: bounded integers ---
+
+int SpecPure::parseIntInRange(const std::string &s, int lo, int hi, const char *what) {
+  std::string t = s;
+  if (t.empty()) ERR2("spec", what << ": empty value")
+  size_t i = 0;
+  bool neg = false;
+  if (t[0] == '-' || t[0] == '+') { neg = t[0] == '-'; i = 1; }
+  if (i >= t.size() || t.size() - i > 9) ERR2("spec", what << ": '" << s << "' is not an integer")
+  long v = 0;
+  for (; i < t.size(); i++) {
+    if (t[i] < '0' || t[i] > '9') ERR2("spec", what << ": '" << s << "' is not an integer")
+    v = v * 10 + (t[i] - '0');
+  }
+  if (neg) v = -v;
+  if (v < lo || v > hi)
+    ERR2("spec", what << ": " << s << " is out of range (" << lo << ".." << hi << ")")
+  return (int)v;
+}
+
+unsigned SpecPure::parsePort(const std::string &s, const char *what) {
+  return (unsigned)SpecPure::parseIntInRange(s, 1, 65535, what);
 }

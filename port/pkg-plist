@@ -1,14 +1,21 @@
-@mode 04755
 bin/crate
-@mode
 man/man5/crate.5.gz
 %%DAEMON%%sbin/crated
+%%DAEMON%%man/man8/crated.8.gz
 %%DAEMON%%@mode 0555
 %%DAEMON%%etc/rc.d/crated
 %%DAEMON%%@mode
 %%DAEMON%%@sample etc/crated.conf.sample
 %%SNMPD%%sbin/crate-snmpd
 %%SNMPD%%share/snmp/mibs/CRATE-MIB.txt
+%%SNMPD%%man/man8/crate-snmpd.8.gz
+%%HUB%%sbin/crate-hub
+%%HUB%%man/man8/crate-hub.8.gz
+%%HUB%%share/crate-hub/web/app.js
+%%HUB%%share/crate-hub/web/index.html
+%%HUB%%share/crate-hub/web/style.css
+%%HUB%%@dir share/crate-hub/web
+%%HUB%%@dir share/crate-hub
 %%COMPLETIONS%%share/crate/completions/crate.sh
 %%COMPLETIONS%%@dir share/crate/completions
 %%COMPLETIONS%%@dir share/crate

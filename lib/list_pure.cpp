@@ -67,11 +67,11 @@ void renderTable(std::ostream &out, const std::vector<Entry> &entries) {
   for (auto &e : entries) {
     out << std::left
         << std::setw(wJid + 2) << e.jid
-        << std::setw(wName + 2) << e.name
-        << std::setw(wIp + 2) << (e.ip.empty() ? "-" : e.ip)
-        << std::setw(wHostname + 2) << e.hostname
-        << std::setw(wPorts + 2) << (e.ports.empty() ? "-" : e.ports)
-        << std::setw(wMounts + 2) << (e.mounts.empty() ? "-" : e.mounts)
+        << std::setw(wName + 2) << sanitizeForTerminal(e.name)
+        << std::setw(wIp + 2) << (e.ip.empty() ? "-" : sanitizeForTerminal(e.ip))
+        << std::setw(wHostname + 2) << sanitizeForTerminal(e.hostname)
+        << std::setw(wPorts + 2) << (e.ports.empty() ? "-" : sanitizeForTerminal(e.ports))
+        << std::setw(wMounts + 2) << (e.mounts.empty() ? "-" : sanitizeForTerminal(e.mounts))
         << (e.hasHealthcheck ? "Y" : "-")
         << "\n";
   }
@@ -86,6 +86,14 @@ std::string renderJsonStr(const std::vector<Entry> &entries) {
 
 std::string renderTableStr(const std::vector<Entry> &entries) {
   std::ostringstream ss; renderTable(ss, entries); return ss.str();
+}
+
+
+std::string sanitizeForTerminal(const std::string &in) {
+  std::string out = in;
+  for (auto &c : out)
+    if ((unsigned char)c < 0x20 || c == 0x7f) c = '?';
+  return out;
 }
 
 }

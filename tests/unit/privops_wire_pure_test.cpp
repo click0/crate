@@ -740,6 +740,30 @@ ATF_TEST_CASE_BODY(parse_1141_verbs_and_rctl_limits) {
   ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::CreateBridge, R"({"name":"br0"})").status, 400);
 }
 
+// --- 1.1.51: escaper on JsonPure, decoder understands \uXXXX ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(escape_round_trips_control_bytes);
+ATF_TEST_CASE_BODY(escape_round_trips_control_bytes) {
+  // a message with a bell, an escape and a quote used to produce invalid
+  // JSON (raw control bytes) — now \u0007 / \u001b and round-trips
+  // 1.1.54: no explicit length — the literal has no embedded NUL and the
+  // hand-counted 28 read past the 25-byte constant (ASan CI caught it).
+  std::string raw = "err: \x07 \x1b[31m \"q\" tab\t nl\n";
+  ATF_REQUIRE_EQ(raw.size(), 25u);
+  auto body = formatHandlerError("kind", raw);
+  for (unsigned char c : body) ATF_REQUIRE(c >= 0x20);   // nothing raw below 0x20
+  std::string back;
+  ATF_REQUIRE_EQ(extractStringField(body, "error", back), std::string(kPresent));
+  ATF_REQUIRE_EQ(back, std::string("kind: ") + raw);
+  // \u for a non-ASCII BMP code point decodes to UTF-8
+  std::string out;
+  ATF_REQUIRE_EQ(extractStringField(R"({"x":"café €"})", "x", out), std::string(kPresent));
+  ATF_REQUIRE_EQ(out, std::string("caf\xc3\xa9 \xe2\x82\xac"));
+  // malformed \u keeps the text instead of failing
+  ATF_REQUIRE_EQ(extractStringField(R"({"x":"a\uZZ"})", "x", out), std::string(kPresent));
+  ATF_REQUIRE(out.find('u') != std::string::npos);
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, extract_string_present_absent_wrong_type);
   ATF_ADD_TEST_CASE(tcs, extract_string_decodes_escapes);
@@ -804,4 +828,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, format_query_jail_rctl_escapes_newlines);
   ATF_ADD_TEST_CASE(tcs, parse_exec_in_jail_argv_fields);
   ATF_ADD_TEST_CASE(tcs, parse_1141_verbs_and_rctl_limits);
+  ATF_ADD_TEST_CASE(tcs, escape_round_trips_control_bytes);
 }

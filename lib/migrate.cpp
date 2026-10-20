@@ -20,6 +20,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <cstdlib>   // 1.1.48: mkstemp/mkdtemp
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <regex>
@@ -65,13 +67,27 @@ std::string runCurl(const std::vector<std::string> &args,
   argv.push_back("--show-error");
   argv.push_back("--location");
   argv.push_back("--fail");
-  // Header with bearer token — passed via argv since FreeBSD's
-  // base curl doesn't honour the env-based form. Note: token is
-  // in argv. Mitigation: tokens come from a chmod-600 file the
-  // operator owns, the migrate command runs only on the operator's
-  // workstation, and the daemon-side audit log redacts.
+  // 1.1.48: the bearer token used to be an argv element ("Authorization:
+  // Bearer <token>"), visible in `ps` to every local user for the
+  // duration of the transfer. curl reads headers from a file with
+  // `-H @file` (7.55+); the file is a 0600 mkstemp and is unlinked right
+  // after the call.
+  char hdrTmpl[] = "/tmp/crate-migrate-hdr.XXXXXX";
+  int hfd = ::mkstemp(hdrTmpl);
+  if (hfd < 0) ERR("mkstemp for the auth header: " << strerror(errno))
+  struct Unlinker { std::string p; ~Unlinker() { ::unlink(p.c_str()); } } unlinker{hdrTmpl};
+  {
+    std::string hdr = "Authorization: Bearer " + token + "\n";
+    size_t off = 0;
+    while (off < hdr.size()) {
+      ssize_t n = ::write(hfd, hdr.data() + off, hdr.size() - off);
+      if (n < 0) { if (errno == EINTR) continue; int e = errno; ::close(hfd); ERR("write auth header: " << strerror(e)) }
+      off += (size_t)n;
+    }
+    ::close(hfd);
+  }
   argv.push_back("-H");
-  argv.push_back("Authorization: Bearer " + token);
+  argv.push_back(std::string("@") + hdrTmpl);
   // Caller's args (URL, method, --data-binary, --output, ...).
   for (auto &a : args) argv.push_back(a);
   return Util::execCommandGetOutput(argv, "curl");
@@ -151,9 +167,14 @@ bool migrateCommand(const Args &args) {
   if (auto e = MigratePure::validateBearerToken(r.toToken); !e.empty())
     ERR("to token: " << e)
 
-  // Per-run work directory under /tmp.
-  r.workDir = "/tmp/crate-migrate-" + std::to_string(::getpid());
-  Util::Fs::mkdir(r.workDir, S_IRWXU);
+  // Per-run work directory under /tmp. 1.1.48: mkdtemp — the pid-based
+  // name was predictable (pre-created by another user → EEXIST).
+  {
+    char tmpl[] = "/tmp/crate-migrate.XXXXXX";
+    if (::mkdtemp(tmpl) == nullptr)
+      ERR("mkdtemp for the migrate work directory: " << strerror(errno))
+    r.workDir = tmpl;
+  }
 
   try {
     // Step 1: export on source.

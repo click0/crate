@@ -2,6 +2,11 @@
 
 #include "stack_pure.h"
 #include "err.h"
+#include "name_limits.h"   // 1.1.45: kJailName
+
+#include <algorithm>
+#include <cctype>
+#include <set>
 
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -70,7 +75,10 @@ std::string buildHostsEntries(const std::map<std::string, std::string> &nameToIp
 
 std::string validateStackName(const std::string &name) {
   if (name.empty()) return "name is empty";
-  if (name.size() > 64) return "name is longer than 64 chars";
+  // 1.1.45: same ceiling as every other jail name (NameLimits::kJailName);
+  // 64 was a local drift that rejected names `crate run --name` accepts.
+  if (name.size() > NameLimits::kJailName)
+    return "name is longer than " + std::to_string(NameLimits::kJailName) + " chars";
   if (name == "." || name == "..") return "name is reserved";
   if (name.front() == '-') return "name must not start with '-'";
   for (char c : name) {
@@ -119,5 +127,72 @@ std::string validateStackIp(const std::string &ip) {
 }
 
 // topoSort is templated and lives in stack_pure.h.
+
+// --- 1.1.45 ---
+
+bool jailNameMatchesContainer(const std::string &jailName, const std::string &container) {
+  if (container.empty()) return false;
+  const std::string prefix = container + "_pid";
+  if (jailName.size() <= prefix.size()) return false;
+  if (jailName.compare(0, prefix.size(), prefix) != 0) return false;
+  for (size_t i = prefix.size(); i < jailName.size(); i++)
+    if (!std::isdigit((unsigned char)jailName[i])) return false;
+  return true;
+}
+
+std::vector<unsigned> ipfwRuleNumbers(const std::string &ipfwListOutput) {
+  std::vector<unsigned> out;
+  std::istringstream is(ipfwListOutput);
+  std::string line;
+  while (std::getline(is, line)) {
+    size_t i = 0;
+    while (i < line.size() && line[i] == ' ') i++;
+    size_t start = i;
+    unsigned long v = 0;
+    while (i < line.size() && std::isdigit((unsigned char)line[i]) && i - start < 6) {
+      v = v * 10 + (unsigned long)(line[i] - '0');
+      i++;
+    }
+    if (i == start || v == 0 || v > 65535) continue;          // not a rule line
+    if (i < line.size() && line[i] != ' ' && line[i] != '\t') continue;
+    out.push_back((unsigned)v);
+  }
+  return out;
+}
+
+unsigned freePolicySlot(const std::vector<unsigned> &used,
+                        unsigned base, unsigned end, unsigned width) {
+  if (width == 0 || base > end) return 0;
+  std::set<unsigned> taken(used.begin(), used.end());
+  for (unsigned slot = base; slot + width - 1 <= end; slot += width) {
+    auto it = taken.lower_bound(slot);
+    if (it == taken.end() || *it > slot + width - 1) return slot;
+  }
+  return 0;
+}
+
+std::vector<unsigned> policyRulesForBridge(const std::string &ipfwListOutput,
+                                           const std::string &bridge,
+                                           unsigned lo, unsigned hi) {
+  std::vector<unsigned> out;
+  if (bridge.empty()) return out;
+  std::istringstream is(ipfwListOutput);
+  std::string line;
+  const std::string needle = " via " + bridge;
+  while (std::getline(is, line)) {
+    auto nums = ipfwRuleNumbers(line);
+    if (nums.empty()) continue;
+    unsigned n = nums[0];
+    if (n < lo || n > hi) continue;
+    // "via <bridge>" must be a whole token: " via bridge0" followed by
+    // end of line or a space (not "bridge01").
+    size_t p = line.find(needle);
+    if (p == std::string::npos) continue;
+    size_t after = p + needle.size();
+    if (after < line.size() && line[after] != ' ' && line[after] != '\t' && line[after] != '\r') continue;
+    if (std::find(out.begin(), out.end(), n) == out.end()) out.push_back(n);
+  }
+  return out;
+}
 
 }
