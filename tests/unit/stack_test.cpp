@@ -108,7 +108,7 @@ ATF_TEST_CASE_BODY(validateStackName_injection_rejected)
 	ATF_REQUIRE(!validateStackName(".").empty());
 	ATF_REQUIRE(!validateStackName("").empty());
 	ATF_REQUIRE(!validateStackName("-leading").empty());
-	ATF_REQUIRE(!validateStackName(std::string(65, 'a')).empty());
+	ATF_REQUIRE(!validateStackName(std::string(129, 'a')).empty());   // 1.1.45: cap is NameLimits::kJailName
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(validateStackIp_typical_accepted);
@@ -249,6 +249,63 @@ ATF_TEST_CASE_BODY(topoSort_disconnected_components)
 	ATF_REQUIRE(indexOf(out, "y") < indexOf(out, "x"));
 }
 
+// --- 1.1.45: exact jail matching + network_policy rule numbering ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(jail_name_matches_container_exactly);
+ATF_TEST_CASE_BODY(jail_name_matches_container_exactly) {
+	ATF_REQUIRE(StackPure::jailNameMatchesContainer("db_pid4242", "db"));
+	ATF_REQUIRE(StackPure::jailNameMatchesContainer("my.app-2_pid1", "my.app-2"));
+	// the substring bug: container "db" must NOT match jail "mydb_pid…"
+	ATF_REQUIRE(!StackPure::jailNameMatchesContainer("mydb_pid4242", "db"));
+	ATF_REQUIRE(!StackPure::jailNameMatchesContainer("db2_pid4242", "db"));
+	ATF_REQUIRE(!StackPure::jailNameMatchesContainer("db_pid", "db"));
+	ATF_REQUIRE(!StackPure::jailNameMatchesContainer("db_pid12x", "db"));
+	ATF_REQUIRE(!StackPure::jailNameMatchesContainer("db", "db"));
+	ATF_REQUIRE(!StackPure::jailNameMatchesContainer("db_pid1", ""));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(policy_rule_numbers_and_free_slot);
+ATF_TEST_CASE_BODY(policy_rule_numbers_and_free_slot) {
+	const std::string listing =
+	  "00100 allow ip from any to any via lo0\n"
+	  "30000 deny tcp from 10.99.0.2 to 10.99.0.3 5432 via bridge99\n"
+	  "30001 deny ip from 10.99.0.2 to any via bridge99\n"
+	  "30150 deny ip from 10.88.0.5 to any via bridge88\n"
+	  "40002 allow ip from any to any via epair1a\n"
+	  "65535 deny ip from any to any\n"
+	  "garbage line\n";
+	auto nums = StackPure::ipfwRuleNumbers(listing);
+	ATF_REQUIRE_EQ(nums.size(), 6u);
+	ATF_REQUIRE_EQ(nums[0], 100u);
+	ATF_REQUIRE_EQ(nums[1], 30000u);
+	ATF_REQUIRE_EQ(nums[5], 65535u);
+	// blocks 30000 and 30100 are taken (30150 lies in the second) -> 30200
+	ATF_REQUIRE_EQ(StackPure::freePolicySlot(nums), 30200u);
+	// empty host -> first block
+	ATF_REQUIRE_EQ(StackPure::freePolicySlot({}), 30000u);
+	// full range -> 0
+	std::vector<unsigned> full;
+	for (unsigned b = 30000; b < 40000; b += 100) full.push_back(b + 7);
+	ATF_REQUIRE_EQ(StackPure::freePolicySlot(full), 0u);
+	// width 0 / inverted range -> 0
+	ATF_REQUIRE_EQ(StackPure::freePolicySlot({}, 30000, 39999, 0), 0u);
+	ATF_REQUIRE_EQ(StackPure::freePolicySlot({}, 40000, 39999), 0u);
+	// rules for one bridge only, within the policy range, whole-token match
+	auto br99 = StackPure::policyRulesForBridge(listing, "bridge99");
+	ATF_REQUIRE_EQ(br99.size(), 2u);
+	ATF_REQUIRE_EQ(br99[0], 30000u);
+	ATF_REQUIRE_EQ(br99[1], 30001u);
+	ATF_REQUIRE_EQ(StackPure::policyRulesForBridge(listing, "bridge9").size(), 0u);   // not bridge99
+	ATF_REQUIRE_EQ(StackPure::policyRulesForBridge(listing, "epair1a").size(), 0u);   // outside 30000..39999
+	ATF_REQUIRE_EQ(StackPure::policyRulesForBridge(listing, "").size(), 0u);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(stack_name_limit_matches_jail_name_limit);
+ATF_TEST_CASE_BODY(stack_name_limit_matches_jail_name_limit) {
+	ATF_REQUIRE_EQ(StackPure::validateStackName(std::string(128, 'a')), std::string());
+	ATF_REQUIRE(!StackPure::validateStackName(std::string(129, 'a')).empty());
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
 	ATF_ADD_TEST_CASE(tcs, ipFromCidr_with_prefix);
@@ -272,4 +329,7 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, validateStackName_injection_rejected);
 	ATF_ADD_TEST_CASE(tcs, validateStackIp_typical_accepted);
 	ATF_ADD_TEST_CASE(tcs, validateStackIp_injection_rejected);
+	ATF_ADD_TEST_CASE(tcs, jail_name_matches_container_exactly);
+	ATF_ADD_TEST_CASE(tcs, policy_rule_numbers_and_free_slot);
+	ATF_ADD_TEST_CASE(tcs, stack_name_limit_matches_jail_name_limit);
 }

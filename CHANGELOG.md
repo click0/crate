@@ -6,6 +6,54 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.45] — 2026-10-20
+
+**TODO §4: `crate stack` stops guessing — exact jail matching, real
+`stack down`, collision-free network_policy numbering, and the overlay
+fields mergeSpecs used to drop.** ⚠️ `stack down` now stops the
+containers (it printed "scheduled for cleanup" and did nothing); a
+`crate:` entry no longer receives a pool IP.
+
+- **`stack exec` / `stack status` matched jails by substring**, so
+  container `db` matched jail `mydb_pid…` and `stack exec db` ran the
+  command as root in the wrong container. `StackPure::
+  jailNameMatchesContainer` requires exactly `<name>_pid<digits>`.
+- **`stack down` stops the containers**: every jail matching an entry
+  goes through `stopCrate` (signal, wait, force-destroy on timeout; the
+  supervisor's cleanup chain runs). It also deletes the stack bridges'
+  network_policy rules left by a killed `stack up`
+  (`StackPure::policyRulesForBridge`), then stops the per-stack DNS as
+  before.
+- **network_policy rule numbers**: the block in 30000..39999 was a
+  per-process counter that restarted at 0, so every stack used 30000+
+  and one stack's cleanup (`ipfw delete 30000`) removed another's. The
+  block is now the first free one in the live `ipfw list`
+  (`StackPure::freePolicySlot`); the cleanup `RunAtEnd` is armed before
+  the first `addRule` (a mid-loop failure no longer leaks rules);
+  `otherStackSubnets` — never passed, so the advertised isolation was
+  dead code — is now the stack's other networks; `net.link.bridge.ipfw`
+  is set to 1 when a policy is applied (host ipfw does not see bridged
+  L2 traffic otherwise).
+- **Pool IPs for `crate:` entries** were allocated and published in
+  unbound and `/etc/hosts` but never applied (only the `spec:` path
+  writes the address into the spec), so other containers resolved the
+  name to an address nothing listened on. Prebuilt entries get no pool
+  IP and a warning; they join stack DNS only through their own static
+  `ip`.
+- **mergeSpecs** (used by `crate stack` templates and `crate create
+  --template`) silently dropped an overlay's `limits.disk_quota`,
+  `securelevel`, `children_max`, `cpuset`, `cron:` jobs, `depends` and
+  an explicit `services/auto_start: false` (new
+  `servicesAutoStartExplicit`). All carried now.
+- Stack `subnet` must be an IPv4 CIDR at parse time (a value without
+  `/N` used to be caught only after the bridge was created); the unbound
+  early-exit message decodes the wait status properly;
+  `validateStackName` uses `NameLimits::kJailName` (128) instead of a
+  drifted 64.
+
+Tests: `stack_test` exact matching, rule-number parsing / free slot /
+per-bridge rules, name cap. Version 1.1.45.
+
 ## [1.1.44] — 2026-10-19
 
 **TODO §3 tail: MAC portacl stops clobbering the host list, `crate

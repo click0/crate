@@ -215,6 +215,10 @@ public:
   };
   std::vector<ManagedService>                        managedServices;
   bool                                               servicesAutoStart = true;
+  // 1.1.45: set when the spec wrote services/auto_start explicitly, so
+  // mergeSpecs can carry an overlay's `false` (indistinguishable from
+  // the default otherwise).
+  bool                                               servicesAutoStartExplicit = false;
 
   // Socket proxy (§15)
   struct SocketProxy {

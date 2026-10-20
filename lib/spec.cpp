@@ -55,6 +55,7 @@ Spec::Spec(const Spec &o)
     clipboardOptions(clonePtr(o.clipboardOptions)),
     dbusOptions(clonePtr(o.dbusOptions)),
     managedServices(o.managedServices), servicesAutoStart(o.servicesAutoStart),
+    servicesAutoStartExplicit(o.servicesAutoStartExplicit),
     socketProxy(clonePtr(o.socketProxy)),
     firewallPolicy(clonePtr(o.firewallPolicy)),
     securityAdvanced(clonePtr(o.securityAdvanced)),
@@ -1044,6 +1045,7 @@ static Spec parseSpecFromNode(YAML::Node top) {
         } else if (isKey(b, "auto_start") || isKey(b, "auto-start")) {
           if (!YAML::convert<bool>::decode(b.second, spec.servicesAutoStart))
             ERR("services/auto_start must be a boolean")
+          spec.servicesAutoStartExplicit = true;   // 1.1.45: mergeSpecs needs to know
         } else {
           ERR("unknown element services/" << b.first << " in spec")
         }
@@ -1421,6 +1423,17 @@ Spec mergeSpecs(const Spec &base, const Spec &overlay) {
   if (overlay.allowSetHostname) result.allowSetHostname = true;
   if (overlay.allowChflags) result.allowChflags = true;
   if (overlay.allowMlock) result.allowMlock = true;
+  // 1.1.45: fields a stack/template overlay used to lose silently.
+  if (!overlay.diskQuota.empty()) result.diskQuota = overlay.diskQuota;
+  if (overlay.securelevel >= 0)   result.securelevel = overlay.securelevel;
+  if (overlay.childrenMax >= 0)   result.childrenMax = overlay.childrenMax;
+  if (!overlay.cpuset.empty())    result.cpuset = overlay.cpuset;
+  if (overlay.servicesAutoStartExplicit) {
+    result.servicesAutoStart = overlay.servicesAutoStart;   // an explicit `false` wins too
+    result.servicesAutoStartExplicit = true;
+  }
+  for (auto &v : overlay.cronJobs) result.cronJobs.push_back(v);
+  for (auto &v : overlay.depends)  result.depends.push_back(v);
 
   // Maps: overlay wins for conflicts
   for (auto &opt : overlay.options) result.options[opt.first] = opt.second;

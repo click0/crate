@@ -234,47 +234,33 @@ The bhyve/VM track is in TODO2.
 
 === 4. crate stack ===
 
-* (MED) Pool IPs assigned to `crate:` entries are never applied but
-  are published in DNS/hosts: stack.cpp:177-192 allocates for every
-  entry; only the `spec:` path (:886-908) writes netOpt->staticIp. A
-  prebuilt .crate entry gets its own IP while unbound (:250-253) and
-  /etc/hosts (:919-925) advertise the phantom pool IP. allocateIpPool
-  is in-process only — not persisted, not reconciled with
-  network_lease.
+  [FIXED in 1.1.45] pool IPs no longer allocated/advertised for
+  prebuilt `crate:` entries (their spec owns their network; a WARN
+  says they are outside stack DNS/hosts); network_policy rule block
+  picked from the live `ipfw list` (StackPure::freePolicySlot) instead
+  of a per-process counter, cleanup RunAtEnd armed before the first
+  addRule, otherStackSubnets = the stack's other networks,
+  net.link.bridge.ipfw=1 set when a policy is applied, `stack down`
+  deletes the bridge's policy rules (policyRulesForBridge); `stack
+  exec`/`status` match jails exactly (jailNameMatchesContainer — the
+  substring match ran `stack exec db` in jail "mydb_pid…"); mergeSpecs
+  carries diskQuota, securelevel, childrenMax, cpuset, cronJobs,
+  depends and an explicit services/auto_start: false
+  (servicesAutoStartExplicit); subnet validated as CIDR at parse;
+  unbound exit status decoded with WIFEXITED/WIFSIGNALED; `stack down`
+  actually stops the containers (stopCrate per matching jail);
+  validateStackName cap = NameLimits::kJailName.
 
-* (MED) network_policy rule numbers collide and leak: stack.cpp:398-400
-  `static unsigned nextPolicySlot` restarts at 0 in every process →
-  every stack uses 30000+; cleanup `ipfw delete 30000` (:466-470)
-  removes ALL rules with that number, including another stack's.
-  `stack down` never deletes policy rules. otherStackSubnets is never
-  passed (:821) → the advertised inter-stack isolation is dead code.
-  If IpfwOps::addRule throws mid-loop (`proto` omitted → syntax
-  error) rules already added are lost (RunAtEnd built only at :466).
-  Host-ipfw `via bridgeN` rules do not see L2 jail<->jail traffic
-  unless net.link.bridge.ipfw=1, which nothing sets (plausible).
-
-* (MED) `stack exec` / `stack status` match jails by SUBSTRING:
-  stack.cpp:688 and :1070 use j.name.find(e.name); container `db`
-  matches jail `mydb-..._pid...` → `stack exec db` runs the command
-  as root in the wrong container. Match on the exact nameComponent.
-
-* (MED) mergeSpecs drops overlay fields (spec.cpp:1364-1468): never
-  copies cronJobs, diskQuota, securelevel, childrenMax, cpuset, nor a
-  false servicesAutoStart. Used by `crate stack` (stack.cpp:487,882)
-  and `crate create --template` (cli/main.cpp:151) → a stack/template
-  overlay's cron:, limits.disk_quota, security.cpuset are silently
-  lost. Add a test that round-trips every Spec field through
-  mergeSpecs.
-
-* (LOW) stack.cpp:791 subnet without `/` → find() npos, +1 == 0 →
-  "/" + whole subnet appended to the gateway after the bridge was
-  already created (no rollback); :307 WEXITSTATUS on a possibly
-  signalled status.
-* (LOW) `stack down` does not stop containers (:1023-1031 prints
-  "scheduled for cleanup"); examples/matrix/README.md:83 tells users
-  to run it. Incomplete feature.
-* (LOW) stack_pure.cpp:73 caps names at 64 vs NameLimits::kJailName
-  128 (same drift as spec_registry below).
+* (MED) allocateIpPool is in-process only — not persisted, not
+  reconciled with network_lease; two `stack up` runs of different
+  stacks on one subnet can hand out the same address. Needs the lease
+  file (lib/ip_alloc) or a stack-level lease under /var/run/crate.
+* (LOW) no unit test round-trips every Spec field through mergeSpecs:
+  lib/spec.cpp is not in TEST_LINK_SRCS (yaml-cpp), so the test needs
+  either a pure "field list" or a FreeBSD functional test.
+* (LOW) network_policy: a rule whose `proto` is omitted produces an
+  ipfw syntax error at addRule (now cleaned up, but still fails the
+  stack); validate rule.proto at parse.
 
 === 5. Spec parsing, config, registries ===
 
