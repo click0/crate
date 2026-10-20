@@ -6,6 +6,61 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.49] — 2026-10-20
+
+**TODO §8: crate-hub actually sees containers, actually polls when
+daemonised, and stops exposing an unauthenticated API to the world.**
+⚠️ The hub binds `127.0.0.1` by default (`-b`/`listen_host` to widen);
+`POST /api/v1/admin/prune` is loopback-only; `/api/v1/containers`
+embeds the container array instead of a string.
+
+- **Container data path was dead end to end.** crated answers
+  `{"status":"ok","data":<jls --libxo json>}` where `data` is an
+  *object*; the hub stored the whole envelope, `countTopLevelObjects`
+  wants an array and returned 0, so `/aggregate`, `/datacenters` and
+  `/scheduling/least-loaded` saw zero containers on every node (the
+  scheduler was always a tie) and the dashboard's `JSON.parse` of an
+  already-parsed object threw "No containers" forever.
+  `AggregatorPure::extractContainerArray` unwraps the envelope and
+  `jail-information.jail`; the poller stores the bare array; `app.js`
+  accepts an embedded array.
+- **Daemonised hub never polled.** The poller thread was started before
+  `fork()`; the child had only the forking thread, so no poll loop ran
+  unless `-f` was given, and shutdown `join()`ed a thread that did not
+  exist in that process. Fork first.
+- **Dashboard action buttons targeted the wrong host**: the Datacenter
+  column was inserted at index 1, so every start/stop/restart/destroy
+  went to `https://default/...`. The host is read from column 2.
+- **Unauthenticated API on 0.0.0.0** → default bind `127.0.0.1`
+  (`-b`/`--bind`, `listen_host`); `listen_port` is finally read; long
+  options as the man page always claimed; `/admin/prune` (destructive,
+  CSRF-able) accepted from loopback only; new SECURITY section in
+  `crate-hub.8`.
+- **Node polling TLS**: `SSLClient` only existed with a client cert and
+  never verified the server; `CPPHTTPLIB_OPENSSL_SUPPORT` was not even
+  defined for the hub. `tls: true` / `ca_cert:` per node, server
+  certificate verification always on under TLS.
+- JSON output goes through `JsonPure::quote` (a node name or error with
+  a quote broke the document; a non-JSON node body is normalised to
+  `[]`); Prometheus label values escaped; `/api/v1/nodes` carries
+  `datacenter` and `stale`.
+- Poller: every status write under the mutex (data race on
+  `std::string` with `getNodeStatuses()`); a failed poll keeps the
+  previous container list but flags it `stale` and is not recorded as a
+  fresh sample; IPv6 node hosts (`[::1]:9800`, `::1`) via
+  `splitHostPort`; a node entry without `host` is skipped instead of
+  aborting the rest; documented `port:` key honoured.
+- `-p` validated (uncaught `stoi`), `/var/db/crate-hub` created, a
+  failed `listen()` exits non-zero instead of sleeping forever.
+
+Known: the hub still has **no build target** — only its pure modules
+are compiled (by the unit tests); the runtime files are syntax-checked
+here with the httplib/sqlite headers absent. See TODO §8.
+
+Tests: `hub_aggregator_pure_test` envelope unwrapping (crated shape,
+bare array, garbage) and host:port forms. Full suite 1484/1484.
+Version 1.1.49.
+
 ## [1.1.48] — 2026-10-20
 
 **TODO §7: snapshot restore no longer crashes, `crate export` no longer

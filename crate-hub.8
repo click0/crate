@@ -50,13 +50,26 @@ Stay in the foreground; do not fork.
 .It Fl c Ar config , Fl Fl config Ar config
 Path to the YAML configuration file. Default
 .Pa /usr/local/etc/crate-hub.conf .
-.It Fl p Ar port
+.It Fl p Ar port , Fl Fl port Ar port
 TCP port to listen on. Default
-.Ar 9810 .
-.It Fl w Ar webdir
+.Ar 9810
+.Pq or Va listen_port in the configuration file .
+.It Fl b Ar address , Fl Fl bind Ar address
+Address to listen on. Default
+.Ar 127.0.0.1
+.Pq or Va listen_host in the configuration file .
+See
+.Sx SECURITY
+before binding to a routable address.
+.It Fl w Ar webdir , Fl Fl webdir Ar webdir
 Directory served as the embedded dashboard. Default
 .Pa /usr/local/share/crate-hub/web .
 .El
+.Pp
+.Nm Cm schedule
+.Op Ar args
+runs the placement recommendation once and prints it
+.Pq same logic as Pa /api/v1/scheduling/least-loaded .
 .Sh ENDPOINTS
 .Bl -tag -width "POST /api/v1/admin/prune                  "
 .It GET Pa /healthz
@@ -71,28 +84,80 @@ All containers across all nodes, grouped by node.
 .It GET Pa /api/v1/aggregate
 Single-shot summary for the dashboard banner: nodes total /
 reachable / down, containers total.
+.It GET Pa /api/v1/datacenters
+Per-datacenter summary: nodes total / reachable / down, containers.
+.It GET Pa /api/v1/ha/orders
+HA failover orders derived from the node reachability streaks and
+the
+.Va ha:
+section; the hub never executes them itself.
+.It GET Pa /api/v1/scheduling/least-loaded Op ?current=node
+Placement recommendation for the next container.
 .It GET Pa /metrics
 Prometheus exposition aggregating all nodes.
 .It POST Pa /api/v1/admin/prune
 Drop store entries older than 48 hours.
+Accepted from loopback only.
 .El
+.Pp
+Node entries in
+.Pa /api/v1/nodes
+and
+.Pa /api/v1/containers
+carry
+.Va stale: true
+when the last poll failed and the container list shown is the previous
+good snapshot.
 .Sh CONFIGURATION
 .Bd -literal -offset indent
-listen_port: 9810
+listen_host: 127.0.0.1     # -b / --bind overrides
+listen_port: 9810          # -p / --port overrides
 
 # Polling interval for each node, seconds.
 poll_interval: 15
 
 nodes:
   - name:  alpha
-    host:  alpha.example.com
-    port:  9800
+    host:  alpha.example.com:9800   # or host: + port:; IPv6 as [fd00::5]:9800
     token: <admin-token-for-alpha>
+    datacenter: eu-1
   - name:  beta
     host:  beta.example.com
     port:  9800
     token: <admin-token-for-beta>
+    tls:   true                     # HTTPS to a crated with a server certificate
+    ca_cert: /usr/local/etc/ssl/crate-ca.pem
+    # tls_cert / tls_key: client certificate for mTLS (implies tls: true)
+
+ha:
+  threshold_seconds: 60
+  specs:
+    - container: web
+      primary: alpha
+      partners: [beta]
 .Ed
+.Pp
+The node's server certificate is always verified when TLS is used
+.Pq against Va ca_cert when set, else the system store .
+Without
+.Va tls
+the admin token travels in cleartext; keep such nodes on a trusted
+network.
+.Sh SECURITY
+The hub API has no authentication of its own.
+It binds to
+.Ar 127.0.0.1
+by default; to serve a dashboard to other hosts put an authenticating
+TLS reverse proxy in front of it, or bind to a network that only
+trusted operators can reach.
+.Pa /api/v1/nodes
+exposes node host:port values and last-error strings;
+.Pa /api/v1/admin/prune
+is accepted from loopback only.
+Dashboard start/stop/restart/destroy buttons talk to the node daemons
+directly with the admin token stored in the browser, so each
+.Xr crated 8
+must be reachable from the browser and permit the hub's origin.
 .Sh WEB DASHBOARD
 The
 .Pa /usr/local/share/crate-hub/web

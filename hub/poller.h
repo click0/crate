@@ -23,6 +23,11 @@ struct NodeConfig {
   std::string tlsKey;      // client key (optional)
   std::string token;       // Bearer token (optional)
   std::string datacenter;  // logical group name; empty -> "default"
+  // 1.1.49: `tls: true` talks HTTPS even without a client cert;
+  // `ca_cert` is the CA bundle that verifies the node's server cert
+  // (verification is ON whenever TLS is used).
+  bool tls = false;
+  std::string caCert;
 };
 
 // Load node list from YAML config file. The optional
@@ -61,7 +66,10 @@ public:
     std::string datacenter;     // group label, mirrored from NodeConfig
     bool reachable = false;
     std::string hostInfo;       // raw JSON from /api/v1/host
-    std::string containers;     // raw JSON from /api/v1/containers
+    std::string containers;     // JSON ARRAY of containers (normalised by
+                                // AggregatorPure::extractContainerArray, 1.1.49)
+    bool containersStale = false; // 1.1.49: last poll failed; `containers` is the
+                                  // previous good snapshot
     std::string lastError;
     // Wall-clock UNIX epoch when the node first became unreachable
     // in the current down-streak. 0 while reachable. Updated by

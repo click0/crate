@@ -1,7 +1,13 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "poller.h"
+#include "aggregator_pure.h"   // 1.1.49: extractContainerArray / splitHostPort
 
+// 1.1.49: without this httplib::SSLClient does not exist (daemon/server.cpp
+// defines it; the hub never did, so the TLS branch could not compile).
+#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
+#define CPPHTTPLIB_OPENSSL_SUPPORT
+#endif
 #include <httplib.h>
 #include <yaml-cpp/yaml.h>
 
@@ -47,13 +53,24 @@ std::vector<NodeConfig> loadNodes(const std::string &configPath,
     YAML::Node root = YAML::LoadFile(configPath);
     if (auto nodeList = root["nodes"]) {
       for (auto n : nodeList) {
+        // 1.1.49: a node without `host` used to throw and silently drop
+        // every node after it; report and skip just that one.
+        if (!n["host"]) {
+          std::cerr << "crate-hub: nodes[] entry without 'host' skipped" << std::endl;
+          continue;
+        }
         NodeConfig nc;
-        nc.name = n["name"].as<std::string>(n["host"].as<std::string>());
         nc.host = n["host"].as<std::string>();
+        // Documented `port:` key (crate-hub.8) — folded into host:port.
+        if (n["port"] && nc.host.find(':') == std::string::npos)
+          nc.host += ":" + n["port"].as<std::string>();
+        nc.name = n["name"].as<std::string>(nc.host);
         nc.tlsCert = n["tls_cert"].as<std::string>("");
         nc.tlsKey = n["tls_key"].as<std::string>("");
         nc.token = n["token"].as<std::string>("");
         nc.datacenter = n["datacenter"].as<std::string>("");
+        nc.tls = n["tls"].as<bool>(!nc.tlsCert.empty());
+        nc.caCert = n["ca_cert"].as<std::string>("");
         nodes.push_back(nc);
       }
     }
@@ -102,16 +119,27 @@ void Poller::stop() {
 
 void Poller::pollNode(const NodeConfig &node, NodeStatus &status) {
   try {
-    // Parse host:port
-    auto colon = node.host.rfind(':');
-    auto host = node.host.substr(0, colon);
-    int port = (colon != std::string::npos) ? std::stoi(node.host.substr(colon + 1)) : 9800;
+    // Parse host:port — 1.1.49: IPv6 literals ([::1]:9800, ::1) too; the
+    // old rfind(':') split made them permanently "down" with lastError
+    // "stoi".
+    std::string host; int port = 9800;
+    if (!AggregatorPure::splitHostPort(node.host, host, port))
+      throw std::runtime_error("invalid node host '" + node.host + "' (want host, host:port or [v6]:port)");
 
-    // Create HTTP client (TLS if cert provided)
+    // 1.1.49: TLS when `tls: true` or a client cert is given; the server
+    // certificate is always verified (against `ca_cert` when set, else
+    // the system store). Before this an HTTPS crated with a server-only
+    // cert could not be polled at all, and TLS implied no verification.
     std::unique_ptr<httplib::Client> cli;
-    if (!node.tlsCert.empty()) {
-      cli = std::make_unique<httplib::SSLClient>(host, port,
-        node.tlsCert, node.tlsKey);
+    if (node.tls) {
+      std::unique_ptr<httplib::SSLClient> ssl;
+      if (!node.tlsCert.empty())
+        ssl = std::make_unique<httplib::SSLClient>(host, port, node.tlsCert, node.tlsKey);
+      else
+        ssl = std::make_unique<httplib::SSLClient>(host, port);
+      if (!node.caCert.empty()) ssl->set_ca_cert_path(node.caCert);
+      ssl->enable_server_certificate_verification(true);
+      cli = std::move(ssl);
     } else {
       cli = std::make_unique<httplib::Client>(host, port);
     }
@@ -138,19 +166,36 @@ void Poller::pollNode(const NodeConfig &node, NodeStatus &status) {
 
     // Fetch /api/v1/containers
     auto ctRes = cli->Get("/api/v1/containers");
-    if (ctRes && ctRes->status == 200) {
+    std::string hostInfoCopy, containersCopy;
+    bool store = false;
+    {
+      // 1.1.49: every status write under the mutex (lastError and the
+      // recordPoll() arguments were read/written unlocked while
+      // getNodeStatuses() copied the vector). A failed poll keeps the
+      // previous container list but marks it stale and is NOT recorded
+      // as a fresh sample.
       std::lock_guard<std::mutex> lock(statusMutex_);
-      status.containers = ctRes->body;
+      if (ctRes && ctRes->status == 200) {
+        status.containers = AggregatorPure::extractContainerArray(ctRes->body);
+        status.containersStale = false;
+        status.lastError.clear();
+        store = status.reachable;
+      } else {
+        status.containersStale = true;
+        status.lastError = ctRes ? "containers: HTTP " + std::to_string(ctRes->status)
+                                 : "containers: no response";
+      }
+      hostInfoCopy = status.hostInfo;
+      containersCopy = status.containers;
     }
 
-    status.lastError.clear();
-
-    // Store metrics in SQLite
-    store_.recordPoll(node.name, status.hostInfo, status.containers);
+    // Store metrics in SQLite (fresh samples only)
+    if (store) store_.recordPoll(node.name, hostInfoCopy, containersCopy);
 
   } catch (const std::exception &e) {
     std::lock_guard<std::mutex> lock(statusMutex_);
     status.reachable = false;
+    status.containersStale = true;
     if (status.firstDownAt == 0)
       status.firstDownAt = ::time(nullptr);
     status.lastError = e.what();

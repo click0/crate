@@ -457,95 +457,47 @@ The bhyve/VM track is in TODO2.
 
 === 8. crate-hub ===
 
-* (HIGH) Container data path is dead end-to-end. crated's
-  GET /api/v1/containers (daemon/routes.cpp:134-138) returns
-  {"status":"ok","data":<jls --libxo json>} — an OBJECT; the hub
-  stores the whole envelope as status.containers (hub/poller.cpp
-  :143). AggregatorPure::countTopLevelObjects (aggregator_pure.cpp
-  :40) requires [...] and returns 0, so /api/v1/aggregate,
-  /api/v1/datacenters and /api/v1/scheduling/least-loaded
-  (hub/api.cpp:116,135,201) always see 0 containers on every node
-  (scheduler always a pure tie, confidence 50); /api/v1/containers
-  (api.cpp:74) embeds the envelope and hub/web/app.js:124 then
-  JSON.parse()s an already-parsed object → throws → "No containers"
-  forever. tests/unit/hub_aggregator_pure_test.cpp:75-99 feeds only
-  synthetic [{...}]. Fix on the hub side: unwrap data and
-  jail-information.jail.
+  [FIXED in 1.1.49] container data path: the poller normalises
+  crated's {"status","data":<jls object>} envelope to the bare jail
+  array (AggregatorPure::extractContainerArray), so aggregate /
+  datacenters / scheduling count real containers and the dashboard
+  renders them (app.js accepts an embedded array); daemonised hub
+  forks BEFORE starting threads (the poller never ran in -f-less
+  mode, and join() hit a thread that did not exist); dashboard
+  action buttons read the host from the Host column (cells[2], not
+  the Datacenter column); hub binds 127.0.0.1 by default (-b/--bind,
+  listen_host; listen_port read; long options), /admin/prune
+  loopback-only, SECURITY section in crate-hub.8; node polling
+  verifies the server certificate (tls:, ca_cert:,
+  CPPHTTPLIB_OPENSSL_SUPPORT defined); JSON output escaped with
+  JsonPure::quote and Prometheus labels escaped; status writes under
+  the mutex, failed polls not recorded as fresh and flagged stale:;
+  IPv6 node hosts ([::1]:9800, ::1) via splitHostPort; /api/v1/nodes
+  carries datacenter; -p validated; /var/db/crate-hub created;
+  listen() failure exits non-zero; a node without host is skipped,
+  not fatal; documented `port:` key honoured.
 
-* (HIGH) Daemonised crate-hub never polls: hub/main.cpp:210 starts
-  the poller thread, then :220 fork()s; the child has only the forking
-  thread, so no poll loop runs in the default (non -f) mode. At
-  shutdown :239 pollerThread.join() in the child joins a thread that
-  does not exist in that process (std::system_error / UB). Fork
-  before starting threads.
+* (HIGH) crate-hub still has no build target in the Makefile (only
+  its pure modules are compiled, by the unit tests). hub/main.cpp,
+  poller.cpp, api.cpp and store.cpp have never been compiled by CI;
+  the 1.1.49 fixes are syntax-checked on Linux with httplib/sqlite
+  headers missing. Add `make crate-hub` (httplib + yaml-cpp + sqlite3
+  + OpenSSL) and a lite-CI compile step before shipping the hub.
 
-* (HIGH) Dashboard action buttons target the wrong host:
-  hub/web/app.js:168-172 take the node host from cells[1] of the Nodes
-  table, but since the Datacenter column was inserted (index.html:42,
-  app.js:88-92) cells[1] is the datacenter → every
-  start/stop/restart/destroy goes to https://default/... app.js:49,52
-  also hard-code https:// while crated's TCP listener and the hub's
-  own polling are plain HTTP by default, and crated emits no CORS
-  headers (grep Access-Control in daemon/: none) — so the cross-origin
-  fetch would be blocked anyway. Route actions through the hub.
+* (MED) Dashboard actions still go browser → crated directly with
+  https:// hard-coded, and crated emits no CORS headers, so the
+  cross-origin fetch is blocked. Route start/stop/restart/destroy
+  through the hub (POST /api/v1/nodes/:node/containers/:name/<verb>
+  with the hub holding per-node admin tokens — a trust-model change)
+  or document the dashboard as read-only.
 
-* (MED) Hub API fully unauthenticated, bound to 0.0.0.0
-  (hub/main.cpp:230), undocumented as such: no auth middleware in
-  hub/api.cpp; POST /api/v1/admin/prune (api.cpp:213) deletes data and
-  is CSRF-able from any website; crate-hub.8 has no
-  AUTHENTICATION/SECURITY section; /api/v1/nodes leaks node host:port
-  and error strings.
-
-* (MED) Node polling has no server-cert verification path and sends
-  tokens in cleartext by default: hub/poller.cpp:112-117 uses TLS only
-  when tls_cert (a CLIENT cert) is configured; no set_ca_cert_path /
-  enable_server_certificate_verification, so an HTTPS crated with a
-  server-only cert cannot be polled, and the default path sends the
-  admin Bearer token (:122) over plain HTTP. poller.cpp also never
-  defines CPPHTTPLIB_OPENSSL_SUPPORT (daemon/server.cpp:10 does), so
-  httplib::SSLClient at :113 will not compile once a hub build target
-  exists.
-
-* (MED) Hand-built JSON with unescaped interpolation:
-  hub/api.cpp:33-37,55,74,98 splice s.name, s.host, s.lastError and
-  the raw node body into JSON/Prometheus output (JsonPure is used by
-  ha/scheduling but not here). One node answering 200 with a non-JSON
-  body (reverse-proxy error page) makes /api/v1/containers invalid
-  JSON for the whole cluster.
-
-* (MED) crate-hub.8 CONFIGURATION contradicts the code: man :81-94
-  documents listen_port, separate host:/port: keys and
-  --foreground/--config; the code reads only `host` as host:port
-  (poller.cpp:52,106-108, default 9800), ignores `port` and
-  `listen_port` (port only via -p, main.cpp:177), accepts only short
-  flags (:175-178). Omits datacenter, tls_cert/tls_key, ha:,
-  /api/v1/datacenters, /api/v1/ha/orders,
-  /api/v1/scheduling/least-loaded and the `schedule` subcommand.
-
-* (MED) Poller writes shared state outside the mutex:
-  poller.cpp:146,149 touch status.lastError / hostInfo / containers
-  without statusMutex_ while getNodeStatuses() (:160-163) copies under
-  it → data race on std::string. On a down node `containers` keeps the
-  last good body and recordPoll (:149) still inserts it each cycle →
-  stale data presented as fresh with no flag.
-
-* (MED) IPv6 node hosts cannot be configured: poller.cpp:106-108
-  splits on the last `:` → [::1]:9800 yields host "[::1]" and bare
-  ::1 yields host ":" + port 1; stoi failures mark the node
-  permanently down with lastError="stoi".
-
-* (LOW) /api/v1/nodes omits `datacenter` (api.cpp:33-38) so the Nodes
-  table always shows "default" (app.js:91). main.cpp:177 stoi on -p
-  uncaught; :206 SQLite open throws if /var/db/crate-hub/ is absent
-  (nothing creates it); :229-231 listen() failure is silent and main
-  sleeps forever. store.cpp: one sqlite3* shared by poller and HTTP
-  threads with no mutex (safe only with SQLITE_THREADSAFE=1 —
-  plausible). poller.cpp:51 n["host"].as<string>() throws on a node
-  without `host` and silently drops all later nodes; :125,140 a down
-  node costs two 5 s timeouts so N down nodes exceed poll_interval.
-  api.cpp:164 emits HA failover orders from the hub's own view only
-  (hub-side partition → orders while the primary is healthy;
-  mitigated because `crate migrate` needs the source).
+* (LOW) store.cpp: one sqlite3* shared by poller and HTTP threads
+  with no mutex (safe only with SQLITE_THREADSAFE=1 — plausible).
+  poller.cpp: a down node costs two 5 s timeouts so N down nodes can
+  exceed poll_interval. api.cpp /api/v1/ha/orders emits failover
+  orders from the hub's own view only (hub-side partition → orders
+  while the primary is healthy; mitigated because `crate migrate`
+  needs the source).
 
 === 9. crate-snmpd ===
 
