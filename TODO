@@ -321,40 +321,26 @@ The bhyve/VM track is in TODO2.
 
 === 7. Lifecycle, storage, GUI, monitoring, DNS, VPN ===
 
-* (HIGH) `crate snapshot restore` NULL-derefs libzfs:
-  lib/zfs_ops.cpp:84 calls zfs_rollback(zhp, nullptr, B_FALSE) with
-  the SNAPSHOT handle as the first argument; the signature is
-  zfs_rollback(zfs_handle_t *fs, zfs_handle_t *snap, boolean_t force)
-  and libzfs dereferences `snap` unconditionally → SIGSEGV before the
-  exec fallback can run. Requires HAVE_LIBZFS, which port/Makefile:50
-  sets for the FreeBSD port. Open the parent dataset for `fs`, the
-  snapshot for `snap`. Same shape at :349: zfs_show_diffs(zhp, outFd,
-  fromsnap, tosnap, flags) is passed snap2 as fromsnap and nullptr as
-  tosnap, so with two snapshots it shows snap2 → live filesystem, not
-  snap1 → snap2 (plausible — libzfs API semantics).
-
-* (HIGH) `crate export` archives everything mounted inside the jail
-  root: lib/export.cpp:103 `tar cf - -C <jailPath> .` with no
-  --one-file-system / exclusions. `crate run` nullfs-mounts host
-  dirs/share, files/share, X11/Wayland/Pulse sockets and devfs under
-  J(...) (run.cpp:752,1757,1791,1802; run_gui.cpp:316,739,828). A spec
-  sharing $HOME exports the user's host directory into a shareable
-  .crate (data leak + bloat + /dev nodes packed). create.cpp unmounts
-  before tar (:541-543); export has no equivalent. README:18 and
-  crate.5:82 carry no caveat. Fix: --one-file-system plus explicit
-  --exclude of every share destination.
-
-* (HIGH) `crate inter-dns` never emits any crate jail (feature dead):
-  the kernel jail name is <name>_pid<pid> (run.cpp:907, run_jail.cpp
-  :41-104); inter_dns.cpp:78 drops any name failing
-  InterDnsPure::validateHostname, and inter_dns_pure.cpp:22-27 rejects
-  `_`. collectEntries() is always empty → /etc/hosts gets an empty
-  marker block and crate.conf only the local-zone. Strip the `_pid`
-  suffix (nameComponent) before validation. Once fixed, multi-IP jails
-  still break the output: jail_query.cpp:115,195 store ip4.addr via
-  jailparam_export, which comma-joins arrays, so inter_dns_pure.cpp
-  :64,78 emit `10.0.0.1,10.0.0.2` into hosts/local-data and unbound
-  rejects the file.
+  [FIXED in 1.1.48] zfs_rollback(fs, snap) / zfs_show_diffs(fs, …,
+  snap1, snap2) called with the right handles (snapshot restore
+  SIGSEGV'd under HAVE_LIBZFS; diff showed snap2→live); `crate export`
+  tars with --one-file-system (shared host dirs, GUI sockets, devfs
+  stayed out of the archive — a data leak into a shareable .crate);
+  `crate inter-dns` emits crate jails (the `_pid<N>` kernel suffix is
+  stripped before the hostname rule; first ip4 of a comma-joined
+  list); backup destroys its @backup-<ts> snapshot and the partial
+  file when `zfs send` fails (no more unrestorable incremental
+  chains from a failed run); ZfsOps::send/recv report fork failure
+  and check waitpid; /tmp scratch files (vncpw, xorg conf, clipboard
+  script) via mkstemp 0600; x11vnc and the embedded VNC server bind to
+  loopback by default (gui.vnc_bind to widen, warning when public);
+  migrate passes the bearer token with `-H @<0600 mkstemp file>` and a
+  mkdtemp work dir; `crate stop` returns false (red message) when the
+  jail survived destroy_jail, so `crate restart` no longer starts a
+  second instance; `crate restart` forwards --var; `crate logs TARGET`
+  validated as a jail name; `crate list`/`info` strip control chars
+  from kernel-controlled names/hostnames; execInJail root path exits
+  124 on a failed user switch instead of running as root.
 
   [FIXED in 1.1.39] `crate console`: "login -f <user>" was one argv
   element to jexec; split into words, extra args appended verbatim.
@@ -390,20 +376,10 @@ The bhyve/VM track is in TODO2.
   the supported upgrade path. Either keep pkg + its DB when the spec
   installs packages, or make update bootstrap pkg and re-register.
 
-* (MED) ZfsOps::send/recv exec fallback silently succeeds on fork()
-  failure (zfs_ops.cpp:385-399, 413-427): pid == -1 matches neither
-  branch; restoreCrate then prints "recovered" with nothing received;
-  waitpid return unchecked. lzc_receive(targetDataset) (:402-411)
-  needs a fs@snap name; `--to pool/jails/name` always yields EINVAL,
-  so the "native libzfs" label printed at backup.cpp:110 is never
-  true (plausible).
-
-* (MED) `crate restart` drops the original run's CLI options:
-  lifecycle.cpp:512-518 forwards only runCrateFile and logProgress;
-  --name / --warm-base / --var are lost, so the container comes back
-  under a different name/config. stopCrate also returns true after
-  destroy_jail soft-fails (:431-452), so restart proceeds while the old
-  jail still exists; `crate stop` exits 0 with "stopped" in that case.
+* (MED) `crate restart` cannot restore the original run's --name /
+  --warm-base (not recorded anywhere; --var is forwarded since 1.1.48).
+  Record the run's options in the spec registry entry (or a sidecar)
+  at `crate run` and replay them.
 
 * (MED) `crate clean` races an in-progress `crate run`:
   clean.cpp:50-78 rmdirHier's every jail-* directory not in
@@ -411,31 +387,6 @@ The bhyve/VM track is in TODO2.
   jail-<name>-<hex> BEFORE jail_set, so a concurrent clean deletes a
   container mid-extraction (plausible — timing). chroot-create-* dirs
   (create.cpp:441) are never swept.
-
-* (MED) Predictable world-writable /tmp scratch files (same class as
-  the 1.1.25 gui.cpp fix): run_gui.cpp:201 /tmp/crate-vncpw-<N>, :449
-  /tmp/crate-xorg-<N>.conf, :911 /tmp/crate-clipboard-<name>.sh;
-  display N is global (gui_registry.cpp:60 starts at 10).
-  Util::Fs::writeFile is O_NOFOLLOW|O_TRUNC so symlinks are blocked,
-  but a pre-created attacker-owned 0666 regular file is truncated and
-  written: the VNC password lands in the attacker's file; the Xorg
-  conf has no chmod so ModulePath/Load can be rewritten between write
-  and execl (:462); a FIFO blocks open() forever. Use mkstemp /
-  mkdtemp as gui.cpp now does.
-
-* (MED) Unauthenticated VNC bound to all interfaces by default:
-  run_gui.cpp:189-195 runs x11vnc `-shared -forever -nopw` with no
-  -localhost; vnc_server.cpp:141 never sets listenInterface
-  (libvncserver default INADDR_ANY). crate.5:270-277 documents no
-  exposure caveat, while the compositor path (:1087-1100) defaults to
-  127.0.0.1 with a warning. Default to loopback (reuse gui.vnc_bind).
-
-* (MED) Migrate token IS visible in `ps`: migrate.cpp:73-74 puts
-  `Authorization: Bearer <token>` in curl's argv (the comment admits
-  it); README.md:144 claims it never appears on the command line.
-  Use `-H @file` / --config. migrate_pure.cpp:146 also accepts explicit
-  http:// (plaintext token), and the artifact is uploaded without
-  checking the sha256 the export response carries (migrate.cpp:81,164).
 
 * (MED) `crate top` DISK column is write bandwidth, not usage:
   top_pure.cpp:148 maps `writebps` to diskBytes, rendered as "DISK
@@ -452,11 +403,10 @@ The bhyve/VM track is in TODO2.
   alone is rejected; retune_pure.cpp:35 lists `cpuset`, not an RCTL
   resource; isHumanSize accepts 1.5M which rctl rejects;
   parseHumanSize (:127) can overflow long and is unused.
-* (LOW) clean.cpp:232-244 deletes orphan throttle RULES (20000+) but
-  never the dummynet PIPES (kPipeBase 10000+); the comment at :195
-  says pipes live at 20000..29999 — wrong, that is kRuleBase.
-  clean.cpp:97-98 iface-record liveness uses path.find(name)
-  substring match.
+* (LOW) clean.cpp deletes orphan throttle RULES (20000+) but never
+  the dummynet PIPES (kPipeBase 10000+; needs `ipfw pipe list`
+  parsing). clean.cpp:97-98 iface-record liveness uses
+  path.find(name) substring match. (comment fixed in 1.1.48)
 * (LOW) import.cpp:262,272 outFile == archivePath is a raw string
   compare (`-o foo.crate` on ./foo.crate passes, copy_file fails);
   ImportPure::archiveHasTraversal (import_pure.cpp:21) rejects any
@@ -474,10 +424,9 @@ The bhyve/VM track is in TODO2.
   the CLI, unsafe if ever called from the threaded daemon.
 * (LOW) jail_query.cpp:141 fallback parses `jls -N`, whose first
   column is the NAME → jid always 0, rest misparsed; breaks on paths
-  with spaces. :324,384 a command legitimately exiting 126 is mistaken
-  for jail_attach failure and re-executed via jexec (double
-  execution); :309-310,360-361 ignore setgid/setuid return → runs as
-  root in the jail if they fail.
+  with spaces. A command legitimately exiting 126 is mistaken for
+  jail_attach failure and re-executed via jexec (double execution).
+  (setuid/setgid return now checked — 1.1.48.)
 * (LOW) vnc_server.cpp:67 XGetImage with start-time dimensions; after
   `gui resize` (gui.cpp:402) BadMatch hits Xlib's default handler
   which exit()s the whole `crate run` (no XSetErrorHandler) →

@@ -6,6 +6,7 @@
 #include "crypto_pure.h"
 #include "sign_pure.h"
 #include "jail_query.h"
+#include "stack_pure.h"   // 1.1.48: jailNameMatchesContainer
 #include "pathnames.h"
 #include "cmd.h"
 #include "util.h"
@@ -49,7 +50,9 @@ static bool resolveContainer(const std::string &target, int &jid, std::string &p
   for (auto &j : JailQuery::getAllJails()) {
     bool match = false;
     if (j.hostname == target) match = true;
-    else if (j.name.find("jail-" + target + "-") == 0) match = true;
+    // 1.1.48: exact "<target>_pid<N>" kernel-name match (the old
+    // "jail-<target>-" prefix test matched `web` against `web-2`).
+    else if (StackPure::jailNameMatchesContainer(j.name, target)) match = true;
     if (match) {
       jid = j.jid;
       path = j.path;
@@ -100,7 +103,12 @@ bool exportCrate(const Args &args) {
   // Pack the container's root filesystem into a .crate archive.
   // tar -> xz -> [openssl enc] -> file
   std::vector<std::vector<std::string>> pipeline = {
-    {CRATE_PATH_TAR, "cf", "-", "-C", path, "."},
+    // 1.1.48: --one-file-system — everything `crate run` nullfs-mounted
+    // into the jail (dirs/share, files/share, X11/Wayland/Pulse sockets)
+    // and devfs are separate filesystems; without the flag a spec sharing
+    // $HOME exported the operator's home directory into a shareable
+    // .crate (and packed /dev nodes). Only the jail's own root goes in.
+    {CRATE_PATH_TAR, "cf", "-", "--one-file-system", "-C", path, "."},
     {CRATE_PATH_XZ, Cmd::xzThreadsArg, "--extreme"},
   };
   if (encrypt)

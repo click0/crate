@@ -29,6 +29,20 @@ std::string validateHostname(const std::string &name) {
   return "";
 }
 
+std::string hostnameFromJailName(const std::string &jailName) {
+  auto p = jailName.rfind("_pid");
+  if (p == std::string::npos || p == 0) return "";
+  for (size_t i = p + 4; i < jailName.size(); i++)
+    if (jailName[i] < '0' || jailName[i] > '9') return "";
+  if (p + 4 >= jailName.size()) return "";
+  return jailName.substr(0, p);
+}
+
+std::string firstAddress(const std::string &addrs) {
+  auto c = addrs.find(',');
+  return c == std::string::npos ? addrs : addrs.substr(0, c);
+}
+
 std::string normalizeName(const std::string &name) {
   std::string out;
   out.reserve(name.size());

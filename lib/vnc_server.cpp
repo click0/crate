@@ -8,6 +8,9 @@
 // server a real alternative to fork+exec'ing x11vnc.
 
 #include "vnc_server.h"
+
+#include <arpa/inet.h>   // 1.1.48: inet_addr for the bind address
+#include <netinet/in.h>
 #include "err.h"
 
 #ifdef HAVE_LIBVNCSERVER
@@ -96,7 +99,8 @@ static void grabLoop(unsigned displayNum) {
 }
 #endif
 
-unsigned start(unsigned displayNum, unsigned port, const std::string &password) {
+unsigned start(unsigned displayNum, unsigned port,
+               const std::string &password, const std::string &bindAddr) {
 #ifdef HAVE_LIBVNCSERVER
   if (g_running) return g_port;
 
@@ -139,6 +143,11 @@ unsigned start(unsigned displayNum, unsigned port, const std::string &password) 
   ::memset(g_screen->frameBuffer, 0, (size_t)width * (size_t)height * 4);
 
   g_screen->port = (port > 0) ? port : 5900 + displayNum;
+  // 1.1.48: bind where gui.vnc_bind says (loopback by default).
+  {
+    in_addr_t a = ::inet_addr(bindAddr.empty() ? "127.0.0.1" : bindAddr.c_str());
+    g_screen->listenInterface = (a == INADDR_NONE) ? htonl(INADDR_LOOPBACK) : a;
+  }
   g_screen->alwaysShared = TRUE;
 
   if (!password.empty()) {

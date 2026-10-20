@@ -39,6 +39,14 @@ std::string validateHostname(const std::string &name);
 // Lower-case a hostname for canonical comparison.
 std::string normalizeName(const std::string &name);
 
+// 1.1.48: the kernel jail name is "<name>_pid<N>" (crate run); DNS wants
+// the <name> part. Returns "" when the name has no such suffix.
+std::string hostnameFromJailName(const std::string &jailName);
+
+// 1.1.48: jailparam_export comma-joins ip4.addr arrays; hosts/unbound
+// want one address per record. First address of "a,b,c" (or the input).
+std::string firstAddress(const std::string &addrs);
+
 // Render an unbound include fragment for the `.crate.` zone. Output:
 //
 //   server:

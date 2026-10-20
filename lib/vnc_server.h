@@ -25,8 +25,12 @@ bool available();
 // 0.8.22: when libX11 is linked, the server discovers the
 // display's actual resolution at start time via XGetGeometry —
 // no need to pre-supply width/height.
+// 1.1.48: `bindAddr` is the listen address (dotted quad); the default is
+// loopback — libvncserver's own default is INADDR_ANY, which exposed an
+// unauthenticated framebuffer on every interface.
 unsigned start(unsigned displayNum, unsigned port = 0,
-               const std::string &password = "");
+               const std::string &password = "",
+               const std::string &bindAddr = "127.0.0.1");
 
 // Stop the embedded VNC server.
 void stop();

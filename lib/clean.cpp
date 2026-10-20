@@ -209,7 +209,8 @@ bool cleanCrates(const Args &args) {
   // `crate doctor` (0.8.14) has warned about these for a while;
   // this section actually deletes them. Three reserved ranges:
   //
-  //   20000..29999  throttle pipe binds (per-jail pair from 0.7.7)
+  //   10000..19999  dummynet PIPES (throttle, kPipeBase) — not swept yet (TODO §7)
+  //   20000..29999  throttle RULES (per-jail pair from 0.7.7, kRuleBase)
   //   30000..39999  auto-fw NAT instances (per-jail from 0.8.0)
   //   40000..49999  auto-fw NAT-rule pointers (per-jail from 0.8.0)
   //

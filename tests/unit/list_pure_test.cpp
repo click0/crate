@@ -142,6 +142,17 @@ ATF_TEST_CASE_BODY(table_hc_y_n)
 	ATF_REQUIRE(n.find("-\n") != std::string::npos);
 }
 
+// --- 1.1.48: terminal sanitiser ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(sanitize_for_terminal);
+ATF_TEST_CASE_BODY(sanitize_for_terminal)
+{
+	ATF_REQUIRE_EQ(ListPure::sanitizeForTerminal("web"), std::string("web"));
+	ATF_REQUIRE_EQ(ListPure::sanitizeForTerminal("a\x1b[31mb"), std::string("a?[31mb"));
+	ATF_REQUIRE_EQ(ListPure::sanitizeForTerminal(std::string("x\x7f\ny", 4)), std::string("x??y"));
+	ATF_REQUIRE_EQ(ListPure::sanitizeForTerminal(""), std::string());
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
 	ATF_ADD_TEST_CASE(tcs, json_empty);
@@ -154,4 +165,5 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, table_singular_plural);
 	ATF_ADD_TEST_CASE(tcs, table_dash_for_empty_fields);
 	ATF_ADD_TEST_CASE(tcs, table_hc_y_n);
+	ATF_ADD_TEST_CASE(tcs, sanitize_for_terminal);
 }

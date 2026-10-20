@@ -6,6 +6,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.48] — 2026-10-20
+
+**TODO §7: snapshot restore no longer crashes, `crate export` no longer
+leaks the host into the archive, inter-dns works, and a batch of
+lifecycle/GUI/migrate hardening.** ⚠️ `crate export` output changes
+(mounted shares are excluded); x11vnc and the embedded VNC server now
+bind to 127.0.0.1 unless `gui/vnc_bind` says otherwise; `crate stop`
+exits non-zero when the jail survived.
+
+- **`crate snapshot restore` SIGSEGV under libzfs.** `zfs_rollback`
+  takes `(fs, snap, force)`; the code passed the snapshot handle as `fs`
+  and `nullptr` as `snap`, which libzfs dereferences. Same shape in
+  `zfs diff`: `zfs_show_diffs` got the snap1 handle, snap2 as `fromsnap`
+  and no `tosnap`, i.e. it showed snap2 → live. Both open the parent
+  dataset for the handle and pass the snapshots where they belong.
+- **`crate export` archived every filesystem mounted inside the jail
+  root** (dirs/files shares, X11/Wayland/Pulse sockets, devfs) — a spec
+  sharing `$HOME` exported the operator's home into a shareable
+  `.crate`. `tar --one-file-system`; `crate.5` says so. The target
+  lookup also matches the kernel name exactly instead of a `jail-<t>-`
+  prefix (`web` matched `web-2`).
+- **`crate inter-dns` was dead**: the kernel jail name is
+  `<name>_pid<N>` and the hostname rule rejects `_`, so no crate jail was
+  ever emitted (empty `/etc/hosts` block, bare unbound zone). The suffix
+  is stripped (`InterDnsPure::hostnameFromJailName`) and the first
+  address of a comma-joined `ip4.addr` list is used.
+- **Backup chain corruption after a failed send**: the `@backup-<ts>`
+  snapshot was taken before `zfs send` and stayed behind on failure, so
+  the next `--auto-incremental` run based itself on a snapshot no stream
+  holds. The snapshot and the partial stream file are removed on
+  failure. `ZfsOps::send`/`recv` report `fork()` failure (pid −1 used to
+  "succeed") and check `waitpid`.
+- **Scratch files under `/tmp` with fixed names** (`crate-vncpw-<N>`,
+  `crate-xorg-<N>.conf`, `crate-clipboard-<name>.sh`) are `mkstemp`
+  0600 now — a pre-created attacker-owned file received the VNC
+  password / could rewrite the Xorg config between write and exec.
+- **Unauthenticated VNC on all interfaces**: x11vnc ran with no
+  `-listen` and libvncserver defaulted to INADDR_ANY. Both bind to
+  loopback by default; `gui/vnc_bind` widens it with a warning, like
+  the compositor path already did.
+- **Migrate token in `ps`**: `Authorization: Bearer <token>` was a curl
+  argv element for the whole transfer. It is written to a 0600
+  `mkstemp` file and passed as `-H @file`; the work directory is
+  `mkdtemp` instead of `/tmp/crate-migrate-<pid>`.
+- `crate stop` returns false with a red message when the jail is still
+  there after `destroy_jail` soft-failed (it printed "stopped", exited
+  0, and `crate restart` started a second instance); `crate restart`
+  forwards `--var`; `crate logs TARGET` validates the name (it was a
+  path component: `../../x`); `crate list` / `crate info` strip control
+  characters from kernel-controlled names and hostnames
+  (`allow.set_hostname` let a jail inject escape sequences into the
+  operator's terminal); the in-process `execInJail` exits 124 on a
+  failed user switch instead of continuing as root.
+
+Tests: `inter_dns_pure_test` (jail name → hostname, first address),
+`list_pure_test` (terminal sanitiser). Full suite 1482/1482. Version
+1.1.48.
+
 ## [1.1.47] — 2026-10-20
 
 **TODO §6: `crate doctor` stops failing every FreeBSD host.**

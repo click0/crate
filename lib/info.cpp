@@ -4,6 +4,7 @@
 #include "args.h"
 #include "locs.h"
 #include "jail_query.h"
+#include "list_pure.h"   // 1.1.48: sanitizeForTerminal
 #include "privops_client.h"       // 1.1.41: query_jail_rctl limits under rootless
 #include "privops_wire_pure.h"
 #include "runtime_paths_pure.h"
@@ -100,9 +101,9 @@ bool infoCrate(const Args &args) {
   {
     auto ji = JailQuery::getJailByJid(jid);
     if (ji) {
-      std::cout << "  name: " << ji->name << std::endl;
+      std::cout << "  name: " << ListPure::sanitizeForTerminal(ji->name) << std::endl;   // 1.1.48
       std::cout << "  path: " << ji->path << std::endl;
-      std::cout << "  hostname: " << ji->hostname << std::endl;
+      std::cout << "  hostname: " << ListPure::sanitizeForTerminal(ji->hostname) << std::endl;
       std::cout << "  ip4: " << (ji->ip4.empty() ? "(none)" : ji->ip4) << std::endl;
       std::cout << "  dying: " << (ji->dying ? "true" : "false") << std::endl;
     } else {

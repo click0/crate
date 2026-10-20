@@ -83,6 +83,11 @@ for dry-run.
 Export a running container to a
 .Pa .crate
 archive with SHA256 validation.
+Only the jail's own root filesystem is archived
+.Pq Fl -one-file-system :
+host directories and files shared into the jail, GUI sockets and
+.Pa /dev
+are mounted filesystems and stay out (since 1.1.48).
 .It Cm import Ar file Op Fl o Ar file Op Fl -force
 Import a
 .Pa .crate

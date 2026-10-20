@@ -11,6 +11,7 @@
 #include "run_jail.h"
 #include "spec_registry.h"
 #include "util.h"
+#include "warm_pure.h"   // 1.1.48: validateJailName for `crate logs`
 #include "err.h"
 
 #include <rang.hpp>
@@ -276,6 +277,10 @@ bool statsCrate(const Args &args) {
 // --- crate logs TARGET ---
 
 bool logsCrate(const Args &args) {
+  // 1.1.48: the target becomes a path component — `crate logs ../../x`
+  // used to read /var/log/x/console.log.
+  if (auto e = WarmPure::validateJailName(args.logsTarget); !e.empty())
+    ERR("logs: invalid container name: " << e)
   // Look for container logs in /var/log/crate/<name>/
   auto logDir = STR("/var/log/crate/" << args.logsTarget);
   auto stdoutLog = logDir + "/stdout.log";
@@ -455,6 +460,15 @@ bool stopCrate(const Args &args) {
     }
   }
 
+  // 1.1.48: say the truth. destroy_jail soft-failed above and `crate stop`
+  // still printed "stopped" and exited 0 (and `crate restart` went on to
+  // start a second instance next to the survivor).
+  if (auto survivor = JailQuery::getJailByJid(jail->jid); survivor && !survivor->dying) {
+    std::cerr << rang::fg::red << "Container " << jail->name
+              << " is still running (jid " << jail->jid << ") — stop failed"
+              << rang::style::reset << std::endl;
+    return false;
+  }
   std::cout << rang::fg::green << "Container " << jail->name
             << " stopped." << rang::style::reset << std::endl;
   return true;
@@ -521,6 +535,9 @@ bool restartCrate(const Args &args) {
   runArgs.cmd = CmdRun;
   runArgs.runCrateFile = crateFile;
   runArgs.logProgress = args.logProgress;
+  runArgs.vars = args.vars;   // 1.1.48: --var given to `crate restart` reaches the run
+  // NOTE: the original run's --name / --warm-base are not recorded
+  // anywhere and cannot be restored here (TODO §7).
 
   int returnCode = 0;
   return runCrate(runArgs, 0, nullptr, returnCode);

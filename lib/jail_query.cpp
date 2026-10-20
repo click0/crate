@@ -422,12 +422,13 @@ int execInJail(int jid, const std::vector<std::string> &argv,
 
     // Switch user if needed
     if (!user.empty() && user != "root") {
+      // 1.1.48: an unknown user or a failed switch used to run the
+      // command as root inside the jail; exit 124 like the daemon path.
       struct passwd *pw = ::getpwnam(user.c_str());
-      if (pw) {
-        ::initgroups(user.c_str(), pw->pw_gid);
-        ::setgid(pw->pw_gid);
-        ::setuid(pw->pw_uid);
-      }
+      if (!pw) ::_exit(124);
+      if (::initgroups(user.c_str(), pw->pw_gid) != 0 || ::setgid(pw->pw_gid) != 0 ||
+          ::setuid(pw->pw_uid) != 0)
+        ::_exit(124);
     }
 
     auto cargv = buildArgv(argv);
@@ -510,12 +511,13 @@ std::string execInJailGetOutput(int jid, const std::vector<std::string> &argv,
       ::_exit(126);
 
     if (!user.empty() && user != "root") {
+      // 1.1.48: an unknown user or a failed switch used to run the
+      // command as root inside the jail; exit 124 like the daemon path.
       struct passwd *pw = ::getpwnam(user.c_str());
-      if (pw) {
-        ::initgroups(user.c_str(), pw->pw_gid);
-        ::setgid(pw->pw_gid);
-        ::setuid(pw->pw_uid);
-      }
+      if (!pw) ::_exit(124);
+      if (::initgroups(user.c_str(), pw->pw_gid) != 0 || ::setgid(pw->pw_gid) != 0 ||
+          ::setuid(pw->pw_uid) != 0)
+        ::_exit(124);
     }
 
     auto cargv = buildArgv(argv);
