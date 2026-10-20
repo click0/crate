@@ -228,9 +228,11 @@ crate.x: crate
 
 install-snmpd: crate-snmpd
 	@mkdir -p $(DESTDIR)$(PREFIX)/sbin
-	install -s -m 0755 crate-snmpd $(DESTDIR)$(PREFIX)/sbin/crate-snmpd
 	@mkdir -p $(DESTDIR)$(PREFIX)/share/snmp/mibs
+	@mkdir -p $(DESTDIR)$(PREFIX)/man/man8
+	install -s -m 0755 crate-snmpd $(DESTDIR)$(PREFIX)/sbin/crate-snmpd
 	install -m 0644 snmpd/CRATE-MIB.txt $(DESTDIR)$(PREFIX)/share/snmp/mibs/CRATE-MIB.txt
+	gzip -9 < crate-snmpd.8 > $(DESTDIR)$(PREFIX)/man/man8/crate-snmpd.8.gz
 
 # 1.1.52: install the hub binary, its web dashboard and the man page.
 # install-hub-man is kept as a separate target for the docs-only case.

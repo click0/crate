@@ -6,6 +6,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.53] — 2026-10-20
+
+**TODO §12: documentation debt.**
+
+- **crate.5** now documents every command (31, was 11) and the spec
+  keys that had no entry: `healthcheck`, `restart`/`restart_policy`,
+  `depends`, `base_container`, `zfs/datasets`, `limits/disk_quota`,
+  the top-level `x11:` map, `gui/mode: compositor` with `gui/backend`,
+  `gui/compositor`, `gui/vnc_bind`, `gui/vnc_native`, and the
+  `wireguard` / `ipsec` options with their sub-keys. New **STACK
+  FILES** section: `containers` (`spec`/`crate`, `template`,
+  `depends`, `vars` incl. `from_file`, `volumes`), `volumes`,
+  `networks` (`bridge`, `subnet`, `gateway`, `ip_range`, `dns`),
+  `network_policy`, and the exact-name rule of `stack exec`.
+- **crate-snmpd.8** written (it was referenced from crated.8 but did
+  not exist): options, reconnect behaviour, the four scalars served,
+  and an explicit statement that the container table and traps in
+  `CRATE-MIB.txt` are not implemented. Installed by `make
+  install-snmpd`, in the port plist and the release tarball.
+- **crated.8**: `DELETE /api/v1/containers/:name` describes what it
+  does since 1.1.43 (stop + `was_running`; dataset kept) instead of
+  "remove its dataset".
+- **README**: command count/list; the snmpd paragraph says what is
+  actually exposed.
+- **docs/trust-model.md(.uk.md)**: the gate range reads 1.1.12 →
+  1.1.43; §2a states that the pool ACL confines *which* jails an
+  `admin` control socket may start, not what a started `.crate` does
+  as root.
+- Stale "runs as root" comments in `lib/gui.cpp` reworded for the
+  rootless model.
+
+Version 1.1.53.
+
 ## [1.1.52] — 2026-10-20
 
 **TODO §11: build, CI, packaging — crate-hub is built, shipped and

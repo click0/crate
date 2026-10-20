@@ -129,7 +129,7 @@ jobs:
             echo "tar -xJf crate-${VERSION}-freebsd-14.2-amd64.tar.xz"
             echo '```'
             echo
-            echo "The tarball holds \`bin/crate\`, \`sbin/crated\`, \`sbin/crate-snmpd\`, \`sbin/crate-hub\`, the man pages (\`crate.5\`, \`crated.8\`, \`crate-hub.8\`), the hub web dashboard (\`share/crate-hub/web\`), \`crated.conf.sample\`, \`crated.rc\`, the SNMP MIB and this changelog. Assets appear a few minutes after the Release page (separate build jobs)."
+            echo "The tarball holds \`bin/crate\`, \`sbin/crated\`, \`sbin/crate-snmpd\`, \`sbin/crate-hub\`, the man pages (\`crate.5\`, \`crated.8\`, \`crate-hub.8\`, \`crate-snmpd.8\`), the hub web dashboard (\`share/crate-hub/web\`), \`crated.conf.sample\`, \`crated.rc\`, the SNMP MIB and this changelog. Assets appear a few minutes after the Release page (separate build jobs)."
             echo
             if [ -n "$PREV" ]; then
               echo "**Full changelog:** https://github.com/${REPO}/compare/${PREV}...${TAG}"
@@ -227,8 +227,9 @@ jobs:
             cp crate-snmpd   "$PKGDIR/sbin/"
             cp crate-hub     "$PKGDIR/sbin/"
             gzip -9 < crate.5     > "$PKGDIR/man/man5/crate.5.gz"
-            gzip -9 < crated.8    > "$PKGDIR/man/man8/crated.8.gz"
-            gzip -9 < crate-hub.8 > "$PKGDIR/man/man8/crate-hub.8.gz"
+            gzip -9 < crated.8      > "$PKGDIR/man/man8/crated.8.gz"
+            gzip -9 < crate-hub.8   > "$PKGDIR/man/man8/crate-hub.8.gz"
+            gzip -9 < crate-snmpd.8 > "$PKGDIR/man/man8/crate-snmpd.8.gz"
             # 1.1.52: no `|| true` — every one of these ships in the tarball,
             # a missing file is a packaging bug, not something to hide.
             cp daemon/crated.conf.sample "$PKGDIR/"

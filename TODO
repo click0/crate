@@ -185,9 +185,8 @@ The bhyve/VM track is in TODO2.
 
 * (LOW) Registry write happens after `jail -c` returns (:663-671);
   until then the new jid/path are unowned (bootstrap Allow).
-* (LOW) crated.8:135-136 says DELETE /containers/:name removes the
-  dataset; it stops the container (via stopCrate since 1.1.43) and
-  nothing else — fix the man page or implement the dataset removal.
+  [FIXED in 1.1.53] crated.8 DELETE /containers/:name documents the
+  1.1.43 behaviour (stop + was_running; dataset kept).
 * (LOW) privops_socket_mode gets no tightness warning unlike
   listen.unix_mode.
 * (LOW) handlers at privops_handlers.cpp :171,560,577 return raw
@@ -646,38 +645,33 @@ The bhyve/VM track is in TODO2.
 
 === 12. Documentation debt ===
 
-* crate.5 still has no entry for: healthcheck, restart/restart_policy,
-  depends, base_container, zfs/datasets, limits/disk_quota, top-level
-  `network: auto`, top-level `x11:` section, gui/vnc_native | backend |
-  compositor | vnc_bind, the wireguard/ipsec options (line 156 lists
-  options without them); the "Commands" section lists 9 of the 31
-  commands in cli/args.h:10. (`scripts/*` and `limits` ARE documented
-  — the previous TODO entry was partly stale.) Stack files (`crate
-  stack`) have no man-page section at all; the 1.1.25 name/IP rules
-  live only in CHANGELOG. (network_pool, network_pool6, firewall_backend and the 1.1.39
-  *_user_bits keys ARE documented since 1.1.39.)
-* crate.5:243 must state that `firewall:` applies to NAT mode only
-  (until 3. is fixed); :510 "deterministic MAC" is false today; :270-277
-  needs the VNC exposure caveat; :82 and README:18 need the export
-  share-content caveat.
-* crated.8: SEE ALSO references crate-snmpd(8), which does not exist
-  (write it — the agent now has real behaviour to document, and real
-  gaps per section 9); :135-136 DELETE semantics; :173-176 read-route
-  auth claim (false today, see 2.).
-* crate-hub.8: see 8. (config keys, flags, endpoints, no security
-  section). .Dd May 3, 2026 predates HA (0.7.3) and scheduling (0.8.40).
-* README.md:144 migrate token "not visible via ps" is false (7.);
-  README.md:274-278 top DISK column semantics (7.); README.md:761-763
-  snmpd "exposes container metrics" (9.).
-* docs/trust-model.md(.uk.md): :136-139 "every verb with an
-  operator-controlled ownership signal is gated" (false — 2.),
-  :225-228 pool-scoped admin isolation (2.), :359-362 registry-absent
-  concession wording (2.). Keep EN/UK in sync.
-* examples/matrix/README.md:83 tells users to run `stack down`, which
-  does not stop containers (4.).
-* Stale comments: gui.cpp:171-172,326-330 "runs as root";
-  run.cpp:1211-1213 "flushed at teardown"; clean.cpp:195 pipe range;
-  privops_handlers.cpp:212-218 move-only mode.
+  [FIXED in 1.1.53] crate.5: all 31 commands; entries for healthcheck,
+  restart/restart_policy, depends, base_container, zfs/datasets,
+  limits/disk_quota, top-level x11:, gui compositor/backend/vnc_bind/
+  vnc_native, options wireguard/ipsec; new STACK FILES section (the
+  1.1.25 name/IP rules, 1.1.45 exact-name exec, 1.1.51 spawn/wait).
+  firewall-in-bridge-mode (1.1.38), deterministic MAC (1.1.38), VNC
+  exposure (1.1.48) and export share caveat (1.1.48) were already
+  updated in those releases.
+
+  [FIXED in 1.1.53] crate-snmpd.8 written and installed (Makefile,
+  plist, release tarball); crated.8 DELETE semantics; README command
+  list and snmpd paragraph; trust-model EN/UK gate range 1.1.12 →
+  1.1.43 and the §2a admin-start note; gui.cpp "runs as root" comments.
+  crate-hub.8 was rewritten in 1.1.49 (.Dd bumped 1.1.52);
+  examples/matrix/README.md `stack down` is correct since 1.1.45;
+  run.cpp "flushed at teardown" (destroyPfAnchor exists) and
+  clean.cpp:212 (pipes still not swept, see 7.) are accurate.
+
+* crated.8 AUTHENTICATION still says read endpoints are open to "any
+  viewer or admin token holder" — true since 1.1.36, but the CAVEATS
+  wording that unix-socket peers are all admin should point at the
+  1.1.4x per-user control sockets as the alternative.
+* crate.5 has no entry for `network: auto` at the top level of a spec
+  (spec.cpp:523) — confirm what it does today (auto bridge + pool
+  lease?) before documenting it.
+* docs/on-hardware-validation.md needs a runbook entry for each
+  "validate on a real FreeBSD host" note in sections 3, 4, 10.
 
 === 13. Test gaps (unit, pure modules) ===
 

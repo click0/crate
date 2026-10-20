@@ -1,0 +1,145 @@
+.\" Copyright (c) 2026
+.\"     Vladyslav V. Prodan.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.Dd October 20, 2026
+.Dt CRATE-SNMPD 8
+.Os
+.Sh NAME
+.Nm crate-snmpd
+.Nd AgentX subagent exposing crate container counters over SNMP
+.Sh SYNOPSIS
+.Nm
+.Op Fl f
+.Op Fl p Ar socket
+.Op Fl i Ar seconds
+.Sh DESCRIPTION
+.Nm
+is an AgentX
+.Pq RFC 2741
+subagent.
+It connects to the host's SNMP master agent
+.Po
+.Xr bsnmpd 1
+with
+.Pa snmp_agentx.so ,
+or net-snmp
+.Xr snmpd 8
+with
+.Ic master agentx
+.Pc
+over a Unix socket, registers the
+.Li crate
+enterprise subtree
+.Pq Li .1.3.6.1.4.1.59999
+and answers Get and GetNext requests for it from a cache that a
+collector thread refreshes every
+.Ar seconds
+by running
+.Xr jls 8
+and
+.Xr rctl 8 .
+.Pp
+The options are as follows:
+.Bl -tag -width Ds
+.It Fl f
+Stay in the foreground; do not fork.
+.It Fl p Ar socket
+Path of the master agent's AgentX socket.
+Default
+.Pa /var/agentx/master .
+.It Fl i Ar seconds
+Collector polling interval.
+Default 30; 0 is rejected
+.Pq it would run Xr jls 8 and Xr rctl 8 in a tight loop .
+.El
+.Pp
+When the master agent closes the connection
+.Pq restart, reload
+the subagent drops its socket and reconnects with a backoff that
+grows from 1 to 30 seconds, re-registering the subtree on success
+.Pq since 1.1.50; earlier releases spun at 100 % CPU on the dead descriptor .
+.Sh MIB
+The MIB module is installed as
+.Pa /usr/local/share/snmp/mibs/CRATE-MIB.txt .
+The scalars served today are:
+.Bl -column ".Li crateContainerRunning.0" ".Li .1.3.6.1.4.1.59999.1.2.0" -offset indent
+.It Sy Object Ta Sy OID Ta Sy Meaning
+.It Li crateContainerCount.0 Ta Li .1.3.6.1.4.1.59999.1.1.0 Ta number of crate jails seen by Xr jls 8
+.It Li crateContainerRunning.0 Ta Li .1.3.6.1.4.1.59999.1.2.0 Ta of which not dying
+.It Li crateVersion.0 Ta Li .1.3.6.1.4.1.59999.1.3.0 Ta the crate release
+.Pq same number as Xr crate 1 Fl -version
+.It Li crateHostname.0 Ta Li .1.3.6.1.4.1.59999.1.4.0 Ta host name
+.El
+.Pp
+.Em Not yet served :
+the per-container table
+.Li crateContainerTable
+.Pq Li .1.3.6.1.4.1.59999.2.1
+and the
+.Li NOTIFICATION-TYPE
+traps that
+.Pa CRATE-MIB.txt
+also defines.
+A Get on a table column answers
+.Li noSuchInstance
+and no trap is ever sent; use
+.Xr crated 8 Ns 's
+.Pa /metrics
+Prometheus endpoint for per-container figures until the table is
+implemented.
+.Sh FILES
+.Bl -tag -width "/usr/local/share/snmp/mibs/CRATE-MIB.txt"
+.It Pa /var/agentx/master
+Default AgentX socket of the master agent.
+.It Pa /usr/local/share/snmp/mibs/CRATE-MIB.txt
+MIB module
+.Pq installed by Ic make install-snmpd .
+.El
+.Sh EXAMPLES
+Enable the AgentX master in
+.Xr bsnmpd 1
+and start the subagent:
+.Bd -literal -offset indent
+# /etc/snmpd.config
+begemotSnmpdModulePath."agentx" = "/usr/lib/snmp_agentx.so"
+
+# /etc/rc.conf
+bsnmpd_enable="YES"
+
+service bsnmpd restart
+crate-snmpd -i 15
+.Ed
+.Pp
+Query the counters from another host:
+.Bd -literal -offset indent
+snmpwalk -v2c -c public crate-host .1.3.6.1.4.1.59999
+snmpget  -v2c -c public crate-host CRATE-MIB::crateContainerRunning.0
+.Ed
+.Sh SEE ALSO
+.Xr bsnmpd 1 ,
+.Xr crate 5 ,
+.Xr crated 8 ,
+.Xr jls 8 ,
+.Xr rctl 8
+.Rs
+.%R RFC 2741
+.%T Agent Extensibility (AgentX) Protocol Version 1
+.Re
+.Sh HISTORY
+The
+.Nm
+agent first appeared in crate version 0.4.0.
+.Sh AUTHORS
+.An Vladyslav V. Prodan Aq Mt github.com/click0
+.Sh BUGS
+Only the four scalars above are implemented; see
+.Sx MIB .

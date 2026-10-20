@@ -8,6 +8,7 @@ man/man5/crate.5.gz
 %%DAEMON%%@sample etc/crated.conf.sample
 %%SNMPD%%sbin/crate-snmpd
 %%SNMPD%%share/snmp/mibs/CRATE-MIB.txt
+%%SNMPD%%man/man8/crate-snmpd.8.gz
 %%HUB%%sbin/crate-hub
 %%HUB%%man/man8/crate-hub.8.gz
 %%HUB%%share/crate-hub/web/app.js

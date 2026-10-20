@@ -11,7 +11,7 @@ Crate containers contain everything needed to run the containerized software —
 ## Features
 
 ### Container Management
-* **11 commands**: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`, `gui`
+* **31 commands**: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`, `gui`, `stack`, `stats`, `logs`, `stop`, `restart`, `top`, `inter-dns`, `vpn`, `inspect`, `migrate`, `backup`, `backup-prune`, `restore`, `replicate`, `template`, `retune`, `throttle`, `doctor`, `vm-wrap`, `update` — all described in `crate(5)`
 * **YAML specification** with template inheritance (`--template`)
 * **ZFS integration**: snapshots (create/list/restore/delete/diff), COW clones, encryption (AES-256-GCM/CCM, AES-128), dataset attachment
 * **Copy-on-Write**: ephemeral or persistent modes via ZFS clone or unionfs
@@ -767,7 +767,7 @@ service crated status
 
 ## crate-snmpd — SNMP Monitoring Agent
 
-`crate-snmpd` is an AgentX subagent that exposes container metrics via SNMP. It collects data from `jls`/`rctl` and registers a `CRATE-MIB` (installed to `/usr/local/share/snmp/mibs/`).
+`crate-snmpd` is an AgentX subagent that exposes crate counters via SNMP under `.1.3.6.1.4.1.59999`. Today it serves four scalars — container count, running count, crate version and hostname; the per-container table that `CRATE-MIB.txt` (installed to `/usr/local/share/snmp/mibs/`) also defines is not implemented yet (use `crated`'s `/metrics` for per-container figures). See `crate-snmpd(8)`.
 
 ```sh
 make all-snmpd && sudo make install-snmpd

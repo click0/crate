@@ -10,7 +10,7 @@
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
 .\"
-.Dd October 17, 2026
+.Dd October 20, 2026
 .Dt CRATED 8
 .Os
 .Sh NAME
@@ -135,7 +135,14 @@ Send SIGTERM, then SIGKILL after a grace window.
 .It POST Pa /api/v1/containers/:name/restart
 Stop + start in one call.
 .It DELETE Pa /api/v1/containers/:name
-Destroy the jail and remove its dataset.
+Stop the container
+.Pq SIGTERM, then the jail is force-removed
+and answer
+.Ic { Qq name , Qq was_running } .
+The dataset and the recorded
+.Pa .crate
+file are kept
+.Pq since 1.1.43; earlier releases did not stop a running jail here .
 .It GET Pa /api/v1/containers/:name/snapshots
 List ZFS snapshots for the container.
 .It POST Pa /api/v1/containers/:name/snapshots

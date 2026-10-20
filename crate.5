@@ -16,7 +16,7 @@
 .\"    without specific prior written permission.
 .\"
 .\"
-.Dd March 3, 2026
+.Dd October 20, 2026
 .Dt CRATE 5
 .Os
 .Sh NAME
@@ -95,6 +95,75 @@ archive with integrity validation.
 .It Cm gui Ar subcommand
 GUI session manager:
 .Cm list , focus , attach , url , tile , screenshot , resize .
+.It Cm stack Ar subcommand Ar stack.yml
+Multi-container stacks:
+.Cm up , down , status , exec .
+See
+.Sx STACK FILES .
+.It Cm stats Op Fl j Ar target
+Resource usage of one container
+.Pq CPU%, memory, PIDs, I/O, network .
+.It Cm logs Ar target Op Fl f
+Show
+.Pq Fl f : follow
+the container console log.
+.It Cm stop Ar target
+Stop a running container
+.Pq SIGTERM, then the jail is removed .
+.It Cm restart Ar target
+Stop and start again from the recorded
+.Pa .crate
+file and variables.
+.It Cm top
+Live resource monitor across all running containers
+.Pq the DISK column is the write rate, Sy writebps , not usage .
+.It Cm inter-dns
+Rebuild the global
+.Pa .crate
+DNS zone from the running jails.
+.It Cm vpn Ar subcommand
+VPN tooling:
+.Cm wireguard render-conf Ar spec.yml ,
+.Cm ipsec render-conf Ar spec.yml .
+.It Cm inspect Ar target
+Full JSON snapshot of a running container's state.
+.It Cm migrate Ar target Fl -from Ar endpoint Fl -to Ar endpoint
+Move a container between hosts through the
+.Xr crated 8
+API.
+.It Cm backup Ar target Fl -output-dir Ar dir
+ZFS send stream of the jail dataset
+.Pq incremental with Fl -incremental-from .
+.It Cm backup-prune Ar dir Fl -keep Ar spec
+Delete old
+.Pa .zstream
+files by retention bucket.
+.It Cm restore Ar stream Fl -to Ar dataset
+Replay a backup stream into a fresh dataset.
+.It Cm replicate Ar target Fl -to Ar host Fl -dest-dataset Ar dataset
+Stream a ZFS snapshot to a remote host over
+.Xr ssh 1 .
+.It Cm template warm Ar target Fl -output Ar dataset
+Capture a jail's on-disk state as a warm template.
+.It Cm retune Ar target Fl -rctl Ar key=value ...
+Live-tune RCTL limits of a running jail
+.Pq Fl -show , Fl -clear .
+.It Cm throttle Ar target Fl -ingress Ar rate Fl -egress Ar rate
+Dummynet token-bucket shaping of the jail's traffic.
+.It Cm doctor Op Fl j
+Host health check: kernel modules, commands, ZFS, firewall, racct,
+jails.
+.It Cm vm-wrap Ar vm Fl -jail Ar name
+Render a devfs ruleset and
+.Pa jail.conf
+for a
+.Xr bhyve 8
+enclosure.
+.It Cm update Ar target Fl -pkg-only
+In-place
+.Xr pkg 8
+upgrade inside a running jail
+.Pq Fl n dry-run, Fl y auto-yes .
 .El
 .Ss Global options
 .Bl -tag -width "--log-progress"
@@ -158,13 +227,34 @@ key accepts a list
 or a map
 .Pq extended format .
 Supported options:
-.Cm net , x11 , ssl-certs , tor , video , gl , no-rm-static-libs , dbg-ktrace .
+.Cm net , x11 , ssl-certs , tor , video , gl , no-rm-static-libs ,
+.Cm dbg-ktrace , wireguard , ipsec .
 .Pp
 See
 .Sx NETWORKING
 for details on the
 .Cm net
 option.
+.Bl -tag -width "wireguard/config"
+.It Sy options/wireguard/config
+Path of a
+.Xr wg-quick 8
+configuration on the host; the interface is brought up inside the
+jail's vnet at start and torn down at exit.
+.Cm crate vpn wireguard render-conf
+renders the file from the spec.
+.It Sy options/ipsec/conn
+Name of a strongSwan
+.Ic conn
+to bring up
+.Pq Ic ipsec auto --up
+before the jail starts and down at teardown.
+.It Sy options/ipsec/conf
+Optional path of a conn snippet on the host that is installed into
+.Pa strongswan.d/
+.Pq followed by Ic ipsec reread
+before the conn is used.
+.El
 .Ss Security
 .Bl -tag -width "enforce_statfs"
 .It Sy security/securelevel
@@ -197,6 +287,18 @@ Supported resources:
 .Cm swapuse , nthr , msgqqueued , msgqsize , nmsgq , nsem ,
 .Cm nsemop , nshm , shmsize , wallclock , pcpu , readbps ,
 .Cm writebps , readiops , writeiops .
+.Bl -tag -width "disk_quota"
+.It Sy limits/disk_quota
+ZFS
+.Sy refquota
+for the container dataset: an integer followed by
+.Cm K , M , G
+or
+.Cm T
+.Pq e.g.\& 10G .
+Requires
+.Sy zfs_enable .
+.El
 .Ss IPC
 .Bl -tag -width "raw_sockets"
 .It Sy ipc/sysvipc
@@ -273,13 +375,20 @@ flushed at teardown in every mode.
 .Ss GUI
 .Bl -tag -width "vnc_password"
 .It Sy gui/mode
-.Cm nested , headless , gpu , auto ,
+.Cm nested , headless , gpu , auto , wayland
 or
-.Cm wayland .
+.Cm compositor .
 .Cm wayland
 is the strict-Wayland counterpart to
 .Cm auto :
 no X11 fallback, refuses to start if WAYLAND_DISPLAY is unset.
+.Cm compositor
+runs a Wayland compositor
+.Em inside
+the jail
+.Pq Sy gui/compositor
+and exposes it through
+.Xr wayvnc 1 .
 .It Sy gui/resolution
 Display resolution
 .Pq e.g., \(dq1920x1080\(dq .
@@ -298,7 +407,59 @@ Driver:
 .Cm nvidia , amdgpu , intel ,
 or
 .Cm dummy .
+.It Sy gui/backend
+For
+.Cm compositor
+mode:
+.Cm headless
+.Pq default; wlroots headless backend
+or
+.Cm drm
+.Pq a GPU is passed in .
+.It Sy gui/compositor
+Command run as the in-jail compositor in
+.Cm compositor
+mode, e.g.\&
+.Dq sway
+or
+.Dq cage firefox .
+Required for that mode.
+.It Sy gui/vnc_bind
+Address
+.Xr wayvnc 1
+listens on.
+Default
+.Ar 127.0.0.1 ;
+anything else exposes an unauthenticated desktop to that network.
+.It Sy gui/vnc_native
+Use the embedded libvncserver instead of forking
+.Xr x11vnc 1
+.Pq needs a build with Ev WITH_LIBVNCSERVER ; falls back with a warning otherwise .
 .El
+.Ss X11 isolation
+A top-level
+.Sy x11
+map replaces the plain
+.Cm x11
+option when the display sharing mode matters:
+.Bl -tag -width "resolution"
+.It Sy x11/mode
+.Cm shared
+.Pq the host display, default ,
+.Cm nested
+.Pq a Xephyr window
+or
+.Cm none .
+.It Sy x11/resolution
+Size of the nested display
+.Pq default 1280x720 .
+.It Sy x11/clipboard
+Boolean; default true.
+.El
+.Pp
+.Sy x11: true
+is accepted as the short form of the option; any other scalar is
+rejected.
 .Ss Clipboard
 .Bl -tag -width "direction"
 .It Sy clipboard/mode
@@ -434,6 +595,98 @@ Before main command execution.
 After main command exits.
 .It Sy scripts/run:end
 After container shutdown.
+.El
+.Ss Health check
+.Bl -tag -width "start_period"
+.It Sy healthcheck
+Either a command string
+.Pq the short form
+or a map.
+The command runs inside the jail as root; exit status 0 means
+healthy.
+Service-only containers are monitored in the background and the
+state is shown by
+.Cm crate list
+and
+.Cm crate stats .
+.It Sy healthcheck/test
+The command.
+Required in the map form.
+.It Sy healthcheck/interval
+Seconds between checks; default 30, must be at least 1.
+.It Sy healthcheck/timeout
+Seconds before a check counts as failed; default 5.
+.It Sy healthcheck/retries
+Consecutive failures before the container is marked unhealthy;
+default 3.
+.It Sy healthcheck/start_period
+Grace period in seconds before the first check; default 0.
+.El
+.Ss Restart policy
+.Bl -tag -width "max_retries"
+.It Sy restart
+.Pq alias Sy restart_policy
+Either the policy name or a map.
+.Cm no
+.Pq default ,
+.Cm on-failure
+.Pq restart when the application exits non-zero ,
+.Cm always
+or
+.Cm unless-stopped .
+.Cm crate run
+stops restarting after
+.Dv SIGINT
+or
+.Dv SIGTERM
+in every policy.
+.It Sy restart/policy
+The policy name.
+.It Sy restart/max_retries
+Restarts before giving up; default 3.
+.It Sy restart/delay
+Seconds between restarts; default 5, must be at least 1.
+.El
+.Ss Dependencies
+.Bl -tag -width "depends"
+.It Sy depends
+List of container names this one needs.
+Only
+.Cm crate stack
+acts on it: containers are started in dependency order and stopped
+in reverse; a plain
+.Cm crate run
+ignores the list.
+.El
+.Ss Base container
+.Bl -tag -width "base_container/name"
+.It Sy base_container
+Clone the root filesystem from an existing running jail
+.Pq a ZFS clone of its dataset
+instead of bootstrapping a base system.
+.It Sy base_container/type
+Only
+.Cm jail
+is supported
+.Pq default .
+.It Sy base_container/name
+Jail name or JID to clone from.
+Required.
+.El
+.Ss ZFS datasets
+.Bl -tag -width "zfs/datasets"
+.It Sy zfs/datasets
+Datasets
+.Pq e.g.\& Pa tank/data
+to attach to the jail with
+.Ic zfs jail .
+The container needs
+.Sy security/allow_quotas
+or
+.Sy security_advanced
+privileges as appropriate to manage them from inside.
+Requires
+.Sy zfs_enable .
 .El
 .Sh NETWORKING
 .Nm
@@ -610,6 +863,120 @@ IPv6 mode:
 .Cm slaac , none ,
 or static address.
 .El
+.Sh STACK FILES
+.Cm crate stack
+starts several containers from one YAML file; containers are started
+in dependency order and stopped in reverse.
+Each
+.Cm crate run
+is spawned as its own detached process and the stack waits for its
+jail to appear.
+.Bd -literal -offset indent
+containers:
+  postgres:
+    spec: postgres.yml            # or crate: postgres.crate
+    vars: { PG_VERSION: "16" }
+  webapp:
+    spec: webapp.yml
+    template: web-base            # optional --template for the build
+    depends: [postgres]
+    vars:
+      DB_HOST: "postgres"
+      DB_PASSWORD: { from_file: /usr/local/etc/secrets/db }
+    volumes: [certs:/etc/letsencrypt:ro]
+
+volumes:
+  certs: /usr/local/etc/letsencrypt
+
+networks:
+  backend:
+    bridge: bridge10
+    subnet: 10.99.0.0/24
+    gateway: 10.99.0.1
+    ip_range: 10.99.0.100-10.99.0.200
+    dns: true
+
+network_policy:
+  default: deny
+  rules:
+    - { from: webapp, to: postgres, proto: tcp, ports: [5432], action: allow }
+.Ed
+.Bl -tag -width "network_policy"
+.It Sy containers/<name>
+One container.
+Exactly one of
+.Sy spec
+.Pq a specification built on the fly
+or
+.Sy crate
+.Pq an existing archive
+is required.
+The name follows the jail-name rule
+.Pq 1\(en128 characters from Ql [A-Za-z0-9._-] .
+.It Sy containers/<name>/depends
+Start-order dependencies inside the stack.
+.It Sy containers/<name>/vars
+Variables substituted as
+.Li ${KEY}
+in the spec; a map with
+.Sy from_file
+reads the value from a host file
+.Pq trailing newline stripped .
+.Fl -var Ar KEY=VALUE
+on the command line overrides.
+.It Sy containers/<name>/volumes
+.Li name:/path[:ro]
+mounts of the stack-level
+.Sy volumes .
+.It Sy volumes
+Named host directories
+.Pq a path, or a map with Sy path .
+.It Sy networks
+Bridges the stack creates when missing.
+.Sy bridge
+is required;
+.Sy subnet
+is an IPv4 CIDR and
+.Sy gateway
+a bare address assigned to the bridge;
+.Sy ip_range
+.Pq Ar first-last
+is the pool containers without a static address draw from;
+.Sy dns: true
+starts a stack-local resolver that answers the container names.
+Names follow the jail-name rule.
+.It Sy network_policy
+Inter-container firewall rules loaded into the host
+.Xr ipfw 8
+.Pq Sy net.link.bridge.ipfw is enabled .
+.Sy default
+is
+.Cm allow
+or
+.Cm deny ;
+each rule names
+.Sy from
+and
+.Sy to
+containers, an optional
+.Sy proto
+and
+.Sy ports
+list, and an
+.Sy action .
+Rule numbers are taken from a free block above the live rules and
+removed by
+.Cm stack down .
+.El
+.Pp
+.Cm stack exec Ar stack.yml name Fl - Ar cmd
+runs a command in the jail whose name is exactly
+.Ar name
+.Pq plus the Li _pid<N> suffix crate appends ;
+a container named
+.Ar db
+never matches
+.Ar mydb .
 .Sh CONFIGURATION
 .Nm
 reads configuration from YAML files in the following order

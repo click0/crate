@@ -31,6 +31,7 @@ on:
       - 'crate.5'
       - 'crated.8'
       - 'crate-hub.8'
+      - 'crate-snmpd.8'
       - '.github/workflows/freebsd-build.yml'
   workflow_dispatch:
 
