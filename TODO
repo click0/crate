@@ -675,32 +675,34 @@ The bhyve/VM track is in TODO2.
 
 === 13. Test gaps (unit, pure modules) ===
 
-* privops_pure: validateCreateJail must reject exec.*, mount.fstab,
-  name=, path= tokens in `parameters` (only allow.raw_sockets=1
-  round-trips are tested).
-* privops_authz_pure: Mount/Unmount/devfs with a target under another
-  tenant's pathMasterPrefix but absent from the registry; AttachZfs
-  jid ownership; anchor/ifname ownership once gated.
-* auth: a test pinning that ws-console uses checkBearerAuthFull.
-* routes_pure / a routes smoke: read endpoints require a token.
-* jid_owner_registry_pure: stale-entry reconciliation (once it exists).
-* spec_test: securelevel -1, enforce_statfs, children_max, cpuset,
-  vlan non-int, disk_quota, inbound port ranges (0, >65535, reversed),
-  duplicate top-level keys, `x11:` scalar, extended-options unknown
-  key; mergeSpecs round-trip of every field.
-* util_pure: fileExists/dirExists on a socket; `$HOME` alone.
-* backup_prune_pure: incremental chain (inc-from-inc) kept and
-  --delete-orphans with a kept chain.
-* import_pure: `foo..bar` false positive. throttle_pure: jid bound.
-  retune_pure: parseHumanSize overflow. lifecycle_pure: humanBytes
-  1023/1024 and UINT64_MAX.
-* hub_aggregator_pure: feed the REAL crated envelope
-  ({"status":"ok","data":{"jail-information":{"jail":[...]}}}).
-* snmpd mib_pure: OctetString n >= 0xFFFFFFFD; little-endian OID /
-  OctetString; Open response session-id extraction.
-* inter_dns_pure: `<name>_pid<pid>` input (should strip, not drop);
-  comma-joined ip4.addr.
-* console: argv split of `login -f <user>` + extra args.
+  [COVERED, audited 1.1.54] privops_pure create_jail `parameters`
+  tokens (1.1.35); authz Mount/Unmount/devfs unregistered targets,
+  AttachZfs jid, anchor and iface ownership (1.1.35-1.1.43); jid
+  registry reconciliation (1.1.36); backup_prune chains; import
+  `foo..bar`; retune parseHumanSize; lifecycle humanBytes 1023/1024/
+  UINT64_MAX; hub real envelope (1.1.49); snmpd length overflow,
+  little-endian, header/session decoding (1.1.50); inter-dns `_pid`
+  and comma-joined ip4.addr (1.1.48); spec enforce_statfs / vlan /
+  securelevel / duplicate keys / port ranges via SpecPure (1.1.46).
+
+  [FIXED in 1.1.54] throttle_pure jid bound; util_pure fileExists/
+  dirExists on a socket; auth_pure pin of the ws-console admin gate.
+
+* (MED) the tests link only the *_pure objects, so everything that
+  lives in lib/spec.cpp (yaml-cpp) is untested at the parser level:
+  children_max, cpuset, disk_quota, the `x11:` map vs scalar, the
+  extended-options unknown-key rejection, healthcheck/restart maps,
+  mergeSpecs round-trip of every field. Either link lib/spec.cpp +
+  yaml-cpp into a dedicated spec parser test binary (Linux CI would
+  need libyaml-cpp-dev) or move the key-level validation into
+  SpecPure functions that take already-extracted scalars.
+* (LOW) routes.cpp's "which endpoints need which role" table is
+  inline in the handlers; lifting it into RoutesPure (method, path →
+  min role) would make the viewer-token rule testable.
+* (LOW) console.cpp builds the `login -f <user>` argv inline; a pure
+  builder (ConsolePure::loginArgv) would pin the 1.1.x split fix.
+* (LOW) the ws-console pin tests AuthPure, not the call site in
+  daemon/ws_console.cpp — that needs the daemon compiled into a test.
 * Not unit-testable, needs the on-hardware runbook: everything in
   section 1, pf anchor lifecycle (3.), lease/registry lock race,
   stack up/down, privops symlink canonicalisation.

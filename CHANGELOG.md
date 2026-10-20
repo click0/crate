@@ -6,6 +6,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.54] — 2026-10-20
+
+**TODO §13: unit-test gaps, and a test bug ASan CI caught.**
+
+- `privops_wire_pure_test` `escape_round_trips_control_bytes` (new in
+  1.1.51) built its input with an explicit length of 28 over a
+  25-byte literal — a global-buffer-overflow read that only the
+  Linux ASan+UBSan job saw (kyua on Linux and FreeBSD passed). Fixed;
+  the length is asserted.
+- New tests: `throttle_pure` jid bound for the rule/pipe id space
+  (0, 1, 4999, 5000; ids stay below the auto-fw NAT block);
+  `util_test` `fileExists`/`dirExists` on a UNIX socket (the 1.1.46
+  `S_ISREG`/`S_ISDIR` fix was untested), plus file/dir/missing;
+  `auth_pure` pin of the WebSocket-console gate (`checkBearerAuthFull`
+  with `admin`: viewer, out-of-scope admin, no header and a non-Bearer
+  scheme are all rejected).
+- TODO §13 audited against the suite: the privops `parameters`
+  tokens, authz Mount/devfs/AttachZfs/anchor/iface cases, registry
+  reconciliation, backup-prune chains, `foo..bar`, `parseHumanSize`,
+  `humanBytes` edges, the real hub envelope, the snmpd decoder cases
+  and inter-dns `_pid`/comma inputs were already covered by 1.1.35 →
+  1.1.50; the remaining items need `lib/spec.cpp` (yaml-cpp) linked
+  into the tests and are listed as such.
+
+Tests: 1490 cases. Version 1.1.54.
+
 ## [1.1.53] — 2026-10-20
 
 **TODO §12: documentation debt.**

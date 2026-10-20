@@ -14,6 +14,13 @@
 #include <string>
 #include <vector>
 
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <cstdio>
+#include <cstring>
+#include <unistd.h>
+
 #include "util.h"
 
 // ===================================================================
@@ -236,8 +243,42 @@ ATF_TEST_CASE_BODY(hasExtension_partial)
 	ATF_REQUIRE(!Util::Fs::hasExtension("archive.tar.gz", ".tar.gz"));
 }
 
+// 1.1.54 (TODO §13): a UNIX socket has both S_IFREG and S_IFDIR bits set
+// in st_mode; before 1.1.46 fileExists/dirExists tested the bits and said
+// "yes" to a socket for both questions.
+ATF_TEST_CASE_WITHOUT_HEAD(fileExists_dirExists_reject_socket);
+ATF_TEST_CASE_BODY(fileExists_dirExists_reject_socket)
+{
+	// kyua runs each case in a private scratch directory.
+	const char *sockPath = "probe.sock";
+	int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+	ATF_REQUIRE(fd >= 0);
+	struct sockaddr_un sa;
+	::memset(&sa, 0, sizeof sa);
+	sa.sun_family = AF_UNIX;
+	::strncpy(sa.sun_path, sockPath, sizeof(sa.sun_path) - 1);
+	ATF_REQUIRE_EQ(::bind(fd, (struct sockaddr *)&sa, sizeof sa), 0);
+	ATF_REQUIRE(!Util::Fs::fileExists(sockPath));
+	ATF_REQUIRE(!Util::Fs::dirExists(sockPath));
+	::close(fd);
+	::unlink(sockPath);
+
+	// and the plain cases keep working
+	ATF_REQUIRE_EQ(::mkdir("adir", 0700), 0);
+	ATF_REQUIRE(Util::Fs::dirExists("adir"));
+	ATF_REQUIRE(!Util::Fs::fileExists("adir"));
+	FILE *f = ::fopen("afile", "w");
+	ATF_REQUIRE(f != nullptr);
+	::fclose(f);
+	ATF_REQUIRE(Util::Fs::fileExists("afile"));
+	ATF_REQUIRE(!Util::Fs::dirExists("afile"));
+	ATF_REQUIRE(!Util::Fs::fileExists("missing"));
+	ATF_REQUIRE(!Util::Fs::dirExists("missing"));
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
+	ATF_ADD_TEST_CASE(tcs, fileExists_dirExists_reject_socket);
 	ATF_ADD_TEST_CASE(tcs, filePathToBareName_full_path);
 	ATF_ADD_TEST_CASE(tcs, filePathToBareName_no_dir);
 	ATF_ADD_TEST_CASE(tcs, filePathToBareName_no_ext);

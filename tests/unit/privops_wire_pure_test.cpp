@@ -746,7 +746,10 @@ ATF_TEST_CASE_WITHOUT_HEAD(escape_round_trips_control_bytes);
 ATF_TEST_CASE_BODY(escape_round_trips_control_bytes) {
   // a message with a bell, an escape and a quote used to produce invalid
   // JSON (raw control bytes) — now \u0007 / \u001b and round-trips
-  std::string raw = std::string("err: \x07 \x1b[31m \"q\" tab\t nl\n", 28);
+  // 1.1.54: no explicit length — the literal has no embedded NUL and the
+  // hand-counted 28 read past the 25-byte constant (ASan CI caught it).
+  std::string raw = "err: \x07 \x1b[31m \"q\" tab\t nl\n";
+  ATF_REQUIRE_EQ(raw.size(), 25u);
   auto body = formatHandlerError("kind", raw);
   for (unsigned char c : body) ATF_REQUIRE(c >= 0x20);   // nothing raw below 0x20
   std::string back;

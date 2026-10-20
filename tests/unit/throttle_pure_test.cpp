@@ -244,6 +244,22 @@ ATF_TEST_CASE_BODY(pipe_show_argv) {
   ATF_REQUIRE_EQ(v[3], std::string("10001"));
 }
 
+// 1.1.54 (TODO §13): the jid bound that keeps throttle rule ids below the
+// auto-fw NAT block at 30000.
+ATF_TEST_CASE_WITHOUT_HEAD(jid_bounds_for_ids);
+ATF_TEST_CASE_BODY(jid_bounds_for_ids) {
+  ATF_REQUIRE(!ThrottlePure::validateJidForIds(0).empty());
+  ATF_REQUIRE(!ThrottlePure::validateJidForIds(-7).empty());
+  ATF_REQUIRE(ThrottlePure::validateJidForIds(1).empty());
+  ATF_REQUIRE(ThrottlePure::validateJidForIds(4999).empty());
+  ATF_REQUIRE(!ThrottlePure::validateJidForIds(5000).empty());
+  // at the accepted maximum every id stays under the NAT range
+  for (bool egress : {false, true}) {
+    ATF_REQUIRE(ThrottlePure::ruleIdForJail(4999, egress) < 30000u);
+    ATF_REQUIRE(ThrottlePure::pipeIdForJail(4999, egress) < 30000u);
+  }
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, rate_typical_units);
   ATF_ADD_TEST_CASE(tcs, rate_invalid_rejected);
@@ -265,4 +281,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, bind_ingress_uses_from_any_to_ip);
   ATF_ADD_TEST_CASE(tcs, rule_and_pipe_delete_argv);
   ATF_ADD_TEST_CASE(tcs, pipe_show_argv);
+  ATF_ADD_TEST_CASE(tcs, jid_bounds_for_ids);
 }
