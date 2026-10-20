@@ -45,6 +45,10 @@ int main(int argc, char **argv) {
         std::cerr << "crate-snmpd: invalid value for -i: " << e.what() << std::endl;
         return 1;
       }
+      if (pollInterval == 0) {   // 1.1.50: 0 ran jls/rctl every 100 ms
+        std::cerr << "crate-snmpd: -i must be at least 1 second" << std::endl;
+        return 1;
+      }
     }
     else if (arg == "-h") {
       usage();
@@ -54,6 +58,7 @@ int main(int argc, char **argv) {
 
   ::signal(SIGINT, signalHandler);
   ::signal(SIGTERM, signalHandler);
+  ::signal(SIGPIPE, SIG_IGN);   // 1.1.50: a write to a closed master must not kill us
 
   // Initialize AgentX connection
   if (!CrateSnmp::initAgentX(agentxSocket)) {
@@ -81,8 +86,27 @@ int main(int argc, char **argv) {
   collector.collect();
   CrateSnmp::updateMibData(collector);
   time_t lastCollect = ::time(nullptr);
+  // 1.1.50: reconnect with backoff when the master goes away (bsnmpd /
+  // snmpd restart). 1 s, doubling to 30 s; re-register on success.
+  unsigned backoffSec = 1;
+  time_t nextReconnect = 0;
   while (g_running) {
-    CrateSnmp::dispatchOnce(100);     // 100 ms — cheap when idle
+    if (!CrateSnmp::agentxConnected()) {
+      time_t now0 = ::time(nullptr);
+      if (now0 >= nextReconnect) {
+        if (CrateSnmp::initAgentX(agentxSocket)) {
+          CrateSnmp::registerMib();
+          std::cerr << "crate-snmpd: reconnected to AgentX master" << std::endl;
+          backoffSec = 1;
+        } else {
+          nextReconnect = now0 + backoffSec;
+          backoffSec = backoffSec >= 30 ? 30 : backoffSec * 2;
+        }
+      }
+      ::usleep(100000);
+    } else {
+      CrateSnmp::dispatchOnce(100);     // 100 ms — cheap when idle
+    }
     time_t now = ::time(nullptr);
     if ((unsigned)(now - lastCollect) >= pollInterval) {
       collector.collect();

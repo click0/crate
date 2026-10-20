@@ -82,18 +82,29 @@ int decodeHeader(const std::vector<uint8_t> &buf, size_t offset, Header &out);
 // Parse an AgentX OID at `offset`. Returns the number of bytes
 // consumed or 0 on short/invalid input. `include` reports the I-bit
 // (used by SearchRanges).
+// 1.1.50: `bigEndian` is the header's NETWORK_BYTE_ORDER bit; sub-ids
+// and lengths follow it (the header decoder honoured it, these did not).
 int decodeOid(const std::vector<uint8_t> &buf, size_t offset,
-              std::vector<uint32_t> &out, bool *include = nullptr);
+              std::vector<uint32_t> &out, bool *include = nullptr,
+              bool bigEndian = true);
 
-// Parse an AgentX OctetString. Honours 4-byte zero padding.
+// Parse an AgentX OctetString. Honours 4-byte zero padding. 1.1.50: a
+// length that does not fit the buffer (incl. the n+3 wrap for lengths
+// near 2^32) returns 0 instead of reading past the buffer.
 int decodeOctetString(const std::vector<uint8_t> &buf, size_t offset,
-                      std::string &out);
+                      std::string &out, bool bigEndian = true);
 
 // Parse a SearchRange (OID, OID). Returns bytes consumed.
 int decodeSearchRange(const std::vector<uint8_t> &buf, size_t offset,
                       std::vector<uint32_t> &startOid,
                       std::vector<uint32_t> &endOid,
-                      bool *startInclude = nullptr);
+                      bool *startInclude = nullptr,
+                      bool bigEndian = true);
+
+// 1.1.50: largest payload the subagent accepts from the master (header
+// payload_length). AgentX Get/GetNext PDUs for four scalars are a few
+// hundred bytes; 1 MiB leaves room and bounds the allocation.
+constexpr uint32_t kMaxPayloadLen = 1u << 20;
 
 // Parse a Get/GetNext payload — a sequence of SearchRanges with an
 // optional context octet-string prefix (skipped if NON_DEFAULT_CONTEXT

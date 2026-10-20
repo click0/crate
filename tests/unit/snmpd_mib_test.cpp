@@ -170,6 +170,54 @@ ATF_TEST_CASE_BODY(encodeOctetString_padding_aligned_after_existing)
 	ATF_REQUIRE_EQ(buf.size(), 8u);
 }
 
+// --- 1.1.50: decoder hardening ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(decodeOctetString_length_overflow_rejected);
+ATF_TEST_CASE_BODY(decodeOctetString_length_overflow_rejected)
+{
+	// length 0xFFFFFFFE: (n + 3) wrapped to 1 → padded 0 → the bounds check
+	// passed and out.assign() read ~4 GB past the buffer.
+	std::vector<uint8_t> buf = {0xFF, 0xFF, 0xFF, 0xFE, 'a', 'b', 'c', 'd'};
+	std::string out;
+	ATF_REQUIRE_EQ(MibPure::decodeOctetString(buf, 0, out), 0);
+	// a length larger than what is present is a short read, not a success
+	std::vector<uint8_t> shortBuf = {0x00, 0x00, 0x00, 0x09, 'a', 'b', 'c', 'd'};
+	ATF_REQUIRE_EQ(MibPure::decodeOctetString(shortBuf, 0, out), 0);
+	// well-formed: "hello" padded to 8
+	std::vector<uint8_t> ok = {0x00, 0x00, 0x00, 0x05, 'h', 'e', 'l', 'l', 'o', 0, 0, 0};
+	ATF_REQUIRE_EQ(MibPure::decodeOctetString(ok, 0, out), 12);
+	ATF_REQUIRE_EQ(out, std::string("hello"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(decoders_honour_little_endian_flag);
+ATF_TEST_CASE_BODY(decoders_honour_little_endian_flag)
+{
+	// OID with prefix 4 and one sub-id 59999 (0xEA5F) in LITTLE-endian
+	std::vector<uint8_t> oidLe = {0x01, 0x04, 0x00, 0x00, 0x5F, 0xEA, 0x00, 0x00};
+	std::vector<uint32_t> oid;
+	ATF_REQUIRE_EQ(MibPure::decodeOid(oidLe, 0, oid, nullptr, /*bigEndian=*/false), 8);
+	ATF_REQUIRE_EQ(oid.size(), 6u);
+	ATF_REQUIRE_EQ(oid[5], 59999u);
+	// the same bytes read big-endian are a different (huge) sub-id
+	std::vector<uint32_t> oidBe;
+	ATF_REQUIRE_EQ(MibPure::decodeOid(oidLe, 0, oidBe), 8);
+	ATF_REQUIRE(oidBe[5] != 59999u);
+	// octet string length little-endian
+	std::vector<uint8_t> strLe = {0x02, 0x00, 0x00, 0x00, 'h', 'i', 0, 0};
+	std::string out;
+	ATF_REQUIRE_EQ(MibPure::decodeOctetString(strLe, 0, out, false), 8);
+	ATF_REQUIRE_EQ(out, std::string("hi"));
+	// decodeGetRequest picks the byte order from the header flags
+	// (0x10 = NETWORK_BYTE_ORDER): one SearchRange, both OIDs LE.
+	std::vector<uint8_t> req;
+	for (int i = 0; i < 2; i++) req.insert(req.end(), oidLe.begin(), oidLe.end());
+	std::vector<std::vector<uint32_t>> oids;
+	ATF_REQUIRE(MibPure::decodeGetRequest(req, 0, /*flags=*/0x00, oids) > 0);
+	ATF_REQUIRE_EQ(oids.size(), 1u);
+	ATF_REQUIRE_EQ(oids[0][5], 59999u);
+	ATF_REQUIRE(MibPure::kMaxPayloadLen >= 65536u);
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
 	ATF_ADD_TEST_CASE(tcs, encodeUint32_zero);
@@ -186,4 +234,6 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, encodeOctetString_padding_1);
 	ATF_ADD_TEST_CASE(tcs, encodeOctetString_padding_2);
 	ATF_ADD_TEST_CASE(tcs, encodeOctetString_padding_aligned_after_existing);
+	ATF_ADD_TEST_CASE(tcs, decodeOctetString_length_overflow_rejected);
+	ATF_ADD_TEST_CASE(tcs, decoders_honour_little_endian_flag);
 }

@@ -43,6 +43,7 @@
 #include <string.h>
 #include <arpa/inet.h>
 
+#include <cerrno>   // 1.1.50
 #include <cstdint>
 #include <mutex>
 #include <iostream>
@@ -87,7 +88,9 @@ static std::mutex g_mibMutex;
 static std::vector<ContainerMetrics> g_containers;
 static unsigned g_totalCount = 0;
 static unsigned g_runningCount = 0;
-static std::string g_version = "0.8.48";
+// 1.1.50: was a stale "0.8.48" literal. Keep in step with cli/args.cpp
+// (`crate --version`) until there is one shared version header (TODO).
+static std::string g_version = "1.1.50";
 static std::string g_hostname;
 
 // --- AgentX PDU helpers ---
@@ -122,41 +125,80 @@ static inline void encodeOctetString(std::vector<uint8_t> &buf, const std::strin
   MibPure::encodeOctetString(buf, s);
 }
 
+// 1.1.50: full-length read/write helpers (short read()s on the stream
+// socket used to be taken as whole PDUs; write() return was ignored).
+static ssize_t readFull(int fd, void *buf, size_t n) {
+  size_t off = 0;
+  while (off < n) {
+    ssize_t r = ::read(fd, (char*)buf + off, n - off);
+    if (r < 0) { if (errno == EINTR) continue; return -1; }
+    if (r == 0) return (ssize_t)off;          // EOF
+    off += (size_t)r;
+  }
+  return (ssize_t)n;
+}
+
+static bool writeFull(int fd, const uint8_t *p, size_t n) {
+  size_t off = 0;
+  while (off < n) {
+    ssize_t w = ::write(fd, p + off, n - off);
+    if (w < 0) { if (errno == EINTR) continue; return false; }
+    off += (size_t)w;
+  }
+  return true;
+}
+
+static void dropConnection(const char *why) {
+  if (g_agentxFd >= 0) {
+    std::cerr << "crate-snmpd: AgentX connection lost (" << why << ")" << std::endl;
+    ::close(g_agentxFd);
+    g_agentxFd = -1;
+  }
+}
+
 // Send a PDU over the AgentX connection
 static bool sendPdu(const std::vector<uint8_t> &pdu) {
   if (g_agentxFd < 0)
     return false;
-  ssize_t n = ::write(g_agentxFd, pdu.data(), pdu.size());
-  return n == (ssize_t)pdu.size();
+  return writeFull(g_agentxFd, pdu.data(), pdu.size());
 }
 
-// Read a response PDU (simplified: just read header + check error status)
-static bool readResponse() {
+// Read a Response PDU, check its error status, and optionally hand back
+// the decoded header (1.1.50: the Open response carries the session id
+// the master assigned — it used to be ignored).
+static bool readResponse(MibPure::Header *hdrOut = nullptr) {
   if (g_agentxFd < 0)
     return false;
 
   uint8_t hdr[20];
-  ssize_t n = ::read(g_agentxFd, hdr, sizeof(hdr));
-  if (n < 20)
+  if (readFull(g_agentxFd, hdr, sizeof(hdr)) != 20)
+    return false;
+
+  std::vector<uint8_t> hdrVec(hdr, hdr + 20);
+  MibPure::Header h;
+  if (MibPure::decodeHeader(hdrVec, 0, h) != 20)
     return false;
 
   // Check it's a Response PDU
-  if (hdr[1] != AGENTX_RESPONSE_PDU)
+  if (h.type != AGENTX_RESPONSE_PDU)
+    return false;
+  if (h.payloadLen > MibPure::kMaxPayloadLen)   // 1.1.50: bound the allocation
     return false;
 
-  // Read payload length and skip payload
-  uint32_t payloadLen = ((uint32_t)hdr[16] << 24) | ((uint32_t)hdr[17] << 16) |
-                        ((uint32_t)hdr[18] << 8) | hdr[19];
-  if (payloadLen > 0) {
-    std::vector<uint8_t> payload(payloadLen);
-    ::read(g_agentxFd, payload.data(), payloadLen);
+  if (h.payloadLen > 0) {
+    std::vector<uint8_t> payload(h.payloadLen);
+    if (readFull(g_agentxFd, payload.data(), h.payloadLen) != (ssize_t)h.payloadLen)
+      return false;
     // Response payload starts with: sysUpTime(4), error(2), index(2)
-    if (payloadLen >= 8) {
-      uint16_t errorStatus = ((uint16_t)payload[4] << 8) | payload[5];
+    if (h.payloadLen >= 8) {
+      const bool be = (h.flags & 0x10) != 0;
+      uint16_t errorStatus = be ? (uint16_t)(((uint16_t)payload[4] << 8) | payload[5])
+                                : (uint16_t)(((uint16_t)payload[5] << 8) | payload[4]);
       if (errorStatus != AGENTX_NO_ERROR)
         return false;
     }
   }
+  if (hdrOut) *hdrOut = h;
 
   return true;
 }
@@ -211,16 +253,19 @@ bool initAgentX(const std::string &socketPath) {
     return false;
   }
 
-  if (!readResponse()) {
+  MibPure::Header openResp;
+  if (!readResponse(&openResp)) {
     std::cerr << "crate-snmpd: Open PDU rejected by master agent" << std::endl;
     ::close(g_agentxFd);
     g_agentxFd = -1;
     return false;
   }
 
-  // Extract sessionId from response (stored in header bytes 4-7)
-  // For simplicity, use transaction ID as session placeholder
-  g_sessionId = g_transactionId;
+  // 1.1.50: the session id is the one the master put in the Response
+  // header (RFC 2741 §7.1.1). Using our own transaction id meant every
+  // later Register/Close carried a session the master never assigned
+  // (notOpen) on any master that does not hand out 1.
+  g_sessionId = openResp.sessionId;
 
   std::cerr << "crate-snmpd: AgentX connection established (session "
             << g_sessionId << "), PEN .1.3.6.1.4.1.59999" << std::endl;
@@ -274,17 +319,11 @@ void registerMib() {
   //   .1.3.6.1.4.1.59999.2.1   — crateContainerTable   (SEQUENCE OF CrateContainerEntry)
   //   .1.3.6.1.4.1.59999.2.1.1.{1-9}.X — per-container columns
 
-  // Register the root subtree (covers all children)
+  // Register the root subtree (covers all children). 1.1.50: the two
+  // child registrations (crateSystem, crateContainerTable) that followed
+  // overlapped it at the same priority and were answered
+  // duplicateRegistration by every RFC-conforming master.
   registerSubtree(CRATE_BASE_OID, "CRATE-MIB root at .1.3.6.1.4.1.59999");
-
-  // Also register specific subtrees for finer-grained control:
-  // Scalars: .1.3.6.1.4.1.59999.1 (crateSystem)
-  auto systemOid = CRATE_BASE_OID;
-  systemOid.push_back(1);
-  registerSubtree(systemOid, "crateSystem at .1.3.6.1.4.1.59999.1");
-
-  // Container table: .1.3.6.1.4.1.59999.2.1 (crateContainerTable)
-  registerSubtree(OID_CONTAINER_TABLE, "crateContainerTable at .1.3.6.1.4.1.59999.2.1");
 
   std::cerr << "crate-snmpd: MIB registration complete — PEN 59999 (placeholder)" << std::endl;
   std::cerr << "crate-snmpd: NOTE: register a real PEN with IANA before production use"
@@ -387,18 +426,9 @@ void resolveGetNext(const std::vector<uint32_t> &oid, std::vector<uint8_t> &out)
   MibPure::encodeVarBindEndOfMibView(out, oid);
 }
 
-// --- Read up to `n` bytes from g_agentxFd. Returns -1 on error. ---
-ssize_t readN(int fd, void *buf, size_t n) {
-  size_t off = 0;
-  while (off < n) {
-    ssize_t r = ::read(fd, (char*)buf + off, n - off);
-    if (r <= 0) return r < 0 ? -1 : (ssize_t)off;
-    off += (size_t)r;
-  }
-  return (ssize_t)n;
-}
-
 } // anon
+
+bool agentxConnected() { return g_agentxFd >= 0; }
 
 bool dispatchOnce(int timeoutMs) {
   if (g_agentxFd < 0) return false;
@@ -408,18 +438,31 @@ bool dispatchOnce(int timeoutMs) {
   FD_SET(g_agentxFd, &rfds);
   timeval tv{timeoutMs / 1000, (timeoutMs % 1000) * 1000};
   int sel = ::select(g_agentxFd + 1, &rfds, nullptr, nullptr, &tv);
-  if (sel <= 0) return false;
+  if (sel < 0) { if (errno == EINTR) return false; dropConnection(strerror(errno)); return false; }
+  if (sel == 0) return false;                      // idle
 
+  // 1.1.50: EOF / error closes the connection so main() reconnects.
+  // Before this, select() was readable forever after the master closed
+  // the socket, read() returned 0, and the loop spun at 100 % CPU with
+  // no reconnect — a bsnmpd/snmpd restart killed monitoring for good.
   uint8_t hdrBytes[20];
-  if (readN(g_agentxFd, hdrBytes, 20) != 20) return false;
+  ssize_t got = readFull(g_agentxFd, hdrBytes, 20);
+  if (got != 20) { dropConnection(got == 0 ? "master closed the socket" : "read error"); return false; }
 
   std::vector<uint8_t> hdrVec(hdrBytes, hdrBytes + 20);
   MibPure::Header h;
-  if (MibPure::decodeHeader(hdrVec, 0, h) != 20) return false;
+  if (MibPure::decodeHeader(hdrVec, 0, h) != 20) { dropConnection("bad header"); return false; }
+  if (h.payloadLen > MibPure::kMaxPayloadLen) { dropConnection("payload too large"); return false; }
 
   std::vector<uint8_t> payload(h.payloadLen);
-  if (h.payloadLen > 0 && readN(g_agentxFd, payload.data(), h.payloadLen) != (ssize_t)h.payloadLen)
+  if (h.payloadLen > 0 && readFull(g_agentxFd, payload.data(), h.payloadLen) != (ssize_t)h.payloadLen) {
+    dropConnection("short payload");
     return false;
+  }
+
+  // A Response from the master (to our Register/Notify) is not answered
+  // with another Response (1.1.50).
+  if (h.type == MibPure::PDU_RESPONSE) return true;
 
   // Only Get and GetNext are handled; everything else is acknowledged
   // with an empty Response so the master agent doesn't stall.
@@ -446,7 +489,8 @@ bool dispatchOnce(int timeoutMs) {
   rh.payloadLen = (uint32_t)respPayload.size();
   MibPure::encodeHeader(respPdu, rh);
   respPdu.insert(respPdu.end(), respPayload.begin(), respPayload.end());
-  ::write(g_agentxFd, respPdu.data(), respPdu.size());
+  if (!writeFull(g_agentxFd, respPdu.data(), respPdu.size()))   // 1.1.50: was unchecked
+    dropConnection("write error");
   return true;
 }
 

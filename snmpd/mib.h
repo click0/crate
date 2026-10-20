@@ -33,7 +33,13 @@ void sendTrap(TrapType type, const std::string &containerName, int jid);
 // incoming PDU, dispatch it (Get/GetNext) and send the response.
 // Returns true if a PDU was processed, false on no input or error.
 // Called from main loop with a short select() timeout.
+// Returns true when a PDU was handled. 1.1.50: on EOF/error the
+// connection is closed and agentxConnected() turns false; the caller
+// reconnects (initAgentX again) with a backoff instead of spinning.
 bool dispatchOnce(int timeoutMs);
+
+// 1.1.50: is the AgentX session up?
+bool agentxConnected();
 
 // Clean shutdown
 void shutdownAgentX();

@@ -6,6 +6,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.50] — 2026-10-20
+
+**TODO §9: crate-snmpd survives a master restart and speaks AgentX by
+the RFC.**
+
+- **100 % CPU spin, no reconnect.** After bsnmpd/snmpd closed the
+  socket, `select()` was readable forever, `read()` returned 0 and the
+  main loop called `dispatchOnce` again with no delay, with the dead fd
+  kept open — monitoring was gone for good and a core was pinned.
+  `dispatchOnce` now drops the connection on EOF/error;
+  `agentxConnected()` tells `main()`, which reconnects with a 1 → 30 s
+  backoff and re-registers the MIB.
+- **Session id.** The subagent set `sessionId = transactionId` (= 1)
+  instead of taking it from the Open Response header, so every later
+  Register/Close carried a session the master never assigned (RFC 2741
+  `notOpen`) on any master that does not hand out 1. `readResponse`
+  returns the decoded header and the Open path uses its `sessionId`.
+- **OctetString length overflow** (`mib_pure.cpp`): `n + 3` wrapped for
+  `n >= 0xFFFFFFFD`, the bounds check passed and `out.assign(ptr, n)`
+  read ~4 GB past the buffer — reachable through the NON_DEFAULT_CONTEXT
+  string from a hostile or buggy master. Lengths are compared in
+  `size_t` against what is actually present.
+- **Little-endian masters**: only the header honoured the byte-order
+  flag; OID sub-ids and string lengths were always read big-endian.
+  `decodeOid` / `decodeOctetString` / `decodeSearchRange` take the flag,
+  `decodeGetRequest` passes it down.
+- Payload length capped at 1 MiB (`MibPure::kMaxPayloadLen`) in the
+  dispatcher and in `readResponse` (unbounded `std::vector` allocation,
+  uncaught `bad_alloc`); full-length `read`/`write` helpers (a short
+  `read()` was taken as a whole PDU; `write()` return was ignored);
+  `SIGPIPE` ignored; a Response PDU from the master is no longer
+  answered with a Response; only the root subtree is registered (the
+  two overlapping children were `duplicateRegistration`); `-i 0`
+  rejected (it ran `jls`/`rctl` every 100 ms); `g_version` and
+  `port/Makefile` `PORTVERSION` say 1.1.50 (both were 0.8.48).
+
+Tests: `snmpd_mib_test` length overflow / short input, little-endian
+decoding incl. through `decodeGetRequest`. Version 1.1.50.
+
 ## [1.1.49] — 2026-10-20
 
 **TODO §8: crate-hub actually sees containers, actually polls when

@@ -501,49 +501,35 @@ The bhyve/VM track is in TODO2.
 
 === 9. crate-snmpd ===
 
-* (HIGH) Spins at 100% CPU and never reconnects after the master
-  closes the socket: snmpd/mib.cpp:410-414 — on EOF select() is
-  readable immediately, readN returns 0, dispatchOnce returns false,
-  the main loop (snmpd/main.cpp:84-93) calls it again with no delay;
-  g_agentxFd stays >= 0, no reconnect/backoff exists. A
-  bsnmpd/snmpd restart permanently kills monitoring and pins a core.
-
-* (HIGH) AgentX session ID never taken from the Open response:
-  mib.cpp:221-223 sets g_sessionId = g_transactionId (=1) instead of
-  header bytes 4-7 of the Response. Register/Close then carry a
-  sessionId the master did not assign → RFC 2741 §7.1.1 notOpen;
-  registration fails with any master that does not hand out 1
-  (plausible); protocol violation confirmed; only logged (:255).
-
-* (MED) OctetString length overflow → out-of-bounds read:
-  mib_pure.cpp:116-119 — n is uint32_t, (n + 3) wraps for
-  n >= 0xFFFFFFFD → padded = 0 → bounds check passes → out.assign(ptr,
-  n) reads ~4 GB past the buffer. Reachable via the
-  NON_DEFAULT_CONTEXT string (:145-148). mib.cpp:420 and :151 also
-  allocate payloadLen bytes with no cap (bad_alloc uncaught). Requires
-  a hostile/buggy master on the local socket.
-
-* (MED) Little-endian flag honoured only in the header:
-  mib_pure.cpp:83-88 flips header fields, but decodeOid (:108) and
-  decodeOctetString (:116) always use loadU32be; mib_pure.h:78-79
-  claims LE is handled.
+  [FIXED in 1.1.50] no more 100 % CPU spin after the master closes the
+  socket: dispatchOnce drops the connection on EOF/error and main()
+  reconnects with 1→30 s backoff and re-registers; sessionId taken
+  from the Open Response header (RFC 2741 §7.1.1) instead of our own
+  transaction id; decodeOctetString rejects lengths that do not fit
+  (the (n+3) wrap read ~4 GB past the buffer); OID / OctetString /
+  SearchRange decoders honour the little-endian flag;
+  payload_length capped (MibPure::kMaxPayloadLen, 1 MiB) in both the
+  dispatcher and readResponse; full-length read/write helpers, write
+  return checked, SIGPIPE ignored; Response PDUs from the master are
+  not answered with a Response; only the root subtree is registered
+  (the two overlapping children were duplicateRegistration);
+  g_version 1.1.50 and port/Makefile PORTVERSION 1.1.50 (both said
+  0.8.48); `-i 0` rejected.
 
 * (MED) CRATE-MIB table and traps are not implemented but documented
-  as the product: mib.cpp:371-374 answers noSuchInstance for every
-  non-scalar OID; resolveGetNext (:380-387) walks only 4 scalars;
-  sendTrap (:316-319) only logs. snmpd/CRATE-MIB.txt:65-165 defines an
-  11-column table plus NOTIFICATION-TYPEs; README.md:761-763 says the
-  agent "exposes container metrics". collector.h:20 says "CPU% x 100"
-  but collector.cpp:52 stores raw percent; netRx/netTx/uptimeTicks
-  never populated.
+  as the product: mib.cpp answers noSuchInstance for every non-scalar
+  OID; resolveGetNext walks only 4 scalars; sendTrap only logs.
+  snmpd/CRATE-MIB.txt:65-165 defines an 11-column table plus
+  NOTIFICATION-TYPEs; README.md:761-763 says the agent "exposes
+  container metrics". collector.h:20 says "CPU% x 100" but
+  collector.cpp:52 stores raw percent; netRx/netTx/uptimeTicks never
+  populated. Either implement the table + Notify PDUs or trim the MIB
+  and README to the four scalars.
 
-* (LOW) mib.cpp:263-287 registers root + two overlapping child
-  subtrees at equal priority (duplicateRegistration, logged only);
-  :430-437 answers Response PDUs with a Response; :449 write() return
-  unchecked and SIGPIPE not ignored; :139,152 short read() not looped.
-  mib.cpp:90 g_version = "0.8.48" and port/Makefile:2
-  PORTVERSION=0.8.48 vs 1.1.33 (cli/args.cpp:756). main.cpp:41-48
-  `-i 0` runs jls/rctl every 100 ms.
+* (LOW) there is no single version source: cli/args.cpp ("crate
+  X.Y.Z" twice), snmpd/mib.cpp g_version and port/Makefile
+  PORTVERSION are edited by hand each release — generate a version.h
+  from one place and have `make` check PORTVERSION against it.
 
 === 10. Carried over from the previous TODO (still open, unchanged) ===
 

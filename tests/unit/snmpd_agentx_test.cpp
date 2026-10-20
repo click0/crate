@@ -143,7 +143,7 @@ ATF_TEST_CASE_BODY(get_request_one_oid) {
   encodeOid(buf, a);
   encodeOid(buf, b);   // null end OID = open range
   std::vector<std::vector<uint32_t>> oids;
-  ATF_REQUIRE(decodeGetRequest(buf, 0, /*flags*/0, oids) > 0);
+  ATF_REQUIRE(decodeGetRequest(buf, 0, /*flags: NETWORK_BYTE_ORDER*/0x10, oids) > 0);
   ATF_REQUIRE_EQ(oids.size(), (size_t)1);
   ATF_REQUIRE(oids[0] == a);
 }
@@ -156,7 +156,7 @@ ATF_TEST_CASE_BODY(get_request_two_oids) {
   encodeOid(buf, a); encodeOid(buf, std::vector<uint32_t>());
   encodeOid(buf, b); encodeOid(buf, std::vector<uint32_t>());
   std::vector<std::vector<uint32_t>> oids;
-  ATF_REQUIRE(decodeGetRequest(buf, 0, 0, oids) > 0);
+  ATF_REQUIRE(decodeGetRequest(buf, 0, /*NETWORK_BYTE_ORDER*/0x10, oids) > 0);
   ATF_REQUIRE_EQ(oids.size(), (size_t)2);
   ATF_REQUIRE(oids[0] == a);
   ATF_REQUIRE(oids[1] == b);
@@ -172,7 +172,7 @@ ATF_TEST_CASE_BODY(get_request_with_context_octetstring) {
   encodeOid(buf, a);
   encodeOid(buf, std::vector<uint32_t>());
   std::vector<std::vector<uint32_t>> oids;
-  ATF_REQUIRE(decodeGetRequest(buf, 0, /*flags*/0x08, oids) > 0);
+  ATF_REQUIRE(decodeGetRequest(buf, 0, /*flags: NETWORK_BYTE_ORDER|NON_DEFAULT_CONTEXT*/0x18, oids) > 0);
   ATF_REQUIRE_EQ(oids.size(), (size_t)1);
   ATF_REQUIRE(oids[0] == a);
 }
