@@ -265,6 +265,13 @@ The control sockets and the privops socket
 check the peer with
 .Xr getpeereid 2 .
 A future release will tighten the main listener too.
+Since 1.1.55 the socket file is created root-only
+.Pq 0700
+and set to the configured owner, group and mode
+.Em before
+the daemon starts accepting, so there is no window in which it is
+reachable at the process umask's default mode; earlier releases also
+skipped the mode fixup entirely when none of the three keys was set.
 .It
 The WebSocket console listener is disabled by default
 .Pq Ar console_ws.port = 0 .

@@ -29,6 +29,7 @@ private:
   // 1.1.37: body cap / worker pool / FD_CLOEXEC, applied to both the
   // TCP and the unix-socket httplib instances.
   void applyListenerLimits(httplib::Server &srv);
+  void applyUnixSocketPerms();   // 1.1.55: between bind(2) and accept
 
   struct Impl;
   std::unique_ptr<Impl> impl_;

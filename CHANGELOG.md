@@ -6,6 +6,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.55] — 2026-10-20
+
+**TODO §16 hygiene item: the crated.sock bind→chmod race is closed.**
+⚠️ Behaviour change for the default config: `crated.sock` now really
+gets `listen.unix_mode` (0660 by default, group = root's primary
+group) — before, a config without `unix_owner`/`unix_group` and with
+the default mode never ran the chmod at all, so the socket kept the
+process umask's default mode (root-only under umask 022). Members of
+the socket's group can now connect, as crated.8 always said.
+
+- `daemon/server.cpp`: the main-API unix socket is bound
+  synchronously under `umask(0077)` (file created 0700), then
+  chown/chmod to the configured owner/group/mode, and only then does
+  the accept loop start (`bind_to_port` / `listen_after_bind`). The
+  0.8.19 detached "poll for the socket file, then chmod" thread and
+  its documented race window are gone; a bind failure is reported
+  instead of silently leaving no listener.
+- docs/getpeereid-main-api-refactor.md §3.1 marked done, crated.8
+  CAVEATS updated; TODO §16 notes that §14/§16 features wait for
+  operator design input.
+
+Version 1.1.55.
+
 ## [1.1.54] — 2026-10-20
 
 **TODO §13: unit-test gaps, and a test bug ASan CI caught.**

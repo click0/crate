@@ -735,14 +735,21 @@ The bhyve/VM track is in TODO2.
   sources, goal (disk vs cold-start vs hub bandwidth), interaction
   with the ZFS-send backup/replicate path and per-user ZFS prefixes.
 
+  [FIXED in 1.1.55] the bind→chmod race on crated.sock: bind under
+  umask 0077, chown/chmod, then accept (bind_to_port /
+  listen_after_bind); the perms fixup now also runs for the default
+  config (it used to be skipped when no listen.unix_* key was set).
+
 * (security) True getpeereid(2)-based unix-socket auth for the main
   HTTP API in crated. docs/getpeereid-main-api-refactor.md argues for
   deferring: the per-tenant gate lives on control sockets (Plane 2)
-  and the privops socket. The bind→chmod race is closeable with a
-  small set_socket-based fix (~50 LOC) — do that as a 1.1.x hygiene
-  PR. The big refactor waits for a concrete per-tenant feature on the
-  main HTTP API. Operators can scope crated.sock via listen.unix_owner
-  / unix_group / unix_mode (0.8.19).
+  and the privops socket. The big refactor waits for a concrete
+  per-tenant feature on the main HTTP API. Operators can scope
+  crated.sock via listen.unix_owner / unix_group / unix_mode (0.8.19).
+
+* Sections 14 and 16 (features) need operator input before any code:
+  base-system update design (snapshot → clone → verify → promote),
+  layered images (canonical layer sources, goal). Not started.
 
 === Done (removed) ===
 
