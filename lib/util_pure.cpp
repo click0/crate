@@ -143,7 +143,10 @@ bool isUrl(const std::string &str) {
 }
 
 std::string pathSubstituteVarsInPath(const std::string &path) {
-  if (path.size() > 5 && path.substr(0, 5) == "$HOME") {
+  // 1.1.46: "$HOME" alone (size 5) and "$HOME/x" substitute; "$HOMER/x"
+  // does not (the next char must end the variable name).
+  if (path.size() >= 5 && path.compare(0, 5, "$HOME") == 0 &&
+      (path.size() == 5 || path[5] == '/')) {
     auto *pw = ::getpwuid(pure_myuid);
     if (pw == nullptr)
       ERR2("path substitution", "getpwuid failed for uid " << pure_myuid << ": " << strerror(errno))
@@ -195,12 +198,14 @@ bool hasExtension(const char *file, const char *extension) {
 
 bool fileExists(const std::string &path) {
   struct stat sb;
-  return ::stat(path.c_str(), &sb) == 0 && sb.st_mode & S_IFREG;
+  // 1.1.46: S_ISREG, not a bitmask test — a UNIX socket (0140000) has
+  // both the S_IFREG and S_IFDIR bits set and passed both checks.
+  return ::stat(path.c_str(), &sb) == 0 && S_ISREG(sb.st_mode);
 }
 
 bool dirExists(const std::string &path) {
   struct stat sb;
-  return ::stat(path.c_str(), &sb) == 0 && sb.st_mode & S_IFDIR;
+  return ::stat(path.c_str(), &sb) == 0 && S_ISDIR(sb.st_mode);
 }
 
 std::string getUserHomeDir() {

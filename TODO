@@ -264,86 +264,44 @@ The bhyve/VM track is in TODO2.
 
 === 5. Spec parsing, config, registries ===
 
-* (MED) Unknown option names are silently dropped in the extended
-  `options:` map form: spec.cpp:542-547 collects names into `opts`,
-  :548 iterates only allOptionsLst, so `options: {nett: {...}}` never
-  reaches spec.options and validate()'s unknown-option check
-  (spec_pure.cpp:222) never fires. The list form IS caught.
+  [FIXED in 1.1.46] options map form rejects unknown option names;
+  security/securelevel and enforce_statfs accept the documented -1
+  (SpecPure::parseIntInRange); spec-registry name rule = jail name
+  rule (128 chars, '.' allowed); spec registry + network_lease(6) lock
+  a stable `<path>.lock` file instead of the renamed-over inode;
+  crate.yml applied all-or-nothing per file with unknown keys
+  reported; crate.yml securelevel / children_max wired as defaults
+  for specs at -1 (both now default to unset, so behaviour is
+  unchanged until configured); fileExists/dirExists use S_ISREG/
+  S_ISDIR; ports validated 1..65535 and ranges non-reversed
+  (parsePort/parsePortRange) for net inbound, firewall allow-tcp/udp,
+  mac_portacl/allow_ports, gui/vnc_port; restart/delay 0 rejected;
+  `restart: always` no longer loops after Ctrl-C / crate stop (exit
+  128+SIGINT/SIGTERM breaks the loop) and an unknown policy in an old
+  .crate is reported and treated as "no"; vlan parsed as a bounded
+  spec value (1..4094) instead of as<int>() → "internal error";
+  files/ rejects unknown sub-keys and a non-list share; `x11: maybe`
+  rejected; cron schedule/command single-line with 5 fields or
+  @keyword; audit file write loops to completion; $HOME alone is
+  substituted and $HOMER is not; validate_pure recommends
+  gui/mode=headless (x11/mode has no headless) and drops the dead
+  gui/mode == "shared" branch.
 
-* (MED) Documented `securelevel: -1` / `enforce_statfs` cannot be
-  parsed: spec.cpp:866,880 use Util::toUInt, which rejects a leading
-  `-` (util_pure.cpp:78). crate.5:166 and README.md:51 document -1;
-  the -1 branches at spec.cpp:881 and spec_pure.cpp:345 are dead.
-
-* (MED) Spec-registry name rule contradicts NameLimits:
-  spec_registry_pure.cpp:32 caps at 63 and :36 forbids `.`, while
-  WarmPure::validateJailName allows 128 chars and `.`. A valid jail
-  `my.app` or a 64+ char name makes upsert throw; run.cpp:955-961 only
-  WARNs, so the jail starts but SpecRegistry::lookup (lifecycle.cpp
-  :488) and the daemon's PostStart cannot find its spec. Switch to
-  NameLimits::kJailName + the validateJailName charset.
-
-* (MED) Spec-registry lock-on-renamed-inode race: spec_registry.cpp:56
-  flocks the fd of effectivePath(), but writeAllAtomic (:98-122)
-  renames a fresh inode over it, and the .tmp name is fixed —
-  identical to the network_lease defect carried over in section 10.
-  Fix both with one stable `<path>.lock` file.
-
-* (MED) Config partial application + dead keys: config.cpp:41-114
-  applyYaml throws at :63/:73 (network_pool6 / firewall_backend) or on
-  any as<>() type mismatch; load() catches per file, so keys before
-  the bad one apply and keys after are skipped (WARN only) — tier
-  precedence then depends on key order. Unknown keys are ignored.
-  `securelevel` / `children_max` (config.cpp:80-81, documented
-  crate.5:649-652) have no consumer anywhere (grep) — dead config.
-
-* (MED) util_pure.cpp:198 fileExists `st_mode & S_IFREG`, :203
-  dirExists `& S_IFDIR` — bitmask instead of S_ISREG/S_ISDIR; a UNIX
-  socket (0140000) satisfies both. Same bug 1.1.27 fixed in
-  util.cpp:685. Affects Config::resolveCrateFile, run.cpp:473 etc.
-
-* (MED) Ports / counts without range checks: net inbound-tcp/udp
-  (spec.cpp:583-594 via SpecPure::parsePortRange) accept 0, > 65535
-  and reversed `90-80` (validate only compares spans, spec_pure.cpp
-  :235); gui/vnc_port (:1197) and mac_portacl/allow_ports (:1114)
-  unchecked; healthcheck.interval: 0 (:1246) → tight jexec loop;
-  restart.delay: 0 → tight restart loop (cli/main.cpp:229).
-
-* (MED) `restart: always` loops forever after Ctrl-C / `crate stop`:
-  cli/main.cpp:194-230 — on SIGINT/SIGTERM runCrate returns
-  returnCode = 128+sig (run.cpp:1953) with succ=true; the loop checks
-  only `policy`, never the signal, despite the comment at :202.
-  Policy typos (`on_failure`) silently mean "run once"; no backoff;
-  unless-stopped == always. Validate the policy enum at parse time.
-
-* (LOW) spec.cpp:667,708 `vlan:` non-integer → as<int>() throws
-  YAML::TypedBadConversion, surfaced as "internal error
-  (std::exception)" (main.cpp:344) rather than a spec error.
-* (LOW) spec.cpp:479-494 `files:` silently ignores unknown sub-keys
-  and a non-sequence `share` (the `dirs:` twin errors at :473/:476);
-  :1076-1088 firewall/allow-tcp|udp with a map value silently ignored;
-  :1109-1120 mac_portacl non-map / allow_ports non-sequence ignored;
-  :938-942 `x11: maybe` silently ignored.
-* (LOW) validate_pure.cpp:83,90,245,249 recommend x11/mode=headless,
-  which the parser rejects (spec.cpp:924); :108 tests gui/mode ==
-  "shared", not a parseable value (dead branch).
-* (LOW) run.cpp:1819-1821 cron schedule/command written verbatim — a
-  YAML block scalar with embedded newlines adds crontab lines;
-  schedule format unvalidated (user is).
-* (LOW) audit.cpp:140-142 relies on single-write atomicity <= PIPE_BUF
-  but argv (audit_pure.cpp:83) is unbounded; write return ignored →
-  interleaved/partial JSONL lines under concurrency.
-* (LOW) util_pure.cpp:146 `$HOME` alone (size==5) not substituted;
-  `$HOMER/x` → <home>R/x.
+* (LOW) firewall/allow-tcp|udp with a map value and mac_portacl
+  non-map / allow_ports non-sequence are still silently ignored
+  (spec.cpp firewall / security_advanced blocks) — mirror the
+  files/ handling.
 * (LOW) Duplicate top-level keys: only `scripts` is checked
-  (spec.cpp:1336); other sections are processed twice (lists append)
-  or last-wins. (plausible — yaml-cpp iteration semantics)
+  (spec.cpp); other sections are processed twice (lists append) or
+  last-wins. (plausible — yaml-cpp iteration semantics)
 * (LOW) locs.cpp:18-22 static initialiser calls getSysctlString; a
   throw there is std::terminate before main.
-* (LOW) lib/doctor.cpp: :507 dead jailXname; :77 WARNs when ipfw is
-  missing on pf-only hosts; `pf` not in kModules; :204/:317 hardcode
-  /var/log/crate ignoring Config.logs; :327 threshold is 100 MB while
-  the comment/section say 50.
+* (LOW) lib/doctor.cpp: :77 WARNs when ipfw is missing on pf-only
+  hosts; `pf` not in kModules; :204/:317 hardcode /var/log/crate
+  ignoring Config.logs; :327 threshold is 100 MB while the
+  comment/section say 50.
+* (LOW) `unless-stopped` == `always` in cli/main.cpp; no backoff
+  between restarts.
 
 === 6. crate doctor ===
 

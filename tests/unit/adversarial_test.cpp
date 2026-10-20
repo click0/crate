@@ -247,10 +247,12 @@ ATF_TEST_CASE_BODY(parsePortRange_negative_throws)
 ATF_TEST_CASE_WITHOUT_HEAD(parsePortRange_inverted_range);
 ATF_TEST_CASE_BODY(parsePortRange_inverted_range)
 {
-	// parsePortRange does not validate that first <= second.
-	auto r = SpecPure::parsePortRange("100-50");
-	ATF_REQUIRE_EQ(r.first, 100u);
-	ATF_REQUIRE_EQ(r.second, 50u);
+	// 1.1.46: parsePortRange rejects a reversed range (it used to accept
+	// 100-50 and only validate()'s span comparison could notice).
+	ATF_REQUIRE_THROW(Exception, SpecPure::parsePortRange("100-50"));
+	auto r = SpecPure::parsePortRange("50-100");
+	ATF_REQUIRE_EQ(r.first, 50u);
+	ATF_REQUIRE_EQ(r.second, 100u);
 }
 
 // ===================================================================

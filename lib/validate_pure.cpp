@@ -80,14 +80,14 @@ std::vector<std::string> gatherWarnings(const Spec &spec) {
       w.push_back("x11/mode=nested requires Xephyr to be installed on the host");
     if (spec.x11Options->mode == "shared")
       w.push_back("x11/mode=shared provides NO display isolation — jail processes can "
-                  "read host keystrokes and manipulate windows; prefer mode=nested or "
-                  "mode=headless for security-sensitive workloads");
+                  "read host keystrokes and manipulate windows; prefer x11/mode=nested or "
+                  "gui/mode=headless for security-sensitive workloads");
   } else {
     // No x11Options block at all: when GUI is implied, default mode is "shared".
     // Only warn when the spec actually pulls in something that triggers GUI.
     if (spec.optionExists("x11"))
       w.push_back("x11 option without an explicit x11/mode defaults to 'shared', which "
-                  "provides NO display isolation; set x11/mode=nested or mode=headless "
+                  "provides NO display isolation; set x11/mode=nested or gui/mode=headless "
                   "for security-sensitive workloads");
   }
 
@@ -104,12 +104,11 @@ std::vector<std::string> gatherWarnings(const Spec &spec) {
   if (spec.guiOptions
       && spec.guiOptions->resolution != "1280x720"   // default
       && (spec.guiOptions->mode == "wayland"
-          || spec.guiOptions->mode == "auto"
-          || spec.guiOptions->mode == "shared")) {
+          || spec.guiOptions->mode == "auto")) {   // 1.1.46: "shared" is not a gui/mode
     w.push_back("gui/resolution is ignored when gui/mode resolves to shared "
                 "or wayland (the host compositor decides resolution via "
                 "wl_output / X11 root window size); only honoured for "
-                "mode=nested (Xephyr) and mode=headless (Xvfb)");
+                "mode=nested (Xephyr) and gui/mode=headless (Xvfb)");
   }
 
   if (spec.dbusOptions) {
@@ -242,7 +241,7 @@ std::vector<std::string> gatherStrictErrors(const Spec &spec) {
   // --- x11/mode=shared promoted to error in strict mode ---
   if (spec.x11Options && spec.x11Options->mode == "shared") {
     e.push_back("x11/mode=shared is rejected in --strict mode "
-                "(no display isolation; switch to mode=nested or mode=headless, "
+                "(no display isolation; switch to x11/mode=nested or gui/mode=headless, "
                 "or drop --strict if intentional)");
   } else if (!spec.x11Options && spec.optionExists("x11")) {
     e.push_back("x11 option without explicit x11/mode is rejected in --strict mode "

@@ -158,9 +158,15 @@ static void writeRecord(const AuditPure::Event &ev) {
     }
   }
   if (fd >= 0) {
-    // Single write() is atomic per POSIX for size <= PIPE_BUF (4096).
-    // A single audit JSON line stays well under that.
-    (void)::write(fd, line.data(), line.size());
+    // O_APPEND writes <= PIPE_BUF are atomic; a line with a long argv
+    // can exceed that, so 1.1.46 loops until the whole line is out
+    // (a short write used to leave a truncated JSONL record).
+    size_t off = 0;
+    while (off < line.size()) {
+      ssize_t n = ::write(fd, line.data() + off, line.size() - off);
+      if (n < 0) { if (errno == EINTR) continue; break; }
+      off += (size_t)n;
+    }
     ::close(fd);
   }
 

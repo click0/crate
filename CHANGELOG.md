@@ -6,6 +6,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.46] — 2026-10-20
+
+**TODO §5: spec parsing, crate.yml and the registries stop accepting
+what they cannot use and start rejecting what they used to drop.**
+⚠️ Specs with an unknown option name in the `options:` map form, a port
+outside 1..65535, a reversed port range, `restart/delay: 0`, a non-list
+`files/share`, a non-map `x11:`, or a multi-line cron entry are now
+rejected at parse time. `restart: always` no longer restarts after
+Ctrl-C / `crate stop`.
+
+- **Unknown options in the map form** (`options: {nett: {...}}`) were
+  collected and then dropped — only the list form was checked. Both
+  forms reject unknown names now.
+- **`security/securelevel: -1` and `enforce_statfs: -1`** are documented
+  and were unparseable (`Util::toUInt` refuses a leading `-`), so the
+  "auto" branches were dead. `SpecPure::parseIntInRange` parses signed
+  bounded integers; also used for `vlan` (1..4094, was `as<int>()` →
+  "internal error (std::exception)").
+- **Ports.** `SpecPure::parsePort` (1..65535) for net inbound ranges,
+  `firewall/allow-tcp|udp`, `mac_portacl/allow_ports`, `gui/vnc_port`;
+  `parsePortRange` rejects reversed `90-80`. Port 0 / 70000 used to go
+  straight into pf/ipfw rule text.
+- **`restart: always` looped forever after Ctrl-C / `crate stop`**:
+  `runCrate` reports a signalled run as 128+sig and the outer loop in
+  `cli/main.cpp` never looked. It breaks on SIGINT/SIGTERM now; an
+  unknown policy in an old `.crate` is reported and treated as `no`
+  (it silently meant "run once"); `delay: 0` is rejected by the spec
+  parser and clamped to 1 s in the loop.
+- **Spec registry name rule** capped at 63 chars and forbade `.`, while
+  a jail name may be 128 chars with dots: `my.app` started fine but
+  `upsert` threw, so `SpecRegistry::lookup` and the daemon's `start`
+  never found its spec. Same rule as the jail name now
+  (`NameLimits::kJailName`).
+- **Lock on a renamed inode.** The spec registry and both network
+  lease files `flock`ed the data file, then `writeAllAtomic` renamed a
+  fresh inode over it — a second process holding the old inode's lock
+  was not serialised against the first and could read a stale snapshot
+  or write over a newer one. All three lock a stable `<path>.lock`
+  companion file.
+- **crate.yml applied all-or-nothing** per file: a bad value used to
+  apply the keys before it and skip the rest (tier precedence depended
+  on key order). Unknown keys are reported. `securelevel` /
+  `children_max` had no consumer; they are now the defaults for specs
+  that leave `security/securelevel` / `children_max` at -1, and default
+  to unset (-1) so nothing changes until configured (`crate.5`).
+- `fileExists`/`dirExists` use `S_ISREG`/`S_ISDIR` instead of a bitmask
+  (a UNIX socket satisfied both); `$HOME` alone is substituted and
+  `$HOMER/x` is not; the audit file write loops to completion (a long
+  argv could leave a truncated JSONL line); `files/` rejects unknown
+  sub-keys and a non-list `share`; `x11:` must be a map; cron
+  `schedule`/`command` must be single-line and the schedule five fields
+  or an `@keyword`; `crate validate` recommends `gui/mode=headless`
+  (`x11/mode` has no `headless`) and drops the dead `gui/mode ==
+  "shared"` branch.
+
+Tests: `spec_validate_test` bounded ints / ports / ranges,
+`spec_registry_pure_test` name rule (dotted, 128/129). Version 1.1.46.
+
 ## [1.1.45] — 2026-10-20
 
 **TODO §4: `crate stack` stops guessing — exact jail matching, real

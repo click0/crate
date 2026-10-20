@@ -33,7 +33,7 @@ ATF_TEST_CASE_BODY(name_rejects_garbage) {
   ATF_REQUIRE(!validateName("with/slash").empty());
   ATF_REQUIRE(!validateName("$(reboot)").empty());
   // length cap
-  std::string toolong(64, 'a');
+  std::string toolong(129, 'a');   // 1.1.46: cap is NameLimits::kJailName (128)
   ATF_REQUIRE(!validateName(toolong).empty());
 }
 
@@ -135,6 +135,18 @@ ATF_TEST_CASE_BODY(findIndex_works) {
   ATF_REQUIRE_EQ(findIndex(es, "missing"), -1);
 }
 
+// --- 1.1.46: name rule == jail name rule ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(validateName_matches_jail_name_rule);
+ATF_TEST_CASE_BODY(validateName_matches_jail_name_rule) {
+  ATF_REQUIRE_EQ(validateName("my.app"), std::string());                 // '.' allowed now
+  ATF_REQUIRE_EQ(validateName(std::string(128, 'a')), std::string());    // NameLimits::kJailName
+  ATF_REQUIRE(!validateName(std::string(129, 'a')).empty());
+  ATF_REQUIRE(!validateName(".hidden").empty());
+  ATF_REQUIRE(!validateName("..").empty());
+  ATF_REQUIRE(!validateName("a/b").empty());
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, name_typical_accepted);
   ATF_ADD_TEST_CASE(tcs, name_rejects_garbage);
@@ -146,4 +158,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, line_rejects_extra_spaces);
   ATF_ADD_TEST_CASE(tcs, line_rejects_garbage);
   ATF_ADD_TEST_CASE(tcs, findIndex_works);
+  ATF_ADD_TEST_CASE(tcs, validateName_matches_jail_name_rule);
 }

@@ -17,6 +17,7 @@
 
 #include <string>
 #include <set>
+#include <algorithm>   // 1.1.46: std::find over allOptionsLst
 #include <map>
 #include <list>
 #include <iostream>
@@ -479,9 +480,13 @@ static Spec parseSpecFromNode(YAML::Node top) {
         }
       }
     } else if (isKey(k, "files")) {
+      if (!k.second.IsMap())
+        ERR("files must be a map")   // 1.1.46: mirrors dirs/
       for (auto b : k.second) {
         if (isKey(b, "share")) {
-          if (b.second.IsSequence()) {
+          if (!b.second.IsSequence())
+            ERR("files/share must be a list")   // 1.1.46: was silently ignored
+          {
             for (auto oneShare : b.second) {
               if (oneShare.IsScalar())
                 spec.filesShare.push_back({AsString(oneShare), AsString(oneShare)});
@@ -492,6 +497,8 @@ static Spec parseSpecFromNode(YAML::Node top) {
               }
             }
           }
+        } else {
+          ERR("unknown element files/" << b.first << " in spec")   // 1.1.46
         }
       }
     } else if (isKey(k, "network")) {
@@ -545,6 +552,11 @@ static Spec parseSpecFromNode(YAML::Node top) {
           auto soptName = AsString(lo.first);
           if (!lo.second.IsMap() && !lo.second.IsNull())
             ERR("options/" << soptName << " value must be a map or empty when options are in the extended format")
+          // 1.1.46: the list form rejected unknown options, the map form
+          // silently dropped them (`nett:` never reached spec.options).
+          if (std::find(allOptionsLst.begin(), allOptionsLst.end(), soptName) == allOptionsLst.end())
+            ERR("unknown option '" << soptName << "' in options (known: x11, net, ssl-certs, tor, video, gl, "
+                "no-rm-static-libs, dbg-ktrace, wireguard, ipsec)")
           opts.insert(soptName);
         }
         for (auto &soptName : allOptionsLst)
@@ -673,7 +685,7 @@ static Spec parseSpecFromNode(YAML::Node top) {
                     if (!YAML::convert<bool>::decode(netOpt.second, optNetDetails->staticMac))
                       ERR("options/net/static-mac must be a boolean")
                   } else if (AsString(netOpt.first) == "vlan") {
-                    optNetDetails->vlanId = netOpt.second.as<int>();
+                    optNetDetails->vlanId = SpecPure::parseIntInRange(AsString(netOpt.second), 1, 4094, "options/net/vlan");   // 1.1.46: spec error, not an internal exception
                     if (optNetDetails->vlanId < 1 || optNetDetails->vlanId > 4094)
                       ERR("options/net/vlan must be 1-4094")
                   } else if (AsString(netOpt.first) == "extra") {
@@ -726,7 +738,7 @@ static Spec parseSpecFromNode(YAML::Node top) {
                           if (!YAML::convert<bool>::decode(e.second, extra.staticMac))
                             ERR("options/net/extra[]/static-mac must be a boolean")
                         } else if (eKey == "vlan") {
-                          extra.vlanId = e.second.as<int>();
+                          extra.vlanId = SpecPure::parseIntInRange(AsString(e.second), 1, 4094, "options/net/extra[]/vlan");   // 1.1.46
                           if (extra.vlanId < 1 || extra.vlanId > 4094)
                             ERR("options/net/extra[]/vlan must be 1-4094")
                         } else {
@@ -884,7 +896,8 @@ static Spec parseSpecFromNode(YAML::Node top) {
         ERR("security must be a map")
       for (auto b : k.second) {
         if (isKey(b, "enforce_statfs") || isKey(b, "enforce-statfs")) {
-          spec.enforceStatfs = Util::toUInt(AsString(b.second));
+          // 1.1.46: -1 (auto) is documented and was unparseable (toUInt)
+          spec.enforceStatfs = SpecPure::parseIntInRange(AsString(b.second), -1, 2, "security/enforce_statfs");
         } else if (isKey(b, "allow_quotas") || isKey(b, "allow-quotas")) {
           if (!YAML::convert<bool>::decode(b.second, spec.allowQuotas))
             ERR("security/allow_quotas must be a boolean")
@@ -898,9 +911,7 @@ static Spec parseSpecFromNode(YAML::Node top) {
           if (!YAML::convert<bool>::decode(b.second, spec.allowMlock))
             ERR("security/allow_mlock must be a boolean")
         } else if (isKey(b, "securelevel") || isKey(b, "secure-level")) {
-          spec.securelevel = Util::toUInt(AsString(b.second));
-          if (spec.securelevel < -1 || spec.securelevel > 3)
-            ERR("security/securelevel must be between -1 and 3")
+          spec.securelevel = SpecPure::parseIntInRange(AsString(b.second), -1, 3, "security/securelevel");   // 1.1.46
         } else if (isKey(b, "children_max") || isKey(b, "children-max")) {
           try {
             spec.childrenMax = std::stoi(AsString(b.second));
@@ -937,6 +948,8 @@ static Spec parseSpecFromNode(YAML::Node top) {
       }
     } else if (isKey(k, "x11")) {
       // GUI/Desktop isolation (§11) — top-level x11 section
+      if (!k.second.IsMap())
+        ERR("x11 must be a map (e.g. x11: {mode: nested})")   // 1.1.46: `x11: maybe` was ignored
       if (k.second.IsMap()) {
         spec.x11Options = std::make_unique<Spec::X11Options>();
         for (auto b : k.second) {
@@ -1097,16 +1110,16 @@ static Spec parseSpecFromNode(YAML::Node top) {
         } else if (isKey(b, "allow-tcp") || isKey(b, "allow_tcp")) {
           if (b.second.IsSequence()) {
             for (auto p : b.second)
-              spec.firewallPolicy->allowTcp.push_back(Util::toUInt(AsString(p)));
+              spec.firewallPolicy->allowTcp.push_back(SpecPure::parsePort(AsString(p), "firewall/allow_tcp"));
           } else if (b.second.IsScalar()) {
-            spec.firewallPolicy->allowTcp.push_back(Util::toUInt(AsString(b.second)));
+            spec.firewallPolicy->allowTcp.push_back(SpecPure::parsePort(AsString(b.second), "firewall/allow_tcp"));
           }
         } else if (isKey(b, "allow-udp") || isKey(b, "allow_udp")) {
           if (b.second.IsSequence()) {
             for (auto p : b.second)
-              spec.firewallPolicy->allowUdp.push_back(Util::toUInt(AsString(p)));
+              spec.firewallPolicy->allowUdp.push_back(SpecPure::parsePort(AsString(p), "firewall/allow_udp"));
           } else if (b.second.IsScalar()) {
-            spec.firewallPolicy->allowUdp.push_back(Util::toUInt(AsString(b.second)));
+            spec.firewallPolicy->allowUdp.push_back(SpecPure::parsePort(AsString(b.second), "firewall/allow_udp"));
           }
         } else if (isKey(b, "default")) {
           scalar(b.second, spec.firewallPolicy->defaultPolicy, "firewall/default");
@@ -1133,7 +1146,7 @@ static Spec parseSpecFromNode(YAML::Node top) {
               if (AsString(p.first) == "allow_ports" || AsString(p.first) == "allow-ports") {
                 if (p.second.IsSequence()) {
                   for (auto port : p.second)
-                    spec.securityAdvanced->macAllowPorts.push_back(Util::toUInt(AsString(port)));
+                    spec.securityAdvanced->macAllowPorts.push_back(SpecPure::parsePort(AsString(port), "security_advanced/mac_portacl/allow_ports"));
                 }
               } else {
                 ERR("unknown element security_advanced/mac_portacl/" << p.first)
@@ -1216,7 +1229,7 @@ static Spec parseSpecFromNode(YAML::Node top) {
           if (!YAML::convert<bool>::decode(b.second, spec.guiOptions->vncNative))
             ERR("gui/vnc_native must be a boolean")
         } else if (isKey(b, "vnc_port") || isKey(b, "vnc-port")) {
-          spec.guiOptions->vncPort = Util::toUInt(AsString(b.second));
+          spec.guiOptions->vncPort = SpecPure::parsePort(AsString(b.second), "gui/vnc_port");   // 1.1.46: 1..65535
         } else if (isKey(b, "novnc")) {
           if (!YAML::convert<bool>::decode(b.second, spec.guiOptions->novnc))
             ERR("gui/novnc must be a boolean")
@@ -1327,6 +1340,18 @@ static Spec parseSpecFromNode(YAML::Node top) {
           ERR("cron entry requires 'schedule' (e.g., '0 3 * * *')")
         if (job.command.empty())
           ERR("cron entry requires 'command'")
+        // 1.1.46: both go verbatim into a crontab line; a newline would
+        // add lines of its own, and a schedule needs five fields.
+        if (job.schedule.find_first_of("\n\r\t") != std::string::npos ||
+            job.command.find_first_of("\n\r") != std::string::npos)
+          ERR("cron entry: schedule/command must be single-line")
+        {
+          std::istringstream fs(job.schedule);
+          std::string f; int n = 0;
+          while (fs >> f) n++;
+          if (n != 5 && !(n == 1 && !job.schedule.empty() && job.schedule[0] == '@'))
+            ERR("cron/schedule '" << job.schedule << "' must have 5 fields (min hour dom mon dow) or be @reboot/@daily/...")
+        }
         spec.cronJobs.push_back(std::move(job));
       }
     } else if (isKey(k, "restart") || isKey(k, "restart_policy")) {
@@ -1341,8 +1366,11 @@ static Spec parseSpecFromNode(YAML::Node top) {
             scalar(b.second, spec.restartPolicy->policy, "restart/policy");
           else if (isKey(b, "max_retries"))
             spec.restartPolicy->maxRetries = Util::toUInt(AsString(b.second));
-          else if (isKey(b, "delay"))
+          else if (isKey(b, "delay")) {
             spec.restartPolicy->delaySec = Util::toUInt(AsString(b.second));
+            if (spec.restartPolicy->delaySec == 0)   // 1.1.46: 0 = tight restart loop
+              ERR("restart/delay must be at least 1 second")
+          }
           else
             ERR("unknown element restart/" << b.first << " in spec")
         }

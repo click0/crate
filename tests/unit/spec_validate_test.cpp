@@ -634,6 +634,35 @@ ATF_TEST_CASE_BODY(net_address_validators) {
 	ATF_REQUIRE(!SpecPure::validateGateway4("").empty());
 }
 
+// --- 1.1.46: bounded integers, ports, port ranges ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(bounded_int_and_port_parsing);
+ATF_TEST_CASE_BODY(bounded_int_and_port_parsing) {
+	ATF_REQUIRE_EQ(SpecPure::parseIntInRange("-1", -1, 3, "securelevel"), -1);
+	ATF_REQUIRE_EQ(SpecPure::parseIntInRange("3", -1, 3, "securelevel"), 3);
+	ATF_REQUIRE_EQ(SpecPure::parseIntInRange("+2", -1, 3, "securelevel"), 2);
+	ATF_REQUIRE_THROW(Exception, SpecPure::parseIntInRange("4", -1, 3, "securelevel"));
+	ATF_REQUIRE_THROW(Exception, SpecPure::parseIntInRange("-2", -1, 3, "securelevel"));
+	ATF_REQUIRE_THROW(Exception, SpecPure::parseIntInRange("abc", -1, 3, "securelevel"));
+	ATF_REQUIRE_THROW(Exception, SpecPure::parseIntInRange("", -1, 3, "securelevel"));
+	ATF_REQUIRE_THROW(Exception, SpecPure::parseIntInRange("-", -1, 3, "securelevel"));
+	ATF_REQUIRE_THROW(Exception, SpecPure::parseIntInRange("1e3", 0, 10000, "x"));
+
+	ATF_REQUIRE_EQ(SpecPure::parsePort("1", "p"), 1u);
+	ATF_REQUIRE_EQ(SpecPure::parsePort("65535", "p"), 65535u);
+	ATF_REQUIRE_THROW(Exception, SpecPure::parsePort("0", "p"));
+	ATF_REQUIRE_THROW(Exception, SpecPure::parsePort("65536", "p"));
+	ATF_REQUIRE_THROW(Exception, SpecPure::parsePort("-80", "p"));
+
+	auto r = SpecPure::parsePortRange("80-90");
+	ATF_REQUIRE_EQ(r.first, 80u); ATF_REQUIRE_EQ(r.second, 90u);
+	auto one = SpecPure::parsePortRange("443");
+	ATF_REQUIRE_EQ(one.first, 443u); ATF_REQUIRE_EQ(one.second, 443u);
+	ATF_REQUIRE_THROW(Exception, SpecPure::parsePortRange("90-80"));     // reversed
+	ATF_REQUIRE_THROW(Exception, SpecPure::parsePortRange("0-80"));      // port 0
+	ATF_REQUIRE_THROW(Exception, SpecPure::parsePortRange("80-70000"));  // > 65535
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
 	// 0.8.17: top-level network shorthand
@@ -716,4 +745,5 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, terminal_devfs_too_large_throws);
 	ATF_ADD_TEST_CASE(tcs, terminal_devfs_default_ok);
 	ATF_ADD_TEST_CASE(tcs, net_address_validators);
+	ATF_ADD_TEST_CASE(tcs, bounded_int_and_port_parsing);
 }

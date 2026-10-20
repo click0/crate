@@ -694,11 +694,19 @@ Base system bootstrap method.
 Default:
 .Dq base_txz .
 .It Sy securelevel
-Default securelevel.
-Default: 2.
+Default securelevel for specs that leave
+.Sy security/securelevel
+at \-1 (auto).
+Default: unset (\-1, the jail inherits the host's securelevel).
+Since 1.1.46; earlier releases documented this key but never read it.
 .It Sy children_max
-Default maximum child jails.
-Default: 0.
+Default
+.Va children.max
+for specs that leave
+.Sy security/children_max
+at \-1 (auto).
+Default: unset (\-1, kernel default).
+Since 1.1.46.
 .It Sy search_path
 List of directories to search for
 .Pa .crate

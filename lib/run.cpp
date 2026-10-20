@@ -1046,9 +1046,14 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // securelevel: -1 means inherit host default, 0-3 are explicit values
   // bastille defaults to securelevel=2 for all jails
-  auto securelevelStr = spec.securelevel >= 0 ? std::to_string(spec.securelevel) : std::string();
+  // 1.1.46: crate.yml `securelevel` / `children_max` are the defaults
+  // for specs that leave these at -1 (auto); unset in crate.yml (-1) keeps
+  // the kernel/host default exactly as before.
+  const int effSecurelevel = spec.securelevel >= 0 ? spec.securelevel : Config::get().securelevel;
+  const int effChildrenMax = spec.childrenMax >= 0 ? spec.childrenMax : Config::get().childrenMax;
+  auto securelevelStr = effSecurelevel >= 0 ? std::to_string(effSecurelevel) : std::string();
   // children.max: limits nested jails; -1 means not set (kernel default)
-  auto childrenMaxStr = spec.childrenMax >= 0 ? std::to_string(spec.childrenMax) : std::string();
+  auto childrenMaxStr = effChildrenMax >= 0 ? std::to_string(effChildrenMax) : std::string();
 
   RunAtEnd destroyJail([jailInfo,&jailXname,runScript,&args]() {
     runScript("run:before-remove-jail");

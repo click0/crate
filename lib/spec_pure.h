@@ -12,6 +12,8 @@ namespace SpecPure {
 
 typedef std::pair<unsigned, unsigned> PortRange;
 
+// 1.1.46: both ends must be 1..65535 and lo <= hi (a reversed `90-80`
+// or port 0 / 70000 used to pass straight into pf/ipfw rule text).
 PortRange parsePortRange(const std::string &str);
 
 // Replace ${KEY} tokens in `input` with values from `vars`.
@@ -34,5 +36,14 @@ std::string validateTopLevelNetwork(const std::string &v);
 std::string validateStaticIp4(const std::string &v);
 std::string validateStaticIp6(const std::string &v);
 std::string validateGateway4(const std::string &v);
+
+// 1.1.46: bounded integer parsing for spec fields. `what` names the
+// field in the error. Throws Exception (via ERR) outside [lo, hi] or on
+// a non-integer; accepts a leading '-' (Util::toUInt does not, which
+// made the documented `securelevel: -1` / `enforce_statfs: -1`
+// unparseable).
+int parseIntInRange(const std::string &s, int lo, int hi, const char *what);
+// 1..65535 port number, same error style.
+unsigned parsePort(const std::string &s, const char *what);
 
 }

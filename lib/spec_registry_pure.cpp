@@ -1,6 +1,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "spec_registry_pure.h"
+#include "name_limits.h"   // 1.1.46
 
 #include <cctype>
 #include <string>
@@ -28,13 +29,20 @@ bool segmentHasDotDot(const std::string &s) {
 } // anon
 
 std::string validateName(const std::string &n) {
+  // 1.1.46: the same rule as the jail name it keys (WarmPure::
+  // validateJailName / NameLimits::kJailName): 128 chars, '.' allowed.
+  // The old 63-char / no-dot rule made upsert throw for a valid jail
+  // such as "my.app", so SpecRegistry::lookup and the daemon's start
+  // never found its spec.
   if (n.empty()) return "name is empty";
-  if (n.size() > 63) return "name too long (>63 chars): '" + n + "'";
+  if (n.size() > NameLimits::kJailName)
+    return "name too long (>" + std::to_string(NameLimits::kJailName) + " chars): '" + n + "'";
+  if (n == "." || n == "..") return "name is reserved: '" + n + "'";
   if (n[0] == '-' || n[0] == '.')
     return "name must not start with '-' or '.': '" + n + "'";
   for (char c : n)
-    if (!isAlnumDashUnderscore(c))
-      return "name contains forbidden char (allowed: [A-Za-z0-9_-]): '" + n + "'";
+    if (!isAlnumDashUnderscore(c) && c != '.')
+      return "name contains forbidden char (allowed: [A-Za-z0-9._-]): '" + n + "'";
   return "";
 }
 
