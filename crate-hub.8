@@ -22,6 +22,8 @@
 .Op Fl c Ar config
 .Op Fl p Ar port
 .Op Fl w Ar webdir
+.Nm
+.Fl V
 .Sh DESCRIPTION
 .Nm
 polls
@@ -64,6 +66,10 @@ before binding to a routable address.
 .It Fl w Ar webdir , Fl Fl webdir Ar webdir
 Directory served as the embedded dashboard. Default
 .Pa /usr/local/share/crate-hub/web .
+.It Fl V , Fl Fl version
+Print the version
+.Pq the same release number as Xr crate 1
+and exit.
 .El
 .Pp
 .Nm Cm schedule
@@ -112,6 +118,7 @@ good snapshot.
 .Bd -literal -offset indent
 listen_host: 127.0.0.1     # -b / --bind overrides
 listen_port: 9810          # -p / --port overrides
+db_path: /var/db/crate-hub/metrics.db   # SQLite store; directory created if missing
 
 # Polling interval for each node, seconds.
 poll_interval: 15
@@ -194,7 +201,8 @@ framework and release cadence independent of the C++ daemons.
 .It Pa /usr/local/etc/crate-hub.conf
 Operator-edited config file.
 .It Pa /var/db/crate-hub/metrics.db
-SQLite store of polled metrics.
+SQLite store of polled metrics
+.Pq default; Va db_path in the configuration file overrides .
 .It Pa /usr/local/share/crate-hub/web/index.html
 Embedded dashboard root.
 .El

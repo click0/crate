@@ -17,6 +17,7 @@
 #include "store.h"
 #include "api.h"
 #include "scheduling_pure.h"
+#include "version.h"          // 1.1.52: generated from VERSION by the Makefile
 
 #include <httplib.h>
 
@@ -27,6 +28,7 @@
 #include <cstring>
 #include <iostream>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -194,6 +196,9 @@ int main(int argc, char **argv) {
     else if (arg == "-h" || arg == "--help") {
       std::cout << "Usage: crate-hub [-f] [-c config] [-p port] [-b bind-address] [-w webdir]\n";
       return 0;
+    } else if (arg == "-V" || arg == "--version") {   // 1.1.52: shared version.h
+      std::cout << "crate-hub " << CRATE_VERSION << std::endl;
+      return 0;
     } else {
       std::cerr << "crate-hub: unknown argument '" << arg << "'" << std::endl;
       return 1;
@@ -239,16 +244,34 @@ int main(int argc, char **argv) {
   // forking thread — no poll loop ever ran in the default mode, and the
   // final pollerThread.join() joined a thread that did not exist in
   // that process.
+  // 1.1.52: open the SQLite store BEFORE daemonising so a failure is
+  // reported on the operator's terminal instead of being an uncaught
+  // exception (std::terminate, "unable to open database file" with no
+  // path) in a detached child. `db_path:` in the config overrides the
+  // default; the parent directory is created when missing.
+  std::string dbPath = "/var/db/crate-hub/metrics.db";
+  try {
+    YAML::Node root = YAML::LoadFile(configPath);
+    if (root["db_path"]) dbPath = root["db_path"].as<std::string>();
+  } catch (...) {}
+  std::unique_ptr<CrateHub::Store> storePtr;
+  try {
+    auto slash = dbPath.find_last_of('/');
+    if (slash != std::string::npos && slash > 0)
+      ::mkdir(dbPath.substr(0, slash).c_str(), 0750);
+    storePtr = std::make_unique<CrateHub::Store>(dbPath);
+  } catch (const std::exception &e) {
+    std::cerr << "crate-hub: " << e.what() << " (" << dbPath << ")" << std::endl;
+    return 1;
+  }
+  CrateHub::Store &store = *storePtr;
+
   if (!foreground) {
     pid_t pid = ::fork();
     if (pid < 0) { std::cerr << "fork failed\n"; return 1; }
     if (pid > 0) ::_exit(0);
     ::setsid();
   }
-
-  // Initialize SQLite store (create the directory; nothing else does)
-  ::mkdir("/var/db/crate-hub", 0750);
-  CrateHub::Store store("/var/db/crate-hub/metrics.db");
 
   // Start poller thread
   CrateHub::Poller poller(nodes, store, pollIntervalSec);

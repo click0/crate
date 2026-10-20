@@ -132,14 +132,19 @@ void Poller::pollNode(const NodeConfig &node, NodeStatus &status) {
     // cert could not be polled at all, and TLS implied no verification.
     std::unique_ptr<httplib::Client> cli;
     if (node.tls) {
-      std::unique_ptr<httplib::SSLClient> ssl;
+      // 1.1.52: httplib::SSLClient derives from ClientImpl, not from
+      // Client, so the 1.1.49 `cli = std::move(ssl)` never compiled (the
+      // hub had no build target, so nothing noticed). Client itself picks
+      // the TLS implementation from the URL scheme; IPv6 literals need
+      // brackets in the URL.
+      std::string hostPort = (host.find(':') != std::string::npos ? "[" + host + "]" : host)
+                             + ":" + std::to_string(port);
       if (!node.tlsCert.empty())
-        ssl = std::make_unique<httplib::SSLClient>(host, port, node.tlsCert, node.tlsKey);
+        cli = std::make_unique<httplib::Client>("https://" + hostPort, node.tlsCert, node.tlsKey);
       else
-        ssl = std::make_unique<httplib::SSLClient>(host, port);
-      if (!node.caCert.empty()) ssl->set_ca_cert_path(node.caCert);
-      ssl->enable_server_certificate_verification(true);
-      cli = std::move(ssl);
+        cli = std::make_unique<httplib::Client>("https://" + hostPort);
+      if (!node.caCert.empty()) cli->set_ca_cert_path(node.caCert);
+      cli->enable_server_certificate_verification(true);
     } else {
       cli = std::make_unique<httplib::Client>(host, port);
     }

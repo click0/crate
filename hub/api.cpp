@@ -201,8 +201,7 @@ void registerApiRoutes(httplib::Server &srv, Store &store, Poller &poller,
   //                      (avoids ping-pong migrations).
   //
   // Operator workflow:
-  //   target=$(curl -s http://hub:9001/api/v1/scheduling/least-loaded \
-  //              | jq -r .data.host)
+  //   target=$(curl -s http://hub:9810/api/v1/scheduling/least-loaded | jq -r .data.host)
   //   crate migrate myjail --to "$target" ...
   srv.Get("/api/v1/scheduling/least-loaded",
           [&poller](const httplib::Request &req, httplib::Response &res) {

@@ -34,6 +34,7 @@
 #include "mib.h"
 #include "mib_pure.h"
 #include "collector.h"
+#include "version.h"
 
 #include "util.h"
 
@@ -88,9 +89,9 @@ static std::mutex g_mibMutex;
 static std::vector<ContainerMetrics> g_containers;
 static unsigned g_totalCount = 0;
 static unsigned g_runningCount = 0;
-// 1.1.50: was a stale "0.8.48" literal. Keep in step with cli/args.cpp
-// (`crate --version`) until there is one shared version header (TODO).
-static std::string g_version = "1.1.50";
+// 1.1.52: from the generated lib/version.h (one VERSION file for crate,
+// crated, crate-snmpd, crate-hub and the port).
+static std::string g_version = CRATE_VERSION;
 static std::string g_hostname;
 
 // --- AgentX PDU helpers ---

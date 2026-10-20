@@ -6,6 +6,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.52] — 2026-10-20
+
+**TODO §11: build, CI, packaging — crate-hub is built, shipped and
+version-checked like the other binaries.**
+
+- **`make crate-hub` / `make install-hub`** (`Makefile`). The hub had no
+  build target anywhere: its runtime files were compiled by nothing, so
+  the 1.1.49 TLS poller did not even compile (`httplib::SSLClient` is
+  not a `Client`; now `httplib::Client("https://host:port")`, IPv6
+  literals bracketed). First end-to-end run of the hub against a mock
+  crated: every `/api/v1/*` endpoint, `/metrics`, the dashboard mount
+  and `admin/prune` answer. `install-hub` installs the binary, the web
+  dashboard and the man page; `install-snmpd` creates `sbin` first;
+  `install-daemon` no longer seeds `etc/crated.conf` into a staged
+  `DESTDIR` (port plist). `crate-hub -V/--version`; `db_path:` config
+  key; a store that cannot be opened is reported before daemonising
+  instead of `std::terminate` in the detached child.
+- **One version source.** `VERSION` holds the release number; the
+  Makefile generates `lib/version.h` (`CRATE_VERSION`) for `crate
+  --version`, `crate-snmpd` (`g_version`) and `crate-hub`;
+  `make check-version` verifies `port/Makefile` `PORTVERSION` and the
+  `CHANGELOG.md` section agree. `release.yml` checks the tag against
+  `VERSION` and runs it before publishing.
+- **Release tarball** now holds `sbin/crate-hub`, `crated.8.gz`,
+  `crate-hub.8.gz` and the hub web dir; the `|| true` copies are gone
+  (a missing file fails the build instead of shipping silently); both
+  binaries' `--version` is checked against the tag.
+- **CI**: lite links `crate-hub` on every push and runs
+  `check-version`; the smoke step compares `./crate --version` with
+  `VERSION` and runs `crate validate examples/nginx.yml` as the
+  unprivileged user; `System info` has `set -ex`; `crated.8` /
+  `crate-hub.8` join `paths-ignore`; the full workflow builds the three
+  daemons too; `sqlite3` added to every FreeBSD dependency list.
+- **Port**: `BUILD_DEPENDS` rang (never listed), `cpp-httplib` for the
+  DAEMON option, new `HUB` option (cpp-httplib + sqlite3), plist: no
+  more `@mode 04755` on `bin/crate` (setuid went away in 1.0.0),
+  `crated.8.gz`, the hub files.
+- `hub/ha_pure` name cap = `NameLimits::kJailName` (was a private 64).
+
+Tests: unit suite unchanged (1487). Version 1.1.52.
+
 ## [1.1.51] — 2026-10-20
 
 **TODO §10: the carried-over `crate run` / `stack up` correctness

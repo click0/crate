@@ -29,6 +29,8 @@ on:
       - 'examples/**'
       - 'templates/**'
       - 'crate.5'
+      - 'crated.8'
+      - 'crate-hub.8'
       - '.github/workflows/freebsd-build.yml'
   workflow_dispatch:
 
@@ -68,7 +70,8 @@ jobs:
           # in PR CI — see the "Link daemon binaries" step below.
           #
           # Hard build deps — these MUST install or the job is dead.
-          sudo pkg install -y pkgconf yaml-cpp rang gmake cpp-httplib
+          # 1.1.52: sqlite3 for crate-hub (linked below).
+          sudo pkg install -y pkgconf yaml-cpp rang gmake cpp-httplib sqlite3
 
           # ATF link libraries. The Makefile links every unit test with
           # `-L/usr/local/lib -latf-c++ -latf-c`. FreeBSD 14.x base ships
@@ -118,6 +121,7 @@ jobs:
       - name: System info
         shell: cpa.sh {0}
         run: |
+          set -ex
           uname -a
           c++ --version
           echo "ncpu=$(sysctl -n hw.ncpu)"
@@ -150,15 +154,19 @@ jobs:
           # The VM shell is the unprivileged runner user (hence `sudo pkg
           # install` above); `sudo` gives the root variant.
           id -u
+          # 1.1.52: the binary must report exactly the VERSION file, and
+          # `validate` on a real example exercises the spec parser + crate.yml
+          # defaults as an unprivileged user.
           for pfx in "" "sudo"; do
-            $pfx ./crate --version | grep '^crate 1\.'
+            $pfx ./crate --version | grep -Fx "crate $(cat VERSION)"
             $pfx ./crate --help | head -n 1 | grep '^usage:'
+            $pfx ./crate validate examples/nginx.yml
             if $pfx ./crate validate /nonexistent/spec.yml; then
               echo "::error::crate validate on a missing file must fail"; exit 1
             fi
           done
 
-      - name: Link daemon binaries crated + crate-snmpd
+      - name: Link daemon binaries crated + crate-snmpd + crate-hub
         shell: cpa.sh {0}
         run: |
           set -ex
@@ -172,6 +180,13 @@ jobs:
           # (base); crate-snmpd needs only base libs.
           gmake -j"$(sysctl -n hw.ncpu)" crated crate-snmpd
           ls -la crated crate-snmpd
+          # 1.1.52: crate-hub has a build target at last — until now its
+          # runtime files were compiled by nothing (the 1.1.49 TLS branch
+          # did not even build). Link it and check its version.
+          gmake -j"$(sysctl -n hw.ncpu)" crate-hub
+          ls -la crate-hub
+          ./crate-hub --version | grep -Fx "crate-hub $(cat VERSION)"
+          gmake check-version
 
       - name: Build unit tests
         shell: cpa.sh {0}

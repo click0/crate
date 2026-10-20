@@ -620,7 +620,11 @@ cd /usr/ports/sysutils/crate && make config && make install clean
 make && sudo make install
 ```
 
-**Dependencies:** yaml-cpp, libjail
+**Dependencies:** yaml-cpp, rang (header-only), libjail / libnv / libnetgraph (base).
+`crated` additionally needs cpp-httplib (header-only); `crate-hub` needs
+cpp-httplib and sqlite3. The release number lives in the `VERSION` file:
+the build generates `lib/version.h` from it, and `make check-version`
+confirms `port/Makefile` and `CHANGELOG.md` agree with it.
 
 **Compile-time feature flags** (set `=0` to disable):
 
@@ -638,9 +642,12 @@ All native API wrappers fall back to shell commands when compiled without the co
 | `make` | Build `crate` CLI |
 | `make all-daemon` | Build `crate` + `crated` daemon |
 | `make all-snmpd` | Build `crate` + `crate-snmpd` agent |
+| `make all-hub` | Build `crate` + `crate-hub` aggregator |
 | `make install` | Install crate CLI + man pages |
 | `make install-daemon` | Install crated, RC script, config |
 | `make install-snmpd` | Install crate-snmpd + MIB file |
+| `make install-hub` | Install crate-hub, its web dashboard and man page |
+| `make check-version` | Verify `VERSION`, `port/Makefile` and `CHANGELOG.md` agree |
 | `make install-examples` | Install example specs to `/usr/local/share/examples/crate/` |
 | `make install-completions` | Install shell completions |
 | `make test` | Compile unit tests and run via kyua |

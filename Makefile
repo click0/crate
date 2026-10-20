@@ -71,10 +71,18 @@ DAEMON_SRCS = daemon/main.cpp daemon/config.cpp daemon/server.cpp \
 SNMPD_SRCS = snmpd/main.cpp snmpd/collector.cpp \
              snmpd/mib.cpp snmpd/mib_pure.cpp
 
+# 1.1.52: crate-hub finally has a build target. Only lib/json_pure.o is
+# shared with the rest of the tree, so the hub links that object directly
+# instead of dragging in libcrate.a (and its FreeBSD-only libraries).
+HUB_SRCS = hub/main.cpp hub/api.cpp hub/poller.cpp hub/store.cpp \
+           hub/aggregator_pure.cpp hub/datacenter_pure.cpp \
+           hub/ha_pure.cpp hub/scheduling_pure.cpp
+
 LIB_OBJS = $(LIB_SRCS:.cpp=.o)
 CLI_OBJS = $(CLI_SRCS:.cpp=.o)
 DAEMON_OBJS = $(DAEMON_SRCS:.cpp=.o)
 SNMPD_OBJS = $(SNMPD_SRCS:.cpp=.o)
+HUB_OBJS = $(HUB_SRCS:.cpp=.o)
 
 # --- Flags ---
 
@@ -138,8 +146,15 @@ CXXFLAGS += -Wall -std=c++17
 CXXFLAGS += -Ilib             # lib/ headers visible to all
 CXXFLAGS += -Idaemon          # daemon/ headers for daemon build
 CXXFLAGS += -Isnmpd           # snmpd/ headers for snmpd build
+CXXFLAGS += -Ihub             # hub/ headers for hub build
 
 LIBS_DAEMON = $(LIBS) -lssl -lcrypto -lpthread
+# 1.1.52: the hub needs cpp-httplib (header-only) + ssl/crypto for the TLS
+# poller, sqlite3 for the metrics store and yaml-cpp for its config; none
+# of the jail/netgraph/nv libraries.
+# yaml-cpp is repeated here on purpose: LDFLAGS puts it BEFORE the objects,
+# which an --as-needed linker (Linux) drops; after the objects it sticks.
+LIBS_HUB = `pkg-config --libs yaml-cpp` -lsqlite3 -lssl -lcrypto -lpthread
 
 # --- Targets ---
 
@@ -148,6 +163,8 @@ all: crate
 all-daemon: crate crated
 
 all-snmpd: crate crate-snmpd
+
+all-hub: crate crate-hub
 
 libcrate.a: $(LIB_OBJS)
 	$(AR) rcs $@ $^
@@ -160,6 +177,9 @@ crated: libcrate.a $(DAEMON_OBJS)
 
 crate-snmpd: libcrate.a $(SNMPD_OBJS)
 	$(CXX) $(LDFLAGS) -o $@ $(SNMPD_OBJS) libcrate.a $(LIBS) -lpthread
+
+crate-hub: $(HUB_OBJS) lib/json_pure.o
+	$(CXX) $(LDFLAGS) -o $@ $(HUB_OBJS) lib/json_pure.o $(LIBS_HUB)
 
 install: crate
 	@mkdir -p $(DESTDIR)$(PREFIX)/bin
@@ -181,8 +201,12 @@ install-daemon: crated
 	install -s -m 0755 crated $(DESTDIR)$(PREFIX)/sbin/crated
 	install -m 0555 daemon/crated.rc $(DESTDIR)$(PREFIX)/etc/rc.d/crated
 	install -m 0640 daemon/crated.conf.sample $(DESTDIR)$(PREFIX)/etc/crated.conf.sample
-	@if [ ! -f $(DESTDIR)$(PREFIX)/etc/crated.conf ]; then \
-		install -m 0640 daemon/crated.conf.sample $(DESTDIR)$(PREFIX)/etc/crated.conf; \
+	# 1.1.52: only seed the live config on a direct install. Under a
+	# staged (DESTDIR) port build the port's @sample directive does this
+	# at pkg-install time, and a stray etc/crated.conf in the stage dir
+	# fails the plist check.
+	@if [ -z "$(DESTDIR)" ] && [ ! -f $(PREFIX)/etc/crated.conf ]; then \
+		install -m 0640 daemon/crated.conf.sample $(PREFIX)/etc/crated.conf; \
 	fi
 	gzip -9 < crated.8 > $(DESTDIR)$(PREFIX)/man/man8/crated.8.gz
 
@@ -203,18 +227,36 @@ crate.x: crate
 	sudo install -s -m 04755 -o 0 -g 0 crate crate.x
 
 install-snmpd: crate-snmpd
+	@mkdir -p $(DESTDIR)$(PREFIX)/sbin
 	install -s -m 0755 crate-snmpd $(DESTDIR)$(PREFIX)/sbin/crate-snmpd
 	@mkdir -p $(DESTDIR)$(PREFIX)/share/snmp/mibs
 	install -m 0644 snmpd/CRATE-MIB.txt $(DESTDIR)$(PREFIX)/share/snmp/mibs/CRATE-MIB.txt
 
-# Install only the crate-hub(8) man page. The hub binary itself is
-# built and installed separately (its build is not driven from this
-# Makefile yet). Splitting this target out lets the hub package — or
-# an operator running `make install-hub-man` by hand — ship the
-# documentation without otherwise touching the source tree.
+# 1.1.52: install the hub binary, its web dashboard and the man page.
+# install-hub-man is kept as a separate target for the docs-only case.
+install-hub: crate-hub install-hub-man
+	@mkdir -p $(DESTDIR)$(PREFIX)/sbin
+	@mkdir -p $(DESTDIR)$(PREFIX)/share/crate-hub/web
+	install -s -m 0755 crate-hub $(DESTDIR)$(PREFIX)/sbin/crate-hub
+	install -m 0644 hub/web/index.html hub/web/app.js hub/web/style.css \
+		$(DESTDIR)$(PREFIX)/share/crate-hub/web/
+
 install-hub-man:
 	@mkdir -p $(DESTDIR)$(PREFIX)/man/man8
 	gzip -9 < crate-hub.8 > $(DESTDIR)$(PREFIX)/man/man8/crate-hub.8.gz
+
+# 1.1.52: one version source. VERSION holds the release number; lib/version.h
+# is generated from it (below) for crate, crate-snmpd and crate-hub, and this
+# target checks the two places that cannot include a header: the port and the
+# CHANGELOG. release.yml runs it before publishing a tag.
+check-version:
+	@v=$$(tr -d '[:space:]' < VERSION); \
+	 case "$$v" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "VERSION '$$v' is not X.Y.Z"; exit 1;; esac; \
+	 pv=$$(sed -n 's/^PORTVERSION=[[:space:]]*//p' port/Makefile | tr -d '[:space:]'); \
+	 if [ "$$pv" != "$$v" ]; then echo "port/Makefile PORTVERSION=$$pv != VERSION $$v"; exit 1; fi; \
+	 if ! grep -q "^## \[$$v\]" CHANGELOG.md; then echo "CHANGELOG.md has no '## [$$v]' section"; exit 1; fi; \
+	 if grep -q '"crate [0-9]' cli/args.cpp; then echo "cli/args.cpp hard-codes a version; use CRATE_VERSION"; exit 1; fi; \
+	 echo "version $$v: VERSION, port/Makefile and CHANGELOG.md agree"
 
 UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              network_test network_ipv6_test err_test \
@@ -427,7 +469,7 @@ clean-tests:
 	rm -rf $(TEST_OBJ_DIR)
 
 clean: clean-tests coverage-clean
-	rm -f $(LIB_OBJS) $(CLI_OBJS) $(DAEMON_OBJS) $(SNMPD_OBJS) libcrate.a crate crated crate-snmpd lib/lst-all-script-sections.h lib/lst-all-script-sections.h.tmp
+	rm -f $(LIB_OBJS) $(CLI_OBJS) $(DAEMON_OBJS) $(SNMPD_OBJS) $(HUB_OBJS) libcrate.a crate crated crate-snmpd crate-hub lib/lst-all-script-sections.h lib/lst-all-script-sections.h.tmp lib/version.h lib/version.h.tmp
 
 # --- Generated sources ---
 
@@ -453,6 +495,15 @@ lib/lst-all-script-sections.h: lib/create.cpp lib/run.cpp lib/run_net.cpp lib/ru
 # allScriptSections set.
 lib/spec.o lib/spec_pure.o: lib/lst-all-script-sections.h
 
+# 1.1.52: lib/version.h from VERSION, content-stable like the header above.
+lib/version.h: VERSION
+	@v=$$(tr -d '[:space:]' < VERSION); \
+	 printf '// Generated from VERSION by the Makefile — do not edit.\n#pragma once\n#define CRATE_VERSION "%s"\n' "$$v" > $@.tmp
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; \
+	 else mv -f $@.tmp $@; echo "generate $@"; fi
+
+cli/args.o snmpd/mib.o hub/main.o: lib/version.h
+
 # --- Shortcuts ---
 a: all
 c: clean
@@ -460,3 +511,4 @@ d: all-daemon
 l: install-local
 e: install-examples
 s: all-snmpd
+h: all-hub

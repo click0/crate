@@ -477,12 +477,19 @@ The bhyve/VM track is in TODO2.
   listen() failure exits non-zero; a node without host is skipped,
   not fatal; documented `port:` key honoured.
 
-* (HIGH) crate-hub still has no build target in the Makefile (only
-  its pure modules are compiled, by the unit tests). hub/main.cpp,
-  poller.cpp, api.cpp and store.cpp have never been compiled by CI;
-  the 1.1.49 fixes are syntax-checked on Linux with httplib/sqlite
-  headers missing. Add `make crate-hub` (httplib + yaml-cpp + sqlite3
-  + OpenSSL) and a lite-CI compile step before shipping the hub.
+  [FIXED in 1.1.52] `make crate-hub` / `make install-hub` (httplib +
+  yaml-cpp + sqlite3 + OpenSSL), linked by lite CI on every push and
+  shipped in the release tarball; the 1.1.49 TLS branch did not
+  compile (SSLClient is not a Client) and is fixed; first end-to-end
+  run against a mock crated on Linux (all endpoints answer). Store
+  open failure reported before daemonising; `db_path:` config key;
+  `-V/--version`.
+
+* (LOW) hub/store.cpp shares one sqlite3 handle between the poller
+  thread and the HTTP threads with no mutex and no busy_timeout; it
+  works because sqlite's default serialized threading mode locks per
+  call. Add a Store mutex (or one connection per thread) before any
+  multi-statement operation is added.
 
 * (MED) Dashboard actions still go browser → crated directly with
   https:// hard-coded, and crated emits no CORS headers, so the
@@ -526,10 +533,10 @@ The bhyve/VM track is in TODO2.
   populated. Either implement the table + Notify PDUs or trim the MIB
   and README to the four scalars.
 
-* (LOW) there is no single version source: cli/args.cpp ("crate
-  X.Y.Z" twice), snmpd/mib.cpp g_version and port/Makefile
-  PORTVERSION are edited by hand each release — generate a version.h
-  from one place and have `make` check PORTVERSION against it.
+  [FIXED in 1.1.52] one version source: VERSION → generated
+  lib/version.h (CRATE_VERSION) used by cli/args.cpp, snmpd/mib.cpp
+  and hub/main.cpp; `make check-version` checks port/Makefile
+  PORTVERSION and the CHANGELOG section; release.yml runs it.
 
 === 10. Carried over from the previous TODO ===
 
@@ -586,8 +593,7 @@ The bhyve/VM track is in TODO2.
   loops treat read()==-1 as EOF (EINTR); ws_console.cpp select() with
   fds >= FD_SETSIZE.
 
-* (consistency, LOW) hub/ha_pure isValidName caps names at 64; switch
-  to NameLimits::kJailName when the hub gets a build target.
+  [FIXED in 1.1.52] hub/ha_pure isValidName uses NameLimits::kJailName.
 
 * (security, HIGH-if-reachable, latent) libvirt VM track
   (lib/vm_spec.cpp:97-184 generateDomainXml embeds name / disk /
@@ -600,27 +606,43 @@ The bhyve/VM track is in TODO2.
 
 === 11. Build, CI, packaging ===
 
-* (MED) No smoke test runs the built crate(1) as a non-root user in
-  any workflow (would have caught section 1). Add `./crate --version`
-  and `./crate validate examples/...` to freebsd-build-lite.yml.
-* (MED) release.yml:88-96 ships only crate.5; crated.8 (installed by
-  `make install-daemon`, Makefile:185) and crate-hub.8 are not in the
-  tarball; the crated.rc/conf copies are `|| true` so a missing file
-  is silent. No hub binary/web dir is shipped (no Makefile target
-  either — see below).
-* (MED) Makefile: no `crate-hub` build target; install-hub-man is
-  reachable from nothing; the hub web dir (/usr/local/share/crate-hub/
-  web, hub/main.cpp:170) is installed by no target; install-snmpd
-  (:203-204) lacks `mkdir -p $(DESTDIR)$(PREFIX)/sbin` (fails on a
-  fresh DESTDIR, unlike install-daemon).
-* (LOW) port/Makefile PORTVERSION=0.8.48 and snmpd/mib.cpp:90
-  g_version "0.8.48" are stale vs 1.1.33; there is no single version
-  source (cli/args.cpp:756 hard-codes "crate 1.1.33"). Generate a
-  version.h from one VERSION file and use it in crate, crated,
-  crate-snmpd, crate-hub and the port.
-* (LOW) linux-unit.yml:19-30 paths-ignore skips crate.5 but not
-  crated.8/crate-hub.8 (inconsistent, harmless);
-  freebsd-build-lite.yml:120-123 "System info" step lacks set -e.
+  [FIXED in 1.1.34 / 1.1.52] freebsd-build-lite.yml smoke-runs the
+  built crate(1) as the unprivileged runner user and as root:
+  `--version` (compared with VERSION), `--help`, `validate
+  examples/nginx.yml`, `validate` on a missing file must fail.
+
+  [FIXED in 1.1.52] release tarball: sbin/crate-hub, man8 crated.8.gz
+  + crate-hub.8.gz, the hub web dir; no `|| true` on the copies;
+  `crate --version` and `crate-hub --version` checked against the tag;
+  the notes job checks the tag against VERSION and runs
+  `make check-version`.
+
+  [FIXED in 1.1.52] Makefile: `crate-hub` / `all-hub` / `install-hub`
+  targets (binary + web dir + man page); install-snmpd creates sbin;
+  install-daemon does not seed etc/crated.conf under DESTDIR.
+
+  [FIXED in 1.1.52] VERSION file → generated lib/version.h; `make
+  check-version` (port PORTVERSION, CHANGELOG section, no hard-coded
+  "crate X.Y.Z" left in cli/args.cpp).
+
+  [FIXED in 1.1.52] paths-ignore covers crated.8 / crate-hub.8 in both
+  Linux and lite workflows; lite "System info" has set -ex; full
+  workflow builds crated + crate-snmpd + crate-hub; sqlite3 in every
+  FreeBSD dependency list; port lists rang (BUILD_DEPENDS),
+  cpp-httplib (DAEMON/HUB) and sqlite3 (HUB); plist drops the stale
+  `@mode 04755` on bin/crate.
+
+* (MED) port/Makefile `do-test` runs `make test`, which needs kyua and
+  the ATF libraries (devel/atf) — add them as TEST_DEPENDS or drop the
+  target; `pkg-plist` has not been verified against a real `make
+  stage` + `make check-plist` run since the HUB option was added.
+* (LOW) freebsd-build.yml (full) is manual-only and has not run since
+  2026-06; the functional suite (tests/functional) therefore gates
+  nothing. A self-hosted FreeBSD runner would make it a nightly.
+* (LOW) the Linux unit workflow builds the tests but never links crate,
+  crated or crate-hub; crate-hub links on Linux (yaml-cpp, sqlite3,
+  openssl, cpp-httplib all in apt) and could be built there as a
+  second compile gate.
 
 === 12. Documentation debt ===
 
