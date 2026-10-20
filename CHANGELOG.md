@@ -6,6 +6,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.51] — 2026-10-20
+
+**TODO §10: the carried-over `crate run` / `stack up` correctness
+items.**
+
+- **`crate run` teardown on the failure path** (`lib/run.cpp`). The
+  network / lease / firewall `RunAtEnd` handlers were declared *after*
+  `destroyJail`, so on a throw they ran before the jail was removed
+  (interfaces torn out from under a live jail, MAC rules removed
+  against a recycled jid). They are now declared before `destroyJail`
+  and fire in the same order as the explicit happy-path `doNow()`
+  sequence: jail → mounts → net → leases → firewall slot.
+- **Handlers registered at acquisition, not later.** `releaseLeaseAtEnd`
+  / `releaseLease6AtEnd` are armed right after `allocateFor` (a lease
+  row used to stay forever when `configureStaticIp` or a copy threw in
+  between); `destroyBridgeEpairAtEnd` right after `createBridgeEpair`;
+  a new `destroyAutoBridgeAtEnd` destroys an auto-created bridge that
+  `setUp` / `createBridgeEpair` then fail on. The happy path also
+  destroys the auto-bridge explicitly.
+- **`stack up` spawns each `crate run`** (`lib/stack.cpp`) in its own
+  setsid'd process (`spawnCrateRunDetached`) and waits for the jail to
+  appear (`waitForStackJail`, 120 s) instead of calling `runCrate()`
+  in-process: a service-only first container never returned, so the
+  second container of a stack was never started. `ip_range` bounds are
+  now checked with `inet_pton` and a reversed range is rejected.
+- **cron: one crontab per user.** All entries used to be written into
+  the crontab of the user of the *first* entry; `user:` on later
+  entries was silently ignored. Entries are grouped by user.
+- **privops wire JSON** (`lib/privops_wire_pure.cpp`): `escape()`
+  delegates to `JsonPure::escape` (control bytes in an error message
+  used to be emitted raw — invalid JSON); the decoder understands
+  `\uXXXX` (UTF-8 output, malformed sequences keep the text).
+- LOW batch: `execPipelineImpl` kills and reaps children `0..i-1` when
+  the `fork()` for child `i` fails; `jail_query.cpp` root paths retry
+  `waitpid` on `EINTR` and never decode an uninitialised status;
+  `run.cpp` joins the healthcheck thread through an `HcGuard` so an
+  exception from `execInJail` no longer hits `std::terminate` (which
+  skipped every `RunAtEnd`).
+
+Tests: `privops_wire_pure_test` escape round-trip incl. control bytes
+and `\u` decoding. Version 1.1.51.
+
 ## [1.1.50] — 2026-10-20
 
 **TODO §9: crate-snmpd survives a master restart and speaks AgentX by

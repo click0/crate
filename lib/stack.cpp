@@ -31,7 +31,9 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <fcntl.h>   // 1.1.51: /dev/null for the detached supervisor
 #include <signal.h>
+#include <unistd.h>
 #include <sys/wait.h>
 
 #define ERR(msg...) ERR2("stack", msg)
@@ -69,6 +71,54 @@ struct StackEntry {
   std::map<std::string, std::string> vars;  // per-container variable overrides
   std::vector<VolumeMountEntry> volumeMounts;  // named volume mounts
 };
+
+// 1.1.51: start a container as a detached `crate run -f` child instead of
+// calling runCrate() in-process. runCrate() is the jail's foreground
+// supervisor and returns only when the jail exits — so a service-only
+// first container meant the second was never started. The child is
+// spawned like daemon/routes.cpp spawnCrateRun (setsid, stdio to
+// /dev/null); we then wait for its jail "<name>_pid<pid>" to appear so
+// `depends:` ordering still means "the previous one is up".
+static pid_t spawnCrateRunDetached(const std::string &crateFile,
+                                   const std::map<std::string, std::string> &vars,
+                                   bool logProgress) {
+  std::vector<std::string> argv = {CRATE_PATH_CRATE, "run"};
+  if (logProgress) argv.push_back("--log-progress");
+  for (auto &kv : vars) { argv.push_back("--var"); argv.push_back(kv.first + "=" + kv.second); }
+  argv.push_back("-f");
+  argv.push_back(crateFile);
+  pid_t pid = ::fork();
+  if (pid < 0) return -1;
+  if (pid == 0) {
+    ::setsid();
+    ::close(0); ::close(1); ::close(2);
+    ::open("/dev/null", O_RDONLY);
+    ::open("/dev/null", O_WRONLY);
+    ::open("/dev/null", O_WRONLY);
+    std::vector<char*> cargv;
+    for (auto &a : argv) cargv.push_back(const_cast<char*>(a.c_str()));
+    cargv.push_back(nullptr);
+    ::execv(CRATE_PATH_CRATE, cargv.data());
+    ::_exit(127);
+  }
+  return pid;
+}
+
+// Wait up to `timeoutSec` for the jail of container `name` started by
+// `pid` to appear. Returns false when the child exited first or the
+// time ran out.
+static bool waitForStackJail(const std::string &name, pid_t pid, unsigned timeoutSec) {
+  for (unsigned i = 0; i < timeoutSec * 10; i++) {
+    try {
+      for (auto &j : JailQuery::getAllJails(true))
+        if (!j.dying && StackPure::jailNameMatchesContainer(j.name, name)) return true;
+    } catch (...) {}
+    int st = 0;
+    if (::waitpid(pid, &st, WNOHANG) == pid) return false;   // supervisor died before its jail
+    ::usleep(100000);
+  }
+  return false;
+}
 
 // Parse networks section from a stack YAML
 static std::vector<StackNetwork> parseNetworks(const YAML::Node &top) {
@@ -150,10 +200,15 @@ static std::map<std::string, std::string> allocateIpPool(
     auto dashPos = network.ipRange.find('-');
     if (dashPos != std::string::npos) {
       struct in_addr s, e;
-      inet_pton(AF_INET, network.ipRange.substr(0, dashPos).c_str(), &s);
-      inet_pton(AF_INET, network.ipRange.substr(dashPos + 1).c_str(), &e);
+      // 1.1.51: a malformed ip_range used to leave s/e uninitialised.
+      if (inet_pton(AF_INET, network.ipRange.substr(0, dashPos).c_str(), &s) != 1 ||
+          inet_pton(AF_INET, network.ipRange.substr(dashPos + 1).c_str(), &e) != 1)
+        ERR("networks/" << network.name << "/ip_range '" << network.ipRange
+            << "' must be a.b.c.d-a.b.c.d")
       poolStart = ntohl(s.s_addr);
       poolEnd = ntohl(e.s_addr);
+      if (poolStart > poolEnd)
+        ERR("networks/" << network.name << "/ip_range '" << network.ipRange << "' is reversed")
     } else {
       poolStart = (baseAddr & ~((1u << (32 - prefixLen)) - 1)) + 2;
       poolEnd = (baseAddr | ((1u << (32 - prefixLen)) - 1)) - 1;
@@ -916,15 +971,8 @@ bool stackCommand(const Args &args) {
         for (auto &a : runArgs) runArgv.push_back(const_cast<char*>(a.c_str()));
         runArgv.push_back(nullptr);
 
-        Args runCmdArgs;
-        runCmdArgs.cmd = CmdRun;
-        runCmdArgs.runCrateFile = e.crateFile;
-        runCmdArgs.logProgress = args.logProgress;
-        runCmdArgs.vars = e.vars;
-
-        int returnCode = 0;
-        bool ok = runCrate(runCmdArgs, 0, nullptr, returnCode);
-        if (!ok) {
+        pid_t pid = spawnCrateRunDetached(e.crateFile, e.vars, args.logProgress);
+        if (pid < 0 || !waitForStackJail(e.name, pid, 120)) {
           std::cerr << rang::fg::red << "  [stack] Failed to start: " << e.name
                     << rang::style::reset << std::endl;
           return false;
@@ -1021,16 +1069,9 @@ bool stackCommand(const Args &args) {
           return false;
         }
 
-        // Now run the created crate
-        Args runCmdArgs;
-        runCmdArgs.cmd = CmdRun;
-        runCmdArgs.runCrateFile = crateOutput;
-        runCmdArgs.logProgress = args.logProgress;
-        runCmdArgs.vars = e.vars;
-
-        int returnCode = 0;
-        ok = runCrate(runCmdArgs, 0, nullptr, returnCode);
-        if (!ok) {
+        // Now run the created crate (detached supervisor, 1.1.51)
+        pid_t pid = spawnCrateRunDetached(crateOutput, e.vars, args.logProgress);
+        if (pid < 0 || !waitForStackJail(e.name, pid, 120)) {
           std::cerr << rang::fg::red << "  [stack] Failed to run: " << e.name
                     << rang::style::reset << std::endl;
           return false;

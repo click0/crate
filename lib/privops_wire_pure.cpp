@@ -1,6 +1,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "privops_wire_pure.h"
+#include "json_pure.h"   // 1.1.51: the one JSON escaper
 
 #include <cctype>
 #include <cstdlib>
@@ -62,6 +63,28 @@ bool decodeJsonString(const std::string &body, size_t &i, std::string &out) {
         case 't':  out += '\t'; break;
         case 'b':  out += '\b'; break;
         case 'f':  out += '\f'; break;
+        case 'u': {
+          // 1.1.51: \uXXXX (what JsonPure::escape emits for control
+          // bytes). BMP code point → UTF-8; a surrogate pair is passed
+          // through as two \u escapes decoded independently (crate never
+          // emits them). Malformed hex → keep the text verbatim.
+          if (i + 6 > body.size()) { out += esc; break; }
+          unsigned cp = 0; bool okHex = true;
+          for (size_t k = i + 2; k < i + 6; k++) {
+            char h = body[k]; unsigned v;
+            if (h >= '0' && h <= '9') v = (unsigned)(h - '0');
+            else if (h >= 'a' && h <= 'f') v = (unsigned)(h - 'a' + 10);
+            else if (h >= 'A' && h <= 'F') v = (unsigned)(h - 'A' + 10);
+            else { okHex = false; break; }
+            cp = cp * 16 + v;
+          }
+          if (!okHex) { out += esc; break; }
+          if (cp < 0x80) out += (char)cp;
+          else if (cp < 0x800) { out += (char)(0xC0 | (cp >> 6)); out += (char)(0x80 | (cp & 0x3F)); }
+          else { out += (char)(0xE0 | (cp >> 12)); out += (char)(0x80 | ((cp >> 6) & 0x3F)); out += (char)(0x80 | (cp & 0x3F)); }
+          i += 6;
+          continue;
+        }
         default:   out += esc;  break;
       }
       i += 2;
@@ -512,17 +535,10 @@ namespace {
 // rejected outright since validators never produce them. Same
 // shape as the audit_pure escape but inlined to avoid pulling in
 // audit_pure.h here.
+// 1.1.51: delegate to the one JSON escaper (JsonPure) — this copy passed
+// control bytes other than \n \r \t through raw, producing invalid JSON.
 std::string escape(const std::string &s) {
-  std::string out;
-  out.reserve(s.size() + 8);
-  for (char c : s) {
-    if (c == '\\' || c == '"') out += '\\';
-    if (c == '\n') { out += "\\n"; continue; }
-    if (c == '\r') { out += "\\r"; continue; }
-    if (c == '\t') { out += "\\t"; continue; }
-    out += c;
-  }
-  return out;
+  return JsonPure::escape(s);
 }
 
 } // anon

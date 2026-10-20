@@ -368,19 +368,11 @@ or
 anything else is rejected before the container starts
 .Pq the value becomes a file name under Pa /var/cron/tabs/ .
 .Pp
-Note: all entries are written to a
-.Em single
-crontab owned by the
+Entries are grouped by
 .Sy user
-of the
-.Em first
-entry.
-A different
-.Sy user
-on a later entry is currently ignored \(em those jobs also run as the
-first entry's user.
-Put jobs for different users in separate containers until per-user
-crontabs are supported.
+and written to one crontab per user under
+.Pa /var/cron/tabs/
+inside the container.
 .El
 .Ss Socket proxying
 .Bl -tag -width "proxy"

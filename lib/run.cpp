@@ -1055,6 +1055,27 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // children.max: limits nested jails; -1 means not set (kernel default)
   auto childrenMaxStr = effChildrenMax >= 0 ? std::to_string(effChildrenMax) : std::string();
 
+  // 1.1.51: host-side network teardown handlers are declared BEFORE
+  // destroyJail on purpose. On the success path run.cpp calls doNow() in
+  // an explicit order (jail -> mounts -> net -> fw slot); on an exception
+  // the RunAtEnd destructors fire in reverse declaration order, and
+  // these used to be declared after destroyJail — so a failing run tore
+  // the network down while the jail still existed and unmounted last.
+  // Declared here (empty) and .reset() right after each acquisition.
+  RunAtEnd destroyEpipeAtEnd;
+  RunAtEnd destroyBridgeEpairAtEnd;
+  RunAtEnd destroyAutoBridgeAtEnd;      // 1.1.51: bridge we auto-created
+  // 0.7.17: release the network-pool lease on teardown if we allocated
+  // one. 0.8.20: same for the IPv6 pool lease (network_pool6).
+  RunAtEnd releaseLeaseAtEnd;
+  RunAtEnd releaseLease6AtEnd;
+  RunAtEnd destroyNetgraphAtEnd;
+  RunAtEnd destroyFirewallRulesAtEnd;
+  RunAtEnd destroyPfAnchor;
+  RunAtEnd releaseFwSlot;
+  // 1.1.38: put net.inet6.ip6.forwarding back the way we found it.
+  RunAtEnd restoreIp6ForwardingAtEnd;
+
   RunAtEnd destroyJail([jailInfo,&jailXname,runScript,&args]() {
     runScript("run:before-remove-jail");
     LOG("removing jail " << jailXname << " jid=" << jailInfo.jid << " ...")
@@ -1148,28 +1169,12 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   };
 
   // set up networking
-  RunAtEnd destroyEpipeAtEnd;
-  RunAtEnd destroyBridgeEpairAtEnd;
-  // 0.7.17: release the network-pool lease on teardown if we
-  // allocated one. Declared at function scope so it's reachable
-  // from inside the bridge-mode IP-config block below.
-  RunAtEnd releaseLeaseAtEnd;
-  // 0.8.20: same pattern for the IPv6 pool lease (network_pool6).
-  RunAtEnd releaseLease6AtEnd;
   // 0.8.2: ipfw NAT rule + instance cleanup. Only used on hosts
   // running ipfw (not pf). Declared next to the other auto-fw
   // teardown so the destruction ordering matches.
   RunAtEnd ipfwAutoFwCleanup;
   RunAtEnd reclaimPassthroughAtEnd;
-  RunAtEnd destroyNetgraphAtEnd;
   std::vector<RunAtEnd> destroyExtraInterfaces;
-  RunAtEnd destroyFirewallRulesAtEnd;
-  RunAtEnd destroyPfAnchor;
-  RunAtEnd releaseFwSlot;
-  // 1.1.38: put net.inet6.ip6.forwarding back the way we found it.
-  // The v4 sysctl is restored by setupFirewallRules' teardown; the v6
-  // one was enabled here and never reset.
-  RunAtEnd restoreIp6ForwardingAtEnd;
   auto optionNet = spec.optionNet();
   std::string jailSideIface; // jail-side network interface name (for all modes)
 
@@ -1209,12 +1214,23 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
           IfconfigOps::setUp(optionNet->bridgeIface);
         }
         weCreatedBridge = true;
+        // 1.1.51: registered immediately — a throw in createBridgeEpair /
+        // static-mac / VLAN below used to leak the bridge.
+        destroyAutoBridgeAtEnd.reset([optionNet]() {
+          try { RunNet::teardownIface(optionNet->bridgeIface); }   // 1.1.39: privops-aware
+          catch (...) { /* best-effort while possibly unwinding */ }
+        });
         LOG("bridge mode: auto-created bridge " << optionNet->bridgeIface)
       }
     }
 
     auto bridgeInfo = RunNet::createBridgeEpair(jid, jidStr, optionNet->bridgeIface, execInJail);
     jailSideIface = bridgeInfo.ifaceB;
+    // 1.1.51: epair teardown armed right here, not after MAC/VLAN/IP
+    // configuration — any throw in between leaked an epair pair per run.
+    destroyBridgeEpairAtEnd.reset([bridgeInfo]() {
+      RunNet::destroyBridgeEpair(bridgeInfo);
+    });
 
     // Static MAC address (deterministic based on jail name + interface).
     // 1.1.38: hashed from nameComponent, not jailXname — jailXname is
@@ -1235,19 +1251,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       LOG("bridge mode: VLAN " << optionNet->vlanId << " on " << bridgeInfo.ifaceB)
     }
 
-    destroyBridgeEpairAtEnd.reset([bridgeInfo, weCreatedBridge, optionNet]() {
-      RunNet::destroyBridgeEpair(bridgeInfo);
-      // Only destroy the bridge if we created it. If the user pre-existed
-      // it (the typical case), leave it intact for the next run.
-      if (weCreatedBridge) {
-        try {
-          RunNet::teardownIface(optionNet->bridgeIface);   // 1.1.39: privops-aware
-        } catch (...) {
-          // Best-effort: log but don't propagate (we may be unwinding
-          // from another error and a missing bridge isn't critical).
-        }
-      }
-    });
+    (void)weCreatedBridge;   // 1.1.51: bridge + epair teardown are armed above, at acquisition
 
     // 1.1.38: the jail's IPv4 address once known (static or pool) —
     // feeds the per-container firewall policy below. Empty for DHCP
@@ -1306,6 +1310,13 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
           }
         }
         uint32_t addr = NetworkLease::allocateFor(leaseName, allocPool);
+        // 1.1.51: release armed right after the allocation succeeds —
+        // configureStaticIp / copyFile throwing below used to leave the
+        // lease row forever.
+        releaseLeaseAtEnd.reset([leaseName, &args]() {
+          LOG("network: releasing lease for " << leaseName)
+          try { NetworkLease::releaseFor(leaseName); } catch (...) {}
+        });
         auto ipBare = IpAllocPure::formatIp(addr);
         auto ip = ipBare + "/" + std::to_string(pool.prefixLen);
         auto gw = IpAllocPure::formatIp(IpAllocPure::gatewayFor(pool));
@@ -1314,13 +1325,6 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         LOG("bridge mode: auto-allocated IP " << ip
             << " (gw " << gw << ") on " << bridgeInfo.ifaceB)
         bridgeJailIp = ipBare;
-        // Release the lease on teardown so the IP comes back into
-        // the pool. Best-effort: a failure here logs but doesn't
-        // mask the real teardown error.
-        releaseLeaseAtEnd.reset([leaseName, &args]() {
-          LOG("network: releasing lease for " << leaseName)
-          try { NetworkLease::releaseFor(leaseName); } catch (...) {}
-        });
 
         // 0.8.20: IPv6 pool allocation. If network_pool6 is
         // configured in crate.yml, allocate a v6 from it and
@@ -1354,14 +1358,14 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
             }
           }
           auto addr6 = NetworkLease6::allocateFor(leaseName, allocPool6);
+          releaseLease6AtEnd.reset([leaseName]() {   // 1.1.51: armed at acquisition
+            try { NetworkLease6::releaseFor(leaseName); } catch (...) {}
+          });
           auto ip6Bare = Ip6AllocPure::formatIp6(addr6);
           auto ip6 = ip6Bare + "/" + std::to_string(pool6.prefixLen);
           RunNet::configureStaticIp6(bridgeInfo.ifaceB, ip6, jid, execInJail);
           LOG("bridge mode: auto-allocated IPv6 " << ip6
               << " on " << bridgeInfo.ifaceB)
-          releaseLease6AtEnd.reset([leaseName]() {
-            try { NetworkLease6::releaseFor(leaseName); } catch (...) {}
-          });
         }
 
         // 0.8.0: SNAT auto-rule. Without this, packets from the jail
@@ -2062,30 +2066,35 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // Cron jobs (§25): generate crontab and enable cron inside the container
   if (!spec.cronJobs.empty()) {
-    std::ostringstream crontab;
-    crontab << "# Generated by crate\n";
-    crontab << "SHELL=/bin/sh\n";
-    crontab << "PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin\n";
-    for (auto &job : spec.cronJobs)
-      crontab << job.schedule << "\t" << job.command << std::endl;
-    // Write crontab for the specified user (default: root)
-    auto cronUser = spec.cronJobs[0].user; // use first job's user for the crontab file
-    // 1.1.27: an explicit `user: ""` in the spec used to reach
-    // `/var/cron/tabs/` (a directory) — the "root" default only lives in
-    // the Spec struct initializer. Apply the documented default here.
-    if (cronUser.empty()) cronUser = "root";
-    // 1.1.22: cronUser is a spec field that flows into a root-run file
-    // path AND a `sh -c` string below — validate it as a username so it
-    // can't traverse (`../../etc/cron.d/pwn`) or inject shell metachars.
-    if (auto e = RunPure::validateCronUser(cronUser); !e.empty())
-      ERR("cron/user rejected: " << e)
-    Util::Fs::writeFile(crontab.str(), J(STR("/var/cron/tabs/" << cronUser)));
-    // Ensure correct ownership and permissions (cron requires 0600)
-    Util::execCommand({"/usr/sbin/chroot", jailPath, "/bin/sh", "-c",
-      STR("chmod 0600 /var/cron/tabs/" << cronUser)}, "set crontab permissions");
+    // 1.1.51: one crontab PER USER. All jobs used to land in the first
+    // job's user's crontab and a later `user:` was silently ignored.
+    std::map<std::string, std::vector<const Spec::CronJob*>> byUser;
+    for (auto &job : spec.cronJobs) {
+      // 1.1.27: an explicit `user: ""` in the spec used to reach
+      // `/var/cron/tabs/` (a directory) — apply the documented default.
+      std::string u = job.user.empty() ? "root" : job.user;
+      // 1.1.22: the user is a spec field that flows into a root-run file
+      // path AND a `sh -c` string below — validate it as a username.
+      if (auto e = RunPure::validateCronUser(u); !e.empty())
+        ERR("cron/user rejected: " << e)
+      byUser[u].push_back(&job);
+    }
+    for (auto &kv : byUser) {
+      const std::string &cronUser = kv.first;
+      std::ostringstream crontab;
+      crontab << "# Generated by crate\n";
+      crontab << "SHELL=/bin/sh\n";
+      crontab << "PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin\n";
+      for (auto *job : kv.second)
+        crontab << job->schedule << "\t" << job->command << std::endl;
+      Util::Fs::writeFile(crontab.str(), J(STR("/var/cron/tabs/" << cronUser)));
+      // Ensure correct ownership and permissions (cron requires 0600)
+      Util::execCommand({"/usr/sbin/chroot", jailPath, "/bin/sh", "-c",
+        STR("chmod 0600 /var/cron/tabs/" << cronUser)}, "set crontab permissions");
+    }
     // Enable cron in rc.conf
     Util::Fs::appendFile("cron_enable=\"YES\"\n", J("/etc/rc.conf"));
-    LOG("cron: " << spec.cronJobs.size() << " jobs configured")
+    LOG("cron: " << spec.cronJobs.size() << " jobs configured for " << byUser.size() << " user(s)")
   }
 
   // Init scripts (§26): run only on first start, skip on subsequent runs.
@@ -2171,6 +2180,13 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     // Start background healthcheck monitor for service-only crates (§20)
     std::atomic<bool> hcStopFlag{false};
     std::thread hcThread;
+    // 1.1.51: a joinable std::thread being destroyed on an exception
+    // (execInJail can throw) called std::terminate and skipped every
+    // RunAtEnd; this guard stops and joins it on any exit path.
+    struct HcGuard {
+      std::atomic<bool> &flag; std::thread &t;
+      ~HcGuard() { flag.store(true); if (t.joinable()) t.join(); }
+    } hcGuard{hcStopFlag, hcThread};
     if (spec.healthcheck) {
       LOG("starting background healthcheck monitor")
       hcThread = std::thread(healthcheckMonitorLoop, jidStr, user, *spec.healthcheck, args.logProgress, std::ref(hcStopFlag));
@@ -2245,6 +2261,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   if (optionNet && optionNet->mode == Spec::NetOptDetails::Mode::Bridge) {
     destroyPfAnchor.doNow();
     destroyBridgeEpairAtEnd.doNow();
+    destroyAutoBridgeAtEnd.doNow();   // 1.1.51
   } else if (optionNet && optionNet->mode == Spec::NetOptDetails::Mode::Passthrough) {
     destroyPfAnchor.doNow();
     // reclaimPassthroughAtEnd already done above (before jail destroy)

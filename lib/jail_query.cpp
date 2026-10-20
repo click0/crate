@@ -436,9 +436,12 @@ int execInJail(int jid, const std::vector<std::string> &argv,
     ::_exit(127); // exec failed
   }
 
-  // Parent: wait for child
-  int status;
-  ::waitpid(pid, &status, 0);
+  // Parent: wait for child. 1.1.51: EINTR-safe and status initialised
+  // (a failed waitpid used to decode an uninitialised int).
+  int status = 0;
+  while (::waitpid(pid, &status, 0) == -1) {
+    if (errno != EINTR) ERR("waitpid: " << strerror(errno))
+  }
 
   // If child exited with 126, jail_attach failed — use jexec fallback
   if (WIFEXITED(status) && WEXITSTATUS(status) == 126)
@@ -535,8 +538,10 @@ std::string execInJailGetOutput(int jid, const std::vector<std::string> &argv,
     output.append(buf, n);
   ::close(pipefd[0]);
 
-  int status;
-  ::waitpid(pid, &status, 0);
+  int status = 0;
+  while (::waitpid(pid, &status, 0) == -1) {   // 1.1.51
+    if (errno != EINTR) ERR("waitpid: " << strerror(errno))
+  }
 
   // Fallback if jail_attach failed
   if (WIFEXITED(status) && WEXITSTATUS(status) == 126) {

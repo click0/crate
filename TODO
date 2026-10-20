@@ -531,72 +531,60 @@ The bhyve/VM track is in TODO2.
   PORTVERSION are edited by hand each release — generate a version.h
   from one place and have `make` check PORTVERSION against it.
 
-=== 10. Carried over from the previous TODO (still open, unchanged) ===
+=== 10. Carried over from the previous TODO ===
 
-* (correctness, FreeBSD-only) lib/run.cpp exception-path teardown
-  order diverges from the success path: the happy path tears down in
-  an explicit doNow() order (jail → mounts → net → fw-slot,
-  ~:1942-1984); on a throw before that block, RunAtEnd destructors
-  fire in reverse-declaration order — network teardowns (~:1051-1068)
-  run BEFORE destroyJail (:958), mounts unmount last, removeMacRules
-  (:669) runs against an already-recycled jid. Cleanup quality on an
-  already-failing run. Fix: one ordered teardown for both paths.
-  Validate on a real FreeBSD host (docs/on-hardware-validation.md).
+  [FIXED in 1.1.51] run.cpp exception-path teardown order: the
+  network / lease / firewall RunAtEnd handlers are declared before
+  destroyJail so the reverse-declaration unwind matches the happy
+  path (jail → mounts → net → leases → fw-slot). Validate on a real
+  FreeBSD host (docs/on-hardware-validation.md).
 
-* (correctness, MED) lib/run.cpp registers several teardown handlers
-  AFTER the operations that can throw: NetworkLease::allocateFor
-  succeeds (~:1153) but configureStaticIp/copyFile throws before
-  releaseLeaseAtEnd is set → lease row stays forever (see also 3.
-  "leases never reclaimed"); same for IPv6 (~:1184); bridge
-  auto-created (~:1090) then setUp/createBridgeEpair throws before
-  destroyBridgeEpairAtEnd.reset (~:1115) → bridge + epair leak;
-  run_net.cpp createBridgeEpair / the extras loop (~:1664) leak an
-  epairN pair per failed attempt. Register the RunAtEnd immediately
-  after each successful acquisition.
+  [FIXED in 1.1.51] RunAtEnd handlers armed immediately after each
+  acquisition: releaseLease(6)AtEnd right after allocateFor,
+  destroyBridgeEpairAtEnd right after createBridgeEpair, new
+  destroyAutoBridgeAtEnd for an auto-created bridge whose setUp /
+  epair step fails. run_net.cpp createBridgeEpair / the extras loop
+  still leak one epairN pair when the *second* half of a single
+  attempt fails — LOW, FreeBSD-only to verify.
 
-* (correctness/security, MED) lib/network_lease.cpp +
-  network_lease6.cpp flock the lease FILE's inode but writeAllAtomic
-  renames a fresh inode over the path → a second waiter holds a lock
-  on the unlinked inode and reads stale contents → two concurrent
-  `crate run` by the same user allocate the SAME address. Same bug in
-  spec_registry.cpp (section 5). Fix with a stable `<path>.lock`.
+  [FIXED in 1.1.46] network_lease / network_lease6 / spec_registry
+  lock a stable `<path>.lock` file instead of the renamed-over inode.
 
   [FIXED in 1.1.36] jid→owner registry forget-by-name: destroy_jail
   now resolves name→jid before the handler runs and forgets by jid;
   stale rows are reconciled against live jails.
 
-* (correctness, MED) lib/stack.cpp `stack up` calls runCrate()
-  IN-PROCESS and sequentially per container (stack.cpp:871,977): a
-  service-only first container never returns, so the second is never
-  started. Spawn each `crate run` like daemon/routes.cpp spawnCrateRun.
+  [FIXED in 1.1.51] `stack up` spawns each `crate run` detached
+  (spawnCrateRunDetached, like daemon/routes.cpp) and waits for the
+  jail to appear (waitForStackJail, 120 s) instead of running
+  in-process; ip_range bounds checked with inet_pton, reversed range
+  rejected.
 
   [FIXED in 1.1.37] fd hygiene part 2: accept4(SOCK_CLOEXEC) on the
   three hand-rolled listeners, FD_CLOEXEC on the httplib listening
   sockets via set_socket_options.
 
-* (correctness, MED) cron: all entries go into ONE crontab,
-  /var/cron/tabs/<user of the FIRST entry> (run.cpp:1823); a `user:`
-  on a later entry is silently ignored. Documented as a limitation in
-  crate.5 (1.1.31). Group by user, one crontab per user.
+  [FIXED in 1.1.51] cron entries grouped by user, one crontab per
+  user (a `user:` on a later entry was ignored); crate.5 updated.
 
   [FIXED in 1.1.37] connection-fd recv/send timeouts and a per-listener
   concurrency cap on the privops and control-socket planes.
 
-* (correctness, LOW) lib/privops_wire_pure.cpp escape() is the one
-  JSON escaper not on JsonPure: passes control bytes through raw. Its
-  decoder (~:60) lacks \uXXXX, so teach the decoder first (round-trip
-  test), then delegate.
+  [FIXED in 1.1.51] privops_wire_pure escape() delegates to
+  JsonPure::escape; decoder handles \uXXXX (UTF-8, malformed kept as
+  text); round-trip test.
 
-* (LOW batch) daemon/routes.cpp:1014 import tmp file
+  [FIXED in 1.1.51, LOW batch] execPipelineImpl fork() failure kills
+  and reaps children 0..i-1; jail_query.cpp root paths retry waitpid
+  on EINTR with an initialised status; run.cpp hcThread joined via
+  HcGuard (an execInJail throw no longer std::terminate()s past the
+  RunAtEnds); stack.cpp inet_pton results checked.
+
+* (LOW batch, still open) daemon/routes.cpp:1014 import tmp file
   <name>.crate.tmp.<pid> is constant across threads (two concurrent
-  imports of one name interleave; no fsync before rename);
-  execPipelineImpl fork() failure for child i>0 throws without
-  reaping children 0..i-1; capture loops treat read()==-1 as EOF
-  (EINTR); jail_query.cpp ignores waitpid failure / decodes an
-  uninitialised status; ws_console.cpp select() with fds >= FD_SETSIZE;
-  run.cpp hcThread joinable while execInJail can throw on fork EAGAIN
-  → std::terminate skips every RunAtEnd; stack.cpp inet_pton results
-  unchecked for ip_range.
+  imports of one name interleave; no fsync before rename); capture
+  loops treat read()==-1 as EOF (EINTR); ws_console.cpp select() with
+  fds >= FD_SETSIZE.
 
 * (consistency, LOW) hub/ha_pure isValidName caps names at 64; switch
   to NameLimits::kJailName when the hub gets a build target.

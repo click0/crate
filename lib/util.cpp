@@ -327,8 +327,17 @@ static std::string execPipelineImpl(const std::vector<std::vector<std::string>> 
   for (int i = 0; i < n; i++) {
     auto cargv = toExecArgv(cmds[i]);
     pid_t pid = ::fork();
-    if (pid == -1)
-      ERR2("exec pipeline", "fork() failed for '" << what << "': " << strerror(errno))
+    if (pid == -1) {
+      int e = errno;
+      // 1.1.51: children 0..i-1 are already running — stop and reap them
+      // instead of leaving zombies / a half pipeline behind.
+      for (int j = 0; j < i; j++) {
+        ::kill(pids[j], SIGTERM);
+        int st = 0;
+        while (::waitpid(pids[j], &st, 0) == -1 && errno == EINTR) {}
+      }
+      ERR2("exec pipeline", "fork() failed for '" << what << "': " << strerror(e))
+    }
     if (pid == 0) {
       // child i
       // stdin: from previous pipe or stdinFile (for first)
