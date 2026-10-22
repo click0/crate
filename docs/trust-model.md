@@ -414,7 +414,11 @@ What still remains host-wide after (1)–(3) is **by design**, not a
 pending gate: the genuinely host-global verbs (`set_iface_up`,
 `add_ipfw_rule`, `configure_ipfw_nat`, `create_epair`, `create_bridge`
 — shared host state with no tenant target; the interface-named verbs
-are gated since 1.1.43), the `admin`-only HTTP transport (no peer
+are gated since 1.1.43, and the shared firewall *state* — ipfw slot,
+forwarding refcount — moved into the daemon as the jid-gated
+`acquire_fw_lease` / `release_fw_lease` pair in 1.1.57, so a tenant
+can take a slot only for its own jail and never flips a sysctl
+itself), the `admin`-only HTTP transport (no peer
 uid), and the
 bootstrap concession that lets jids / names absent from the registry
 through (for paths it is limited to the caller's own prefix since

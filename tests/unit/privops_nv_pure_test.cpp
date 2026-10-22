@@ -352,6 +352,24 @@ ATF_TEST_CASE_BODY(parse_1141_verbs_and_rctl_limits) {
   ATF_REQUIRE_EQ(parseCreateBridge({{"name", "bridge0"}}, b), std::string());
   ATF_REQUIRE(parseCreateBridge({}, b).find("missing") != std::string::npos);
 
+  // 1.1.57
+  PrivOpsPure::AcquireFwLeaseReq a;
+  ATF_REQUIRE_EQ(parseAcquireFwLease({{"jid", "9"}, {"slot", "true"}, {"fwd6", "true"}}, a), std::string());
+  ATF_REQUIRE_EQ(a.jid, 9u); ATF_REQUIRE(a.slot); ATF_REQUIRE(!a.fwd4); ATF_REQUIRE(a.fwd6);
+  ATF_REQUIRE(!parseAcquireFwLease({{"slot", "true"}}, a).empty());
+  ATF_REQUIRE(!parseAcquireFwLease({{"jid", "9"}, {"slot", "maybe"}}, a).empty());
+  PrivOpsPure::ReleaseFwLeaseReq rl;
+  ATF_REQUIRE_EQ(parseReleaseFwLease({{"jid", "9"}}, rl), std::string());
+  ATF_REQUIRE(!parseReleaseFwLease({}, rl).empty());
+  PrivOpsPure::SetIfaceInetAddrReq i;
+  ATF_REQUIRE_EQ(parseSetIfaceInetAddr({{"ifname", "epair0a"}, {"addr", "fd00::1"},
+                                        {"prefix_len", "126"}, {"inet6", "true"}}, i), std::string());
+  ATF_REQUIRE(i.inet6);
+  PrivOpsPure::SetIfaceInetAddrReq i4;   // fresh struct: an absent optional leaves the field alone
+  ATF_REQUIRE_EQ(parseSetIfaceInetAddr({{"ifname", "epair0a"}, {"addr", "10.0.0.1"},
+                                        {"prefix_len", "24"}}, i4), std::string());
+  ATF_REQUIRE(!i4.inet6);
+
   PrivOpsPure::QueryJailRctlReq q;
   ATF_REQUIRE_EQ(parseQueryJailRctl({{"jid", "42"}}, q), std::string());
   ATF_REQUIRE(!q.limits);

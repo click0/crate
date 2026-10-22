@@ -220,6 +220,25 @@ ATF_TEST_CASE_BODY(builders_1141_round_trip) {
     ATF_REQUIRE_EQ(r.number, 7u);
   }
   {
+    // 1.1.57: fw lease builders round-trip; false booleans stay off the wire
+    auto fa = PrivOpsClient::buildAcquireFwLease(9, true, true, false);
+    ATF_REQUIRE_EQ(fa.at("verb"), std::string("acquire_fw_lease"));
+    ATF_REQUIRE(fa.count("fwd6") == 0);
+    PrivOpsPure::AcquireFwLeaseReq ar;
+    ATF_REQUIRE_EQ(PrivOpsNvPure::parseAcquireFwLease(fa, ar), std::string());
+    ATF_REQUIRE_EQ(ar.jid, 9u); ATF_REQUIRE(ar.slot); ATF_REQUIRE(ar.fwd4); ATF_REQUIRE(!ar.fwd6);
+    auto fr = PrivOpsClient::buildReleaseFwLease(9);
+    PrivOpsPure::ReleaseFwLeaseReq rr;
+    ATF_REQUIRE_EQ(PrivOpsNvPure::parseReleaseFwLease(fr, rr), std::string());
+    ATF_REQUIRE_EQ(rr.jid, 9u);
+    auto i4 = PrivOpsClient::buildSetIfaceInetAddr("epair0a", "10.0.0.1", 24);
+    ATF_REQUIRE(i4.count("inet6") == 0);   // wire identical to 0.9.25
+    auto i6 = PrivOpsClient::buildSetIfaceInetAddr("epair0a", "fd00::1", 126, true);
+    PrivOpsPure::SetIfaceInetAddrReq ir;
+    ATF_REQUIRE_EQ(PrivOpsNvPure::parseSetIfaceInetAddr(i6, ir), std::string());
+    ATF_REQUIRE(ir.inet6);
+    ATF_REQUIRE_EQ(PrivOpsPure::validateSetIfaceInetAddr(ir), std::string());
+
     auto m = PrivOpsClient::buildCreateBridge("bridge0");
     PrivOpsPure::CreateBridgeReq r;
     ATF_REQUIRE_EQ(m.at("verb"), std::string("create_bridge"));

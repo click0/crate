@@ -244,10 +244,15 @@ ATF_TEST_CASE_BODY(authorize_jid_foreign_owner_denied) {
   auto e = env1000();
   auto l = fixedOwner(77, "web", /*ownerUid=*/1001);
   for (Verb v : {Verb::SignalJail, Verb::SetRctl, Verb::ClearRctl,
-                 Verb::SetJailCpuset, Verb::QueryJailRctl}) {
+                 Verb::SetJailCpuset, Verb::QueryJailRctl,
+                 Verb::AcquireFwLease, Verb::ReleaseFwLease}) {   // 1.1.57
     ATF_REQUIRE(PrivOpsAuthzPure::authorize(v, reqJid(77), e, l)
                 == Decision::DenyForeignJid);
   }
+  // and the owner is allowed through
+  auto own = fixedOwner(77, "web", /*ownerUid=*/1000);
+  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::AcquireFwLease, reqJid(77), e, own)
+              == Decision::Allow);
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(authorize_destroy_jail_own_name_allowed);

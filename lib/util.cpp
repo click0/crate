@@ -475,6 +475,13 @@ std::string getSysctlString(const char *name) {
 }
 
 void ensureKernelModuleIsLoaded(const char *name) {
+  // 1.1.57: an already-loaded module needs no kldload (which an
+  // unprivileged crate cannot do — EPERM); when it is missing and we are
+  // not root, say what to load instead of failing on the syscall.
+  if (::kldfind(name) != -1) return;
+  if (::geteuid() != 0)
+    throw std::runtime_error(std::string("kernel module ") + name
+                             + " is not loaded; load it on the host as root: kldload " + name);
   SYSCALL(::kldload(name), "kldload", name, [](int err) {return err == EEXIST;});
 }
 

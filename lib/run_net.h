@@ -56,12 +56,29 @@ void ipfwExec(const std::vector<std::string> &args, const std::string &what);
 // fwSlot is allocated from Ctx::FwSlots.
 // ipv6Addr / ipv6Iface: jail-side IPv6 address and outbound interface
 // (pass empty strings to skip IPv6 rules).
+// sharedMode (1.1.57): 0 = legacy root mode — the shared outbound NAT
+// instance + rule and net.inet.ip.forwarding are refcounted through
+// Ctx::FwUsers in /var/run/crate; 1 = rootless, this caller is the FIRST
+// user (crated said so through acquire_fw_lease) and creates the shared
+// NAT instance + rule; 2 = rootless, not the first — skip them. In modes
+// 1/2 the teardown never touches FwUsers or the sysctl: the daemon
+// restores forwarding and the caller removes the common rule when
+// release_fw_lease reports it was the last user.
 RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
                             const GatewayInfo &gw, unsigned fwSlot,
                             const std::string &nameserverIp,
                             int origIpForwarding, bool logProgress,
                             const std::string &ipv6Addr = {},
-                            const std::string &ipv6Iface = {});
+                            const std::string &ipv6Iface = {},
+                            int sharedMode = 0);
+
+// 1.1.57: remove the shared outbound NAT rule (the last rootless NAT user
+// does this after release_fw_lease says fwd4_users == 0).
+void removeCommonOutRule();
+
+// 1.1.57: privops-aware `ifconfig <iface> inet6 <addr> prefixlen <n>`.
+void setInet6AddrPrivopsOrLocal(const std::string &iface, const std::string &addr,
+                                int prefixLen);
 
 struct PassthroughInfo {
   std::string iface;  // e.g. "vtnet1" — MUST reclaim before jail destruction

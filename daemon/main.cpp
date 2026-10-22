@@ -13,6 +13,7 @@
 
 #include "../lib/jid_owner_registry.h"
 #include "../lib/iface_owner_registry.h"   // 1.1.43
+#include "../lib/fw_lease_registry.h"     // 1.1.57
 #include "../lib/jail_query.h"
 
 #include "err.h"
@@ -178,6 +179,23 @@ int main(int argc, char **argv) {
                 << " stale entr" << (dropped == 1 ? "y" : "ies")
                 << " (epair gone)" << std::endl;
     Crated::setIfaceOwnerRegistry(&ifaceOwnerRegistry);
+
+    // 1.1.57: shared firewall state (ipfw slot + forwarding refcount) for
+    // NAT / bridge mode under rootless. Keyed by jid; leases of jails that
+    // died while the daemon was down are dropped here and the forwarding
+    // sysctls restored if that emptied a refcount.
+    FwLeaseRegistry::SysctlIo sysctlIo;
+    sysctlIo.get = [](const char *n) { return Util::getSysctlInt(n); };
+    sysctlIo.set = [](const char *n, int v) { Util::setSysctlInt(n, v); };
+    static FwLeaseRegistry fwLeaseRegistry("/var/db/crate/fw_leases.tsv", sysctlIo);
+    fwLeaseRegistry.setLiveProbe([](unsigned jid) {
+      auto j = JailQuery::getJailByJid((int)jid);
+      return j && !j->dying;
+    });
+    if (size_t dropped = fwLeaseRegistry.reconcile())
+      std::cerr << "crated: fw_lease_registry: dropped " << dropped
+                << " lease" << (dropped == 1 ? "" : "s") << " of dead jails" << std::endl;
+    Crated::setFwLeaseRegistry(&fwLeaseRegistry);
 
     Crated::PrivopsListener privopsListener(config);
     bool privopsStarted = privopsListener.start();

@@ -110,6 +110,8 @@ const char *verbName(Verb v) {
     case Verb::SetIfaceMac:          return "set_iface_mac";
     case Verb::DeleteIpfwNat:        return "delete_ipfw_nat";
     case Verb::CreateBridge:         return "create_bridge";
+    case Verb::AcquireFwLease:       return "acquire_fw_lease";
+    case Verb::ReleaseFwLease:       return "release_fw_lease";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -151,6 +153,8 @@ Verb parseVerb(const std::string &name) {
   if (name == "set_iface_mac")           return Verb::SetIfaceMac;
   if (name == "delete_ipfw_nat")         return Verb::DeleteIpfwNat;
   if (name == "create_bridge")           return Verb::CreateBridge;
+  if (name == "acquire_fw_lease")        return Verb::AcquireFwLease;
+  if (name == "release_fw_lease")        return Verb::ReleaseFwLease;
   return Verb::Unknown;
 }
 
@@ -639,6 +643,12 @@ std::string validateBridgeDelMember(const BridgeDelMemberReq &r) {
 
 std::string validateSetIfaceInetAddr(const SetIfaceInetAddrReq &r) {
   if (auto e = validateIfaceName(r.ifname); !e.empty()) return "ifname: " + e;
+  if (r.inet6) {   // 1.1.57
+    if (r.prefixLen > 128) return "prefix_len out of range (0..128)";
+    std::string cidr6 = r.addr + "/" + std::to_string(r.prefixLen);
+    if (auto e = validateIpv6Cidr(cidr6); !e.empty()) return "addr: " + e;
+    return "";
+  }
   if (r.prefixLen > 32) return "prefix_len out of range (0..32)";
   // Reuse validateIpv4Cidr by reassembling addr+prefix; cheaper than
   // duplicating the IPv4 octet logic.
@@ -837,6 +847,19 @@ std::string validateCreateBridge(const CreateBridgeReq &r) {
     return "name: must be bridge<N>";
   for (size_t i = kPrefix.size(); i < r.name.size(); i++)
     if (!std::isdigit((unsigned char)r.name[i])) return "name: must be bridge<N>";
+  return "";
+}
+
+// --- 1.1.57 ---
+
+std::string validateAcquireFwLease(const AcquireFwLeaseReq &r) {
+  if (r.jid == 0 || r.jid > 65535) return "jid: out of range (1..65535)";
+  if (!r.slot && !r.fwd4 && !r.fwd6) return "nothing requested (slot, fwd4 or fwd6)";
+  return "";
+}
+
+std::string validateReleaseFwLease(const ReleaseFwLeaseReq &r) {
+  if (r.jid == 0 || r.jid > 65535) return "jid: out of range (1..65535)";
   return "";
 }
 

@@ -187,6 +187,8 @@ Decision authorize(PrivOpsPure::Verb v,
     case V::SetJailCpuset:
     case V::QueryJailRctl:
     case V::SignalJail:
+    case V::AcquireFwLease:    // 1.1.57: the lease is the jail's
+    case V::ReleaseFwLease:
       return checkOwnedJid(req.jid, env, lookup);
 
     // 1.1.43: configure_iface gates BOTH ends — the jid (1.1.17) and

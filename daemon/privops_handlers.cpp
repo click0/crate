@@ -19,6 +19,7 @@
 #include "../lib/run_pure.h"           // 1.1.42: jailXnameHasPid
 #include "../lib/runtime_paths_pure.h"
 #include "../lib/passwd_pure.h"        // 1.1.56: exec_in_jail user lookup in the parent
+#include "../lib/fw_lease_registry.h"  // 1.1.57: acquire/release_fw_lease
 
 #include <iostream>
 #include <thread>                      // 1.1.42: registerSpawnedJailOwner
@@ -497,7 +498,10 @@ DispatchResult handleBridgeDelMember(const PrivOpsPure::BridgeDelMemberReq &r) {
 
 DispatchResult handleSetIfaceInetAddr(const PrivOpsPure::SetIfaceInetAddrReq &r) {
   try {
-    IfconfigOps::setInetAddr(r.ifname, r.addr, (int)r.prefixLen);
+    if (r.inet6)   // 1.1.57
+      IfconfigOps::setInet6Addr(r.ifname, r.addr, (int)r.prefixLen);
+    else
+      IfconfigOps::setInetAddr(r.ifname, r.addr, (int)r.prefixLen);
   } catch (const std::exception &e) {
     return {500, PrivOpsWirePure::formatHandlerError("ifconfig_failed",
                                                      e.what())};
@@ -720,6 +724,61 @@ DispatchResult handleCreateBridge(const PrivOpsPure::CreateBridgeReq &r) {
     return {500, PrivOpsWirePure::formatHandlerError("ifconfig_failed", e.what())};
   }
   return {200, PrivOpsWirePure::formatCreateBridgeSuccess(r.name)};
+}
+
+// --- handleAcquireFwLease / handleReleaseFwLease (1.1.57) ---
+
+namespace { ::FwLeaseRegistry *g_fwLeaseRegistry = nullptr; }
+
+void setFwLeaseRegistry(::FwLeaseRegistry *registry) {
+  g_fwLeaseRegistry = registry;
+}
+
+DispatchResult handleAcquireFwLease(const PrivOpsPure::AcquireFwLeaseReq &r) {
+  if (!g_fwLeaseRegistry)
+    return {503, PrivOpsWirePure::formatHandlerError(
+                  "no_fw_lease_registry", "crated has no firewall-lease registry")};
+  auto ji = JailQuery::getJailByJid((int)r.jid);
+  if (!ji || ji->dying)
+    return {404, PrivOpsWirePure::formatHandlerError(
+                  "jail_not_found", "jid " + std::to_string(r.jid) + " is not a running jail")};
+  FwLeaseRegistry::Result res;
+  try {
+    if (auto e = g_fwLeaseRegistry->acquire(r.jid, r.slot, r.fwd4, r.fwd6, res); !e.empty())
+      return {409, PrivOpsWirePure::formatHandlerError("fw_lease_exhausted", e)};
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("fw_lease_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatAcquireFwLeaseSuccess(r.jid, res.slot,
+                                                            res.fwd4Users, res.fwd6Users)};
+}
+
+DispatchResult handleReleaseFwLease(const PrivOpsPure::ReleaseFwLeaseReq &r) {
+  if (!g_fwLeaseRegistry)
+    return {503, PrivOpsWirePure::formatHandlerError(
+                  "no_fw_lease_registry", "crated has no firewall-lease registry")};
+  FwLeaseRegistry::Result res;
+  try {
+    res = g_fwLeaseRegistry->release(r.jid);
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("fw_lease_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatReleaseFwLeaseSuccess(r.jid, res.released,
+                                                            res.fwd4Users, res.fwd6Users)};
+}
+
+// 1.1.57: a jail that is destroyed gives its firewall lease back even if
+// the client never sends release_fw_lease (crash, kill -9). Status is the
+// destroy_jail result; the pre-dispatch jid is the only handle left.
+void maybeReleaseFwLease(Verb v, int status, unsigned preDestroyJid) {
+  if (v != Verb::DestroyJail || !g_fwLeaseRegistry || preDestroyJid == 0) return;
+  if (status < 200 || status >= 300) return;
+  try {
+    g_fwLeaseRegistry->release(preDestroyJid);
+  } catch (const std::exception &e) {
+    std::cerr << "privops: fw_lease_registry release(" << preDestroyJid
+              << "): " << e.what() << std::endl;
+  }
 }
 
 // --- handleExecInJail (1.1.40) ---
@@ -1337,6 +1396,22 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleCreateBridge(r);
     }
+    case Verb::AcquireFwLease: {   // 1.1.57
+      PrivOpsPure::AcquireFwLeaseReq r;
+      if (auto e = PrivOpsWirePure::parseAcquireFwLease(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateAcquireFwLease(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleAcquireFwLease(r);
+    }
+    case Verb::ReleaseFwLease: {
+      PrivOpsPure::ReleaseFwLeaseReq r;
+      if (auto e = PrivOpsWirePure::parseReleaseFwLease(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateReleaseFwLease(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleReleaseFwLease(r);
+    }
     default:
       return PrivOpsWirePure::parseValidateAndDispatch(v, body);
   }
@@ -1746,6 +1821,22 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleCreateBridge(r);
     }
+    case Verb::AcquireFwLease: {   // 1.1.57
+      PrivOpsPure::AcquireFwLeaseReq r;
+      if (auto e = PrivOpsNvPure::parseAcquireFwLease(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateAcquireFwLease(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleAcquireFwLease(r);
+    }
+    case Verb::ReleaseFwLease: {
+      PrivOpsPure::ReleaseFwLeaseReq r;
+      if (auto e = PrivOpsNvPure::parseReleaseFwLease(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateReleaseFwLease(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleReleaseFwLease(r);
+    }
     case Verb::Unknown:
       return {404,
               std::string("{\"error\":\"unknown or missing 'verb' field\"}")};
@@ -1757,6 +1848,7 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
   maybeApplyUmbrella(v, operatorUid, result.status);
   maybeUpdateJidOwnerRegistry(v, operatorUid, m, result.status, preDestroyJid);
   maybeUpdateIfaceOwnerRegistry(v, operatorUid, m, result);
+  maybeReleaseFwLease(v, result.status, preDestroyJid);   // 1.1.57
   return result;
 }
 

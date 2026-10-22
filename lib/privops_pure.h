@@ -234,6 +234,15 @@ enum class Verb {
   SetIfaceMac,      // ifconfig <iface> ether <mac>   (host-side static-mac)
   DeleteIpfwNat,    // ipfw nat <n> delete            (auto-fw teardown)
   CreateBridge,     // ifconfig bridge<N> create + up (auto_create_bridge)
+
+  // 1.1.57: shared firewall state for NAT / bridge mode under rootless —
+  // the per-jail ipfw rule slot and the net.inet(6).ip(6).forwarding
+  // refcount that root-mode crate keeps in /var/run/crate/ctx-*. The
+  // daemon owns the registry (lib/fw_lease_registry.h), keys it by jid
+  // (reconciled against live jails, released by destroy_jail) and flips
+  // the sysctls itself on the first / last user. jid-gated.
+  AcquireFwLease,
+  ReleaseFwLease,
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -354,7 +363,10 @@ struct BridgeDelMemberReq {
 struct SetIfaceInetAddrReq {
   std::string ifname;
   std::string addr;       // IPv4 address (no /prefix here; bare addr)
-  unsigned    prefixLen = 32;  // 0..32
+  unsigned    prefixLen = 32;  // 0..32 (0..128 with inet6)
+  // 1.1.57: `inet6: true` makes `addr` an IPv6 address (NAT mode's
+  // host-side epair address was the last ifconfig run directly).
+  bool        inet6 = false;
 };
 
 // 0.9.26: create epair pair. No request fields — kernel picks
@@ -424,6 +436,20 @@ struct DeleteIpfwNatReq {
 // understands and what a spec's `auto_create_bridge` can ask for.
 struct CreateBridgeReq {
   std::string name;
+};
+
+// 1.1.57: shared firewall state (see Verb::AcquireFwLease). `slot` asks
+// for an ipfw rule slot (NAT mode); fwd4 / fwd6 take a reference on the
+// forwarding sysctls. Idempotent per jid.
+struct AcquireFwLeaseReq {
+  unsigned jid = 0;
+  bool slot = false;
+  bool fwd4 = false;
+  bool fwd6 = false;
+};
+
+struct ReleaseFwLeaseReq {
+  unsigned jid = 0;
 };
 
 // 1.1.8: configure an ipfw NAT instance. The `config` field is
@@ -542,6 +568,8 @@ std::string validateExecInJail(const ExecInJailReq &r);
 std::string validateSetIfaceMac(const SetIfaceMacReq &r);
 std::string validateDeleteIpfwNat(const DeleteIpfwNatReq &r);
 std::string validateCreateBridge(const CreateBridgeReq &r);
+std::string validateAcquireFwLease(const AcquireFwLeaseReq &r);
+std::string validateReleaseFwLease(const ReleaseFwLeaseReq &r);
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //

@@ -22,6 +22,7 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/json_pure.cpp lib/netaddr_pure.cpp
            lib/jid_owner_registry_pure.cpp lib/jid_owner_registry.cpp \
            lib/iface_owner_registry_pure.cpp lib/iface_owner_registry.cpp \
            lib/mac_pure.cpp lib/passwd_pure.cpp \
+           lib/fw_lease_pure.cpp lib/fw_lease_registry.cpp \
            lib/privops_client_pure.cpp lib/privops_client.cpp \
            lib/runtime_paths_pure.cpp lib/per_user_net_pure.cpp \
            lib/per_user_rctl_pure.cpp lib/per_user_env_pure.cpp \
@@ -284,7 +285,7 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              privops_authz_pure_test \
              jid_owner_registry_pure_test \
              iface_owner_registry_pure_test \
-             mac_pure_test passwd_pure_test \
+             mac_pure_test passwd_pure_test fw_lease_pure_test \
              runtime_paths_pure_test per_user_net_pure_test \
              per_user_rctl_pure_test per_user_env_pure_test \
              audit_per_user_pure_test \
@@ -357,6 +358,7 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp lib/json_pure.cpp lib/netaddr_pur
                  lib/jid_owner_registry_pure.cpp \
                  lib/iface_owner_registry_pure.cpp \
                  lib/mac_pure.cpp lib/passwd_pure.cpp \
+                 lib/fw_lease_pure.cpp lib/fw_lease_registry.cpp \
                  lib/privops_client_pure.cpp \
                  lib/runtime_paths_pure.cpp lib/per_user_net_pure.cpp \
                  lib/per_user_rctl_pure.cpp lib/per_user_env_pure.cpp \

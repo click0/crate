@@ -91,13 +91,23 @@ The bhyve/VM track is in TODO2.
       maps to uid 0 is refused (403 user_is_root).
 
 * (HIGH) remaining direct privileged calls under rootless:
-    - run.cpp:1595 host v6 epair address (NAT mode only).
-    - NAT mode as a whole: Ctx::FwSlots/FwUsers in root-owned
-      /var/run/crate (ctx.cpp:191, locs.cpp:11,14), ip.forwarding
-      sysctls, setupFirewallRules' ipfw rules partially via privops.
-      Now refused up front under rootless. Making NAT mode rootless
-      needs the slot allocator in the daemon (an `allocate_fw_slot`/
-      `release_fw_slot` pair keyed by peer uid+pid) and a sysctl verb.
+    [FIXED in 1.1.57] host-side v6 epair address: set_iface_inet_addr
+      gained `inet6` (RunNet::setInet6AddrPrivopsOrLocal).
+    [FIXED in 1.1.57] NAT mode under rootless: acquire_fw_lease /
+      release_fw_lease (jid-gated) replace Ctx::FwSlots/FwUsers and
+      the forwarding sysctls — crated keeps one lease per jid
+      (lib/fw_lease_registry, /var/db/crate/fw_leases.tsv), hands out
+      the ipfw slot, flips net.inet(6).ip(6).forwarding on the first
+      user and restores it after the last (release, destroy_jail or a
+      reconcile that finds the jail dead); the client creates the
+      shared outbound NAT rule when fwd4_users == 1 and removes it
+      when release reports 0. Also fixes rootless bridge mode on a
+      host with forwarding=0 (run.cpp set the sysctl directly for any
+      `net:`). Not validated on hardware (on-hardware-validation §4).
+    - Util::ensureKernelModuleIsLoaded (ipfw_nat, if_bridge, ng_*)
+      now checks kldfind first and, unprivileged, tells the operator
+      which module to load instead of failing in kldload — loading
+      modules stays a host-admin step by design.
     - lib/inter_dns.cpp writes /etc/hosts and the unbound conf.d file
       directly (root-only by nature). 1.1.56: refuses up front as
       non-root with the reason; moving the rebuild into crated as a
