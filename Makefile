@@ -149,7 +149,9 @@ CXXFLAGS += -Idaemon          # daemon/ headers for daemon build
 CXXFLAGS += -Isnmpd           # snmpd/ headers for snmpd build
 CXXFLAGS += -Ihub             # hub/ headers for hub build
 
-LIBS_DAEMON = $(LIBS) -lssl -lcrypto -lpthread
+# 1.1.57: -lutil for login_getpwclass/setusercontext (exec_in_jail applies
+# the jail's login.conf limits).
+LIBS_DAEMON = $(LIBS) -lssl -lcrypto -lpthread -lutil
 # 1.1.52: the hub needs cpp-httplib (header-only) + ssl/crypto for the TLS
 # poller, sqlite3 for the metrics store and yaml-cpp for its config; none
 # of the jail/netgraph/nv libraries.

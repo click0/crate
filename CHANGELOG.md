@@ -38,6 +38,8 @@ in crated.**
 - `setupFirewallRules` takes `sharedMode` (0 legacy FwUsers, 1 first
   rootless user, 2 not first); in modes 1/2 the teardown leaves the
   shared rule and the sysctl to the lease protocol.
+- Build: `crated` links `-lutil` (the 1.1.56 `setusercontext` call;
+  the lite CI link of `crated` caught the missing library).
 
 Tests: `fw_lease_pure_test` (allocation, counts, exhaustion,
 reconcile, TSV round trip, registry with fake sysctls incl. restart
