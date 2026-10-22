@@ -771,6 +771,108 @@ The bhyve/VM track is in TODO2.
   base-system update design (snapshot → clone → verify → promote),
   layered images (canonical layer sources, goal). Not started.
 
+=== 17. Ideas borrowed from bwrap / firejail (Linux sandboxes) ===
+
+Context (2026-10-22 review). bubblewrap is a bare primitive —
+namespaces + bind mounts + a seccomp fd, no profiles, no state,
+unprivileged via user namespaces (Flatpak's engine). firejail is a
+setuid wrapper with ~1000 per-application profiles, seccomp/caps,
+`--private-*`, netfilter, an X11 sandbox, a D-Bus filter and runtime
+commands. Both share the HOST rootfs through namespaces; crate runs a
+full jail (own userland, VNET, ZFS). Most of their isolation knobs
+already have a crate equivalent: dirs/files share ≈ --bind, x11/mode
+nested ≈ --x11=xephyr, dbus/policy ≈ --dbus-user.filter, limits ≈
+--rlimit-*, capsicum / mac_bsdextended / mac_portacl ≈ seccomp + caps,
+dns_filter ≈ --dns, terminal/devfs_ruleset ≈ --private-dev;
+clipboard/mode has no firejail counterpart. ZFS snapshots/COW, stacks
+with their own DNS, migrate/backup/replicate, VNC and the hub exist in
+neither — worth a comparison table in README. NOT worth porting:
+seccomp profiles one-to-one (Capsicum + MAC cover it), AppImage,
+Landlock, --restrict-namespaces.
+
+* (feature, HIGH value / MED size) Thin jail on nullfs — bwrap's
+  `--ro-bind /usr`. `base/mode: host-ro`: instead of bootstrapping
+  base.txz, nullfs-mount the host's /bin /sbin /lib /libexec /usr
+  read-only into the jail and keep only /etc /var /tmp /home writable
+  (ZFS dataset or tmpfs). Sub-second start, ~0 disk, and a host
+  upgrade upgrades every thin jail — which also answers §14 for this
+  class of container. Classic FreeBSD thin-jail pattern. Touches
+  create (skip bootstrap, generate /etc from a template), run (mount
+  list before jail -c), export/import (archive only the writable
+  layer + a manifest naming the host release), `crate update
+  --pkg-only` (pkg db lives in the writable layer). Needs the
+  rootless mount path (mount_nullfs verb exists) and a decision on
+  /usr/local: host-ro too, or per-jail (pkg installs need it
+  writable).
+
+* (feature, HIGH value / MED size) Per-application profiles + local
+  overrides — firejail `/etc/firejail/<app>.profile` and
+  `~/.config/firejail/<app>.local`. `profiles/<binary>.yml` shipped
+  with crate (the 56 examples are half of it already), `crate run
+  firefox` without `-f` picks the profile by name, builds the .crate
+  on first use into the spec registry and reuses it; an optional
+  `~/.config/crate/profiles/<name>.local.yml` is merged on top
+  (mergeSpecs / --template already exist; define precedence and the
+  list of keys a .local may NOT loosen — security_advanced, dbus,
+  dirs/share outside $HOME). Install target + plist for profiles/.
+
+* (feature, HIGH value / LARGE size) Profile generator from a trace —
+  firejail `--build` / `--trace`. `crate profile-from-trace -- <cmd>`
+  runs the program under `truss -f` (or a wide "recording" jail with
+  everything shared) and turns the open/stat/connect/bind trace into a
+  minimal spec: read directories → dirs/share, written → writable
+  volumes, listening ports → inbound, outbound destinations →
+  outbound/allow-tcp|udp, X11/D-Bus/sound sockets → the matching
+  options, pkg-owned paths → pkg/install. Pure trace→spec module with
+  unit tests on recorded traces; the runner is FreeBSD-only.
+
+* (feature, MED value / SMALL size) Sandbox audit from the inside —
+  firejail `--audit`. `crate audit <target|spec>`: exec_in_jail a
+  probe that reports what the container can actually reach: host
+  paths visible (mounts), unix sockets, interfaces/addresses/routes,
+  devfs entries, uid/gids, securelevel, allow.* flags, outbound
+  connectivity (one connect to the host gateway, one DNS lookup).
+  Complements `doctor`, which looks at the host. Table + `-j` JSON.
+
+* (feature, MED value / SMALL size) Device classes instead of a
+  hand-written devfs ruleset — firejail --nosound/--novideo/--no3d/
+  --noinput/--nou2f. `devices: {sound: bool, video: bool, gpu: bool,
+  input: bool, usb: bool, serial: bool}` → crate generates the devfs
+  unhide rules (and the gui/gpu_device passthrough) itself;
+  terminal/devfs_ruleset stays as the escape hatch.
+
+* (feature, MED value / SMALL size) `--private-tmp`, `--tmpfs`,
+  `--read-only`, `--private-etc`. `tmpfs: [/tmp, ~/.cache]` mounts
+  tmpfs at those paths inside the jail (mount verb or mount_tmpfs
+  through privops); `dirs/share` gains `:ro` like stack volumes;
+  `etc/keep: [resolv.conf, localtime, ...]` for the thin-jail /etc.
+
+* (security, MED value / SMALL size) Non-root by default — firejail
+  --noroot / --nonewprivs. `run/user: <name>` in the spec, default a
+  dedicated unprivileged user created at `crate create`; exec_in_jail
+  already switches user and applies the jail's login.conf limits
+  (1.1.56), so this is spec plumbing + a doc note that root inside the
+  jail stays available with `run/user: root`.
+
+* (feature, MED value / SMALL size) Machine-readable lifecycle —
+  bwrap `--json-status-fd`, firejail `--timeout`. `crate run
+  --status-fd N` writes one JSON object per event (jail_created jid,
+  mounts_ready, net_ready ip, exec_started pid, healthy/unhealthy,
+  exited code, teardown_done); `stack up` and crated's spawned runs
+  stop polling for the jail to appear (1.1.51 waitForStackJail) and
+  the hub/CI get exact phases. `run/timeout: <seconds>` kills the
+  command and tears down when exceeded.
+
+* (feature, LOW value / SMALL size) Desktop integration — firecfg.
+  `crate wrap install <profile>` writes a launcher to ~/.local/bin (or
+  a .desktop with `Exec=crate run <profile> -- %U`) so programs started
+  from a menu run in their container; `wrap remove` undoes it.
+
+* (privacy, LOW value / SMALL size) `--machine-id` / `--hostname`.
+  `privacy/hostid: random` generates a per-container /etc/hostid (and
+  the jail hostname is already per container); belongs in
+  templates/privacy.yml and the tor examples.
+
 === Done (removed) ===
 
 Items completed and removed from this file; see CHANGELOG.md for the
