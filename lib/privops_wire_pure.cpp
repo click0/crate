@@ -380,6 +380,7 @@ std::string parseBridgeDelMember(const std::string &body,
 
 std::string parseSetIfaceInetAddr(const std::string &body,
                                   PrivOpsPure::SetIfaceInetAddrReq &out) {
+  extractBoolField(body, "inet6", out.inet6);   // 1.1.57, optional
   if (auto e = requireStringField(body, "ifname", out.ifname); !e.empty()) return e;
   if (auto e = requireStringField(body, "addr", out.addr); !e.empty()) return e;
   if (auto e = requireUnsignedField(body, "prefix_len", out.prefixLen); !e.empty()) return e;
@@ -450,6 +451,23 @@ std::string parseDeleteIpfwNat(const std::string &body,
 std::string parseCreateBridge(const std::string &body,
                               PrivOpsPure::CreateBridgeReq &out) {
   if (auto e = requireStringField(body, "name", out.name); !e.empty()) return e;
+  return "";
+}
+
+// --- 1.1.57 ---
+
+std::string parseAcquireFwLease(const std::string &body,
+                                PrivOpsPure::AcquireFwLeaseReq &out) {
+  if (auto e = requireUnsignedField(body, "jid", out.jid); !e.empty()) return e;
+  extractBoolField(body, "slot", out.slot);
+  extractBoolField(body, "fwd4", out.fwd4);
+  extractBoolField(body, "fwd6", out.fwd6);
+  return "";
+}
+
+std::string parseReleaseFwLease(const std::string &body,
+                                PrivOpsPure::ReleaseFwLeaseReq &out) {
+  if (auto e = requireUnsignedField(body, "jid", out.jid); !e.empty()) return e;
   return "";
 }
 
@@ -909,6 +927,22 @@ std::string formatCreateBridgeSuccess(const std::string &name) {
   return o.str();
 }
 
+std::string formatAcquireFwLeaseSuccess(unsigned jid, int slot,
+                                        unsigned fwd4Users, unsigned fwd6Users) {
+  std::ostringstream o;
+  o << "{\"jid\":" << jid << ",\"slot\":" << slot
+    << ",\"fwd4_users\":" << fwd4Users << ",\"fwd6_users\":" << fwd6Users << "}";
+  return o.str();
+}
+
+std::string formatReleaseFwLeaseSuccess(unsigned jid, bool released,
+                                        unsigned fwd4Users, unsigned fwd6Users) {
+  std::ostringstream o;
+  o << "{\"jid\":" << jid << ",\"released\":" << (released ? "true" : "false")
+    << ",\"fwd4_users\":" << fwd4Users << ",\"fwd6_users\":" << fwd6Users << "}";
+  return o.str();
+}
+
 std::string formatExecInJailSuccess(unsigned jid, long pid) {
   std::ostringstream o;
   o << "{\"started\":true,\"jid\":" << jid << ",\"pid\":" << pid << "}";
@@ -1005,6 +1039,10 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       return runVerb<DeleteIpfwNatReq>(body, v, parseDeleteIpfwNat, validateDeleteIpfwNat);
     case Verb::CreateBridge:
       return runVerb<CreateBridgeReq>(body, v, parseCreateBridge, validateCreateBridge);
+    case Verb::AcquireFwLease:
+      return runVerb<AcquireFwLeaseReq>(body, v, parseAcquireFwLease, validateAcquireFwLease);
+    case Verb::ReleaseFwLease:
+      return runVerb<ReleaseFwLeaseReq>(body, v, parseReleaseFwLease, validateReleaseFwLease);
     case Verb::Unknown:
       break;
   }

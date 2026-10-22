@@ -30,6 +30,7 @@ ATF_TEST_CASE_BODY(verb_token_roundtrips_for_every_verb) {
     Verb::EnsureUserRoot,
     Verb::ExecInJail,   // 1.1.40
     Verb::SetIfaceMac, Verb::DeleteIpfwNat, Verb::CreateBridge,   // 1.1.41
+    Verb::AcquireFwLease, Verb::ReleaseFwLease,                   // 1.1.57
   };
   for (Verb v : verbs) {
     std::string token = verbName(v);
@@ -1076,7 +1077,38 @@ ATF_TEST_CASE_BODY(host_primitives_1141_validation) {
   b.name = "";          ATF_REQUIRE(!validateCreateBridge(b).empty());
 }
 
+// 1.1.57: acquire/release_fw_lease + set_iface_inet_addr inet6.
+ATF_TEST_CASE_WITHOUT_HEAD(fw_lease_and_inet6_validation);
+ATF_TEST_CASE_BODY(fw_lease_and_inet6_validation) {
+  ATF_REQUIRE_EQ(verbName(Verb::AcquireFwLease), std::string("acquire_fw_lease"));
+  ATF_REQUIRE(parseVerb("release_fw_lease") == Verb::ReleaseFwLease);
+
+  AcquireFwLeaseReq a;
+  a.jid = 7; a.slot = true;              ATF_REQUIRE_EQ(validateAcquireFwLease(a), std::string());
+  a.slot = false; a.fwd4 = true;         ATF_REQUIRE_EQ(validateAcquireFwLease(a), std::string());
+  a.fwd4 = false; a.fwd6 = true;         ATF_REQUIRE_EQ(validateAcquireFwLease(a), std::string());
+  a.fwd6 = false;                        ATF_REQUIRE(!validateAcquireFwLease(a).empty());   // nothing asked
+  a.slot = true; a.jid = 0;              ATF_REQUIRE(!validateAcquireFwLease(a).empty());
+  a.jid = 65536;                         ATF_REQUIRE(!validateAcquireFwLease(a).empty());
+
+  ReleaseFwLeaseReq r;
+  r.jid = 1;      ATF_REQUIRE_EQ(validateReleaseFwLease(r), std::string());
+  r.jid = 65535;  ATF_REQUIRE_EQ(validateReleaseFwLease(r), std::string());
+  r.jid = 0;      ATF_REQUIRE(!validateReleaseFwLease(r).empty());
+
+  SetIfaceInetAddrReq i;
+  i.ifname = "epair3a"; i.addr = "fd00::1"; i.prefixLen = 126; i.inet6 = true;
+  ATF_REQUIRE_EQ(validateSetIfaceInetAddr(i), std::string());
+  i.prefixLen = 128;  ATF_REQUIRE_EQ(validateSetIfaceInetAddr(i), std::string());
+  i.prefixLen = 129;  ATF_REQUIRE(!validateSetIfaceInetAddr(i).empty());
+  i.prefixLen = 64; i.addr = "10.0.0.1";      ATF_REQUIRE(!validateSetIfaceInetAddr(i).empty());   // v4 with inet6
+  i.inet6 = false; i.addr = "fd00::1"; i.prefixLen = 24;
+  ATF_REQUIRE(!validateSetIfaceInetAddr(i).empty());   // v6 without inet6
+  i.addr = "10.0.0.1"; ATF_REQUIRE_EQ(validateSetIfaceInetAddr(i), std::string());
+}
+
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, fw_lease_and_inet6_validation);
   ATF_ADD_TEST_CASE(tcs, verb_token_roundtrips_for_every_verb);
   ATF_ADD_TEST_CASE(tcs, verb_unknown_token_returns_unknown);
   ATF_ADD_TEST_CASE(tcs, verb_tokens_are_snake_case_lowercase);

@@ -6,6 +6,78 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.57] — 2026-10-22
+
+**TODO §1: NAT mode works under rootless; shared firewall state lives
+in crated.**
+
+- **`acquire_fw_lease` / `release_fw_lease`** (jid-gated privops
+  verbs). Root-mode `crate run` coordinates the per-container ipfw
+  rule slot and the `net.inet.ip.forwarding` /
+  `net.inet6.ip6.forwarding` refcount through root-owned files in
+  `/var/run/crate`, so NAT mode was refused unprivileged (1.1.39).
+  crated now keeps one lease per jid (`lib/fw_lease_pure`,
+  `lib/fw_lease_registry`, `/var/db/crate/fw_leases.tsv`): it hands
+  out the lowest free slot, switches a forwarding sysctl on for the
+  first user that needs it (remembering the original value) and
+  restores it after the last — on `release_fw_lease`, on
+  `destroy_jail`, or when a reconcile at startup finds the jail dead.
+  The response carries the refcounts, so the first rootless NAT user
+  creates the shared outbound NAT instance + rule and the last one
+  removes it (`RunNet::removeCommonOutRule`).
+- **Rootless bridge mode on a host with `forwarding=0` was broken**:
+  `run.cpp` set `net.inet.ip.forwarding` directly for every `net:`
+  option and died with EACCES unprivileged. The lease (fwd4 only, no
+  slot) covers bridge/passthrough/netgraph too.
+- `set_iface_inet_addr` gained `inet6: true` (0..128 prefix, IPv6
+  validated); the host-side IPv6 epair address in NAT mode was the
+  last `ifconfig` run directly.
+- `Util::ensureKernelModuleIsLoaded` checks `kldfind` first; when the
+  module is missing and the caller is not root it says which module to
+  `kldload` instead of failing inside the syscall.
+- `setupFirewallRules` takes `sharedMode` (0 legacy FwUsers, 1 first
+  rootless user, 2 not first); in modes 1/2 the teardown leaves the
+  shared rule and the sysctl to the lease protocol.
+- Build: `crated` links `-lutil` (the 1.1.56 `setusercontext` call;
+  the lite CI link of `crated` caught the missing library).
+
+Tests: `fw_lease_pure_test` (allocation, counts, exhaustion,
+reconcile, TSV round trip, registry with fake sysctls incl. restart
+and corrupt file), verb parsers/validators/builders/authz. Version
+1.1.57.
+
+## [1.1.56] — 2026-10-22
+
+**TODO §1: exec_in_jail follow-ups and the small rootless gaps.**
+
+- **No name-service calls in the pdfork child.** `exec_in_jail` used
+  to call `getpwnam()` / `initgroups()` after `fork` inside the
+  multi-threaded daemon. The parent now reads the jail's own
+  `etc/master.passwd` (or `etc/passwd`) and `etc/group` through an fd
+  of the jail root with `O_RESOLVE_BENEATH` (a symlink planted in the
+  jail cannot redirect the daemon to a host file), parses them with
+  the new `PasswdPure` module and hands the child plain
+  uid/gid/groups/home/shell. Unknown user → 404 `user_not_found`; a
+  user that maps to uid 0 → 403 `user_is_root`.
+- **Per-process limits come from the jail.** After `jail_attach` the
+  child runs `setusercontext(LOGIN_SETRESOURCES | SETPRIORITY |
+  SETUMASK)` against the user's class from the jail's
+  `/etc/login.conf` instead of inheriting crated's rlimits (the
+  cpuset was already the jail's).
+- `PfLock` lives under `/var/run/crate/<uid>/` for an unprivileged
+  crate and a failed lock is reported once (it was silently never
+  taken, so concurrent pf changes were unserialised).
+- `crate inter-dns` and `crate stack up/down` refuse up front as
+  non-root with the reason (they rewrite `/etc/hosts`, create bridges
+  and run the stack resolver) instead of failing half-way.
+- **Two test programs were never run.** `iface_owner_registry_pure_test`
+  (1.1.43) and `mac_pure_test` (1.1.44) were in the Makefile but not
+  in `tests/unit/Kyuafile`; kyua skipped them on every CI run (both
+  pass). `make check-kyuafile` now gates `test`/`test-unit`.
+
+Tests: `passwd_pure_test` (master.passwd / passwd parsing, group
+membership) plus the two recovered programs. Version 1.1.56.
+
 ## [1.1.55] — 2026-10-20
 
 **TODO §16 hygiene item: the crated.sock bind→chmod race is closed.**

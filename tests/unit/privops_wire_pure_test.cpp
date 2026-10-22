@@ -593,6 +593,7 @@ ATF_TEST_CASE_BODY(dispatch_covers_every_verb) {
     Verb::EnsureUserRoot,   // 1.1.39
     Verb::ExecInJail,       // 1.1.40
     Verb::SetIfaceMac, Verb::DeleteIpfwNat, Verb::CreateBridge,   // 1.1.41
+    Verb::AcquireFwLease, Verb::ReleaseFwLease,                   // 1.1.57
   };
   for (auto v : verbs) {
     auto r = parseValidateAndDispatch(v, "{}");
@@ -738,6 +739,32 @@ ATF_TEST_CASE_BODY(parse_1141_verbs_and_rctl_limits) {
   // 501 table covers them (parse + validate, then not implemented)
   ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::CreateBridge, R"({"name":"bridge0"})").status, 501);
   ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::CreateBridge, R"({"name":"br0"})").status, 400);
+
+  // 1.1.57: fw lease verbs — optional booleans, jid required; responses
+  PrivOpsPure::AcquireFwLeaseReq a;
+  ATF_REQUIRE_EQ(parseAcquireFwLease(R"({"jid":9,"slot":true,"fwd4":true})", a), std::string());
+  ATF_REQUIRE_EQ(a.jid, 9u); ATF_REQUIRE(a.slot); ATF_REQUIRE(a.fwd4); ATF_REQUIRE(!a.fwd6);
+  ATF_REQUIRE(!parseAcquireFwLease(R"({"slot":true})", a).empty());
+  ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::AcquireFwLease, R"({"jid":9,"fwd4":true})").status, 501);
+  ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::AcquireFwLease, R"({"jid":9})").status, 400);   // nothing asked
+  PrivOpsPure::ReleaseFwLeaseReq rl;
+  ATF_REQUIRE_EQ(parseReleaseFwLease(R"({"jid":9})", rl), std::string());
+  ATF_REQUIRE(!parseReleaseFwLease(R"({})", rl).empty());
+  ATF_REQUIRE_EQ(formatAcquireFwLeaseSuccess(9, 3, 1, 0),
+                 std::string(R"({"jid":9,"slot":3,"fwd4_users":1,"fwd6_users":0})"));
+  ATF_REQUIRE_EQ(formatReleaseFwLeaseSuccess(9, true, 0, 0),
+                 std::string(R"({"jid":9,"released":true,"fwd4_users":0,"fwd6_users":0})"));
+  long v = -5;
+  ATF_REQUIRE_EQ(extractLongField(formatAcquireFwLeaseSuccess(9, -1, 2, 2), "slot", v), std::string(kPresent));
+  ATF_REQUIRE_EQ(v, -1L);
+  // set_iface_inet_addr: optional inet6 flag
+  PrivOpsPure::SetIfaceInetAddrReq i;
+  ATF_REQUIRE_EQ(parseSetIfaceInetAddr(R"({"ifname":"epair0a","addr":"fd00::1","prefix_len":126,"inet6":true})", i), std::string());
+  ATF_REQUIRE(i.inet6);
+  ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::SetIfaceInetAddr,
+                 R"({"ifname":"epair0a","addr":"fd00::1","prefix_len":126,"inet6":true})").status, 501);
+  ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::SetIfaceInetAddr,
+                 R"({"ifname":"epair0a","addr":"fd00::1","prefix_len":126})").status, 400);
 }
 
 // --- 1.1.51: escaper on JsonPure, decoder understands \uXXXX ---

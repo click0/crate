@@ -706,8 +706,16 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     // net.inet.ip.forwarding needs to be 1 for networking to work
     origIpForwarding = Util::getSysctlInt("net.inet.ip.forwarding");
     if (origIpForwarding == 0) {
-      LOG("enabling net.inet.ip.forwarding (was 0, will restore on exit)")
-      Util::setSysctlInt("net.inet.ip.forwarding", 1);
+      // 1.1.57: unprivileged crate cannot set sysctls; the daemon takes a
+      // forwarding reference for us in acquire_fw_lease once the jail
+      // exists (bridge/passthrough/netgraph too — this line used to fail
+      // with EACCES for every rootless `net:` on a host with forwarding=0).
+      if (!PrivOpsClient::detectSocketPath().empty()) {
+        LOG("net.inet.ip.forwarding is 0; crated will enable it for this jail (acquire_fw_lease)")
+      } else {
+        LOG("enabling net.inet.ip.forwarding (was 0, will restore on exit)")
+        Util::setSysctlInt("net.inet.ip.forwarding", 1);
+      }
     }
     // Detect container-vs-host FreeBSD version mismatch for ipfw compatibility (NAT mode only)
     if (isNatMode) {
@@ -1075,6 +1083,53 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   RunAtEnd releaseFwSlot;
   // 1.1.38: put net.inet6.ip6.forwarding back the way we found it.
   RunAtEnd restoreIp6ForwardingAtEnd;
+  // 1.1.57: rootless — the shared firewall state (ipfw slot, forwarding
+  // refcount) lives in crated, keyed by this jid. Acquired here, as soon
+  // as the jid exists; released after the rules are gone. destroy_jail
+  // also returns it, so a killed `crate run` leaks nothing.
+  RunAtEnd releaseFwLeaseAtEnd;
+  int      fwLeaseSlot = -1;
+  unsigned fwLeaseFwd4Users = 0;
+  const bool rootlessNet = spec.optionExists("net") && !PrivOpsClient::detectSocketPath().empty();
+  if (rootlessNet) {
+    auto optNet = spec.optionNet();
+    const bool wantSlot = isNatMode;
+    const bool want6 = isNatMode && optNet && optNet->ipv6;
+    std::string sock = PrivOpsClient::detectSocketPath();
+    auto resp = PrivOpsClient::sendRequest(sock,
+        PrivOpsClient::buildAcquireFwLease((unsigned)jid, wantSlot, /*fwd4=*/true, want6));
+    if (!resp.transportError.empty())
+      ERR("privops acquire_fw_lease transport error: " << resp.transportError)
+    if (resp.status >= 400)
+      ERR("privops acquire_fw_lease failed (status " << resp.status << "): " << resp.body)
+    long slotL = -1, users4 = 0;
+    if (PrivOpsWirePure::extractLongField(resp.body, "slot", slotL) != PrivOpsWirePure::kPresent
+        || PrivOpsWirePure::extractLongField(resp.body, "fwd4_users", users4) != PrivOpsWirePure::kPresent)
+      ERR("privops acquire_fw_lease: malformed response: " << resp.body)
+    fwLeaseSlot = (int)slotL;
+    fwLeaseFwd4Users = users4 < 0 ? 0u : (unsigned)users4;
+    if (wantSlot && fwLeaseSlot < 0)
+      ERR("privops acquire_fw_lease returned no firewall slot")
+    LOG("fw lease: slot=" << fwLeaseSlot << " fwd4_users=" << fwLeaseFwd4Users)
+    releaseFwLeaseAtEnd.reset([jid, isNatMode, &args]() {
+      std::string sock = PrivOpsClient::detectSocketPath();
+      if (sock.empty()) return;
+      auto resp = PrivOpsClient::sendRequest(sock, PrivOpsClient::buildReleaseFwLease((unsigned)jid));
+      if (!resp.transportError.empty() || resp.status >= 400) {
+        WARN("privops release_fw_lease failed: "
+             << (resp.transportError.empty() ? "status " + std::to_string(resp.status) + " " + resp.body
+                                             : resp.transportError))
+        return;
+      }
+      long users4 = 1;
+      PrivOpsWirePure::extractLongField(resp.body, "fwd4_users", users4);
+      if (isNatMode && users4 == 0) {
+        LOG("fw lease: last NAT user, removing the shared outbound rule")
+        try { RunNet::removeCommonOutRule(); }
+        catch (const std::exception &e) { WARN("remove shared outbound rule: " << e.what()) }
+      }
+    });
+  }
 
   RunAtEnd destroyJail([jailInfo,&jailXname,runScript,&args]() {
     runScript("run:before-remove-jail");
@@ -1784,14 +1839,11 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     //
     // NAT mode (original behavior): epair + ipfw NAT
     //
-    // 1.1.39: NAT mode coordinates host-wide ipfw slots through the
-    // root-owned /var/run/crate/ctx-fw-slots file and writes sysctls;
-    // none of that goes through privops. Refuse up front with the
-    // alternative instead of dying on EACCES at FwSlots::lock.
-    if (!PrivOpsClient::detectSocketPath().empty())
-      ERR("NAT mode (net: outbound/inbound) needs root: firewall slots and "
-          "ip forwarding are host-wide and not reachable through privops yet. "
-          "Under rootless use `network: auto` (bridge + network_pool) or run as root.")
+    // 1.1.39 refused NAT mode under rootless (slots + sysctls lived in
+    // root-owned files). 1.1.57: both come from crated through
+    // acquire_fw_lease (taken above, right after the jail was created),
+    // the host-side IPv6 address goes through set_iface_inet_addr and
+    // the shared NAT rule is created by whoever the daemon says is first.
     // detect host's gateway
     auto gw = RunNet::detectGateway();
     gwIface = gw.iface; hostIP = gw.hostIP; hostLAN = gw.hostLAN;
@@ -1841,13 +1893,12 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       epipeIp6B = RunPure::epairIp6(epair.num, 1);
 
       execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet6", "::1", "prefixlen", "128"}, "set up lo0 IPv6 in jail");
-      Util::execCommand({CRATE_PATH_IFCONFIG, epair.ifaceA, "inet6", epipeIp6A, "prefixlen", "126"},
-                        "set up IPv6 on host-side epair");
+      RunNet::setInet6AddrPrivopsOrLocal(epair.ifaceA, epipeIp6A, 126);   // 1.1.57: privops-aware
       execInJail({CRATE_PATH_IFCONFIG, epair.ifaceB, "inet6", epipeIp6B, "prefixlen", "126"},
                  "set up IPv6 on jail-side epair");
       execInJail({CRATE_PATH_ROUTE, "-6", "add", "default", epipeIp6A}, "set IPv6 default route in jail");
       auto origIp6Forwarding = Util::getSysctlInt("net.inet6.ip6.forwarding");
-      if (origIp6Forwarding == 0) {
+      if (origIp6Forwarding == 0 && !rootlessNet) {   // 1.1.57: rootless -> fwd6 reference in the lease
         LOG("enabling net.inet6.ip6.forwarding")
         Util::setSysctlInt("net.inet6.ip6.forwarding", 1);
         restoreIp6ForwardingAtEnd.reset([&args]() {
@@ -1869,22 +1920,30 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       ),
       "/etc/rc.conf");
 
-    // allocate firewall slot (§18)
-    std::unique_ptr<Ctx::FwSlots> fwSlots(Ctx::FwSlots::lock());
-    auto fwSlot = fwSlots->allocate(::getpid());
-    fwSlots->unlock();
-    releaseFwSlot.reset([]() {
+    // allocate firewall slot (§18). 1.1.57: rootless gets it from the
+    // daemon's lease (taken above); root keeps the /var/run/crate file.
+    unsigned fwSlot = 0;
+    int sharedMode = 0;
+    if (rootlessNet) {
+      fwSlot = (unsigned)fwLeaseSlot;
+      sharedMode = fwLeaseFwd4Users == 1 ? 1 : 2;
+    } else {
       std::unique_ptr<Ctx::FwSlots> fwSlots(Ctx::FwSlots::lock());
-      fwSlots->release(::getpid());
+      fwSlot = fwSlots->allocate(::getpid());
       fwSlots->unlock();
-    });
+      releaseFwSlot.reset([]() {
+        std::unique_ptr<Ctx::FwSlots> fwSlots(Ctx::FwSlots::lock());
+        fwSlots->release(::getpid());
+        fwSlots->unlock();
+      });
+    }
 
     {
       auto v6addr  = (optionNet->ipv6 && !epipeIp6B.empty()) ? epipeIp6B : std::string();
       auto v6iface = (optionNet->ipv6 && !epipeIp6B.empty()) ? (gwIface6.empty() ? gwIface : gwIface6) : std::string();
       destroyFirewallRulesAtEnd = RunNet::setupFirewallRules(spec, epair, gw, fwSlot, nameserverIp,
                                                              origIpForwarding, args.logProgress,
-                                                             v6addr, v6iface);
+                                                             v6addr, v6iface, sharedMode);
       if (!v6addr.empty())
         LOG("IPv6 firewall rules configured for " << v6addr)
     }
@@ -2273,6 +2332,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     destroyFirewallRulesAtEnd.doNow();
     destroyEpipeAtEnd.doNow();
     releaseFwSlot.doNow();
+    releaseFwLeaseAtEnd.doNow();   // 1.1.57
     restoreIp6ForwardingAtEnd.doNow();
   }
   removeMacRules.doNow();

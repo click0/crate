@@ -329,12 +329,34 @@ void destroyEpair(const std::string &ifaceA) {
   teardownIface(ifaceA);
 }
 
+void removeCommonOutRule() {
+  removeIpfwRulePrivopsOrLocal(fwRuleRangeOutBase, "destroy shared outbound firewall rule");
+}
+
+void setInet6AddrPrivopsOrLocal(const std::string &iface, const std::string &addr,
+                                int prefixLen) {
+  std::string sock = PrivOpsClient::detectSocketPath();
+  if (!sock.empty()) {
+    auto resp = PrivOpsClient::sendRequest(sock,
+        PrivOpsClient::buildSetIfaceInetAddr(iface, addr, (unsigned)prefixLen, /*inet6=*/true));
+    if (!resp.transportError.empty())
+      ERR2("run_net", "privops set_iface_inet_addr (inet6) '" << iface
+           << "' transport error: " << resp.transportError)
+    if (resp.status >= 400)
+      ERR2("run_net", "privops set_iface_inet_addr (inet6) '" << iface
+           << "' failed (status " << resp.status << "): " << resp.body)
+    return;
+  }
+  IfconfigOps::setInet6Addr(iface, addr, prefixLen);
+}
+
 RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
                             const GatewayInfo &gw, unsigned fwSlot,
                             const std::string &nameserverIp,
                             int origIpForwarding, bool logProgress,
                             const std::string &ipv6Addr,
-                            const std::string &ipv6Iface) {
+                            const std::string &ipv6Iface,
+                            int sharedMode) {
   auto optionNet = spec.optionNet();
   if (!optionNet)
     return RunAtEnd();
@@ -460,13 +482,18 @@ RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
 
   // OUT common rules
   if (optionNet->allowOutbound()) {
-    std::unique_ptr<Ctx::FwUsers> fwUsers(Ctx::FwUsers::lock());
-    if (fwUsers->isEmpty()) {
+    if (sharedMode == 0) {
+      std::unique_ptr<Ctx::FwUsers> fwUsers(Ctx::FwUsers::lock());
+      if (fwUsers->isEmpty()) {
+        execFW({"nat", natOutCommonS, "config", "ip", gw.hostIP});
+        execFW({"add", ruleOutCommonS, "nat", natOutCommonS, "all", "from", "any", "to", gw.hostIP, "in", "recv", gw.iface});
+      }
+      fwUsers->add(::getpid());
+      fwUsers->unlock();
+    } else if (sharedMode == 1) {   // 1.1.57: first rootless user per crated
       execFW({"nat", natOutCommonS, "config", "ip", gw.hostIP});
       execFW({"add", ruleOutCommonS, "nat", natOutCommonS, "all", "from", "any", "to", gw.hostIP, "in", "recv", gw.iface});
     }
-    fwUsers->add(::getpid());
-    fwUsers->unlock();
   }
 
   // OUT per-epair rules: 1. whitewashes, 2. bans, 3. nats
@@ -499,7 +526,7 @@ RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
   }
 
   // cleanup callback
-  return RunAtEnd([fwRuleInNo, fwRule6InNo, fwRuleOutNo, fwRuleOutCommonNo, fwRule6OutNo, hasV6, optionNet, origIpForwarding, logProgress]() {
+  return RunAtEnd([fwRuleInNo, fwRule6InNo, fwRuleOutNo, fwRuleOutCommonNo, fwRule6OutNo, hasV6, optionNet, origIpForwarding, logProgress, sharedMode]() {
     if (optionNet->allowInbound()) {
       removeIpfwRulePrivopsOrLocal(fwRuleInNo, "destroy firewall rule");
       if (hasV6) {
@@ -519,17 +546,19 @@ RunAtEnd setupFirewallRules(const Spec &spec, const EpairInfo &epair,
           WARN("failed to delete IPv6 firewall rule " << fwRule6OutNo << ": " << e.what())
         }
       }
-      std::unique_ptr<Ctx::FwUsers> fwUsers(Ctx::FwUsers::lock());
-      fwUsers->del(::getpid());
-      if (fwUsers->isEmpty()) {
-        removeIpfwRulePrivopsOrLocal(fwRuleOutCommonNo, "destroy firewall rule");
-        if (origIpForwarding == 0) {
-          if (logProgress)
-            std::cerr << rang::fg::gray << "restoring net.inet.ip.forwarding to 0" << rang::style::reset << std::endl;
-          Util::setSysctlInt("net.inet.ip.forwarding", 0);
+      if (sharedMode == 0) {   // 1.1.57: rootless leaves this to release_fw_lease
+        std::unique_ptr<Ctx::FwUsers> fwUsers(Ctx::FwUsers::lock());
+        fwUsers->del(::getpid());
+        if (fwUsers->isEmpty()) {
+          removeIpfwRulePrivopsOrLocal(fwRuleOutCommonNo, "destroy firewall rule");
+          if (origIpForwarding == 0) {
+            if (logProgress)
+              std::cerr << rang::fg::gray << "restoring net.inet.ip.forwarding to 0" << rang::style::reset << std::endl;
+            Util::setSysctlInt("net.inet.ip.forwarding", 0);
+          }
         }
+        fwUsers->unlock();
       }
-      fwUsers->unlock();
     }
   });
 }

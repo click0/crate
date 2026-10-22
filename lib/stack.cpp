@@ -863,6 +863,15 @@ bool stackCommand(const Args &args) {
     return true;
   }
 
+  // 1.1.56: `stack up`/`down` create bridges, start the stack resolver on
+  // :53 and write /etc/hosts inside the jails as root — the stack path is
+  // root-only today (TODO §1). Refuse up front with the reason instead of
+  // failing on the first privileged step with half a stack running.
+  if ((args.stackSubcmd == "up" || args.stackSubcmd == "down") && ::geteuid() != 0)
+    ERR("stack " << args.stackSubcmd << " needs root: it creates bridges, runs the "
+        "stack DNS resolver and edits /etc/hosts inside the containers "
+        "(rootless stacks are tracked in TODO §1)")
+
   if (args.stackSubcmd == "up") {
     auto sorted = topoSort(entries);
 

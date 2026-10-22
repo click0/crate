@@ -229,6 +229,7 @@ std::string parseBridgeDelMember(const FieldMap &m,
 std::string parseSetIfaceInetAddr(const FieldMap &m,
                                   PrivOpsPure::SetIfaceInetAddrReq &out) {
   if (auto e = requireString(m, "ifname", out.ifname); !e.empty()) return e;
+  if (auto e = optionalBool(m, "inet6", out.inet6); !e.empty()) return e;   // 1.1.57
   if (auto e = requireString(m, "addr", out.addr); !e.empty()) return e;
   if (auto e = requireUnsigned(m, "prefix_len", out.prefixLen); !e.empty()) return e;
   return "";
@@ -297,6 +298,23 @@ std::string parseDeleteIpfwNat(const FieldMap &m,
 std::string parseCreateBridge(const FieldMap &m,
                               PrivOpsPure::CreateBridgeReq &out) {
   if (auto e = requireString(m, "name", out.name); !e.empty()) return e;
+  return "";
+}
+
+// --- 1.1.57 ---
+
+std::string parseAcquireFwLease(const FieldMap &m,
+                                PrivOpsPure::AcquireFwLeaseReq &out) {
+  if (auto e = requireUnsigned(m, "jid", out.jid); !e.empty()) return e;
+  if (auto e = optionalBool(m, "slot", out.slot); !e.empty()) return e;
+  if (auto e = optionalBool(m, "fwd4", out.fwd4); !e.empty()) return e;
+  if (auto e = optionalBool(m, "fwd6", out.fwd6); !e.empty()) return e;
+  return "";
+}
+
+std::string parseReleaseFwLease(const FieldMap &m,
+                                PrivOpsPure::ReleaseFwLeaseReq &out) {
+  if (auto e = requireUnsigned(m, "jid", out.jid); !e.empty()) return e;
   return "";
 }
 

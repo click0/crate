@@ -212,6 +212,10 @@ std::string parseDeleteIpfwNat(const std::string &body,
                                PrivOpsPure::DeleteIpfwNatReq &out);
 std::string parseCreateBridge(const std::string &body,
                               PrivOpsPure::CreateBridgeReq &out);
+std::string parseAcquireFwLease(const std::string &body,
+                                PrivOpsPure::AcquireFwLeaseReq &out);   // 1.1.57
+std::string parseReleaseFwLease(const std::string &body,
+                                PrivOpsPure::ReleaseFwLeaseReq &out);   // 1.1.57
 
 std::string parseSignalJail(const std::string &body,
                             PrivOpsPure::SignalJailReq &out);
@@ -399,5 +403,15 @@ std::string formatSetIfaceMacSuccess(const std::string &ifname, const std::strin
 std::string formatDeleteIpfwNatSuccess(unsigned number);
 // {"created":true,"name":"bridge0"}
 std::string formatCreateBridgeSuccess(const std::string &name);
+
+// 1.1.57: 200 OK bodies for acquire_fw_lease / release_fw_lease. `slot`
+// is -1 when none was requested; the *_users counts are the refcounts
+// AFTER the call (1 on acquire = this caller is the first user and must
+// create the shared NAT rule; 0 on release = it was the last and must
+// remove it). The daemon has already flipped the forwarding sysctls.
+std::string formatAcquireFwLeaseSuccess(unsigned jid, int slot,
+                                        unsigned fwd4Users, unsigned fwd6Users);
+std::string formatReleaseFwLeaseSuccess(unsigned jid, bool released,
+                                        unsigned fwd4Users, unsigned fwd6Users);
 
 } // namespace PrivOpsWirePure

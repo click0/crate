@@ -132,8 +132,18 @@ healthcheck loop use the same path. 1.1.41 adds signal forwarding —
 the command is `crated`'s child, so `crate run`'s SIGINT/SIGTERM
 handler `pdkill`s it through the process descriptor (5 s grace, then
 teardown proceeds regardless) — and the last three host-side
-primitives (`set_iface_mac`, `delete_ipfw_nat`, `create_bridge`). Not
-yet validated on hardware (see `docs/on-hardware-validation.md` §4.1).
+primitives (`set_iface_mac`, `delete_ipfw_nat`, `create_bridge`).
+1.1.57 makes **NAT mode** (`net: outbound/inbound`) work rootless too:
+the ipfw rule slot and the `net.inet.ip.forwarding` /
+`net.inet6.ip6.forwarding` refcount live in crated
+(`acquire_fw_lease` / `release_fw_lease`, keyed by the caller's jid,
+state in `/var/db/crate/fw_leases.tsv`), the daemon switches the
+sysctls on for the first user and back for the last one, and the
+host-side IPv6 epair address goes through `set_iface_inet_addr
+inet6`. Kernel modules (`ipfw_nat`, `if_bridge`, `ng_*`) are still a
+host-admin step: an unprivileged `crate run` reports which one to
+`kldload`. Not yet validated on hardware (see
+`docs/on-hardware-validation.md` §4.1).
 
 uid is the stable key (operators on NIS/LDAP have mutable
 uid→name maps).

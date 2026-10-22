@@ -165,6 +165,10 @@ std::string parseSetIfaceMac(const FieldMap &m,
                              PrivOpsPure::SetIfaceMacReq &out);
 std::string parseDeleteIpfwNat(const FieldMap &m,
                                PrivOpsPure::DeleteIpfwNatReq &out);
+std::string parseAcquireFwLease(const FieldMap &m,
+                                PrivOpsPure::AcquireFwLeaseReq &out);   // 1.1.57
+std::string parseReleaseFwLease(const FieldMap &m,
+                                PrivOpsPure::ReleaseFwLeaseReq &out);   // 1.1.57
 std::string parseCreateBridge(const FieldMap &m,
                               PrivOpsPure::CreateBridgeReq &out);
 

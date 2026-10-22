@@ -83,3 +83,7 @@ atf_test_program{name="zfs_dataset_pure_test"}
 atf_test_program{name="hub_scheduling_pure_test"}
 atf_test_program{name="json_pure_test"}
 atf_test_program{name="netaddr_pure_test"}
+atf_test_program{name="iface_owner_registry_pure_test"}
+atf_test_program{name="mac_pure_test"}
+atf_test_program{name="passwd_pure_test"}
+atf_test_program{name="fw_lease_pure_test"}

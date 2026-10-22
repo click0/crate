@@ -119,10 +119,12 @@ PrivOpsNvPure::FieldMap buildBridgeAddMember(const std::string &bridge,
 PrivOpsNvPure::FieldMap buildBridgeDelMember(const std::string &bridge,
                                               const std::string &member);
 
-// 0.9.25: set host-side IPv4 address.
+// 0.9.25: set host-side IPv4 address. 1.1.57: `inet6` for an IPv6
+// address (omitted from the map when false — wire stays identical).
 PrivOpsNvPure::FieldMap buildSetIfaceInetAddr(const std::string &ifname,
                                               const std::string &addr,
-                                              unsigned prefixLen);
+                                              unsigned prefixLen,
+                                              bool inet6 = false);
 
 // 0.9.26: create epair pair. No request fields. Response body
 // (in Response.body) is a JSON object with `a` and `b` fields
@@ -160,6 +162,11 @@ PrivOpsNvPure::FieldMap buildSetIfaceMac(const std::string &ifname,
                                          const std::string &mac);
 PrivOpsNvPure::FieldMap buildDeleteIpfwNat(unsigned number);
 PrivOpsNvPure::FieldMap buildCreateBridge(const std::string &name);
+
+// 1.1.57: shared firewall state (NAT / bridge mode under rootless).
+// Booleans are omitted from the map when false.
+PrivOpsNvPure::FieldMap buildAcquireFwLease(unsigned jid, bool slot, bool fwd4, bool fwd6);
+PrivOpsNvPure::FieldMap buildReleaseFwLease(unsigned jid);
 
 // 1.1.8: configure an ipfw NAT instance. `config` is the body
 // following `ipfw nat <number> config` (one line, no shell metas).

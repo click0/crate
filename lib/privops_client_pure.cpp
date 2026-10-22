@@ -253,13 +253,16 @@ PrivOpsNvPure::FieldMap buildBridgeDelMember(const std::string &bridge,
 
 PrivOpsNvPure::FieldMap buildSetIfaceInetAddr(const std::string &ifname,
                                               const std::string &addr,
-                                              unsigned prefixLen) {
-  return {
+                                              unsigned prefixLen,
+                                              bool inet6) {
+  PrivOpsNvPure::FieldMap m = {
     {"verb", "set_iface_inet_addr"},
     {"ifname", ifname},
     {"addr", addr},
     {"prefix_len", toString(prefixLen)},
   };
+  if (inet6) m["inet6"] = "true";   // 1.1.57
+  return m;
 }
 
 PrivOpsNvPure::FieldMap buildCreateEpair() {
@@ -339,6 +342,26 @@ PrivOpsNvPure::FieldMap buildCreateBridge(const std::string &name) {
   return {
     {"verb", "create_bridge"},
     {"name", name},
+  };
+}
+
+// --- 1.1.57 ---
+
+PrivOpsNvPure::FieldMap buildAcquireFwLease(unsigned jid, bool slot, bool fwd4, bool fwd6) {
+  PrivOpsNvPure::FieldMap m = {
+    {"verb", "acquire_fw_lease"},
+    {"jid", toString(jid)},
+  };
+  if (slot) m["slot"] = "true";
+  if (fwd4) m["fwd4"] = "true";
+  if (fwd6) m["fwd6"] = "true";
+  return m;
+}
+
+PrivOpsNvPure::FieldMap buildReleaseFwLease(unsigned jid) {
+  return {
+    {"verb", "release_fw_lease"},
+    {"jid", toString(jid)},
   };
 }
 

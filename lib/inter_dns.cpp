@@ -126,6 +126,12 @@ RebuildResult rebuild(const std::string &hostsPath,
 
 // CLI command entry point — wired from cli/main.cpp via commands.h.
 bool interDnsCommand(const Args &/*args*/) {
+  // 1.1.56: this rewrites the HOST's /etc/hosts and the unbound conf.d
+  // file — root-only by nature (TODO §1). Say so instead of failing on
+  // the first EACCES half-way through.
+  if (::geteuid() != 0)
+    ERR2("inter-dns", "inter-dns rewrites /etc/hosts and the unbound configuration on the host "
+         "and must run as root (sudo crate inter-dns)")
   auto r = InterDns::rebuild();
   std::cout << rang::fg::green
             << "inter-dns: " << r.entries << " entries"

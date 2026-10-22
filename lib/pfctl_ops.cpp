@@ -7,7 +7,9 @@
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
+#include "runtime_paths_pure.h"   // 1.1.56: per-user pfctl.lock
 #include <rang.hpp>
+#include <iostream>
 
 #ifdef HAVE_LIBPFCTL
 #include <libpfctl.h>
@@ -25,10 +27,28 @@
 // multiple crate processes.  Uses O_EXLOCK (FreeBSD atomic open+lock).
 class PfLock {
 public:
-  PfLock() : fd_(::open("/var/run/crate/pfctl.lock",
-                         O_RDWR | O_CREAT | O_EXLOCK, 0600)) {}
+  PfLock() : fd_(::open(lockPath().c_str(), O_RDWR | O_CREAT | O_EXLOCK, 0600)) {
+    // 1.1.56: the lock used to live only in root-owned /var/run/crate, so
+    // an unprivileged crate could never take it and nobody checked held()
+    // — concurrent pfctl calls were unserialised. Per-user path under
+    // rootless; a failure to lock is reported once rather than ignored.
+    if (fd_ < 0) {
+      static bool warned = false;
+      if (!warned) {
+        warned = true;
+        std::cerr << rang::fg::yellow << "crate: pfctl: cannot take " << lockPath()
+                  << " (" << ::strerror(errno) << "); concurrent pf changes are not serialised"
+                  << rang::style::reset << std::endl;
+      }
+    }
+  }
   ~PfLock() { if (fd_ >= 0) ::close(fd_); }
   bool held() const { return fd_ >= 0; }
+  static std::string lockPath() {
+    uid_t uid = ::geteuid();
+    return uid == 0 ? std::string("/var/run/crate/pfctl.lock")
+                    : RuntimePathsPure::perUserRoot((uint32_t)uid) + "/pfctl.lock";
+  }
 private:
   int fd_;
 };

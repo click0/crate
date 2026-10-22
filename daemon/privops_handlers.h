@@ -25,6 +25,7 @@
 // dragging the registry includes into every TU that #includes us.
 class JidOwnerRegistry;
 class IfaceOwnerRegistry;   // 1.1.43
+class FwLeaseRegistry;      // 1.1.57
 
 namespace Crated {
 
@@ -258,6 +259,12 @@ PrivOpsWirePure::DispatchResult handleSetIfaceMac(const PrivOpsPure::SetIfaceMac
 PrivOpsWirePure::DispatchResult handleDeleteIpfwNat(const PrivOpsPure::DeleteIpfwNatReq &r);
 PrivOpsWirePure::DispatchResult handleCreateBridge(const PrivOpsPure::CreateBridgeReq &r);
 
+// 1.1.57: shared firewall state for NAT / bridge mode under rootless —
+// ipfw slot + forwarding refcount, owned by FwLeaseRegistry. 503 when
+// the daemon has no registry.
+PrivOpsWirePure::DispatchResult handleAcquireFwLease(const PrivOpsPure::AcquireFwLeaseReq &r);
+PrivOpsWirePure::DispatchResult handleReleaseFwLease(const PrivOpsPure::ReleaseFwLeaseReq &r);
+
 // 0.9.29: register the daemon's `rctl_umbrella:` config. Called
 // once at daemon startup. The umbrella rules apply after a
 // successful create_jail privops invocation when the operator's
@@ -288,6 +295,12 @@ void setJidOwnerRegistry(::JidOwnerRegistry *registry);
 // the pair); consulted by the authz gate for the interface-named verbs
 // through OwnerLookup::byIface. nullptr keeps those verbs host-wide.
 void setIfaceOwnerRegistry(::IfaceOwnerRegistry *registry);
+
+// 1.1.57: register the firewall-lease registry (lib/fw_lease_registry.h).
+// Fed by acquire_fw_lease / release_fw_lease and by destroy_jail (a jail
+// that goes away gives its lease back). nullptr = the two verbs answer
+// 503 and rootless NAT / bridge forwarding is unavailable.
+void setFwLeaseRegistry(::FwLeaseRegistry *registry);
 
 // 1.1.42: a `crate run` the daemon spawned as root (control-socket /
 // HTTP `start` and `restart`) creates its jail with jail_setv directly,
