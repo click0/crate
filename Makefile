@@ -21,7 +21,7 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/json_pure.cpp lib/netaddr_pure.cpp
            lib/privops_nv_pure.cpp lib/privops_authz_pure.cpp \
            lib/jid_owner_registry_pure.cpp lib/jid_owner_registry.cpp \
            lib/iface_owner_registry_pure.cpp lib/iface_owner_registry.cpp \
-           lib/mac_pure.cpp \
+           lib/mac_pure.cpp lib/passwd_pure.cpp \
            lib/privops_client_pure.cpp lib/privops_client.cpp \
            lib/runtime_paths_pure.cpp lib/per_user_net_pure.cpp \
            lib/per_user_rctl_pure.cpp lib/per_user_env_pure.cpp \
@@ -284,7 +284,7 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              privops_authz_pure_test \
              jid_owner_registry_pure_test \
              iface_owner_registry_pure_test \
-             mac_pure_test \
+             mac_pure_test passwd_pure_test \
              runtime_paths_pure_test per_user_net_pure_test \
              per_user_rctl_pure_test per_user_env_pure_test \
              audit_per_user_pure_test \
@@ -302,13 +302,25 @@ UNIT_TEST_BINS = $(addprefix tests/unit/,$(UNIT_TESTS))
 # to run the 1400+ unit cases in parallel (CI does). Empty by default.
 KYUA_FLAGS ?=
 
-test: $(UNIT_TEST_BINS)
+# 1.1.56: every UNIT_TESTS binary must be registered in tests/unit/Kyuafile,
+# otherwise kyua silently never runs it — iface_owner_registry_pure_test
+# (1.1.43) and mac_pure_test (1.1.44) were built on every CI run and
+# executed by nobody until this check existed.
+check-kyuafile:
+	@missing=""; for t in $(UNIT_TESTS); do \
+	   grep -q "atf_test_program{name=\"$$t\"}" tests/unit/Kyuafile || missing="$$missing $$t"; \
+	 done; \
+	 if [ -n "$$missing" ]; then \
+	   echo "tests/unit/Kyuafile is missing:$$missing"; exit 1; \
+	 fi
+
+test: check-kyuafile $(UNIT_TEST_BINS)
 	cd tests && kyua $(KYUA_FLAGS) test
 
 # test-unit: run only the unit test suite (no functional tests).
 # Handy for local development on Linux where functional/crate_info_test
 # requires a FreeBSD jail and will otherwise be reported as broken.
-test-unit: $(UNIT_TEST_BINS)
+test-unit: check-kyuafile $(UNIT_TEST_BINS)
 	cd tests && kyua $(KYUA_FLAGS) test unit
 
 # build-unit-tests: build every unit test binary without running anything.
@@ -344,7 +356,7 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp lib/json_pure.cpp lib/netaddr_pur
                  lib/privops_nv_pure.cpp lib/privops_authz_pure.cpp \
                  lib/jid_owner_registry_pure.cpp \
                  lib/iface_owner_registry_pure.cpp \
-                 lib/mac_pure.cpp \
+                 lib/mac_pure.cpp lib/passwd_pure.cpp \
                  lib/privops_client_pure.cpp \
                  lib/runtime_paths_pure.cpp lib/per_user_net_pure.cpp \
                  lib/per_user_rctl_pure.cpp lib/per_user_env_pure.cpp \

@@ -18,6 +18,7 @@
 #include "../lib/iface_owner_registry.h"   // 1.1.43
 #include "../lib/run_pure.h"           // 1.1.42: jailXnameHasPid
 #include "../lib/runtime_paths_pure.h"
+#include "../lib/passwd_pure.h"        // 1.1.56: exec_in_jail user lookup in the parent
 
 #include <iostream>
 #include <thread>                      // 1.1.42: registerSpawnedJailOwner
@@ -39,6 +40,9 @@ extern "C" {
 #include <jail.h>
 #include <grp.h>
 #include <pwd.h>
+#include <login_cap.h>   // 1.1.56: setusercontext from the jail's login.conf
+#include <fcntl.h>       // 1.1.56: O_RESOLVE_BENEATH
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 #include <cstdio>
@@ -731,6 +735,36 @@ constexpr int kExecExitAttach = 126;
 constexpr int kExecExitExec   = 127;
 constexpr int kExecExitUser   = 124;
 
+// 1.1.56: read <jailRoot>/<rel> (rel is "etc/master.passwd" etc.) without
+// following anything that leaves the jail root: O_RESOLVE_BENEATH on an
+// fd of the root directory. Regular files only, capped at
+// PasswdPure::kMaxFileBytes. Returns false when absent/unreadable.
+bool readJailEtcFile(const std::string &jailRoot, const char *rel, std::string &out) {
+  out.clear();
+  int dfd = ::open(jailRoot.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (dfd < 0) return false;
+  int fd = ::openat(dfd, rel, O_RDONLY | O_CLOEXEC | O_RESOLVE_BENEATH);
+  ::close(dfd);
+  if (fd < 0) return false;
+  struct stat st{};
+  if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)
+      || (size_t)st.st_size > PasswdPure::kMaxFileBytes) {
+    ::close(fd);
+    return false;
+  }
+  out.reserve((size_t)st.st_size);
+  char buf[16384];
+  for (;;) {
+    ssize_t n = ::read(fd, buf, sizeof buf);
+    if (n < 0) { if (errno == EINTR) continue; ::close(fd); return false; }
+    if (n == 0) break;
+    out.append(buf, (size_t)n);
+    if (out.size() > PasswdPure::kMaxFileBytes) { ::close(fd); return false; }
+  }
+  ::close(fd);
+  return true;
+}
+
 } // anon
 
 DispatchResult handleExecInJail(const PrivOpsPure::ExecInJailReq &r,
@@ -751,18 +785,68 @@ DispatchResult handleExecInJail(const PrivOpsPure::ExecInJailReq &r,
   }
 
   // Everything the child needs is prepared BEFORE pdfork so the child
-  // does as little as possible: crated is multi-threaded, and the only
-  // non-trivial libc call left in the child is getpwnam() for a
-  // non-root user (jemalloc's atfork handlers make its allocations
-  // safe; nsdispatch is file-backed inside a jail).
+  // does as little as possible: crated is multi-threaded. 1.1.56: the
+  // user is resolved HERE, from the jail's own /etc/master.passwd and
+  // /etc/group (PasswdPure), instead of getpwnam()/initgroups() in the
+  // child after jail_attach — no nsdispatch, no name-service modules,
+  // no file I/O after fork. The two files are opened relative to the
+  // jail root with O_RESOLVE_BENEATH so a symlink planted inside the
+  // jail cannot point the daemon at a host file.
   std::vector<char*> cargv;
   cargv.reserve(r.argv.size() + 1);
   for (const auto &a : r.argv) cargv.push_back(const_cast<char*>(a.c_str()));
   cargv.push_back(nullptr);
-  const bool switchUser = !r.user.empty() && r.user != "root";
   static const char kPath[] =
       "PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin";
   std::string termEnv = r.term.empty() ? std::string() : "TERM=" + r.term;
+
+  PasswdPure::User user;
+  user.name = r.user.empty() ? "root" : r.user;
+  std::vector<uint32_t> groups{0};
+  const bool switchUser = user.name != "root";
+  {
+    std::string passwdContent, groupContent;
+    bool havePasswd = readJailEtcFile(ji->path, "etc/master.passwd", passwdContent)
+                   || readJailEtcFile(ji->path, "etc/passwd", passwdContent);
+    if (havePasswd && !PasswdPure::lookupUser(passwdContent, user.name, user)) {
+      if (switchUser)
+        return {404, PrivOpsWirePure::formatHandlerError(
+                      "user_not_found",
+                      "user '" + user.name + "' is not in the jail's passwd file")};
+      user = PasswdPure::User{};          // root without an entry: uid 0, "/"
+      user.name = "root";
+    } else if (!havePasswd && switchUser) {
+      return {404, PrivOpsWirePure::formatHandlerError(
+                    "user_not_found",
+                    "jail has no readable etc/master.passwd")};
+    }
+    if (switchUser && user.uid == 0)
+      return {403, PrivOpsWirePure::formatHandlerError(
+                    "user_is_root",
+                    "user '" + user.name + "' maps to uid 0 in the jail")};
+    if (readJailEtcFile(ji->path, "etc/group", groupContent))
+      groups = PasswdPure::supplementaryGroups(groupContent, user.name, user.gid);
+    else
+      groups = {user.gid};
+  }
+  if (user.home.empty())  user.home  = "/";
+  if (user.shell.empty()) user.shell = "/bin/sh";
+  std::string homeEnv    = "HOME=" + user.home;
+  std::string shellEnv   = "SHELL=" + user.shell;
+  std::string userEnv    = "USER=" + user.name;
+  std::string lognameEnv = "LOGNAME=" + user.name;
+  // login class for setusercontext(3) — resource limits, priority and
+  // umask come from the JAIL's /etc/login.conf (read after jail_attach),
+  // not inherited from crated. login_getpwclass() falls back to "root"
+  // / "default" like login(1) does.
+  struct passwd pwForClass{};
+  pwForClass.pw_name  = const_cast<char*>(user.name.c_str());
+  pwForClass.pw_uid   = user.uid;
+  pwForClass.pw_gid   = user.gid;
+  pwForClass.pw_class = const_cast<char*>(user.loginClass.c_str());
+  pwForClass.pw_dir   = const_cast<char*>(user.home.c_str());
+  pwForClass.pw_shell = const_cast<char*>(user.shell.c_str());
+  std::vector<gid_t> gidv(groups.begin(), groups.end());
 
   int pd = -1;
   pid_t pid = ::pdfork(&pd, PD_CLOEXEC);
@@ -780,32 +864,29 @@ DispatchResult handleExecInJail(const PrivOpsPure::ExecInJailReq &r,
     if (::jail_attach((int)r.jid) == -1)
       ::_exit(kExecExitAttach);
 
-    char homeBuf[1024]  = "HOME=/";
-    char shellBuf[1024] = "SHELL=/bin/sh";
-    char userBuf[128]   = "USER=root";
-    char lognameBuf[128] = "LOGNAME=root";
+    // 1.1.56: per-process limits from the jail's login.conf. The jail's
+    // cpuset is already applied by jail_attach(2); RCTL rules key on the
+    // jail. Best effort: a jail without /etc/login.conf keeps crated's
+    // limits, as before.
+    if (login_cap_t *lc = ::login_getpwclass(&pwForClass)) {
+      (void)::setusercontext(lc, &pwForClass, user.uid,
+                             LOGIN_SETRESOURCES | LOGIN_SETPRIORITY | LOGIN_SETUMASK);
+      ::login_close(lc);
+    }
     if (switchUser) {
-      struct passwd *pw = ::getpwnam(r.user.c_str());
-      if (!pw) ::_exit(kExecExitUser);
-      if (::initgroups(r.user.c_str(), pw->pw_gid) != 0 ||
-          ::setgid(pw->pw_gid) != 0 ||
-          ::setuid(pw->pw_uid) != 0)
+      if (::setgroups((int)gidv.size(), gidv.data()) != 0 ||
+          ::setgid(user.gid) != 0 ||
+          ::setuid(user.uid) != 0)
         ::_exit(kExecExitUser);
-      std::snprintf(homeBuf, sizeof homeBuf, "HOME=%s",
-                    (pw->pw_dir && *pw->pw_dir) ? pw->pw_dir : "/");
-      std::snprintf(shellBuf, sizeof shellBuf, "SHELL=%s",
-                    (pw->pw_shell && *pw->pw_shell) ? pw->pw_shell : "/bin/sh");
-      std::snprintf(userBuf, sizeof userBuf, "USER=%s", r.user.c_str());
-      std::snprintf(lognameBuf, sizeof lognameBuf, "LOGNAME=%s", r.user.c_str());
-      if (pw->pw_dir && *pw->pw_dir) (void)::chdir(pw->pw_dir);
+      (void)::chdir(user.home.c_str());
     }
     char *envp[7];
     int n = 0;
     envp[n++] = const_cast<char*>(kPath);
-    envp[n++] = homeBuf;
-    envp[n++] = shellBuf;
-    envp[n++] = userBuf;
-    envp[n++] = lognameBuf;
+    envp[n++] = const_cast<char*>(homeEnv.c_str());
+    envp[n++] = const_cast<char*>(shellEnv.c_str());
+    envp[n++] = const_cast<char*>(userEnv.c_str());
+    envp[n++] = const_cast<char*>(lognameEnv.c_str());
     if (!termEnv.empty()) envp[n++] = const_cast<char*>(termEnv.c_str());
     envp[n] = nullptr;
     ::execve(cargv[0], cargv.data(), envp);

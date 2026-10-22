@@ -80,13 +80,15 @@ The bhyve/VM track is in TODO2.
       (ensure_user_root → create_jail → mounts → exec_in_jail …) has
       never been exercised end to end; docs/on-hardware-validation.md
       §4.1 is the first thing to run.
-    - the daemon's child inherits crated's rlimits and cpuset; RCTL
-      rules on the jail still apply (they key on the jail), but
-      per-process limits should come from the jail, not the daemon.
-    - the child calls getpwnam() after fork in a multi-threaded
-      daemon (jemalloc atfork makes it safe in practice); resolving
-      the user from <jailPath>/etc/master.passwd in the parent would
-      remove the dependency.
+    [FIXED in 1.1.56] per-process limits: the child applies the JAIL's
+      login.conf (login_getpwclass + setusercontext LOGIN_SETRESOURCES
+      | SETPRIORITY | SETUMASK) after jail_attach; the cpuset was
+      already the jail's (jail_attach moves the process into it).
+    [FIXED in 1.1.56] no getpwnam()/initgroups() in the pdfork child:
+      the parent reads <jailPath>/etc/master.passwd (or passwd) and
+      /etc/group through O_RESOLVE_BENEATH (PasswdPure, unit-tested)
+      and hands the child uid/gid/groups/class/home/shell. A user that
+      maps to uid 0 is refused (403 user_is_root).
 
 * (HIGH) remaining direct privileged calls under rootless:
     - run.cpp:1595 host v6 epair address (NAT mode only).
@@ -96,15 +98,17 @@ The bhyve/VM track is in TODO2.
       Now refused up front under rootless. Making NAT mode rootless
       needs the slot allocator in the daemon (an `allocate_fw_slot`/
       `release_fw_slot` pair keyed by peer uid+pid) and a sysctl verb.
-    - lib/inter_dns.cpp:36-56 writes /etc/hosts and the unbound
-      conf.d file directly (root-only by nature; document, or move the
-      rebuild into crated as a verb).
-    - stack.cpp:787-797 (bridge create), stack.cpp:294 (unbound on
-      :53) — stack is root-only today.
-    - lib/pfctl_ops.cpp:28 PfLock opens /var/run/crate/pfctl.lock 0600;
-      non-root open fails and held() is never checked → no
-      serialisation (moot while pf goes through privops, which
-      serialises in the daemon).
+    - lib/inter_dns.cpp writes /etc/hosts and the unbound conf.d file
+      directly (root-only by nature). 1.1.56: refuses up front as
+      non-root with the reason; moving the rebuild into crated as a
+      verb is still open.
+    - stack.cpp (bridge create, unbound on :53, /etc/hosts injection
+      into jails) — stack is root-only today. 1.1.56: `stack up`/`down`
+      refuse up front as non-root with the reason instead of failing
+      half-way with containers already started.
+    [FIXED in 1.1.56] PfLock: per-user lock file under
+      /var/run/crate/<uid>/ when unprivileged; a failed lock is
+      reported once instead of silently running unserialised.
     - `logs` is overridable from ~/.config/crate/crate.yml, so a user
       still chooses where their own audit trail goes (the daemon's
       audit.log is the record that counts for privops).
@@ -687,6 +691,12 @@ The bhyve/VM track is in TODO2.
 
   [FIXED in 1.1.54] throttle_pure jid bound; util_pure fileExists/
   dirExists on a socket; auth_pure pin of the ws-console admin gate.
+
+  [FIXED in 1.1.56] iface_owner_registry_pure_test (1.1.43) and
+  mac_pure_test (1.1.44) were in the Makefile but not in
+  tests/unit/Kyuafile — built by every CI run, executed by none.
+  Registered; `make check-kyuafile` (a prerequisite of test/test-unit)
+  fails when a UNIT_TESTS entry is missing from the Kyuafile.
 
 * (MED) the tests link only the *_pure objects, so everything that
   lives in lib/spec.cpp (yaml-cpp) is untested at the parser level:

@@ -6,6 +6,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.56] — 2026-10-22
+
+**TODO §1: exec_in_jail follow-ups and the small rootless gaps.**
+
+- **No name-service calls in the pdfork child.** `exec_in_jail` used
+  to call `getpwnam()` / `initgroups()` after `fork` inside the
+  multi-threaded daemon. The parent now reads the jail's own
+  `etc/master.passwd` (or `etc/passwd`) and `etc/group` through an fd
+  of the jail root with `O_RESOLVE_BENEATH` (a symlink planted in the
+  jail cannot redirect the daemon to a host file), parses them with
+  the new `PasswdPure` module and hands the child plain
+  uid/gid/groups/home/shell. Unknown user → 404 `user_not_found`; a
+  user that maps to uid 0 → 403 `user_is_root`.
+- **Per-process limits come from the jail.** After `jail_attach` the
+  child runs `setusercontext(LOGIN_SETRESOURCES | SETPRIORITY |
+  SETUMASK)` against the user's class from the jail's
+  `/etc/login.conf` instead of inheriting crated's rlimits (the
+  cpuset was already the jail's).
+- `PfLock` lives under `/var/run/crate/<uid>/` for an unprivileged
+  crate and a failed lock is reported once (it was silently never
+  taken, so concurrent pf changes were unserialised).
+- `crate inter-dns` and `crate stack up/down` refuse up front as
+  non-root with the reason (they rewrite `/etc/hosts`, create bridges
+  and run the stack resolver) instead of failing half-way.
+- **Two test programs were never run.** `iface_owner_registry_pure_test`
+  (1.1.43) and `mac_pure_test` (1.1.44) were in the Makefile but not
+  in `tests/unit/Kyuafile`; kyua skipped them on every CI run (both
+  pass). `make check-kyuafile` now gates `test`/`test-unit`.
+
+Tests: `passwd_pure_test` (master.passwd / passwd parsing, group
+membership) plus the two recovered programs. Version 1.1.56.
+
 ## [1.1.55] — 2026-10-20
 
 **TODO §16 hygiene item: the crated.sock bind→chmod race is closed.**
