@@ -86,6 +86,32 @@ ATF_TEST_CASE_BODY(run_existing_file_ok)
 	std::remove(tmpl);
 }
 
+// 1.1.59: `crate run <profile>` — no file to open at validate time; the
+// name must be a valid jail name and must not be combined with -f/--name.
+ATF_TEST_CASE_WITHOUT_HEAD(run_profile_ok);
+ATF_TEST_CASE_BODY(run_profile_ok)
+{
+	auto a = mkArgs(CmdRun);
+	a.runProfile = "firefox";
+	a.validate();
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(run_profile_bad_name_throws);
+ATF_TEST_CASE_BODY(run_profile_bad_name_throws)
+{
+	{ auto a = mkArgs(CmdRun); a.runProfile = "../etc";      ATF_REQUIRE_THROW(Exception, a.validate()); }
+	{ auto a = mkArgs(CmdRun); a.runProfile = "x.local";     ATF_REQUIRE_THROW(Exception, a.validate()); }
+	{ auto a = mkArgs(CmdRun); a.runProfile = "chromium+tor"; ATF_REQUIRE_THROW(Exception, a.validate()); }
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(run_profile_excludes_file_and_name);
+ATF_TEST_CASE_BODY(run_profile_excludes_file_and_name)
+{
+	{ auto a = mkArgs(CmdRun); a.runProfile = "firefox"; a.runCrateFile = "/x.crate"; ATF_REQUIRE_THROW(Exception, a.validate()); }
+	{ auto a = mkArgs(CmdRun); a.runProfile = "firefox"; a.runName = "ff";            ATF_REQUIRE_THROW(Exception, a.validate()); }
+	{ auto a = mkArgs(CmdRun); a.runProfile = "firefox"; a.runWarmBase = "t/w"; a.runName = "ff"; ATF_REQUIRE_THROW(Exception, a.validate()); }
+}
+
 // ===================================================================
 // CmdValidate
 // ===================================================================
@@ -367,6 +393,9 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, run_requires_file);
 	ATF_ADD_TEST_CASE(tcs, run_missing_file_throws);
 	ATF_ADD_TEST_CASE(tcs, run_existing_file_ok);
+	ATF_ADD_TEST_CASE(tcs, run_profile_ok);
+	ATF_ADD_TEST_CASE(tcs, run_profile_bad_name_throws);
+	ATF_ADD_TEST_CASE(tcs, run_profile_excludes_file_and_name);
 	ATF_ADD_TEST_CASE(tcs, validate_requires_spec);
 	ATF_ADD_TEST_CASE(tcs, validate_with_spec_ok);
 	ATF_ADD_TEST_CASE(tcs, snapshot_requires_subcmd);

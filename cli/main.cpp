@@ -8,6 +8,7 @@
 #include "misc.h"
 #include "audit.h"
 #include "commands.h"
+#include "profile.h"   // 1.1.59: `crate run <profile>`, --template merge persisted
 
 #include <rang.hpp>
 #include <yaml-cpp/yaml.h>
@@ -150,15 +151,29 @@ static int mainGuarded(int argc, char** argv) {
     if (Util::isUrl(templatePath))
       templatePath = Util::fetchUrl(templatePath, tmpDir);
 
-    auto spec = parseSpecWithVars(specPath, args.vars);
-    // Template merging (§10): merge template spec with user spec
-    if (!templatePath.empty()) {
-      auto templateSpec = parseSpecWithVars(templatePath, args.vars);
-      spec = mergeSpecs(templateSpec, spec);
+    // Template merging (§10). 1.1.59: merged at the YAML level into a
+    // file, and THAT file is the spec from here on — createCrate copies
+    // args.createSpec into +CRATE.SPEC verbatim, so the Spec-level merge
+    // used before never reached `crate run` (a `--template privacy` crate
+    // ran without tor, encryption, COW or the DNS filter). `--template X`
+    // without -s makes validate() point createSpec at the template itself;
+    // nothing to merge then.
+    Args createArgs = args;
+    if (!templatePath.empty() && templatePath != specPath) {
+      if (tmpDir.empty()) {
+        tmpDir = STR("/tmp/crate-fetch-" << Util::randomHex(4));
+        Util::Fs::mkdir(tmpDir, S_IRWXU);
+      }
+      auto mergedPath = STR(tmpDir << "/merged-spec.yml");
+      Profile::writeMerged(templatePath, specPath, mergedPath);
+      specPath = mergedPath;
     }
+    createArgs.createSpec = specPath;
+
+    auto spec = parseSpecWithVars(specPath, args.vars);
     spec.validate();
     createCacheDirectoryIfNeeded();
-    succ = createCrate(args, spec.preprocess());
+    succ = createCrate(createArgs, spec.preprocess());
 
     // Clean up temp dir
     if (!tmpDir.empty())
@@ -173,10 +188,21 @@ static int mainGuarded(int argc, char** argv) {
     // by lib/run.cpp once the clone is mounted, but not by this outer
     // restart loop. Operators wanting outer-loop restart should run the
     // jail under a daemon (rc.d) wrapper instead.
+    //
+    // 1.1.59: `crate run <profile>` resolves to an ordinary -f run on the
+    // .crate built from the profile (+ its .local) under
+    // ~/.local/share/crate/profiles/ (lib/profile.cpp). Everything below,
+    // including the registry entry crated uses for PostStart, sees a
+    // plain crate file.
+    //
+    Args runArgs = args;
+    if (!args.runProfile.empty())
+      runArgs.runCrateFile = Profile::resolveForRun(args);
+
     std::unique_ptr<Spec::RestartPolicy> restartPolicy;
-    if (!args.runCrateFile.empty()) try {
+    if (!runArgs.runCrateFile.empty()) try {
       auto specYaml = Util::execCommandGetOutput(
-        {"/usr/bin/tar", "xf", args.runCrateFile, "-O", "+CRATE.SPEC"},
+        {"/usr/bin/tar", "xf", runArgs.runCrateFile, "-O", "+CRATE.SPEC"},
         "extract spec for restart policy");
       auto specNode = YAML::Load(specYaml);
       if (specNode["restart"] || specNode["restart_policy"]) {
@@ -210,7 +236,7 @@ static int mainGuarded(int argc, char** argv) {
     unsigned attempt = 0;
     for (;;) {
       attempt++;
-      succ = runCrate(args, argc - numArgsProcessed, argv + numArgsProcessed, returnCode);
+      succ = runCrate(runArgs, argc - numArgsProcessed, argv + numArgsProcessed, returnCode);
 
       if (!restartPolicy || restartPolicy->policy == "no")
         break;

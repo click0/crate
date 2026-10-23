@@ -91,11 +91,23 @@ static void usageCreate() {
 }
 
 static void usageRun() {
-  std::cout << "usage: crate run [-h|--help] [--var KEY=VALUE ...] -f <create-file>" << std::endl;
+  std::cout << "usage: crate run [-h|--help] [--var KEY=VALUE ...] -f <create-file> [-- args]" << std::endl;
+  std::cout << "       crate run [--var KEY=VALUE ...] <profile> [-- args]" << std::endl;
   std::cout << "       crate run [--var KEY=VALUE ...] --warm-base <dataset> --name <name>" << std::endl;
   std::cout << "" << std::endl;
-  std::cout << "Two modes:" << std::endl;
+  std::cout << "Three modes:" << std::endl;
   std::cout << "  -f / --file <archive>             cold-create from .crate (extract base.txz, run pkg, ...)" << std::endl;
+  std::cout << "  <profile>                         spec found by name, .crate built on first use and reused:" << std::endl;
+  std::cout << "                                      ~/.config/crate/profiles/<profile>.yml" << std::endl;
+  std::cout << "                                      /usr/local/share/crate/profiles/<profile>.yml" << std::endl;
+  std::cout << "                                      /usr/local/share/examples/crate/<profile>.yml" << std::endl;
+  std::cout << "                                    ~/.config/crate/profiles/<profile>.local.yml, if present," << std::endl;
+  std::cout << "                                    is merged on top (it may add packages, options, shares" << std::endl;
+  std::cout << "                                    under $HOME; not security_advanced/dbus/base/scripts/" << std::endl;
+  std::cout << "                                    encrypted/securelevel/socket_proxy). Built archives live" << std::endl;
+  std::cout << "                                    in ~/.local/share/crate/profiles/ and are rebuilt when" << std::endl;
+  std::cout << "                                    the profile or the .local is newer (the build is a" << std::endl;
+  std::cout << "                                    `crate create`: root; the run itself is rootless)." << std::endl;
   std::cout << "  --warm-base <dataset>             skip cold-create: clone the warm-template ZFS dataset" << std::endl;
   std::cout << "                                    produced by `crate template warm` and boot from it." << std::endl;
   std::cout << "                                    Spec comes from +CRATE.SPEC inside the cloned dataset." << std::endl;
@@ -108,6 +120,8 @@ static void usageRun() {
   std::cout << "" << std::endl;
   std::cout << "Examples:" << std::endl;
   std::cout << "  crate run -f firefox.crate" << std::endl;
+  std::cout << "  crate run firefox                       # shipped example as a profile" << std::endl;
+  std::cout << "  crate run fetch -- -o /dev/null https://www.freebsd.org/" << std::endl;
   std::cout << "  crate run --warm-base tank/templates/firefox-warm --name firefox" << std::endl;
   std::cout << "" << std::endl;
 }
@@ -878,6 +892,12 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           } else {
             err("unsupported long option '%s'", argv[a]);
           }
+        } else if (argv[a][0] != '-' && args.runProfile.empty()) {
+          // 1.1.59: `crate run <profile> [-- args]` — a bare word is the
+          // profile name; the application's own arguments follow `--`.
+          args.runProfile = argv[a];
+        } else if (argv[a][0] != '-') {
+          err("run takes one profile name; put the application's arguments after '--' (got '%s')", argv[a]);
         } else {
           err("unknown argument '%s'", argv[a]);
         }

@@ -2,6 +2,7 @@
 
 #include "args_pure.h"
 #include "args.h"
+#include "profile_pure.h"   // 1.1.59: `crate run <profile>` name rule
 #include "util.h"
 #include "err.h"
 
@@ -108,9 +109,20 @@ void Args::validate() {
         ERR("--warm-base and -f/--file are mutually exclusive (warm-base supplies the rootfs from a ZFS clone)")
       if (runName.empty())
         ERR("--warm-base requires --name <name> (no .crate file to derive the jail name from)")
+      if (!runProfile.empty())
+        ERR("--warm-base and a profile name are mutually exclusive")
+    } else if (!runProfile.empty()) {
+      // 1.1.59: `crate run <profile>` — the spec is found by name and the
+      // .crate built on first use (lib/profile.cpp); nothing to open here.
+      if (!runCrateFile.empty())
+        ERR("give either a profile name or -f/--file <archive>, not both")
+      if (!runName.empty())
+        ERR("--name is only valid with --warm-base; a profile run is named after the profile")
+      if (auto e = ProfilePure::validateProfileName(runProfile); !e.empty())
+        ERR(e)
     } else {
       if (runCrateFile.empty())
-        ERR("the 'run' command requires the crate file as an argument (-f, --file)")
+        ERR("the 'run' command requires a profile name or the crate file as an argument (-f, --file)")
       if (!std::ifstream(runCrateFile).good())
         ERR("the file passed to the 'run' command can't be opened: " << runCrateFile)
       if (!runName.empty())

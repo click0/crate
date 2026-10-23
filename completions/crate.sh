@@ -32,7 +32,13 @@ if [ -n "$BASH_VERSION" ]; then
         return
         ;;
       run)
-        COMPREPLY=( $(compgen -W "-f --file --warm-base --name --var -h --help --" -- "$cur") )
+        # 1.1.59: profile names from the three profile directories
+        local profiles d
+        for d in "$HOME/.config/crate/profiles" /usr/local/share/crate/profiles /usr/local/share/examples/crate; do
+          [ -d "$d" ] || continue
+          profiles="$profiles $(cd "$d" && ls *.yml 2>/dev/null | grep -v '\.local\.yml$' | sed 's/\.yml$//')"
+        done
+        COMPREPLY=( $(compgen -W "$profiles -f --file --warm-base --name --var -h --help --" -- "$cur") )
         return
         ;;
       validate)
@@ -180,6 +186,26 @@ fi
 
 # ZSH completion
 if [ -n "$ZSH_VERSION" ]; then
+  # 1.1.59: profile names for `crate run <name>` (plus .crate files)
+  # (written in the bash-parseable subset: this file is sourced by both shells)
+  _crate_profiles() {
+    setopt localoptions nullglob
+    local -a names
+    local d f
+    for d in "$HOME/.config/crate/profiles" /usr/local/share/crate/profiles /usr/local/share/examples/crate; do
+      [ -d "$d" ] || continue
+      for f in "$d"/*.yml; do
+        [ -f "$f" ] || continue
+        case "$f" in *.local.yml) continue ;; esac
+        f="${f##*/}"
+        names+=("${f%.yml}")
+      done
+    done
+    _alternative \
+      "profiles:profile:(${names[*]})" \
+      'files:crate file:_files -g "*.crate"'
+  }
+
   _crate() {
     local -a commands=(
       'create:create a container from a spec file'
@@ -245,7 +271,7 @@ if [ -n "$ZSH_VERSION" ]; then
               '--name[jail name (with --warm-base)]:name:' \
               '*--var[KEY=VALUE substitution]:var:' \
               '(-h --help)'{-h,--help}'[show help]' \
-              '1:crate file:_files -g "*.crate"'
+              '1:profile or crate file:_crate_profiles'
             ;;
           validate)
             _arguments \

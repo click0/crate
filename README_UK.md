@@ -81,6 +81,7 @@ Crate — контейнеризатор для FreeBSD. Пакує застос
 | `crate create -s spec.yml -o app.crate` | Створити контейнер зі специфікації |
 | `crate create -s spec.yml --template base.yml` | Створити з успадкуванням шаблону |
 | `crate run -f app.crate [-- args]` | Запустити контейнер |
+| `crate run NAME [-- args]` | Запустити профіль за іменем: специфікація з `~/.config/crate/profiles/`, `/usr/local/share/crate/profiles/` або встановлених прикладів, `.crate` збирається при першому запуску (1.1.59) |
 | `crate validate -s spec.yml` | Перевірити специфікацію |
 | `crate snapshot create\|list\|restore\|delete\|diff` | Керування ZFS-знімками |
 | `crate list [-j]` | Перелік запущених контейнерів (таблиця або JSON) |
@@ -100,6 +101,9 @@ crate create -s examples/firefox.yml -o firefox.crate
 
 # Запустити
 crate run -f firefox.crate
+
+# ...або без обох кроків: встановлені приклади — це профілі (1.1.59)
+crate run firefox
 
 # Переглянути запущені контейнери
 crate list
@@ -478,6 +482,37 @@ options:
 ```
 
 Поля іменованої мережі працюють як значення за замовчуванням — явно вказані значення у специфікації контейнера завжди мають пріоритет.
+
+## Профілі
+
+`crate run NAME` без `-f` (1.1.59, за зразком `<app>.profile` + `<app>.local` у firejail) шукає специфікацію за іменем, перший збіг виграє:
+
+| Шлях | Хто пише |
+|---|---|
+| `~/.config/crate/profiles/NAME.yml` | оператор |
+| `/usr/local/share/crate/profiles/NAME.yml` | сайт (каталог створює оператор, належить root) |
+| `/usr/local/share/examples/crate/NAME.yml` | постачається з crate — приклади і є набором профілів |
+
+`.crate` збирається при першому запуску в `~/.local/share/crate/profiles/NAME.crate` і далі використовується повторно; перезбирається, коли профіль або його `.local` новіші. Jail називається як профіль, точно як при `-f NAME.crate`. Збірка — це `crate create`, якому досі потрібен root: непривілейований оператор отримує повідомлення з точним рецептом `crate create -s … -o … && chown` для root (злита специфікація вже записана), а коли архів існує — запускає як звично.
+
+Необов'язковий `~/.config/crate/profiles/NAME.local.yml` зливається поверх профілю: map — ключ за ключем, списки — доповнюються без дублікатів, `options` — за іменем опції, скаляри — замінюються. Він може додавати пакунки, опції, ліміти, аргументи запуску і спільні каталоги в межах `$HOME`:
+
+```yaml
+# ~/.config/crate/profiles/firefox.local.yml
+pkg:
+    install: [noto-emoji]
+run:
+    command: /usr/local/bin/firefox --private-window
+dirs:
+    share:
+        - [$HOME/Downloads, $HOME/Downloads]
+limits:
+    memoryuse: 4G
+```
+
+Він **не може** послабити те, що обрав автор профілю: `security_advanced`, `dbus`, `base`, `scripts`, `encrypted`, `securelevel`, `socket_proxy` і спільні каталоги поза домашнім відхиляються з поясненням. Для такого скопіюйте профіль у `~/.config/crate/profiles/` і редагуйте копію. Злита специфікація записується поряд з архівом як `NAME.yml` (згенерований файл) і саме вона потрапляє у `+CRATE.SPEC`. Імена профілів підпорядковуються правилу імен jail (`[A-Za-z0-9._-]`), тож приклади на кшталт `chromium+tor` потребують копії з дефісом в імені.
+
+З 1.1.59 `crate create --template` використовує те саме YAML-злиття, і злита специфікація потрапляє в архів; раніше шаблон впливав лише на збірку, і crate із `--template privacy` запускався без tor, шифрування, COW та DNS-фільтра.
 
 ## Шаблони
 
