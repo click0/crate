@@ -525,7 +525,7 @@ lib/version.h: VERSION
 	@if cmp -s $@.tmp $@; then rm -f $@.tmp; \
 	 else mv -f $@.tmp $@; echo "generate $@"; fi
 
-cli/args.o snmpd/mib.o hub/main.o: lib/version.h
+cli/args.o snmpd/mib.o hub/main.o lib/trace.o: lib/version.h
 
 # --- Shortcuts ---
 a: all
