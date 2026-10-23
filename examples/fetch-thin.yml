@@ -1,0 +1,22 @@
+# Thin jail (1.1.58): the crate carries only the writable layer (/etc /var
+# /root /tmp /home /usr/local); `crate run` nullfs-mounts the host's own
+# /bin /sbin /lib /libexec /rescue /usr/{bin,sbin,lib,lib32,libexec,
+# libdata,share,include} read-only into the jail. The archive is a few
+# MB, the start is a tar of a few MB instead of ~300, and a host upgrade
+# upgrades this jail at its next start. The jail must run on the same
+# FreeBSD release branch it was created on (crate run warns otherwise).
+#
+# Compare examples/fetch.yml — identical apart from `base/mode`.
+
+base:
+    mode: host-ro
+    # Optional: replace the default host directory list. /usr itself,
+    # /etc, /var, /usr/local, /home ... are refused (writable layer).
+    # host-dirs: [/bin, /sbin, /lib, /libexec, /usr/bin, /usr/sbin, /usr/lib, /usr/libexec, /usr/libdata, /usr/share]
+
+run:
+    command: /usr/bin/fetch
+
+options:
+    - net
+    - ssl-certs

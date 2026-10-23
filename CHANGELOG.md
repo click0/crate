@@ -6,15 +6,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [1.1.58] — 2026-10-23
 
+**TODO §17.1: thin jails on nullfs — `base/mode: host-ro`.**
+
+- **`base/mode: host-ro`** (default `full`). The crate carries only the
+  writable layer — `/etc /var /root /tmp` extracted from the cached
+  base.txz of the host's release, plus empty `/home /usr/local` and the
+  mount points — and `crate run` nullfs-mounts the host's own userland
+  read-only into the jail before anything chroots into it or the jail
+  starts: `/bin /sbin /lib /libexec /rescue /usr/{bin,sbin,lib,lib32,
+  libexec,libdata,share,include}`. The archive is a few MB, the start
+  skips the big extraction, and a host upgrade upgrades every thin jail
+  at its next start (bwrap's `--ro-bind /usr`, the classic FreeBSD
+  thin-jail layout). `/usr/local` stays per container and writable, so
+  `pkg/install`, create-time scripts (the host dirs are mounted for the
+  create chroot too) and `crate update --pkg-only` work unchanged.
+- **`+CRATE.THIN` manifest** (`lib/thin_jail_pure`): mode, the host
+  release the writable layer came from and the exact directory list.
+  `crate run` mounts what the manifest says, not what the spec says, so
+  a hand-edited spec cannot widen the list; a spec claiming host-ro on
+  an archive without the manifest is refused. A writable layer from
+  another release branch gets a warning (stronger wording across a
+  major version), never a refusal. `/usr/lib32`, `/rescue` and
+  `/usr/include` may be missing on the host and are skipped; any other
+  missing directory is an error.
+- **`base/host-dirs`** replaces the default list. Entries must be
+  absolute and normalised; `/`, `/usr` itself (it would hide the
+  container's `/usr/local`), anything in the writable layer, duplicates
+  and nested entries are refused at spec parse time.
+- `+CRATE.BOOTSTRAP` records `host-ro`; `--use-pkgbase` with host-ro is
+  refused; `base/keep`/`base/remove` are skipped with a log line
+  (`crate validate` warns about `base/remove`). `crate export` of a
+  running thin jail already archives the writable layer only
+  (`--one-file-system`, 1.1.48) and yields a valid thin crate. Under
+  rootless the mounts go through crated's `mount_nullfs` with
+  `read_only`, like every other nullfs mount.
+- Docs: crate.5 (`base/mode`, `base/host-dirs`), README, new
+  `examples/fetch-thin.yml` (in the port plist).
 - CI: `release.yml` fills the Release page with every CHANGELOG section
   between the previous `v*` tag and the tagged one, not just the tagged
   version's — one tag per batch of TODO sections was leaving the
   intermediate versions off the page (v1.1.57 showed 1.1.57 only, not
   1.1.56). Several sections render as `### X.Y.Z — date` sub-headings
   under a one-line "this tag ships …" summary; a single section is laid
-  out as before. No code change, no version bump.
+  out as before.
+
+Tests: `thin_jail_pure_test` (default list, host-dir validation incl.
+writable-layer and nesting rules, mount plan order, manifest round trip
+and malformed inputs, release compatibility), `validate_pure_test`
+warning. Version 1.1.58. Not yet exercised on hardware: a `crate create`
++ `crate run` of `examples/fetch-thin.yml` on FreeBSD 14.2 and 15.0 is
+the first thing to do (docs/on-hardware-validation.md).
 
 ## [1.1.57] — 2026-10-22
 

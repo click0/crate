@@ -5,6 +5,7 @@
 #include "spec_pure.h"
 #include "compositor_pure.h"
 #include "privops_pure.h"   // 1.1.44: validateIfaceName for options/net/extra[]/interface
+#include "thin_jail_pure.h" // 1.1.58: base/host-dirs validation
 #include "config.h"
 #include "util.h"
 #include "err.h"
@@ -37,6 +38,7 @@ static std::unique_ptr<T> clonePtr(const std::unique_ptr<T> &p) {
 
 Spec::Spec(const Spec &o)
   : baseKeep(o.baseKeep), baseKeepWildcard(o.baseKeepWildcard), baseRemove(o.baseRemove),
+    baseHostRo(o.baseHostRo), baseHostDirs(o.baseHostDirs),
     pkgInstall(o.pkgInstall), pkgLocalOverride(o.pkgLocalOverride), pkgAdd(o.pkgAdd), pkgNuke(o.pkgNuke),
     runCmdExecutable(o.runCmdExecutable), runCmdArgs(o.runCmdArgs),
     runServices(o.runServices), dirsShare(o.dirsShare), filesShare(o.filesShare),
@@ -417,10 +419,25 @@ static Spec parseSpecFromNode(YAML::Node top) {
           listOrScalarOnly(b.second, spec.baseKeepWildcard, "base/keep-wildcard");
         } else if (isKey(b, "remove")) {
           listOrScalarOnly(b.second, spec.baseRemove, "base/remove");
+        } else if (isKey(b, "mode")) {
+          // 1.1.58: full (default) | host-ro (thin jail on nullfs)
+          if (!b.second.IsScalar())
+            ERR("base/mode must be a scalar: full or host-ro")
+          auto mode = b.second.as<std::string>();
+          if (mode == "host-ro")
+            spec.baseHostRo = true;
+          else if (mode != "full")
+            ERR("unknown base/mode '" << mode << "' in spec (expected full or host-ro)")
+        } else if (isKey(b, "host-dirs")) {
+          listOrScalarOnly(b.second, spec.baseHostDirs, "base/host-dirs");
+          if (auto e = ThinJailPure::validateHostDirs(spec.baseHostDirs); !e.empty())
+            ERR("base/host-dirs: " << e)
         } else {
           ERR("unknown element base/" << b.first << " in spec")
         }
       }
+      if (!spec.baseHostDirs.empty() && !spec.baseHostRo)
+        ERR("base/host-dirs is only meaningful with base/mode: host-ro")
     } else if (isKey(k, "pkg")) {
       for (auto b : k.second) {
         if (isKey(b, "install")) {
@@ -1421,6 +1438,10 @@ Spec mergeSpecs(const Spec &base, const Spec &overlay) {
   for (auto &v : overlay.baseKeep) result.baseKeep.push_back(v);
   for (auto &v : overlay.baseKeepWildcard) result.baseKeepWildcard.push_back(v);
   for (auto &v : overlay.baseRemove) result.baseRemove.push_back(v);
+  // 1.1.58: host-ro is sticky (a template cannot be made fat again by an
+  // overlay); an overlay's host-dirs list replaces the base's.
+  result.baseHostRo = base.baseHostRo || overlay.baseHostRo;
+  if (!overlay.baseHostDirs.empty()) result.baseHostDirs = overlay.baseHostDirs;
   for (auto &v : overlay.pkgInstall) result.pkgInstall.push_back(v);
   for (auto &v : overlay.pkgLocalOverride) result.pkgLocalOverride.push_back(v);
   for (auto &v : overlay.pkgAdd) result.pkgAdd.push_back(v);

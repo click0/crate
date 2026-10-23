@@ -17,6 +17,12 @@ std::vector<std::string> gatherWarnings(const Spec &spec) {
   if (spec.allowSysvipc)
     w.push_back("ipc/sysvipc=true reduces isolation; only enable if the application requires System V shared memory");
 
+  // 1.1.58: thin jail — the userland is the host's, mounted read-only, so
+  // base trimming never runs (base/keep is harmless; base/remove is the
+  // one that signals a misunderstanding).
+  if (spec.baseHostRo && !spec.baseRemove.empty())
+    w.push_back("base/mode=host-ro — base/remove has no effect: the host userland is mounted read-only and never trimmed");
+
   if (spec.optionExists("net") && spec.optionExists("tor")) {
     auto optNet = spec.optionNet();
     if (optNet && optNet->outboundLan)

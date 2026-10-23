@@ -34,6 +34,7 @@ man/man5/crate.5.gz
 %%EXAMPLES%%share/examples/crate/chromium-headless.yml
 %%EXAMPLES%%share/examples/crate/chromium-privacy.yml
 %%EXAMPLES%%share/examples/crate/chromium.yml
+%%EXAMPLES%%share/examples/crate/fetch-thin.yml
 %%EXAMPLES%%share/examples/crate/fetch.yml
 %%EXAMPLES%%share/examples/crate/firefox+i2pd.yml
 %%EXAMPLES%%share/examples/crate/firefox-gpu.yml

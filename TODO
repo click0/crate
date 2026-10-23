@@ -790,20 +790,19 @@ neither — worth a comparison table in README. NOT worth porting:
 seccomp profiles one-to-one (Capsicum + MAC cover it), AppImage,
 Landlock, --restrict-namespaces.
 
-* (feature, HIGH value / MED size) Thin jail on nullfs — bwrap's
-  `--ro-bind /usr`. `base/mode: host-ro`: instead of bootstrapping
-  base.txz, nullfs-mount the host's /bin /sbin /lib /libexec /usr
-  read-only into the jail and keep only /etc /var /tmp /home writable
-  (ZFS dataset or tmpfs). Sub-second start, ~0 disk, and a host
-  upgrade upgrades every thin jail — which also answers §14 for this
-  class of container. Classic FreeBSD thin-jail pattern. Touches
-  create (skip bootstrap, generate /etc from a template), run (mount
-  list before jail -c), export/import (archive only the writable
-  layer + a manifest naming the host release), `crate update
-  --pkg-only` (pkg db lives in the writable layer). Needs the
-  rootless mount path (mount_nullfs verb exists) and a decision on
-  /usr/local: host-ro too, or per-jail (pkg installs need it
-  writable).
+* DONE 1.1.58 — thin jail on nullfs, `base/mode: host-ro`
+  (lib/thin_jail_pure, +CRATE.THIN manifest). Decisions taken: the
+  writable layer (/etc /var /root /tmp) is extracted from the cached
+  base.txz of the host release (pristine /etc, no host secrets copied)
+  rather than generated from a template; /usr/local stays per jail
+  and writable (pkg), so /usr is mounted as its subdirectories, not
+  whole; the default directory list is frozen into the manifest and
+  `base/host-dirs` overrides it; release mismatch is a warning, not a
+  refusal (a host upgrade upgrading every thin jail is the point).
+  Left for later, on hardware: a `tmpfs:` option for /tmp of thin
+  jails (item below), `crate info`/`inspect` showing the bootstrap
+  mode, and §14's full base update becomes "re-create the crate" for
+  this class of container.
 
 * (feature, HIGH value / MED size) Per-application profiles + local
   overrides — firejail `/etc/firejail/<app>.profile` and
