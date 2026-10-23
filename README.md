@@ -554,13 +554,16 @@ chromium+tor, firefox+i2pd, chromium+i2pd, qbittorrent+i2pd
 **Utilities:**
 nmap, amass, wget, aria2, fetch, gzip, yt-dlp, xeyes
 
+**Thin jail (`base/mode: host-ro`, 1.1.58):**
+fetch-thin — the same `fetch` spec with the host's userland mounted read-only instead of a copied base system. The archive holds only `/etc /var /root /tmp /home /usr/local`; `crate run` nullfs-mounts `/bin /sbin /lib /libexec /rescue /usr/{bin,sbin,lib,lib32,libexec,libdata,share,include}` from the host before the jail starts. A few MB instead of hundreds, no big extraction at start, and a host upgrade upgrades every thin jail at its next start. `/usr/local` stays per container, so `pkg/install` and `crate update --pkg-only` work unchanged. The directory list and the host release are frozen in `+CRATE.THIN` inside the archive; starting on another release branch prints a warning. `crate export` of a running thin jail archives the writable layer only and yields a valid thin crate.
+
 ## YAML Specification Reference
 
 Top-level keys supported in `.crate` / `.yml` spec files:
 
 | Key | Description |
 |---|---|
-| `base` | `keep`, `keep-wildcard`, `remove` — control base system files |
+| `base` | `mode` (`full` or `host-ro` — thin jail on nullfs, see below), `host-dirs`, `keep`, `keep-wildcard`, `remove` — base system layout |
 | `pkg` | `install`, `local-override`, `nuke` — package management |
 | `run` | `command`, `service` — what to execute in the container |
 | `dirs` | `share` — shared directories (host<->jail) |

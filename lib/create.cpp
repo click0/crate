@@ -10,6 +10,7 @@
 #include "scripts.h"
 #include "pathnames.h"
 #include "log_pure.h"
+#include "thin_jail_pure.h"   // 1.1.58: base/mode: host-ro
 #include "util.h"
 #include "err.h"
 #include "commands.h"
@@ -27,6 +28,8 @@
 #include <string>
 #include <vector>
 #include <set>
+#include <list>
+#include <memory>
 #include <functional>
 #include <filesystem>
 #include <algorithm>
@@ -463,6 +466,18 @@ bool createCrate(const Args &args, const Spec &spec) {
     Util::Fs::rmdirHier(jailPath);
   });
 
+  // 1.1.58: thin jail (base/mode: host-ro). The crate carries only the
+  // writable layer; the host's userland directories are nullfs-mounted
+  // read-only — here for the create-time chroot (scripts, pkg) and again
+  // by `crate run`. The list is frozen into the +CRATE.THIN manifest.
+  const bool thin = spec.baseHostRo;
+  const std::vector<std::string> &hostDirs =
+    spec.baseHostDirs.empty() ? ThinJailPure::defaultHostDirs() : spec.baseHostDirs;
+  if (thin && args.usePkgbase)
+    ERR("base/mode: host-ro and --use-pkgbase are mutually exclusive — a thin jail takes its userland from the host")
+  if (thin)
+    LOG("thin jail (base/mode: host-ro): " << hostDirs.size() << " host directories will be mounted read-only")
+
   // Bootstrap jail root: either via pkgbase (§17) or traditional base.txz
   if (args.usePkgbase) {
     LOG("bootstrapping jail root via pkgbase (§17)")
@@ -491,17 +506,55 @@ bool createCrate(const Args &args, const Spec &spec) {
       cleanBaseCache();
     }
 
-    // unpack the base archive
-    LOG("unpacking the base archive")
-    Util::execPipeline(
-      {{CRATE_PATH_XZ, Cmd::xzThreadsArg, "--decompress"}, {CRATE_PATH_TAR, "-xf", "-", "--uname", "", "--gname", "", "-C", jailPath}},
-      "unpack the system base into the jail directory", archivePath);
+    if (thin) {
+      // Only the writable layer (/etc /var /root /tmp) comes out of
+      // base.txz — a pristine /etc of this very release, no host secrets
+      // copied. Everything else is a mount point.
+      LOG("thin jail: unpacking the writable layer from the base archive")
+      std::vector<std::string> tarArgv = {CRATE_PATH_TAR, "-xf", "-", "--uname", "", "--gname", "", "-C", jailPath};
+      for (auto &m : ThinJailPure::baseArchiveSkeletonMembers())
+        tarArgv.push_back(m);
+      Util::execPipeline(
+        {{CRATE_PATH_XZ, Cmd::xzThreadsArg, "--decompress"}, tarArgv},
+        "unpack the writable layer into the jail directory", archivePath);
+      for (auto &d : ThinJailPure::directoriesToCreate(hostDirs))
+        std::filesystem::create_directories(jailPath + d);
+    } else {
+      // unpack the base archive
+      LOG("unpacking the base archive")
+      Util::execPipeline(
+        {{CRATE_PATH_XZ, Cmd::xzThreadsArg, "--decompress"}, {CRATE_PATH_TAR, "-xf", "-", "--uname", "", "--gname", "", "-C", jailPath}},
+        "unpack the system base into the jail directory", archivePath);
+    }
   }
 
   // Record FreeBSD version used to build this container (for version-mismatch detection at run time)
   Util::Fs::writeFile(STR(Util::getFreeBSDMajorVersion() << "\n"), STR(jailPath << "/+CRATE.OSVERSION"));
-  // Record bootstrap method (§17): "pkgbase" or "base.txz"
-  Util::Fs::writeFile(STR((args.usePkgbase ? "pkgbase" : "base.txz") << "\n"), STR(jailPath << "/+CRATE.BOOTSTRAP"));
+  // Record bootstrap method (§17): "pkgbase", "base.txz" or "host-ro" (1.1.58)
+  Util::Fs::writeFile(STR((thin ? "host-ro" : args.usePkgbase ? "pkgbase" : "base.txz") << "\n"), STR(jailPath << "/+CRATE.BOOTSTRAP"));
+
+  // 1.1.58: thin jail manifest + the read-only host mounts for the
+  // create-time chroot. Unmounted (reverse order) right before the tar
+  // pack; the Mount destructors cover the error path.
+  std::list<std::unique_ptr<Mount>> hostMounts;
+  if (thin) {
+    ThinJailPure::Manifest manifest;
+    manifest.osrelease = Util::getSysctlString("kern.osrelease");
+    manifest.hostDirs = hostDirs;
+    Util::Fs::writeFile(ThinJailPure::serializeManifest(manifest), STR(jailPath << "/" << ThinJailPure::kManifestFile));
+    for (auto &[target, source] : ThinJailPure::mountPlan(jailPath, hostDirs)) {
+      if (!Util::Fs::dirExists(source)) {
+        if (ThinJailPure::isOptionalHostDir(source)) {
+          LOG("thin jail: host directory " << source << " does not exist — skipped")
+          continue;
+        }
+        ERR("thin jail: host directory '" << source << "' does not exist")
+      }
+      LOG("thin jail: mount " << source << " -> " << target << " (read-only)")
+      hostMounts.push_front(std::make_unique<Mount>("nullfs", target, source, MNT_RDONLY|MNT_IGNORE));
+      hostMounts.front()->mount();
+    }
+  }
 
   runScript("create:start");
 
@@ -543,8 +596,12 @@ bool createCrate(const Args &args, const Spec &spec) {
   mountPkgCache.unmount();
 
   // remove parts that aren't needed
-  LOG("removing unnecessary parts")
-  removeRedundantJailParts(jailPath, spec);
+  if (thin) {
+    LOG("thin jail: base trimming (base/keep, base/remove) skipped — the userland is the host's")
+  } else {
+    LOG("removing unnecessary parts")
+    removeRedundantJailParts(jailPath, spec);
+  }
 
   // remove /etc/resolv.conf in the jail directory
   Util::Fs::unlink(STR(jailPath << "/etc/resolv.conf"));
@@ -555,6 +612,14 @@ bool createCrate(const Args &args, const Spec &spec) {
 
   // scripts: end-create
   runScript("create:end");
+
+  // 1.1.58: drop the host mounts before packing — the mount points go
+  // into the archive as empty directories.
+  for (auto &m : hostMounts) {
+    LOG("thin jail: unmount host directory")
+    m->unmount();
+  }
+  hostMounts.clear();
 
   // pack the jail into a .crate file
   LOG("creating the crate file " << crateFileName)

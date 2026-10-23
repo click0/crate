@@ -271,11 +271,47 @@ unchanged.
 
 ---
 
+## 4a. 1.1.58 — thin jail (`base/mode: host-ro`)
+
+Pure logic is unit-tested; the mounts, the base.txz subset extraction
+and the create-time chroot are not. One pass as root, one rootless.
+
+```sh
+# root
+crate create -s examples/fetch-thin.yml -o fetch-thin.crate
+ls -l fetch-thin.crate                      # a few MB, not ~100+
+tar -tJf fetch-thin.crate | grep -c '^./usr/bin/'   # expect 0 (mount point only)
+tar -xJOf fetch-thin.crate +CRATE.THIN      # mode/osrelease/hostdir lines
+crate run -f fetch-thin.crate -- -o /dev/null https://www.freebsd.org/
+# while it runs, from another shell:
+mount | grep "jail-fetch-thin"              # nullfs read-only entries are hidden (MNT_IGNORE); use
+mount -v | grep -c "jail-fetch-thin.*read-only"   # expect the number of hostdir lines minus skipped
+```
+
+Pass criteria: `crate run` exits 0 and fetched the page; `mount -v`
+shows every `hostdir` of the manifest mounted read-only under the jail
+directory (minus `/usr/lib32`, `/rescue`, `/usr/include` when the host
+lacks them); after exit `mount` shows none of them and the jail directory
+is gone; `jls` is unchanged.
+
+Then the same with a `pkg/install: [curl]` added to the spec (pkg
+bootstraps into the container's own `/usr/local` through the mounted
+`/usr/sbin/pkg`), and once as uid 1000 against the privops socket
+(`crated` logs `mount_nullfs ... read_only=true` for each directory,
+`unmount_nullfs` at teardown).
+
+Negative checks: a spec with `base/host-dirs: [/usr]` or `[/etc]` is
+refused by `crate validate` / `crate create` at parse time; a thin crate
+whose `+CRATE.THIN` was deleted is refused by `crate run` with the
+"re-create it" message.
+
+---
+
 ## 5. Reporting back
 
 ```sh
 sh scripts/on-hardware-validation.sh > /tmp/onhw-report.txt 2>&1
-# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* manual checks
+# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a manual checks
 ```
 
 Attach `/tmp/onhw-report.txt` plus the manual-section outcomes to the PR

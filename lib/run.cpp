@@ -42,6 +42,7 @@
 #include "privops_wire_pure.h"
 #include "per_user_net_pure.h"
 #include "runtime_paths_pure.h"
+#include "thin_jail_pure.h"   // 1.1.58: base/mode: host-ro
 
 #include <rang.hpp>
 
@@ -65,6 +66,8 @@ extern "C" {
 #include <string>
 #include <list>
 #include <iostream>
+#include <fstream>    // 1.1.58: +CRATE.THIN
+#include <sstream>
 #include <memory>
 #include <limits>
 #include <filesystem>
@@ -499,6 +502,51 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // parse +CRATE.SPEC
   auto spec = parseSpec(J("/+CRATE.SPEC")).preprocess();
+
+  // 1.1.58: thin jail (base/mode: host-ro). The archive holds the
+  // writable layer only; mount the host's userland read-only now, before
+  // anything chroots into the tree (run:begin scripts) or the jail
+  // starts. The list comes from the +CRATE.THIN manifest `crate create`
+  // froze, not from the spec, so a hand-edited spec cannot widen it.
+  // Same `mount` list as every other nullfs mount: unmounted in reverse
+  // order at teardown, routed through crated's mount_nullfs (read_only)
+  // under rootless.
+  {
+    auto manifestPath = J(STR("/" << ThinJailPure::kManifestFile));
+    const bool haveManifest = Util::Fs::fileExists(manifestPath);
+    if (spec.baseHostRo && !haveManifest)
+      ERR("the spec says base/mode: host-ro but the crate has no " << ThinJailPure::kManifestFile
+          << " — it was created by an older crate or by hand; re-create it with `crate create`")
+    if (haveManifest) {
+      std::string content;
+      {
+        std::ifstream f(manifestPath, std::ios::binary);
+        std::ostringstream ss;
+        ss << f.rdbuf();
+        content = ss.str();
+      }
+      ThinJailPure::Manifest manifest;
+      std::string e;
+      if (!ThinJailPure::parseManifest(content, manifest, e))
+        ERR("thin jail: invalid " << ThinJailPure::kManifestFile << ": " << e)
+      if (auto w = ThinJailPure::releaseMismatchWarning(manifest.osrelease,
+                                                       Util::getSysctlString("kern.osrelease")); !w.empty())
+        std::cerr << rang::fg::yellow << "warning: " << w << rang::style::reset << std::endl;
+      LOG("thin jail: writable layer from FreeBSD " << manifest.osrelease << "; mounting "
+          << manifest.hostDirs.size() << " host directories read-only")
+      for (auto &[target, source] : ThinJailPure::mountPlan(jailPath, manifest.hostDirs)) {
+        if (!Util::Fs::dirExists(source)) {
+          if (ThinJailPure::isOptionalHostDir(source)) {
+            LOG("thin jail: host directory " << source << " does not exist — skipped")
+            continue;
+          }
+          ERR("thin jail: host directory '" << source << "' does not exist on this host")
+        }
+        Util::Fs::mkdirIfNotExists(target, 0755);
+        mount(new Mount("nullfs", target, source, MNT_RDONLY|MNT_IGNORE));
+      }
+    }
+  }
 
   // WireGuard tunnel: if the spec opts in via options.wireguard.config,
   // bring the tunnel up *before* the jail starts and register a

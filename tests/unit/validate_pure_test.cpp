@@ -521,8 +521,23 @@ ATF_TEST_CASE_BODY(strict_x11_nested_no_error)
 		ATF_REQUIRE(m.find("x11") == std::string::npos);
 }
 
+// 1.1.58: base/mode: host-ro — base/remove is dead configuration there.
+ATF_TEST_CASE_WITHOUT_HEAD(thin_jail_base_remove_warns);
+ATF_TEST_CASE_BODY(thin_jail_base_remove_warns)
+{
+	auto s = mkSpec();
+	s.baseHostRo = true;
+	ATF_REQUIRE(!hasMatch(gatherWarnings(s), "base/mode=host-ro"));
+	s.baseRemove.push_back("/usr/share/doc");
+	ATF_REQUIRE(hasMatch(gatherWarnings(s), "base/mode=host-ro"));
+	// a full jail trims as asked: no warning
+	s.baseHostRo = false;
+	ATF_REQUIRE(!hasMatch(gatherWarnings(s), "base/mode=host-ro"));
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
+	ATF_ADD_TEST_CASE(tcs, thin_jail_base_remove_warns);
 	ATF_ADD_TEST_CASE(tcs, no_warnings_for_minimal_spec);
 	ATF_ADD_TEST_CASE(tcs, sysvipc_warns);
 	ATF_ADD_TEST_CASE(tcs, net_lan_with_tor_warns);

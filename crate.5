@@ -183,6 +183,63 @@ Log progress with timestamps.
 Container specifications are YAML files with the following top-level keys:
 .Ss Base system
 .Bl -tag -width "keep-wildcard"
+.It Sy base/mode
+.Cm full
+.Pq default
+or
+.Cm host-ro .
+With
+.Cm full
+the container carries a complete copy of the FreeBSD base system
+.Pq trimmed by Sy base/keep No and Sy base/remove .
+With
+.Cm host-ro
+.Pq thin jail, 1.1.58
+the container carries only the writable layer
+.Pq Pa /etc /var /root /tmp /home /usr/local
+extracted from the base archive of the host's release, and
+.Cm run
+nullfs-mounts the host's own userland directories read-only into the jail
+before it starts:
+.Pa /bin /sbin /lib /libexec /rescue
+and
+.Pa /usr/bin /usr/sbin /usr/lib /usr/lib32 /usr/libexec /usr/libdata /usr/share /usr/include .
+The archive is a few megabytes, the start skips the big extraction, and a
+host upgrade upgrades every thin jail at its next start.
+.Pa /usr/local
+stays per container and writable, so
+.Sy pkg/install
+and
+.Cm update Fl -pkg-only
+work as usual.
+The directory list is frozen into the
+.Pa +CRATE.THIN
+manifest inside the archive together with the host release; a thin jail
+started on a host of another release branch gets a warning
+.Pq its Pa /etc No was generated for the other release .
+.Sy base/keep , base/keep-wildcard
+and
+.Sy base/remove
+have no effect in this mode.
+Not compatible with
+.Fl -use-pkgbase .
+.Cm export
+of a running thin jail archives the writable layer only
+.Pq Fl -one-file-system
+and yields a valid thin crate.
+.It Sy base/host-dirs
+.Pq host-ro only
+List of host directories to mount instead of the default list above.
+Each entry must be an absolute, normalised path; the root directory,
+.Pa /usr
+itself
+.Pq it would hide the container's Pa /usr/local
+and anything in the writable layer are refused, as are nested entries.
+.Pa /usr/lib32 , /rescue
+and
+.Pa /usr/include
+may be absent on the host and are then skipped; any other missing
+directory is an error.
 .It Sy base/keep
 Files and directories to keep from the base system.
 .It Sy base/keep-wildcard
