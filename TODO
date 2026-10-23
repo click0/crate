@@ -804,16 +804,30 @@ Landlock, --restrict-namespaces.
   mode, and §14's full base update becomes "re-create the crate" for
   this class of container.
 
-* (feature, HIGH value / MED size) Per-application profiles + local
-  overrides — firejail `/etc/firejail/<app>.profile` and
-  `~/.config/firejail/<app>.local`. `profiles/<binary>.yml` shipped
-  with crate (the 56 examples are half of it already), `crate run
-  firefox` without `-f` picks the profile by name, builds the .crate
-  on first use into the spec registry and reuses it; an optional
-  `~/.config/crate/profiles/<name>.local.yml` is merged on top
-  (mergeSpecs / --template already exist; define precedence and the
-  list of keys a .local may NOT loosen — security_advanced, dbus,
-  dirs/share outside $HOME). Install target + plist for profiles/.
+* DONE 1.1.59 — per-application profiles, `crate run <name>`
+  (lib/profile_pure, lib/profile). Decisions taken: no `profiles/`
+  directory in the tree and no second copy in the plist — the
+  installed examples ARE the shipped profile set, searched after
+  ~/.config/crate/profiles/ and /usr/local/share/crate/profiles/
+  (site-local, operator-created); the .crate is built on first use
+  into ~/.local/share/crate/profiles/ and rebuilt on mtime; the
+  `.local` merge is YAML-level (maps deep, lists appended, `options`
+  by option name, scalars replaced) because +CRATE.SPEC is a copy of
+  the spec FILE, so a Spec-level merge never reaches `crate run`; a
+  .local may not set security_advanced, dbus, base, scripts,
+  encrypted, securelevel, socket_proxy, nor share outside $HOME.
+  Profile names with '+' (chromium+tor and friends) are not valid
+  jail names — copy them under a dash name. Leftovers: `crate
+  profile list|show|path`, a `--rebuild` flag, `.local` under
+  /usr/local/etc for site-wide tweaks.
+
+* (bug, MED value / SMALL size) `crate stack up` builds members from
+  a Spec-level merge (template, injected hosts/DNS scripts, named
+  volumes as dirs/share) but createCrate copies `e.specFile` into
+  +CRATE.SPEC verbatim, so none of that reaches the detached `crate
+  run -f` (found while fixing the same gap for `crate create
+  --template` in 1.1.59). Either serialise the final Spec to YAML or
+  do the injections at the YAML level the way lib/profile.cpp does.
 
 * (feature, HIGH value / LARGE size) Profile generator from a trace —
   firejail `--build` / `--trace`. `crate profile-from-trace -- <cmd>`

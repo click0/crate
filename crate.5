@@ -1168,6 +1168,77 @@ Passthrough mode with DHCP and IPv6 SLAAC.
 .It Pa netgraph.yml
 Netgraph mode with DHCP and static MAC.
 .El
+.Pp
+Since 1.1.59 the template and the specification are merged at the YAML
+level (template first, specification on top; see
+.Sx PROFILES
+for the rules) and the merged document is what the archive carries in
+.Pa +CRATE.SPEC ,
+so the template's settings reach
+.Cm crate run .
+.Sh PROFILES
+.Cm crate run Ar name
+without
+.Fl f
+looks a specification up by name, first match wins:
+.Bl -tag -width "/usr/local/share/examples/crate/" -compact
+.It Pa ~/.config/crate/profiles/ Ns Ar name Ns Pa .yml
+the operator's own profiles
+.It Pa /usr/local/share/crate/profiles/ Ns Ar name Ns Pa .yml
+site-local profiles (directory created by the operator)
+.It Pa /usr/local/share/examples/crate/ Ns Ar name Ns Pa .yml
+the examples shipped with crate
+.El
+.Pp
+The archive is built on first use into
+.Pa ~/.local/share/crate/profiles/ Ns Ar name Ns Pa .crate
+and reused; it is rebuilt when the profile or its
+.Pa .local
+is newer.
+The build is a
+.Cm crate create ,
+which needs root: an unprivileged operator is told the exact
+.Cm crate create Fl s Ar merged Fl o Ar archive
+recipe for root (the merged specification is already written) and runs
+normally once the archive exists.
+The jail is named after the profile, exactly as with
+.Fl f Ar name Ns Pa .crate .
+Profile names follow the jail-name rule
+.Pq Li [A-Za-z0-9._-] ,
+may not start with
+.Ql -
+or
+.Ql \&.
+and may not end in
+.Pa .local .
+.Pp
+An optional
+.Pa ~/.config/crate/profiles/ Ns Ar name Ns Pa .local.yml
+is merged on top of the profile: maps key by key, lists appended without
+duplicates,
+.Sy options
+by option name whichever form each file uses, scalars replaced by the
+override.
+A
+.Pa .local
+may add packages, options, limits, run arguments and shares under
+.Ev $HOME ;
+it may not contain the top-level keys
+.Sy security_advanced , dbus , base , scripts , encrypted , securelevel ,
+.Sy socket_proxy ,
+nor a
+.Sy dirs/share
+or
+.Sy files/share
+host path outside the operator's home directory.
+Such an override is refused with the reason; copy the profile into
+.Pa ~/.config/crate/profiles/
+and edit the copy instead.
+The merged specification is written next to the archive as
+.Ar name Ns Pa .yml
+(generated, do not edit) and is what
+.Pa +CRATE.SPEC
+contains.
 .Sh FILES
 .Bl -tag -width "/usr/local/etc/crate.d/*.yml"
 .It Pa /usr/local/etc/crate.yml
@@ -1176,6 +1247,15 @@ System-wide configuration.
 Drop-in configuration fragments.
 .It Pa ~/.config/crate/crate.yml
 Per-user configuration.
+.It Pa ~/.config/crate/profiles/
+Per-user profiles and
+.Pa <name>.local.yml
+overrides; see
+.Sx PROFILES .
+.It Pa /usr/local/share/crate/profiles/
+Site-local profiles.
+.It Pa ~/.local/share/crate/profiles/
+Archives and merged specifications built from profiles.
 .It Pa /var/run/crate/
 Runtime jail directories and context files.
 .It Pa /var/cache/crate/

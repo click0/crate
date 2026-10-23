@@ -6,6 +6,67 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.59] — 2026-10-23
+
+**TODO §17.2: per-application profiles — `crate run <name>`.**
+
+- **`crate run <profile> [-- args]`** (no `-f`). The spec is found by
+  name in `~/.config/crate/profiles/<name>.yml`,
+  `/usr/local/share/crate/profiles/<name>.yml` and
+  `/usr/local/share/examples/crate/<name>.yml`, first hit wins — the
+  installed examples double as the profile set, so `crate run firefox`
+  works right after `pkg install crate`. The `.crate` is built on first
+  use into `~/.local/share/crate/profiles/<name>.crate` and reused;
+  it is rebuilt when the profile or its `.local` is newer (built into
+  `<name>.crate.new`, renamed on success). The jail is named after the
+  profile and the spec-registry entry crated uses for PostStart points
+  at the built archive, so everything downstream of `-f` is unchanged.
+  The build is a `crate create`, which is not rootless yet: an
+  unprivileged operator is refused with the exact `crate create -s
+  <merged> -o <archive> && chown` recipe for root (the merged spec is
+  written first) and runs normally once the archive exists.
+- **`~/.config/crate/profiles/<name>.local.yml`** is merged on top of
+  the profile (firejail's `<app>.local`): maps key by key, lists
+  appended without duplicates, `options` by option name (a bare
+  `- net` and a `tor: {control-port: false}` entry merge the same way
+  whichever shape each file uses), scalars replaced. A `.local` may
+  add packages, options, limits, run arguments and shares under
+  `$HOME`; it may **not** set `security_advanced`, `dbus`, `base`,
+  `scripts`, `encrypted`, `securelevel`, `socket_proxy`, nor share a
+  host path outside the operator's home — refused with the reason and
+  a hint to copy the profile into `~/.config/crate/profiles/`. The
+  merged spec is written next to the archive as `<name>.yml` (with a
+  "generated from" header) and is what `+CRATE.SPEC` contains.
+- **Fixed: `crate create --template` never reached `crate run`.** The
+  template was merged into the parsed `Spec` only, while `+CRATE.SPEC`
+  is a verbatim copy of the `-s` file — a `--template privacy` crate
+  ran without tor, encryption, COW, the DNS filter and clipboard
+  isolation. The merge now happens at the YAML level (template = base,
+  spec = overlay, same rules as above) into a file that is the spec
+  for both the build and the archive. `--template X` without `-s` no
+  longer merges the template with itself (every list was doubled).
+- New `lib/profile_pure` (name rule, search order, layout, `.local`
+  policy, rebuild decision) and `lib/profile` (YAML merge, policy walk,
+  build). The audit-log target of a profile run is the profile name.
+  bash/zsh completion offers profile names from the three directories.
+  `crate run -h`, crate.5 (PROFILES, FILES), README, hardware runbook
+  §4b. Profile names follow the jail-name rule, so the `chromium+tor`
+  style examples need a copy under a dash name.
+- Found, left in TODO: `crate stack up` has the same `+CRATE.SPEC` gap
+  for its template merge and for the hosts/DNS scripts and named
+  volumes it injects into the parsed spec.
+
+Tests: `profile_pure_test` (5 cases: names incl. `.local` suffix and
+leading `-`/`.`, search paths and layout, the seven forbidden keys and
+fourteen allowed ones, share host paths in and out of `$HOME`, rebuild
+decision), `args_validate_test` (profile vs `-f`/`--name`/`--warm-base`,
+bad names), `audit_pure_test`. The YAML merge was exercised against
+`templates/privacy.yml` + `examples/firefox.yml` and a `.local` on the
+Linux side; the FreeBSD sources are syntax-checked. Not yet exercised on
+hardware (runbook §4b).
+
+---
+
 ## [1.1.58] — 2026-10-23
 
 **TODO §17.1: thin jails on nullfs — `base/mode: host-ro`.**

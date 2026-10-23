@@ -132,6 +132,9 @@ ATF_TEST_CASE_BODY(pickTarget_run_uses_file)
 {
 	Args a; a.cmd = CmdRun; a.runCrateFile = "/x.crate";
 	ATF_REQUIRE_EQ(pickTarget(a), "/x.crate");
+	// 1.1.59: `crate run <profile>` has no -f; the profile name is the target
+	Args p; p.cmd = CmdRun; p.runProfile = "firefox";
+	ATF_REQUIRE_EQ(pickTarget(p), "firefox");
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(pickTarget_snapshot_dataset_plus_name);

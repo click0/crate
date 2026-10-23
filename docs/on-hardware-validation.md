@@ -307,11 +307,68 @@ whose `+CRATE.THIN` was deleted is refused by `crate run` with the
 
 ---
 
+## 4b. 1.1.59 — profiles (`crate run <name>`) and `--template` in the archive
+
+The name rules, search order and `.local` policy are unit-tested; the
+build-on-first-use, the mtime refresh and the YAML merge inside a real
+`crate create` are not. The build runs `crate create`, which is not
+rootless: do the first pass as root, then the rootless variant below.
+
+```sh
+# as root, examples installed (pkg or `make install-examples`)
+crate run fetch -- -o /dev/null https://www.freebsd.org/
+#   expect: "profile 'fetch': building ~/.local/share/crate/profiles/fetch.crate from
+#            /usr/local/share/examples/crate/fetch.yml", a normal create, the page fetched
+ls -l ~/.local/share/crate/profiles/            # fetch.crate + fetch.yml (generated header)
+crate run fetch -- -o /dev/null https://www.freebsd.org/   # second run: no build, starts at once
+grep fetch /var/run/crate/spec-registry.txt     # points at /root/.local/share/crate/profiles/fetch.crate
+
+# rootless: the first run must refuse with the exact recipe, which root then follows
+sudo -u "#1000" crate run fetch
+#   expect: "profile 'fetch': .../fetch.crate has not been built yet and building needs root ...
+#            as root: crate create -s /home/<user>/.local/share/crate/profiles/fetch.yml -o .../fetch.crate && chown 1000 ..."
+#   and /home/<user>/.local/share/crate/profiles/fetch.yml exists (the merged spec)
+crate create -s /home/<user>/.local/share/crate/profiles/fetch.yml -o /home/<user>/.local/share/crate/profiles/fetch.crate
+chown 1000 /home/<user>/.local/share/crate/profiles/fetch.crate
+sudo -u "#1000" crate run fetch -- -o /dev/null https://www.freebsd.org/   # runs through privops, no build
+grep fetch /var/run/crate/1000/spec-registry.txt
+
+# .local override
+mkdir -p ~/.config/crate/profiles
+printf 'pkg:\n  install: [curl]\noptions:\n  - ssl-certs\n' > ~/.config/crate/profiles/fetch.local.yml
+crate run fetch -- -o /dev/null https://www.freebsd.org/   # rebuilds (the .local is newer); curl is in the jail
+tar -xJOf ~/.local/share/crate/profiles/fetch.crate +CRATE.SPEC | grep -c curl   # expect 1: the merge is IN the archive
+
+# refused .local
+printf 'dirs:\n  share:\n    - [/etc, /etc]\n' > ~/.config/crate/profiles/fetch.local.yml
+crate run fetch        # expect: "fetch.local.yml: dirs/share: a .local override may only share directories under your home"
+printf 'dbus:\n  mode: filter\n' > ~/.config/crate/profiles/fetch.local.yml
+crate run fetch        # expect: "... may not set 'dbus' ..."
+rm ~/.config/crate/profiles/fetch.local.yml
+
+# bad names and conflicts
+crate run ../fetch     # refused at argument validation
+crate run fetch -f x.crate   # refused: one or the other
+crate run nosuchprofile      # "profile 'nosuchprofile' not found; searched ..." listing the three paths
+```
+
+`--template` fix: `crate create --template privacy -s examples/firefox.yml -o f.crate`, then
+`tar -xJOf f.crate +CRATE.SPEC` must show `encrypted`, `cow`, `dns_filter`,
+`clipboard` AND the `tor` option together with firefox's `net x11 gl video`
+(before 1.1.59 the archive held firefox.yml alone).
+
+Pass criteria: first run builds, second run does not; the registry entry
+points at the built archive; a `.local` change triggers exactly one
+rebuild and its content is visible in `+CRATE.SPEC`; every refused case
+above prints the quoted reason and creates nothing.
+
+---
+
 ## 5. Reporting back
 
 ```sh
 sh scripts/on-hardware-validation.sh > /tmp/onhw-report.txt 2>&1
-# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a manual checks
+# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b manual checks
 ```
 
 Attach `/tmp/onhw-report.txt` plus the manual-section outcomes to the PR

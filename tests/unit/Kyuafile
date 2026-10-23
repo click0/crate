@@ -88,3 +88,4 @@ atf_test_program{name="mac_pure_test"}
 atf_test_program{name="passwd_pure_test"}
 atf_test_program{name="fw_lease_pure_test"}
 atf_test_program{name="thin_jail_pure_test"}
+atf_test_program{name="profile_pure_test"}

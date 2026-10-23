@@ -82,6 +82,7 @@ Crate containers contain everything needed to run the containerized software —
 | `crate create -s spec.yml -o app.crate` | Create a container from specification |
 | `crate create -s spec.yml --template base.yml` | Create with template inheritance |
 | `crate run -f app.crate [-- args]` | Run a container |
+| `crate run NAME [-- args]` | Run a profile by name: spec from `~/.config/crate/profiles/`, `/usr/local/share/crate/profiles/` or the installed examples, `.crate` built on first use (1.1.59) |
 | `crate validate -s spec.yml` | Validate a specification |
 | `crate snapshot create\|list\|restore\|delete\|diff` | Manage ZFS snapshots |
 | `crate list [-j]` | List running containers (table or JSON) |
@@ -101,6 +102,9 @@ crate create -s examples/firefox.yml -o firefox.crate
 
 # Run it
 crate run -f firefox.crate
+
+# ...or skip both steps: the installed examples are profiles (1.1.59)
+crate run firefox
 
 # List running containers
 crate list
@@ -518,6 +522,37 @@ options:
 ```
 
 Named network fields serve as defaults — explicit values in the container spec always override.
+
+## Profiles
+
+`crate run NAME` without `-f` (1.1.59, after firejail's `<app>.profile` + `<app>.local`) looks a spec up by name, first match wins:
+
+| Path | Who writes it |
+|---|---|
+| `~/.config/crate/profiles/NAME.yml` | the operator |
+| `/usr/local/share/crate/profiles/NAME.yml` | the site (directory created by the operator, root-owned) |
+| `/usr/local/share/examples/crate/NAME.yml` | shipped with crate — the examples double as the profile set |
+
+The `.crate` is built on first use into `~/.local/share/crate/profiles/NAME.crate` and reused; it is rebuilt when the profile or its `.local` is newer. The jail is named after the profile, exactly as with `-f NAME.crate`. The build is a `crate create`, which still needs root: an unprivileged operator gets a message with the exact `crate create -s … -o … && chown` recipe for root (the merged spec is already written), and runs normally once the archive exists.
+
+An optional `~/.config/crate/profiles/NAME.local.yml` is merged on top of the profile: maps key by key, lists appended without duplicates, `options` by option name, scalars replaced. It may add packages, options, limits, run arguments and shares under `$HOME`:
+
+```yaml
+# ~/.config/crate/profiles/firefox.local.yml
+pkg:
+    install: [noto-emoji]
+run:
+    command: /usr/local/bin/firefox --private-window
+dirs:
+    share:
+        - [$HOME/Downloads, $HOME/Downloads]
+limits:
+    memoryuse: 4G
+```
+
+It may **not** loosen what the profile author chose: `security_advanced`, `dbus`, `base`, `scripts`, `encrypted`, `securelevel`, `socket_proxy` and shares of host paths outside your home are refused with the reason. For those, copy the profile into `~/.config/crate/profiles/` and edit the copy. The merged spec is written next to the archive as `NAME.yml` (generated) and is what `+CRATE.SPEC` contains. Profile names follow the jail-name rule (`[A-Za-z0-9._-]`), so the `chromium+tor`-style examples need a copy under a dash name.
+
+Since 1.1.59 `crate create --template` uses the same YAML merge and the merged spec goes into the archive; before, the template only affected the build and a `--template privacy` crate ran without tor, encryption, COW or the DNS filter.
 
 ## Templates
 

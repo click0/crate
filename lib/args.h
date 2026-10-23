@@ -32,6 +32,9 @@ public:
   std::string runCrateFile;
   std::string runWarmBase;             // --warm-base <dataset>: clone instead of tar-extract
   std::string runName;                 // --name <name>: jail name when --warm-base used (no -f)
+  std::string runProfile;              // 1.1.59: positional profile name (no -f): spec found by name,
+                                       // ~/.config/crate/profiles/<name>.local.yml merged, .crate built on
+                                       // first use under ~/.local/share/crate/profiles/ (lib/profile.h)
 
   // validate parameters
   std::string validateSpec;

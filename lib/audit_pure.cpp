@@ -38,7 +38,7 @@ std::string renderJson(const Event &ev) {
 std::string pickTarget(const Args &args) {
   switch (args.cmd) {
   case CmdCreate:   return !args.createSpec.empty() ? args.createSpec : args.createTemplate;
-  case CmdRun:      return args.runCrateFile;
+  case CmdRun:      return !args.runCrateFile.empty() ? args.runCrateFile : args.runProfile;   // 1.1.59
   case CmdValidate: return args.validateSpec;
   case CmdSnapshot: return args.snapshotDataset + (args.snapshotName.empty() ? "" : "@" + args.snapshotName);
   case CmdInfo:     return args.infoTarget;
