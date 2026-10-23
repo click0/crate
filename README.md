@@ -83,6 +83,7 @@ Crate containers contain everything needed to run the containerized software —
 | `crate create -s spec.yml --template base.yml` | Create with template inheritance |
 | `crate run -f app.crate [-- args]` | Run a container |
 | `crate run NAME [-- args]` | Run a profile by name: spec from `~/.config/crate/profiles/`, `/usr/local/share/crate/profiles/` or the installed examples, `.crate` built on first use (1.1.59) |
+| `crate profile-from-trace -o spec.yml -- CMD [args]` | Run CMD once on the host under `truss(1)` and draft a minimal spec from what it touched (1.1.60) |
 | `crate validate -s spec.yml` | Validate a specification |
 | `crate snapshot create\|list\|restore\|delete\|diff` | Manage ZFS snapshots |
 | `crate list [-j]` | List running containers (table or JSON) |
@@ -553,6 +554,21 @@ limits:
 It may **not** loosen what the profile author chose: `security_advanced`, `dbus`, `base`, `scripts`, `encrypted`, `securelevel`, `socket_proxy` and shares of host paths outside your home are refused with the reason. For those, copy the profile into `~/.config/crate/profiles/` and edit the copy. The merged spec is written next to the archive as `NAME.yml` (generated) and is what `+CRATE.SPEC` contains. Profile names follow the jail-name rule (`[A-Za-z0-9._-]`), so the `chromium+tor`-style examples need a copy under a dash name.
 
 Since 1.1.59 `crate create --template` uses the same YAML merge and the merged spec goes into the archive; before, the template only affected the build and a `--template privacy` crate ran without tor, encryption, COW or the DNS filter.
+
+## Spec draft from a trace
+
+`crate profile-from-trace -o app.yml -- <command> [args]` (1.1.60, after firejail's `--build`) runs the program **once on the host, unsandboxed**, under `truss -f`, and turns the trace into a minimal spec draft:
+
+| Seen in the trace | Becomes |
+|---|---|
+| executed `/usr/local` programs | `pkg/install` (owners from `pkg which`; packages only read from are a comment) |
+| files under your home | `dirs/share` / `files/share` with `$HOME`; `.config/<app>`, `.local/share/<app>`, `.mozilla`-style state directories listed separately with a "remove to keep it per container" comment; `.cache`, `.Xauthority` and login dotfiles skipped |
+| other directories | `dirs/share`, collapsed to the shortest ancestors; base system, `/usr/local`, `/tmp`, `/var`, `/dev`, `/mnt`, `/media` ignored |
+| X11 / D-Bus sockets, `/dev/dri`, `/dev/video*`, certificate files | `x11`, `dbus/session` or `dbus/system`, `gl`, `video`, `ssl-certs` |
+| outbound connections | `options/net/outbound` by address class (`wan`, `lan`, `host`, `dns` for port 53); the plain `net` option when all four are needed |
+| `bind`+`listen`, datagram binds | `inbound-tcp`, `inbound-udp` |
+
+Destinations seen, sound/input/USB devices, Wayland sockets, unknown unix sockets and unowned `/usr/local` files become comments at the end. `--trace-file FILE` uses a saved `truss` output instead of running anything; `--keep-trace FILE` keeps the raw trace. Review the draft, then `crate validate -s app.yml` and `crate create`.
 
 ## Templates
 

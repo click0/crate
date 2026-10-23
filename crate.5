@@ -164,6 +164,30 @@ In-place
 .Xr pkg 8
 upgrade inside a running jail
 .Pq Fl n dry-run, Fl y auto-yes .
+.It Cm profile-from-trace Oo Fl o Ar spec Oc Fl - Ar command Op Ar args ...
+Run the command once on the host, unsandboxed, under
+.Xr truss 1
+and write a minimal specification draft from what it opened, executed,
+connected to and listened on: executed
+.Pa /usr/local
+programs become
+.Sy pkg/install ,
+files under the home
+.Sy dirs/share
+and
+.Sy files/share ,
+X11 and D-Bus sockets, GPU, video and certificate files the matching
+options, destinations
+.Sy options/net/outbound ,
+listening sockets
+.Sy inbound-tcp
+and
+.Sy inbound-udp .
+What cannot be mapped is left as a comment.
+.Fl -trace-file Ar file
+reads a saved trace instead of running;
+.Fl -keep-trace Ar file
+keeps the raw one.
 .El
 .Ss Global options
 .Bl -tag -width "--log-progress"

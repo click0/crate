@@ -69,6 +69,7 @@ static void usage() {
   std::cout << "  doctor [-j]                health check for crate host (kernel modules, commands, ZFS, jails, ...)" << std::endl;
   std::cout << "  vm-wrap VM --jail NAME     bhyve jailer: render devfs ruleset + jail.conf for a vnet enclosure" << std::endl;
   std::cout << "  update TARGET --pkg-only   in-place pkg upgrade in a running jail (-n dry-run, -y auto-yes)" << std::endl;
+  std::cout << "  profile-from-trace -- CMD  run CMD under truss(1) and draft a minimal spec from what it touched" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -438,6 +439,32 @@ static void usageBackupPrune() {
   std::cout << "  base kept     -> incremental kept (chain stays restorable)" << std::endl;
   std::cout << "  base removed  -> incremental flagged 'orphan' (kept by default)" << std::endl;
   std::cout << "                   --delete-orphans removes them too." << std::endl;
+  std::cout << "" << std::endl;
+}
+
+static void usageProfileFromTrace() {
+  std::cout << "usage: crate profile-from-trace [-o <spec.yml>] [--keep-trace <file>] -- <command> [args...]" << std::endl;
+  std::cout << "       crate profile-from-trace [-o <spec.yml>] --trace-file <truss-output>" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Runs the command ONCE on the host, unsandboxed, under `truss -f`, and turns" << std::endl;
+  std::cout << "what it opened, executed, connected to and listened on into a spec draft:" << std::endl;
+  std::cout << "  exec'd /usr/local programs  -> pkg/install (via pkg which)" << std::endl;
+  std::cout << "  files under $HOME           -> dirs/share, files/share (app state marked separately)" << std::endl;
+  std::cout << "  other directories           -> dirs/share (base system, /usr/local, /tmp, /var, /dev ignored)" << std::endl;
+  std::cout << "  X11 / D-Bus sockets, /dev/dri, /dev/video*, certificates -> x11, dbus, gl, video, ssl-certs" << std::endl;
+  std::cout << "  outbound destinations       -> options/net/outbound (wan, lan, host, dns)" << std::endl;
+  std::cout << "  listening sockets           -> options/net/inbound-tcp|udp" << std::endl;
+  std::cout << "Everything it could not map becomes a comment. Review the draft before `crate create`." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Options:" << std::endl;
+  std::cout << "  -o, --output <file>        write the spec there (default: stdout)" << std::endl;
+  std::cout << "      --trace-file <file>    use a saved truss(1) output instead of running a command" << std::endl;
+  std::cout << "      --keep-trace <file>    keep the raw truss output (default: a temp file, deleted)" << std::endl;
+  std::cout << "  -h, --help                 show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Examples:" << std::endl;
+  std::cout << "  crate profile-from-trace -o firefox.yml -- firefox https://www.freebsd.org/" << std::endl;
+  std::cout << "  truss -f -s 1024 -o t.out nginx -g 'daemon off;'; crate profile-from-trace --trace-file t.out" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -1529,6 +1556,26 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.vmWrapVmName = argv[a];
         } else {
           err("too many arguments for 'vm-wrap' command");
+        }
+        break;
+      case CmdProfileFromTrace:
+        if (strEq(argv[a], "--")) {
+          stop = true;   // the rest is the command to trace
+          break;
+        } else if (auto argShort = isShort(argv[a])) {
+          switch (argShort) {
+          case 'h': usageProfileFromTrace(); exit(0);
+          case 'o': args.traceOutput = getArgParam(++a, argc, argv); break;
+          default:  err("unsupported short option '%s'", argv[a]);
+          }
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help"))             { usageProfileFromTrace(); exit(0); }
+          else if (strEq(argLong, "output"))      args.traceOutput = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "trace-file"))  args.traceFile = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "keep-trace"))  args.traceKeep = getArgParam(++a, argc, argv);
+          else err("unsupported long option '%s'", argv[a]);
+        } else {
+          err("the command to trace goes after '--' (got '%s')", argv[a]);
         }
         break;
       case CmdUpdate:

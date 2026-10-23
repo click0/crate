@@ -19,7 +19,7 @@ if [ -n "$BASH_VERSION" ]; then
                     snapshot export import gui stack stats logs \
                     stop restart top inter-dns vpn inspect migrate \
                     backup restore backup-prune replicate template \
-                    retune throttle doctor vm-wrap update"
+                    retune throttle doctor vm-wrap update profile-from-trace"
     local global_opts="-h --help -V --version --no-color -p --log-progress"
 
     case "$prev" in
@@ -153,6 +153,10 @@ if [ -n "$BASH_VERSION" ]; then
         COMPREPLY=( $(compgen -W "--pkg-only -n --dry-run -y --yes -h --help" -- "$cur") )
         return
         ;;
+      profile-from-trace)
+        COMPREPLY=( $(compgen -W "-o --output --trace-file --keep-trace -h --help --" -- "$cur") )
+        return
+        ;;
       -s|--spec)
         COMPREPLY=( $(compgen -f -X '!*.yml' -- "$cur") )
         return
@@ -239,6 +243,7 @@ if [ -n "$ZSH_VERSION" ]; then
       'doctor:health check for crate host'
       'vm-wrap:bhyve jailer; render devfs ruleset + jail.conf'
       'update:in-place pkg upgrade in a running jail'
+      'profile-from-trace:draft a spec from one run under truss(1)'
     )
 
     _arguments -C \
@@ -447,6 +452,14 @@ if [ -n "$ZSH_VERSION" ]; then
               '--output-dir[write artefacts to DIR]:dir:_files -/' \
               '(-h --help)'{-h,--help}'[show help]' \
               '1:vmname:'
+            ;;
+          profile-from-trace)
+            _arguments \
+              '(-o --output)'{-o,--output}'[write the spec draft here]:file:_files -g "*.yml"' \
+              '--trace-file[parse a saved truss output instead of running]:file:_files' \
+              '--keep-trace[keep the raw truss output]:file:_files' \
+              '(-h --help)'{-h,--help}'[show help]' \
+              '*:command to trace (after --):_command_names -e'
             ;;
           update)
             _arguments \

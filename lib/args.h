@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdBackupPrune, CmdReplicate, CmdTemplate, CmdRetune, CmdThrottle, CmdDoctor, CmdVmWrap, CmdUpdate};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdBackupPrune, CmdReplicate, CmdTemplate, CmdRetune, CmdThrottle, CmdDoctor, CmdVmWrap, CmdUpdate, CmdProfileFromTrace};
 
 class Args {
 public:
@@ -178,6 +178,11 @@ public:
   bool        updatePkgOnly = false; // --pkg-only: pkg upgrade only (mandatory for now)
   bool        updateDryRun  = false; // -n/--dry-run: show what would be upgraded
   bool        updateAssumeYes = false; // -y/--yes: pkg upgrade -y (skip confirmation)
+
+  // profile-from-trace parameters (1.1.60): the command to trace follows `--`
+  std::string traceOutput;           // -o/--output: spec file (default stdout)
+  std::string traceFile;             // --trace-file: parse a saved truss(1) output instead of running
+  std::string traceKeep;             // --keep-trace: write the raw truss output here
 
   // vm-wrap parameters (bhyve jailer)
   std::string vmWrapVmName;          // positional: bhyve VM name

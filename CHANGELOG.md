@@ -6,6 +6,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.60] — 2026-10-23
+
+**TODO §17.3: `crate profile-from-trace` — a spec draft from one traced run.**
+
+- **`crate profile-from-trace [-o spec.yml] -- <command> [args]`** runs
+  the command once on the host, unsandboxed, under `truss -f` and turns
+  the trace into a minimal spec draft: executed `/usr/local` programs →
+  `pkg/install` (owners from `pkg which`; packages only read from are a
+  comment); files under the home → `dirs/share` / `files/share` with
+  `$HOME` substituted (`.config/<app>`, `.local/share/<app>`,
+  `.mozilla`-style state directories listed separately with a "remove to
+  keep it per container" comment; `.cache`, `.Xauthority` and login
+  dotfiles skipped); other directories → `dirs/share` collapsed to their
+  shortest ancestors (base system, `/usr/local`, `/tmp`, `/var`, `/dev`,
+  `/mnt`, `/media` ignored); X11 and D-Bus sockets → `x11` /
+  `dbus/session|system`; `/dev/dri` → `gl`; `/dev/video*` → `video`;
+  certificate files → `ssl-certs`; outbound connections →
+  `options/net/outbound` by address class (`wan`, `lan`, `host`, `dns`
+  for port 53; the plain `net` option when all four are needed);
+  `bind`+`listen` → `inbound-tcp`, datagram binds → `inbound-udp`.
+  Destinations seen, sound/input/USB devices, Wayland sockets, unknown
+  unix sockets, unowned `/usr/local` files and a missing `execve` become
+  comments. `--trace-file` reads a saved truss output instead of
+  running; `--keep-trace` keeps the raw one; the command's own exit
+  status is reported, not propagated.
+- `lib/trace_pure` parses the FreeBSD 14/15 truss line shapes
+  (`open`/`openat`, the `stat` family, `execve` with argv, `socket`,
+  `connect` including a non-blocking "in progress", `bind`, `listen`,
+  `sendto`; optional pid, pid+tid and timestamp prefixes; C escapes and
+  truncated strings; parentheses inside quoted paths), tracks sockets
+  per pid+fd to tell TCP from UDP, and renders the YAML by hand — no
+  yaml-cpp, so the whole pipeline is unit-tested on Linux. `lib/trace`
+  runs truss and `pkg which` (output captured whatever the exit status:
+  the "not found" lines are part of the answer).
+- Docs: `crate profile-from-trace -h`, crate.5 (Commands), README en/uk
+  ("Spec draft from a trace"), bash/zsh completion, hardware runbook §4c.
+
+Tests: `trace_pure_test` (6 cases: open variants and line prefixes;
+exec/stat/socket/connect/bind/listen/sendto lines; a 35-line
+firefox-like trace summarised and generated end to end, rendered YAML
+included; a server trace with inbound ports, the plain-`net` and the
+empty-trace edge cases; helpers). No truss on the Linux side: the line
+shapes come from the truss(1) sources and must be confirmed on hardware
+(runbook §4c). FreeBSD sources syntax-checked.
+
+---
+
 ## [1.1.59] — 2026-10-23
 
 **TODO §17.2: per-application profiles — `crate run <name>`.**

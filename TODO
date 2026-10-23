@@ -829,15 +829,21 @@ Landlock, --restrict-namespaces.
   --template` in 1.1.59). Either serialise the final Spec to YAML or
   do the injections at the YAML level the way lib/profile.cpp does.
 
-* (feature, HIGH value / LARGE size) Profile generator from a trace —
-  firejail `--build` / `--trace`. `crate profile-from-trace -- <cmd>`
-  runs the program under `truss -f` (or a wide "recording" jail with
-  everything shared) and turns the open/stat/connect/bind trace into a
-  minimal spec: read directories → dirs/share, written → writable
-  volumes, listening ports → inbound, outbound destinations →
-  outbound/allow-tcp|udp, X11/D-Bus/sound sockets → the matching
-  options, pkg-owned paths → pkg/install. Pure trace→spec module with
-  unit tests on recorded traces; the runner is FreeBSD-only.
+* DONE 1.1.60 — `crate profile-from-trace [-o spec] -- <cmd>`
+  (lib/trace_pure, lib/trace). Decisions taken: the program runs on
+  the HOST under `truss -f`, unsandboxed (a wide "recording" jail is
+  left for later); stat() results are collected but do not produce
+  shares (only successful opens do); nothing under /usr/local is ever
+  shared — executed files become pkg/install via `pkg which`, files
+  that were only read a comment; outbound destinations map to the
+  wan/lan/host/dns classes of options/net/outbound, not to
+  firewall/allow-tcp|udp (ports differ between runs, destinations are
+  kept as a comment); the YAML is rendered by hand so the module is
+  yaml-free and unit-tested on Linux. The truss line shapes come from
+  the 14.x sources, not from a recorded run — runbook §4c confirms
+  them. Leftovers: recording-jail mode (`--in-jail`), read-only shares
+  once dirs/share gains `:ro`, a sound mapping once a sound option
+  exists, `--merge` into an existing spec.
 
 * (feature, MED value / SMALL size) Sandbox audit from the inside —
   firejail `--audit`. `crate audit <target|spec>`: exec_in_jail a
