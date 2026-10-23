@@ -3,9 +3,11 @@ name: Release binaries
 # Triggered when a version tag is pushed. Two stages:
 #
 #   1. `notes`  — creates (or updates) the GitHub Release for the tag
-#      and fills its page from CHANGELOG.md: the `## [X.Y.Z]` section
-#      becomes the release body, plus a download table and a compare
-#      link to the previous tag. Fails fast when the tag does not match
+#      and fills its page from CHANGELOG.md: every `## [X.Y.Z]` section
+#      newer than the previous v* tag becomes the release body (one tag
+#      often covers several CHANGELOG versions, e.g. v1.1.57 shipped
+#      1.1.56 + 1.1.57), plus a download table and a compare link to the
+#      previous tag. Fails fast when the tag does not match
 #      the VERSION file (1.1.52: the one version source — lib/version.h,
 #      the port and the CHANGELOG are checked against it by
 #      `make check-version`) — a mis-tag never reaches the Releases page.
@@ -88,11 +90,44 @@ jobs:
           VERSION="${{ steps.ver.outputs.version }}"
           REPO="${{ github.repository }}"
 
-          # The "## [X.Y.Z] — date" section, up to the next "## [" heading.
-          awk -v ver="$VERSION" '
-            $0 ~ ("^## \\[" ver "\\]") { f = 1; next }
-            f && /^## \[/              { exit }
-            f                          { print }
+          # Previous version tag: the compare link, and the lower bound of
+          # the CHANGELOG range (first release: none).
+          PREV="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${TAG}^" 2>/dev/null || true)"
+          PREV_VERSION="${PREV#v}"
+
+          # One tag frequently covers several CHANGELOG versions (the
+          # VERSION bump per TODO section, one tag per batch). Take every
+          # "## [X.Y.Z] — date" section from the tagged version down to,
+          # but not including, the previous tag's section. When the previous
+          # tag has no section (first release, or a pre-release tag that
+          # never got one) fall back to the single section, as before.
+          MULTI=false
+          if [ -n "$PREV_VERSION" ] && grep -q "^## \[${PREV_VERSION}\]" CHANGELOG.md; then
+            # Only when more than one section lies between the two tags;
+            # a single section is rendered without its own sub-heading.
+            n="$(awk -v ver="$VERSION" -v prev="$PREV_VERSION" '
+                   /^## \[/ { if (!f) { if ($0 ~ ("^## \\[" ver "\\]")) f = 1; else next }
+                              else if ($0 ~ ("^## \\[" prev "\\]")) exit
+                              n++ }
+                   END { print n + 0 }' CHANGELOG.md)"
+            [ "$n" -gt 1 ] && MULTI=true
+          fi
+          awk -v ver="$VERSION" -v prev="$PREV_VERSION" -v multi="$MULTI" '
+            /^## \[/ {
+              if (!f) {
+                if ($0 ~ ("^## \\[" ver "\\]")) f = 1; else next
+              } else if (multi != "true" || $0 ~ ("^## \\[" prev "\\]")) {
+                exit
+              }
+              # Several sections: keep each version as a sub-heading
+              # ("### 1.1.56 — 2026-10-22") and push its own headings down.
+              if (multi == "true") { sub(/^## \[/, "### "); sub(/\]/, ""); print }
+              next
+            }
+            f {
+              if (multi == "true" && /^### /) sub(/^###/, "####")
+              print
+            }
           ' CHANGELOG.md > section.md
           # Trim leading/trailing blank lines and "---" separators.
           sed -i -e :a -e '/^\(---\)\?[[:space:]]*$/{$d;N;ba' -e '}' section.md
@@ -102,13 +137,18 @@ jobs:
             grep -n '^## \[' CHANGELOG.md | head -n 5
             exit 1
           fi
-
-          # Previous version tag for the compare link (first release: none).
-          PREV="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${TAG}^" 2>/dev/null || true)"
+          # The versions this tag ships (multi mode only; single mode is
+          # just VERSION). Oldest first for the sentence below.
+          COVERED="$(grep -o '^### [0-9][^ ]*' section.md | sed 's/^### //' | tac | tr '\n' ' ' | sed 's/ $//')"
+          echo "sections: ${COVERED:-$VERSION}"
 
           {
             echo "## Changes"
             echo
+            if [ "$MULTI" = true ] && [ "$COVERED" != "$VERSION" ]; then
+              echo "This tag ships CHANGELOG versions $(echo "$COVERED" | sed 's/ /, /g') (everything since \`${PREV}\`)."
+              echo
+            fi
             cat section.md
             echo
             echo "## Downloads"

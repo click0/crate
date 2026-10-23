@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+- CI: `release.yml` fills the Release page with every CHANGELOG section
+  between the previous `v*` tag and the tagged one, not just the tagged
+  version's — one tag per batch of TODO sections was leaving the
+  intermediate versions off the page (v1.1.57 showed 1.1.57 only, not
+  1.1.56). Several sections render as `### X.Y.Z — date` sub-headings
+  under a one-line "this tag ships …" summary; a single section is laid
+  out as before. No code change, no version bump.
+
 ## [1.1.57] — 2026-10-22
 
 **TODO §1: NAT mode works under rootless; shared firewall state lives
