@@ -179,6 +179,44 @@ ATF_TEST_CASE_BODY(epair_unit_and_ip6) {
 	ATF_REQUIRE_EQ(RunPure::epairIp6(0x4000, 1), std::string("fd00:cra7:e::1:102"));
 }
 
+// 1.1.64: run/user resolution
+ATF_TEST_CASE_WITHOUT_HEAD(run_user_effective);
+ATF_TEST_CASE_BODY(run_user_effective)
+{
+	// default: the operator mirrored
+	auto a = RunPure::effectiveRunUser("", "alice", 1001);
+	ATF_REQUIRE_EQ(a.name, std::string("alice"));
+	ATF_REQUIRE(a.mirrored && !a.root && !a.dedicated);
+	ATF_REQUIRE(!RunPure::runUserNeedsAccount(a));
+	// root operator: the dedicated account
+	auto r = RunPure::effectiveRunUser("", "root", 0);
+	ATF_REQUIRE_EQ(r.name, std::string(RunPure::kDedicatedRunUser));
+	ATF_REQUIRE(r.dedicated && !r.root && !r.mirrored);
+	ATF_REQUIRE(RunPure::runUserNeedsAccount(r));
+	// uid 0 under another name is still root
+	ATF_REQUIRE(RunPure::effectiveRunUser("", "toor", 0).dedicated);
+	// explicit root
+	auto x = RunPure::effectiveRunUser("root", "alice", 1001);
+	ATF_REQUIRE(x.root && x.name == "root" && !RunPure::runUserNeedsAccount(x));
+	// a jail account
+	auto w = RunPure::effectiveRunUser("www", "alice", 1001);
+	ATF_REQUIRE_EQ(w.name, std::string("www"));
+	ATF_REQUIRE(!w.root && !w.mirrored && !w.dedicated);
+	ATF_REQUIRE(RunPure::runUserNeedsAccount(w));
+	// naming the operator explicitly is the mirror
+	auto m = RunPure::effectiveRunUser("alice", "alice", 1001);
+	ATF_REQUIRE(m.mirrored && !RunPure::runUserNeedsAccount(m));
+	// naming "root"'s operator name with uid 0 does not make a mirror
+	ATF_REQUIRE(!RunPure::effectiveRunUser("root", "root", 0).mirrored);
+
+	for (const char *ok : {"", "root", "www", "_tor", "john.doe", "app-1", "A"})
+		ATF_REQUIRE_EQ(RunPure::validateRunUser(ok), std::string());
+	for (const char *bad : {"1www", "-x", ".hidden", "a b", "www;id", "a/b", "ü"})
+		ATF_REQUIRE(!RunPure::validateRunUser(bad).empty());
+	ATF_REQUIRE(!RunPure::validateRunUser(std::string(33, 'a')).empty());
+	ATF_REQUIRE_EQ(RunPure::validateRunUser(std::string(32, 'a')), std::string());
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
 	ATF_ADD_TEST_CASE(tcs, argsToString_empty);
@@ -195,4 +233,5 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, crate_file_jail_name_rejected);
 	ATF_ADD_TEST_CASE(tcs, jail_xname_pid_suffix);
 	ATF_ADD_TEST_CASE(tcs, epair_unit_and_ip6);
+	ATF_ADD_TEST_CASE(tcs, run_user_effective);
 }

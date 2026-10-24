@@ -7,6 +7,7 @@
 #include "privops_pure.h"   // 1.1.44: validateIfaceName for options/net/extra[]/interface
 #include "thin_jail_pure.h" // 1.1.58: base/host-dirs validation
 #include "mounts_pure.h"    // 1.1.63: share :ro, tmpfs, etc/keep
+#include "run_pure.h"       // 1.1.64: run/user
 #include "config.h"
 #include "util.h"
 #include "err.h"
@@ -42,7 +43,7 @@ Spec::Spec(const Spec &o)
     baseHostRo(o.baseHostRo), baseHostDirs(o.baseHostDirs),
     pkgInstall(o.pkgInstall), pkgLocalOverride(o.pkgLocalOverride), pkgAdd(o.pkgAdd), pkgNuke(o.pkgNuke),
     runCmdExecutable(o.runCmdExecutable), runCmdArgs(o.runCmdArgs),
-    runServices(o.runServices), dirsShare(o.dirsShare), filesShare(o.filesShare),
+    runServices(o.runServices), runUser(o.runUser), dirsShare(o.dirsShare), filesShare(o.filesShare),
     tmpfs(o.tmpfs), etcKeep(o.etcKeep),
     options(o.options), zfsDatasets(o.zfsDatasets),
     allowSysvipc(o.allowSysvipc), allowMqueue(o.allowMqueue),
@@ -475,6 +476,10 @@ static Spec parseSpecFromNode(YAML::Node top) {
           }
         } else if (isKey(b, "service")) {
           listOrScalarOnly(b.second, spec.runServices, "run/service");
+        } else if (isKey(b, "user")) {
+          // 1.1.64: the jail account the command runs as
+          scalar(b.second, spec.runUser, "run/user");
+          if (auto e = RunPure::validateRunUser(spec.runUser); !e.empty()) ERR(e)
         } else {
           ERR("unknown element run/" << b.first << " in spec")
         }
@@ -1548,6 +1553,7 @@ Spec mergeSpecs(const Spec &base, const Spec &overlay) {
   for (auto &v : overlay.managedServices) result.managedServices.push_back(v);
 
   // Scalars: overlay wins if non-default
+  if (!overlay.runUser.empty()) result.runUser = overlay.runUser;   // 1.1.64
   if (!overlay.runCmdExecutable.empty()) {
     result.runCmdExecutable = overlay.runCmdExecutable;
     result.runCmdArgs = overlay.runCmdArgs;

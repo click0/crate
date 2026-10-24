@@ -6,6 +6,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.64] — 2026-10-24
+
+**TODO §17.7: `run/user` — non-root by default, root on request.**
+
+- **`run/user`** (firejail `--noroot`): the jail account the command runs
+  as. Absent → the operator's own account mirrored into the jail (same
+  name, uid, gid — what crate always did). **When the operator is root
+  the dedicated unprivileged account `crate` is used** (created in the
+  jail if missing); the mirror used to be root itself, and
+  `pw groupadd root` failed on the existing group, so `crate run` as the
+  real root had not worked since the user mirror was introduced.
+  `run/user: root` runs the command as root inside the jail, an explicit
+  opt-in `crate validate` warns about. Any other name is a jail account:
+  one a package created (`www`, `git`) or one `crate create` adds with
+  `pw useradd -m` in the chroot when the image has none (`crate run`
+  repeats the check for warm templates and older crates). Such an
+  account is not in `wheel`. `run/service` services are rc(8) services
+  and keep their own users.
+- The service-only `/run.sh` is root-owned 0555 when the run user is not
+  the mirror (it was chown'ed to the operator and 0500). The healthcheck
+  probe runs as the run user.
+- `crate validate` warns when `run/user` is set with shares under `$HOME`
+  (they belong to the operator's uid) or with X11/GUI (the authority
+  file is copied for the operator's account).
+- Docs: crate.5 (`run/user`), README en/uk (spec table, Security
+  bullet), runbook §4g.
+
+Tests: `run_pure_test` (`effectiveRunUser` for the four cases,
+`runUserNeedsAccount`, the name rule), `spec_validate_test` (names),
+`validate_pure_test` (the warnings). kyua on Linux; the root-operator
+path and `pw useradd` in the chroot are unverified on FreeBSD — runbook
+§4g.
+
+---
+
 ## [1.1.63] — 2026-10-24
 
 **TODO §17.6: read-only shares, `tmpfs:`, `etc/keep`.**

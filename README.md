@@ -48,6 +48,7 @@ Crate containers contain everything needed to run the containerized software —
 * **Dynamic firewall slots**: unique rule numbers, no conflicts, RAII cleanup
 
 ### Security
+* **Non-root by default**: the command runs as the operator's own account mirrored into the jail; a root operator gets the dedicated unprivileged `crate` account; `run/user: root` is the explicit opt-in, `run/user: www` picks a package's account (1.1.64)
 * **securelevel**: configurable (-1 auto / 0-3, default=2)
 * **children.max**: configurable (default=0 — no nested jails)
 * **CPU pinning**: cpuset via `security:` in YAML
@@ -671,7 +672,7 @@ Top-level keys supported in `.crate` / `.yml` spec files:
 |---|---|
 | `base` | `mode` (`full` or `host-ro` — thin jail on nullfs, see below), `host-dirs`, `keep`, `keep-wildcard`, `remove` — base system layout |
 | `pkg` | `install`, `local-override`, `nuke` — package management |
-| `run` | `command`, `service` — what to execute in the container |
+| `run` | `command`, `service`, `user` — what to execute in the container and as whom (1.1.64: the operator's mirrored account by default, `crate` when the operator is root, `root` on explicit request, or a jail account) |
 | `dirs` | `share` — shared directories (host<->jail) |
 | `files` | `share` — shared files (host<->jail) |
 | `options` | `net`, `x11`, `ssl-certs`, `tor`, `video`, `gl`, `no-rm-static-libs`, `dbg-ktrace` |

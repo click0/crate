@@ -48,6 +48,7 @@ Crate — контейнеризатор для FreeBSD. Пакує застос
 * **Динамічні слоти файрволу**: унікальні номери правил, без конфліктів, RAII-очищення
 
 ### Безпека
+* **Non-root за замовчуванням**: команда виконується від віддзеркаленого облікового запису оператора; оператор-root отримує окремий непривілейований запис `crate`; `run/user: root` — явний вибір, `run/user: www` — запис пакунка (1.1.64)
 * **securelevel**: налаштовуваний (-1 auto / 0-3, default=2)
 * **children.max**: налаштовуваний (default=0 — без вкладених jail)
 * **CPU pinning**: cpuset через `security:` в YAML
@@ -628,7 +629,7 @@ nmap, amass, wget, aria2, fetch, gzip, yt-dlp, xeyes
 |---|---|
 | `base` | `keep`, `keep-wildcard`, `remove` — керування файлами базової системи |
 | `pkg` | `install`, `local-override`, `nuke` — керування пакунками |
-| `run` | `command`, `service` — що запускати в контейнері |
+| `run` | `command`, `service`, `user` — що запускати в контейнері і від кого (1.1.64: за замовчуванням віддзеркалений обліковий запис оператора, `crate` коли оператор — root, `root` на явну вимогу, або обліковий запис у jail) |
 | `dirs` | `share` — спільні теки (host<->jail) |
 | `files` | `share` — спільні файли (host<->jail) |
 | `options` | `net`, `x11`, `ssl-certs`, `tor`, `video`, `gl`, `no-rm-static-libs`, `dbg-ktrace` |

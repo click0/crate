@@ -85,6 +85,43 @@ bool epairUnit(const std::string &ifname, unsigned &unitOut) {
   return true;
 }
 
+RunUser effectiveRunUser(const std::string &specUser, const std::string &operatorName,
+                         unsigned operatorUid) {
+  RunUser u;
+  if (specUser == "root") { u.name = "root"; u.root = true; return u; }
+  if (!specUser.empty()) {
+    u.name = specUser;
+    if (specUser == operatorName && operatorUid != 0) u.mirrored = true;
+    return u;
+  }
+  if (operatorUid == 0 || operatorName == "root" || operatorName.empty()) {
+    u.name = kDedicatedRunUser;
+    u.dedicated = true;
+    return u;
+  }
+  u.name = operatorName;
+  u.mirrored = true;
+  return u;
+}
+
+bool runUserNeedsAccount(const RunUser &u) {
+  return !u.root && !u.mirrored;
+}
+
+std::string validateRunUser(const std::string &user) {
+  if (user.empty() || user == "root") return "";
+  if (user.size() > 32) return "run/user: name longer than 32 chars";
+  char c0 = user[0];
+  bool alpha0 = (c0 >= 'a' && c0 <= 'z') || (c0 >= 'A' && c0 <= 'Z') || c0 == '_';
+  if (!alpha0) return "run/user: name must start with a letter or '_'";
+  for (char c : user) {
+    bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+           || c == '.' || c == '_' || c == '-';
+    if (!ok) return std::string("run/user: invalid character '") + c + "' in name (allowed: [A-Za-z0-9._-])";
+  }
+  return "";
+}
+
 std::string epairIp6(unsigned num, unsigned idx) {
   // 4 addresses per pair: [base+0 .. base+3] is one /126; host gets
   // +1, jail +2 (+0 is the network address, +3 stays free).

@@ -313,6 +313,38 @@ Packages to forcefully remove.
 Executable path with optional arguments.
 .It Sy run/service
 Services to run (list or scalar).
+.It Sy run/user
+The jail account the command runs as (1.1.64; firejail
+.Fl -noroot ) .
+Absent: the operator's own account, mirrored into the jail with the same
+name, uid and gid, as crate always did; when the operator is root the
+dedicated unprivileged account
+.Li crate
+is used instead (created in the jail if missing).
+.Li root
+runs the command as root inside the jail, an explicit opt-in that
+.Nm crate validate
+warns about.
+Any other name is a jail account: one a package created
+.Pq Li www , Li git
+or one
+.Nm crate create
+adds with
+.Xr pw 8
+when the image has none
+.Nm ( crate run
+repeats the check for older crates and warm templates).
+Services started with
+.Sy run/service
+are
+.Xr rc 8
+services and keep their own users.
+Shares under
+.Ev $HOME
+belong to the operator's uid, and the X11 authority is copied for the
+operator's account, so a GUI program under another
+.Sy run/user
+may not reach the display.
 .El
 .Ss Shared resources
 .Bl -tag -width "files/share"

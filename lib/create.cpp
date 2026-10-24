@@ -11,6 +11,7 @@
 #include "pathnames.h"
 #include "log_pure.h"
 #include "thin_jail_pure.h"   // 1.1.58: base/mode: host-ro
+#include "passwd_pure.h"      // 1.1.64: run/user account lookup
 #include "util.h"
 #include "err.h"
 #include "commands.h"
@@ -24,6 +25,7 @@
 #include <assert.h>
 
 #include <iostream>
+#include <fstream>    // 1.1.64: run/user passwd lookup
 #include <sstream>
 #include <string>
 #include <vector>
@@ -606,6 +608,26 @@ bool createCrate(const Args &args, const Spec &spec) {
     installAndAddPackagesInJail(jailPath, spec.pkgInstall, spec.pkgAdd,
                                 spec.pkgLocalOverride, spec.pkgNuke, logFile);
     LOG("done installing packages")
+  }
+
+  // 1.1.64: run/user — make sure the account exists in the image when the
+  // spec names one that no package created (pw(8) in the chroot picks the
+  // uid; `crate run` repeats the check for older crates and templates).
+  if (!spec.runUser.empty() && spec.runUser != "root") {
+    std::string passwd;
+    {
+      std::ifstream f(STR(jailPath << "/etc/master.passwd"), std::ios::binary);
+      std::ostringstream ss; ss << f.rdbuf(); passwd = ss.str();
+    }
+    PasswdPure::User found;
+    if (PasswdPure::lookupUser(passwd, spec.runUser, found)) {
+      LOG("run/user: account '" << spec.runUser << "' exists in the jail (uid " << found.uid << ")")
+    } else {
+      LOG("run/user: creating the account '" << spec.runUser << "' in the jail")
+      Util::execCommand({"/usr/sbin/chroot", jailPath, "/usr/sbin/pw", "useradd", spec.runUser,
+                         "-m", "-s", "/bin/sh", "-c", "crate run/user"},
+                        CSTR("create the run/user account '" << spec.runUser << "' in jail"));
+    }
   }
 
   // unmount
