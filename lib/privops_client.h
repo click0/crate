@@ -189,6 +189,12 @@ PrivOpsNvPure::FieldMap buildApplyDevfsRuleset(const std::string &mountPath,
 PrivOpsNvPure::FieldMap buildAddDevfsUnhideRule(const std::string &mountPath,
                                                  const std::string &pathPattern);
 
+// 1.1.62: fill private devfs ruleset `ruleset` with `rules` (devfs
+// rulespecs without "add") and apply it to the jail's /dev mount.
+PrivOpsNvPure::FieldMap buildApplyDevfsRules(const std::string &mountPath,
+                                              unsigned ruleset,
+                                              const std::vector<std::string> &rules);
+
 // 1.1.11: send a signal to all processes in a jail.
 PrivOpsNvPure::FieldMap buildSignalJail(unsigned jid,
                                          const std::string &signal);

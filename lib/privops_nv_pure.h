@@ -171,6 +171,9 @@ std::string parseReleaseFwLease(const FieldMap &m,
                                 PrivOpsPure::ReleaseFwLeaseReq &out);   // 1.1.57
 std::string parseCreateBridge(const FieldMap &m,
                               PrivOpsPure::CreateBridgeReq &out);
+// 1.1.62: "mount_path", "ruleset", "argc" + "rule0".."rule<argc-1>".
+std::string parseApplyDevfsRules(const FieldMap &m,
+                                 PrivOpsPure::ApplyDevfsRulesReq &out);
 
 // --- 1.1.43: request size cap (nvlist header pre-check) ---
 //

@@ -346,6 +346,20 @@ ATF_TEST_CASE_BODY(terminal_devfs_ruleset_warns)
 	ATF_REQUIRE(hasMatch(w, "devfs_ruleset"));
 }
 
+// 1.1.62: device classes — media classes are silent, input/usb/serial/all warn
+ATF_TEST_CASE_WITHOUT_HEAD(devices_classes_warn);
+ATF_TEST_CASE_BODY(devices_classes_warn)
+{
+	auto s = mkSpec();
+	s.devices.sound = true; s.devices.gpu = true; s.devices.video = true;
+	ATF_REQUIRE(!hasMatch(gatherWarnings(s), "devices"));
+	s.devices.input = true;
+	ATF_REQUIRE(hasMatch(gatherWarnings(s), "devices/input"));
+	auto a = mkSpec();
+	a.devices.all = true;
+	ATF_REQUIRE(hasMatch(gatherWarnings(a), "devices: all"));
+}
+
 // Sanity: combining multiple problems produces multiple warnings
 ATF_TEST_CASE_WITHOUT_HEAD(multiple_warnings);
 ATF_TEST_CASE_BODY(multiple_warnings)
@@ -570,6 +584,7 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, capsicum_warns);
 	ATF_ADD_TEST_CASE(tcs, mac_rules_warns);
 	ATF_ADD_TEST_CASE(tcs, terminal_devfs_ruleset_warns);
+	ATF_ADD_TEST_CASE(tcs, devices_classes_warn);
 	ATF_ADD_TEST_CASE(tcs, multiple_warnings);
 	// 0.7.16 strict-mode tests
 	ATF_ADD_TEST_CASE(tcs, strict_minimal_spec_still_unbounded);

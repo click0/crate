@@ -34,3 +34,7 @@ scripts:
         ## Uncomment to limit i2pd bandwidth (L=32K O=256K P=2048K X=unlimited):
         #- "sed -i '' 's/^# *bandwidth *=.*/bandwidth = O/' /usr/local/etc/i2pd/i2pd.conf"
         - "chown -R i2pd:i2pd /var/db/i2pd /var/log/i2pd /var/run/i2pd"
+
+# 1.1.62: the jail sees only basic device nodes plus the classes named here
+devices:
+    sound: true

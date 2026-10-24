@@ -112,6 +112,7 @@ const char *verbName(Verb v) {
     case Verb::CreateBridge:         return "create_bridge";
     case Verb::AcquireFwLease:       return "acquire_fw_lease";
     case Verb::ReleaseFwLease:       return "release_fw_lease";
+    case Verb::ApplyDevfsRules:      return "apply_devfs_rules";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -155,6 +156,7 @@ Verb parseVerb(const std::string &name) {
   if (name == "create_bridge")           return Verb::CreateBridge;
   if (name == "acquire_fw_lease")        return Verb::AcquireFwLease;
   if (name == "release_fw_lease")        return Verb::ReleaseFwLease;
+  if (name == "apply_devfs_rules")       return Verb::ApplyDevfsRules;
   return Verb::Unknown;
 }
 
@@ -724,28 +726,73 @@ std::string validateSignalJail(const SignalJailReq &r) {
   return "";
 }
 
-std::string validateAddDevfsUnhideRule(const AddDevfsUnhideRuleReq &r) {
-  if (auto e = validateAbsolutePath(r.mountPath); !e.empty())
-    return "mount_path: " + e;
-  if (r.pathPattern.empty()) return "path_pattern is empty";
-  if (r.pathPattern.size() > 256)
-    return "path_pattern longer than 256 chars";
-  // devfs(8) `path` glob: alnum + dot + slash + hyphen +
-  // underscore + asterisk. Leading slash NOT allowed (devfs
-  // paths are relative to the mount, e.g. "dri/*", not
-  // "/dev/dri/*"). Shell metas explicitly rejected.
-  for (char c : r.pathPattern) {
+// devfs(8) `path` glob: alnum + dot + slash + hyphen + underscore +
+// asterisk. Leading slash NOT allowed (devfs paths are relative to the
+// mount, e.g. "dri/*", not "/dev/dri/*"). Shell metas explicitly
+// rejected. Shared by add_devfs_unhide_rule and apply_devfs_rules.
+static std::string validateDevfsPathGlob(const std::string &pat, const char *what) {
+  if (pat.empty()) return std::string(what) + " is empty";
+  if (pat.size() > 256)
+    return std::string(what) + " longer than 256 chars";
+  for (char c : pat) {
     bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
               (c >= '0' && c <= '9') ||
               c == '.' || c == '_' || c == '-' ||
               c == '/' || c == '*';
     if (!ok) {
       std::ostringstream os;
-      os << "invalid character '" << c << "' in path_pattern";
+      os << "invalid character '" << c << "' in " << what;
       return os.str();
     }
   }
-  if (r.pathPattern.front() == '/') return "path_pattern must not start with '/'";
+  if (pat.front() == '/') return std::string(what) + " must not start with '/'";
+  return "";
+}
+
+std::string validateAddDevfsUnhideRule(const AddDevfsUnhideRuleReq &r) {
+  if (auto e = validateAbsolutePath(r.mountPath); !e.empty())
+    return "mount_path: " + e;
+  return validateDevfsPathGlob(r.pathPattern, "path_pattern");
+}
+
+// 1.1.62
+std::string validateDevfsRuleSpec(const std::string &rule) {
+  // split on single spaces; no tabs, no empty tokens
+  std::vector<std::string> tok;
+  std::string cur;
+  for (char c : rule) {
+    if (c == ' ') { if (cur.empty()) return "empty token in rule"; tok.push_back(cur); cur.clear(); }
+    else if (c == '\t' || c == '\n' || c == '\r') return "whitespace other than a space in rule";
+    else cur += c;
+  }
+  if (cur.empty()) return tok.empty() ? "rule is empty" : "trailing space in rule";
+  tok.push_back(cur);
+
+  if (tok.size() == 1 && tok[0] == "hide") return "";
+  if (tok.size() == 2 && tok[0] == "include") {
+    const std::string &n = tok[1];
+    if (n.empty() || n.size() > 5) return "include: ruleset number out of range (1..65535)";
+    for (char c : n) if (c < '0' || c > '9') return "include: ruleset number must be decimal";
+    unsigned v = (unsigned)std::stoul(n);
+    if (v == 0 || v > 65535) return "include: ruleset number out of range (1..65535)";
+    return "";
+  }
+  if (tok.size() == 3 && tok[0] == "path" && tok[2] == "unhide")
+    return validateDevfsPathGlob(tok[1], "path glob");
+  return "rule must be 'hide', 'include <n>' or 'path <glob> unhide'";
+}
+
+std::string validateApplyDevfsRules(const ApplyDevfsRulesReq &r) {
+  if (auto e = validateAbsolutePath(r.mountPath); !e.empty())
+    return "mount_path: " + e;
+  if (r.ruleset == 0 || r.ruleset > 65535)
+    return "ruleset: out of range (1..65535)";
+  if (r.rules.empty()) return "rules: empty";
+  if (r.rules.size() > kApplyDevfsRulesMaxRules)
+    return "rules: more than " + std::to_string(kApplyDevfsRulesMaxRules) + " entries";
+  for (size_t i = 0; i < r.rules.size(); i++)
+    if (auto e = validateDevfsRuleSpec(r.rules[i]); !e.empty())
+      return "rule" + std::to_string(i) + ": " + e;
   return "";
 }
 

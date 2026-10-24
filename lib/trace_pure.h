@@ -98,6 +98,9 @@ struct Generated {
   std::vector<std::string> outbound;       // subset of wan, lan, host, dns in that order
   std::vector<unsigned> inboundTcp, inboundUdp;
   bool dbusSystem = false, dbusSession = false;
+  // 1.1.62: device classes seen (`devices:` block); gpu and video are
+  // covered by the gl / video options
+  bool devSound = false, devInput = false, devUsb = false;
   std::vector<std::string> outboundSeen;   // "93.184.216.34:443/tcp"
   std::vector<std::string> notes;          // things the operator must decide
 };

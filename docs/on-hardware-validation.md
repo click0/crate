@@ -454,11 +454,60 @@ epairNa` on the host).
 
 ---
 
+## 4e. 1.1.62 — device classes and the private devfs ruleset
+
+Until 1.1.61 the jail's devfs had no ruleset at all (the host's whole
+`/dev` was visible). 1.1.62 builds a private ruleset per jail. The
+`devfs rule -s N add …` / `devfs -m M ruleset N` / `rule applyset`
+sequence was written from devfs(8) without a host to run it on, so the
+first check is that it applies at all and hides what it should.
+
+```sh
+# a plain jail: basic nodes only
+crate run -f fetch.crate -- -o /dev/null https://www.freebsd.org/ &
+crate audit fetch
+#   expect: devfs entries ~ 15-20 (null, zero, random, urandom, crypto, tty, ptmx, pts, fd, stdin,
+#   stdout, stderr, fuse, zfs, bpf*), no gpu/sound/input/disks/raw lines, no yellow "devices: devfs
+#   rules failed" on the crate run console; jail: devfs-ruleset "ruleset 1NNNN"
+ls /jail-root/dev                       # same from the host side of the mount
+devfs rule -s 1NNNN show                # the rules, "hide" first, "path ... unhide" after
+
+# a desktop jail: the classes it asks for
+crate run firefox &                     # examples/firefox.yml: gl, video, devices/sound
+crate audit firefox
+#   expect: devfs gpu (dri, drm), video (video0 if a webcam exists), sound (dsp*, mixer*, sndstat);
+#   no input, no disks, no raw; firefox plays audio and renders with the GPU
+#   (about:support -> Compositing: WebRender, not software)
+
+# rootless: the same through apply_devfs_rules
+sudo -u alice crate run firefox         # then crate audit as alice: identical devfs lines
+
+# the escape hatches
+#   terminal/devfs_ruleset: 4 in a spec -> "ruleset 1NNNN" still, rules start with "include 4",
+#   classes on top; devices: all -> the full host /dev again, crate validate warns
+
+# negative
+crate validate -s x.yml                 # devices: {keyboard: true} -> "unknown class 'keyboard'"
+                                        # devices: [input] -> warning about keystrokes
+```
+
+Pass criteria: no "devices: devfs rules failed" warning on any run; a
+jail without classes shows only the basic nodes in `crate audit`; the
+classes show exactly their devices; sound and GPU work in the firefox
+example; a second run with the same pid-derived number (restart until
+`crate run` gets a reused pid, or run `devfs rule -s 1NNNN add path
+mem unhide` by hand before a run) does not inherit the stale rule. If
+`devfs rule -s N add hide` or the `include` form is refused by devfs(8),
+paste the error here: the rulespec grammar in `lib/privops_pure.cpp`
+and the emitter in `lib/devices_pure.cpp` are the places to fix.
+
+---
+
 ## 5. Reporting back
 
 ```sh
 sh scripts/on-hardware-validation.sh > /tmp/onhw-report.txt 2>&1
-# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b / §4c / §4d manual checks
+# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b / §4c / §4d / §4e manual checks
 ```
 
 Attach `/tmp/onhw-report.txt` plus the manual-section outcomes to the PR

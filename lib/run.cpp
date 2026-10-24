@@ -888,158 +888,96 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // mount devfs (MNT_IGNORE hides it from df/mount output)
   mount(new Mount("devfs", J("/dev"), "", MNT_IGNORE));
 
-  // Terminal isolation: apply devfs ruleset (§16)
-  // 1.1.10: routes through ApplyDevfsRuleset privops verb when
-  // socket detected; falls back to direct devfs(8) for legacy
-  // setuid mode. Under rootless the paired exec calls would
-  // EACCES and the jail would inherit the host's default devfs
-  // view — silent loss of the terminal isolation feature.
-  if (spec.terminalOptions) {
-    if (spec.terminalOptions->devfsRuleset >= 0) {
-      auto rulesetStr = std::to_string(spec.terminalOptions->devfsRuleset);
-      std::string devMount = J("/dev");
-      std::string sock = PrivOpsClient::detectSocketPath();
-      if (!sock.empty()) {
-        auto resp = PrivOpsClient::sendRequest(sock,
-            PrivOpsClient::buildApplyDevfsRuleset(devMount,
-                (unsigned)spec.terminalOptions->devfsRuleset));
-        if (!resp.transportError.empty())
-          ERR("privops apply_devfs_ruleset transport error: " << resp.transportError)
-        if (resp.status >= 400)
-          ERR("privops apply_devfs_ruleset failed (status " << resp.status
-              << "): " << resp.body)
-      } else {
-        Util::execCommand({CRATE_PATH_DEVFS, "-m", devMount, "ruleset", rulesetStr}, "apply terminal devfs ruleset");
-        Util::execCommand({CRATE_PATH_DEVFS, "-m", devMount, "rule", "applyset"}, "apply terminal devfs rules");
+  // 1.1.62: the jail's devfs view. The devfs mounted a moment ago came
+  // from the host with NO ruleset — every host device visible (the
+  // pre-1.1.62 state of every jail without terminal/devfs_ruleset).
+  // Build a PRIVATE ruleset for this jail: the operator's
+  // terminal/devfs_ruleset (included) or the built-in hide-all + basic
+  // nodes, then the device classes the spec enables plus the ones its
+  // options imply — `gl` and the gui gpu/auto/compositor modes need
+  // /dev/dri, `video` the camera, the compositor's drm backend the
+  // evdev nodes. Rootless: one apply_devfs_rules privops round trip;
+  // root: devfs(8) directly. `devices: all` keeps the full host view
+  // (a custom ruleset is then applied the 1.1.10 way).
+  {
+    std::string devMount = J("/dev");
+    DevicesPure::Devices eff = spec.devices;
+    if (spec.optionExists("gl"))    eff.gpu = true;
+    if (spec.optionExists("video")) eff.video = true;
+    if (spec.guiOptions) {
+      const auto &mode = spec.guiOptions->mode;
+      if (mode == "gpu" || mode == "auto" || mode == "compositor") eff.gpu = true;
+      if (mode == "compositor") {
+        CompositorPure::Backend cbk;
+        if (!CompositorPure::parseBackend(spec.guiOptions->backend, cbk))
+          ERR("gui.backend: unknown backend '" << spec.guiOptions->backend << "'")
+        if (cbk == CompositorPure::Backend::Drm) eff.input = true;
       }
-      LOG("terminal: devfs_ruleset=" << rulesetStr)
     }
-    if (!spec.terminalOptions->allowRawTty) {
-      LOG("terminal: raw TTY access denied (default devfs restrictions apply)")
-    }
-  }
+    int custom = spec.terminalOptions ? spec.terminalOptions->devfsRuleset : -1;
+    std::string sock = PrivOpsClient::detectSocketPath();
 
-  // 0.8.11: when GUI mode wants GPU access, auto-unhide /dev/dri/*
-  // entries from the jail's devfs view. Saves the operator from
-  // writing a custom devfs ruleset for the common case "I want
-  // hardware-accelerated firefox in this jail."
-  //
-  // Triggered when:
-  //   - spec.guiOptions->mode == "gpu" (explicit), OR
-  //   - spec.guiOptions->mode == "auto" AND host has /dev/dri/card0
-  //     (gpu mode would resolve to "gpu" at GUI start anyway)
-  // Skipped when guiOptions absent OR mode == "headless"/"nested"
-  // (no GPU needed) OR /dev/dri/card0 doesn't exist on host
-  // (nothing to expose).
-  if (spec.guiOptions
-      && (spec.guiOptions->mode == "gpu" || spec.guiOptions->mode == "auto")) {
-    struct stat st{};
-    if (::stat("/dev/dri/card0", &st) == 0) {
-      // Use devfs(8) per-jail rules: add `path 'dri/*' unhide` then
-      // applyset. Operates on the jail's devfs mount, leaves host
-      // devfs untouched.
-      //
-      // 1.1.10: routes through AddDevfsUnhideRule privops verb when
-      // socket detected. Each verb call internally includes applyset,
-      // so the previous 3-call (add + add + applyset) shape becomes
-      // 2 verb calls (each idempotently applyset-s). Same legacy
-      // fallback for non-privops mode.
-      try {
-        std::string devMount = J("/dev");
-        std::string sock = PrivOpsClient::detectSocketPath();
-        auto unhide = [&](const std::string &pat, const std::string &what) {
-          if (!sock.empty()) {
-            auto resp = PrivOpsClient::sendRequest(sock,
-                PrivOpsClient::buildAddDevfsUnhideRule(devMount, pat));
-            if (!resp.transportError.empty())
-              ERR("privops add_devfs_unhide_rule '" << pat
-                  << "' transport error: " << resp.transportError)
-            if (resp.status >= 400)
-              ERR("privops add_devfs_unhide_rule '" << pat
-                  << "' failed (status " << resp.status << "): " << resp.body)
-          } else {
-            Util::execCommand(
-              {CRATE_PATH_DEVFS, "-m", devMount, "rule", "add",
-               "path", pat, "unhide"},
-              what);
-          }
-        };
-        unhide("dri",   "auto-gui: unhide /dev/dri");
-        unhide("dri/*", "auto-gui: unhide /dev/dri/*");
-        if (sock.empty()) {
-          // Legacy path: applyset still needed after the two raw add calls.
-          Util::execCommand(
-            {CRATE_PATH_DEVFS, "-m", devMount, "rule", "applyset"},
-            "auto-gui: applyset for dri unhide");
+    if (eff.all) {
+      if (custom >= 0) {
+        auto rulesetStr = std::to_string(custom);
+        if (!sock.empty()) {
+          auto resp = PrivOpsClient::sendRequest(sock,
+              PrivOpsClient::buildApplyDevfsRuleset(devMount, (unsigned)custom));
+          if (!resp.transportError.empty())
+            ERR("privops apply_devfs_ruleset transport error: " << resp.transportError)
+          if (resp.status >= 400)
+            ERR("privops apply_devfs_ruleset failed (status " << resp.status
+                << "): " << resp.body)
+        } else {
+          Util::execCommand({CRATE_PATH_DEVFS, "-m", devMount, "ruleset", rulesetStr}, "apply terminal devfs ruleset");
+          Util::execCommand({CRATE_PATH_DEVFS, "-m", devMount, "rule", "applyset"}, "apply terminal devfs rules");
         }
-        LOG("auto-gui: /dev/dri/* unhidden in jail's devfs view "
-            "(GPU mode '" << spec.guiOptions->mode << "')")
-      } catch (const std::exception &ex) {
-        std::cerr << rang::fg::yellow
-                  << "auto-gui: devfs unhide /dev/dri failed: "
-                  << ex.what()
-                  << " — GPU rendering inside the jail will not work; "
-                     "add a custom devfs_ruleset manually if needed"
-                  << rang::style::reset << std::endl;
+        LOG("terminal: devfs_ruleset=" << rulesetStr << " (devices: all)")
+      } else {
+        LOG("devices: all — the host's /dev is visible in the jail")
       }
     } else {
-      LOG("auto-gui: GPU mode requested but /dev/dri/card0 absent "
-          "on host — skipping devfs unhide (jail will fall back to "
-          "software rendering)")
-    }
-  }
-
-  // gui.mode: compositor — a Wayland compositor runs *inside* the jail
-  // and needs device nodes the default ruleset hides: /dev/dri/* for
-  // GPU/KMS and (drm backend only) /dev/input/* for keyboard/mouse.
-  // The exact set is decided by CompositorPure::requiredDevfsUnhide
-  // (headless+software needs nothing). Exposing /dev/input/* is a real
-  // privilege grant — it is opt-in via gui.backend: drm and surfaced in
-  // the trust-model docs.
-  if (spec.guiOptions && spec.guiOptions->mode == "compositor") {
-    CompositorPure::Backend cbk;
-    if (!CompositorPure::parseBackend(spec.guiOptions->backend, cbk))
-      ERR("gui.backend: unknown backend '" << spec.guiOptions->backend << "'")
-    struct stat st{};
-    bool gpuAccel = (::stat("/dev/dri/renderD128", &st) == 0) ||
-                    (::stat("/dev/dri/card0", &st) == 0);
-    auto patterns = CompositorPure::requiredDevfsUnhide(cbk, gpuAccel);
-    if (!patterns.empty()) {
+      auto rules = DevicesPure::buildRules(eff, custom, spec.optionExists("net"));
+      unsigned rs = DevicesPure::rulesetNumberFor((long)::getpid());
       try {
-        std::string devMount = J("/dev");
-        std::string sock = PrivOpsClient::detectSocketPath();
-        for (const auto &pat : patterns) {
-          if (!sock.empty()) {
-            auto resp = PrivOpsClient::sendRequest(sock,
-                PrivOpsClient::buildAddDevfsUnhideRule(devMount, pat));
-            if (!resp.transportError.empty())
-              ERR("privops add_devfs_unhide_rule '" << pat
-                  << "' transport error: " << resp.transportError)
-            if (resp.status >= 400)
-              ERR("privops add_devfs_unhide_rule '" << pat
-                  << "' failed (status " << resp.status << "): " << resp.body)
-          } else {
-            Util::execCommand(
-              {CRATE_PATH_DEVFS, "-m", devMount, "rule", "add",
-               "path", pat, "unhide"},
-              STR("gui.compositor: unhide /dev/" << pat));
+        if (!sock.empty()) {
+          auto resp = PrivOpsClient::sendRequest(sock,
+              PrivOpsClient::buildApplyDevfsRules(devMount, rs, rules));
+          if (!resp.transportError.empty())
+            ERR("privops apply_devfs_rules transport error: " << resp.transportError)
+          if (resp.status >= 400)
+            ERR("privops apply_devfs_rules failed (status " << resp.status << "): " << resp.body)
+        } else {
+          std::string rsStr = std::to_string(rs);
+          // a stale set with this number (an old crate(1) with the same pid)
+          try {
+            Util::execCommand({CRATE_PATH_DEVFS, "rule", "-s", rsStr, "delset"}, "devices: delete a stale devfs ruleset");
+          } catch (...) {}
+          for (const auto &rule : rules) {
+            std::vector<std::string> argv = {CRATE_PATH_DEVFS, "rule", "-s", rsStr, "add"};
+            for (const auto &tok : Util::splitString(rule, " "))
+              if (!tok.empty()) argv.push_back(tok);
+            Util::execCommand(argv, "devices: add a devfs rule");
           }
+          Util::execCommand({CRATE_PATH_DEVFS, "-m", devMount, "ruleset", rsStr}, "devices: associate the devfs ruleset");
+          Util::execCommand({CRATE_PATH_DEVFS, "-m", devMount, "rule", "applyset"}, "devices: apply the devfs ruleset");
         }
-        if (sock.empty())
-          Util::execCommand(
-            {CRATE_PATH_DEVFS, "-m", devMount, "rule", "applyset"},
-            "gui.compositor: applyset for devfs unhide");
-        LOG("gui.compositor: devfs unhidden in jail's /dev view (backend '"
-            << CompositorPure::backendName(cbk) << "')")
+        LOG("devices: " << DevicesPure::describe(eff) << " (private devfs ruleset " << rs
+            << (custom >= 0 ? ", on top of terminal/devfs_ruleset " + std::to_string(custom) : "") << ")")
       } catch (const std::exception &ex) {
         std::cerr << rang::fg::yellow
-                  << "gui.compositor: devfs unhide failed: " << ex.what()
-                  << " — the compositor may fail to open its devices; add a "
-                     "custom devfs_ruleset manually if needed"
+                  << "devices: devfs rules failed: " << ex.what()
+                  << " — the jail sees the host's /dev unfiltered; `crate audit <name>` shows what, "
+                     "`devices: all` in the spec silences this warning"
                   << rang::style::reset << std::endl;
       }
     }
+    if (spec.terminalOptions && !spec.terminalOptions->allowRawTty)
+      LOG("terminal: raw TTY access denied (default devfs restrictions apply)")
   }
+
+  // (0.8.11's auto-gui /dev/dri unhide and 0.8.45's compositor unhide
+  // are part of the device-class block above since 1.1.62.)
 
   // 1.1.42: suffix via RunPure so crated (which knows our pid after
   // spawning us) can find this jail and record its owner.

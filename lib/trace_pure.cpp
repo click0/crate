@@ -562,10 +562,15 @@ Generated generate(const Summary &s, const Input &in) {
   std::sort(g.inboundUdp.begin(), g.inboundUdp.end());
   g.net = !g.outbound.empty() || !g.inboundTcp.empty() || !g.inboundUdp.empty();
 
+  // --- device classes (1.1.62: the `devices:` block)
+  g.devSound = sound;
+  g.devInput = input;
+  g.devUsb   = usb;
+
   // --- notes
-  if (sound) pushUnique(g.notes, "sound was used (OSS device or PulseAudio/PipeWire socket): no spec option generates this — PipeWire/PulseAudio sockets are bound by `gui: {mode: wayland}`, OSS devices need terminal/devfs_ruleset");
-  if (input) pushUnique(g.notes, "/dev/input was read: raw input devices are not exposed by default (terminal/devfs_ruleset)");
-  if (usb)   pushUnique(g.notes, "USB devices (/dev/ugen, /dev/usb, /dev/u2f) were opened: expose them with terminal/devfs_ruleset");
+  if (sound) pushUnique(g.notes, "sound was used (OSS device or PulseAudio/PipeWire socket): devices/sound exposes the OSS nodes; PipeWire/PulseAudio sockets are bound by `gui: {mode: wayland}`");
+  if (input) pushUnique(g.notes, "/dev/input was read: devices/input exposes the evdev nodes — everything typed on the host is readable from inside, drop it unless the program really needs raw input");
+  if (usb)   pushUnique(g.notes, "USB devices (/dev/ugen, /dev/usb, /dev/u2f) were opened: devices/usb exposes every USB device of the host");
   if (cache) pushUnique(g.notes, "$HOME/.cache was used: left per container (nothing to share); a tmpfs there is the usual choice");
   if (!unownedLocal.empty()) {
     std::string list;
@@ -666,6 +671,14 @@ std::string renderSpec(const Generated &g, const std::string &crateVersion) {
     if (g.dbusSystem)  o << "    system: true\n";
     if (g.dbusSession) o << "    session: true\n";
     o << "    # add policy/allow_own and policy/deny_send for the services this program talks to\n";
+  }
+
+  // 1.1.62: device classes beyond what gl / video already grant
+  if (g.devSound || g.devInput || g.devUsb) {
+    o << "\ndevices:\n";
+    if (g.devSound) o << "    sound: true\n";
+    if (g.devInput) o << "    input: true   # raw input devices: keystrokes of the host are readable — remove unless needed\n";
+    if (g.devUsb)   o << "    usb: true     # every USB device of the host\n";
   }
 
   if (!g.outboundSeen.empty()) {

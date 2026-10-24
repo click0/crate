@@ -401,6 +401,20 @@ PrivOpsNvPure::FieldMap buildAddDevfsUnhideRule(const std::string &mountPath,
   };
 }
 
+PrivOpsNvPure::FieldMap buildApplyDevfsRules(const std::string &mountPath,
+                                              unsigned ruleset,
+                                              const std::vector<std::string> &rules) {
+  PrivOpsNvPure::FieldMap m = {
+    {"verb", "apply_devfs_rules"},
+    {"mount_path", mountPath},
+    {"ruleset", std::to_string(ruleset)},
+    {"argc", std::to_string(rules.size())},
+  };
+  for (size_t i = 0; i < rules.size(); i++)
+    m["rule" + std::to_string(i)] = rules[i];
+  return m;
+}
+
 PrivOpsNvPure::FieldMap buildSignalJail(unsigned jid,
                                          const std::string &signal) {
   return {

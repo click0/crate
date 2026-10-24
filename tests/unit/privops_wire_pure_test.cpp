@@ -594,6 +594,7 @@ ATF_TEST_CASE_BODY(dispatch_covers_every_verb) {
     Verb::ExecInJail,       // 1.1.40
     Verb::SetIfaceMac, Verb::DeleteIpfwNat, Verb::CreateBridge,   // 1.1.41
     Verb::AcquireFwLease, Verb::ReleaseFwLease,                   // 1.1.57
+    Verb::ApplyDevfsRules,                                        // 1.1.62
   };
   for (auto v : verbs) {
     auto r = parseValidateAndDispatch(v, "{}");
@@ -660,6 +661,34 @@ ATF_TEST_CASE_BODY(format_query_jail_rctl_escapes_newlines) {
   ATF_REQUIRE_EQ(extractStringField(body, "output", recovered),
                  std::string(kPresent));
   ATF_REQUIRE_EQ(recovered, std::string("memoryuse=512M\nmaxproc=64\n"));
+}
+
+// --- apply_devfs_rules (1.1.62) ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(parse_apply_devfs_rules_fields);
+ATF_TEST_CASE_BODY(parse_apply_devfs_rules_fields) {
+  PrivOpsPure::ApplyDevfsRulesReq r;
+  ATF_REQUIRE_EQ(parseApplyDevfsRules(
+    R"({"mount_path":"/jails/web/dev","ruleset":10042,"argc":2,"rule0":"hide","rule1":"path dri/* unhide"})", r),
+    std::string());
+  ATF_REQUIRE_EQ(r.ruleset, 10042u);
+  ATF_REQUIRE_EQ(r.rules.size(), 2u);
+  ATF_REQUIRE_EQ(r.rules[1], std::string("path dri/* unhide"));
+  ATF_REQUIRE(!parseApplyDevfsRules(R"({"mount_path":"/j/dev","ruleset":5,"argc":0})", r).empty());
+  ATF_REQUIRE(parseApplyDevfsRules(R"({"mount_path":"/j/dev","ruleset":5,"argc":2,"rule0":"hide"})", r)
+              .find("rule1") != std::string::npos);
+  ATF_REQUIRE(!parseApplyDevfsRules(R"({"ruleset":5,"argc":1,"rule0":"hide"})", r).empty());
+  // dispatch: a valid request reaches the (unimplemented here) handler, a bad rule is 400
+  ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::ApplyDevfsRules,
+    R"({"mount_path":"/jails/web/dev","ruleset":10042,"argc":1,"rule0":"hide"})").status, 501);
+  ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::ApplyDevfsRules,
+    R"({"mount_path":"/jails/web/dev","ruleset":10042,"argc":1,"rule0":"path mem mode 0666"})").status, 400);
+  ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::ApplyDevfsRules,
+    R"({"mount_path":"/jails/web/dev","ruleset":0,"argc":1,"rule0":"hide"})").status, 400);
+  auto ok = formatApplyDevfsRulesSuccess("/jails/web/dev", 10042, 17);
+  ATF_REQUIRE(ok.find("\"applied\":true") != std::string::npos);
+  ATF_REQUIRE(ok.find("\"ruleset\":10042") != std::string::npos);
+  ATF_REQUIRE(ok.find("\"rules\":17") != std::string::npos);
 }
 
 // --- exec_in_jail (1.1.40) ---
@@ -854,6 +883,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, parse_query_jail_rctl);
   ATF_ADD_TEST_CASE(tcs, format_query_jail_rctl_escapes_newlines);
   ATF_ADD_TEST_CASE(tcs, parse_exec_in_jail_argv_fields);
+  ATF_ADD_TEST_CASE(tcs, parse_apply_devfs_rules_fields);
   ATF_ADD_TEST_CASE(tcs, parse_1141_verbs_and_rctl_limits);
   ATF_ADD_TEST_CASE(tcs, escape_round_trips_control_bytes);
 }

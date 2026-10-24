@@ -63,7 +63,7 @@ Crate containers contain everything needed to run the containerized software —
 * **JAIL_OWN_DESC**: race-free jail removal (FreeBSD 15+)
 * **Archive traversal protection**: validates paths before extraction
 * **Signal-safe RAII cleanup**: guaranteed resource cleanup on SIGINT/SIGTERM
-* **Terminal isolation**: configurable devfs ruleset, TTY control
+* **Device classes**: the jail's `/dev` shows only basic nodes plus the `devices:` classes the spec names (sound, gpu, video, input, usb, serial); `terminal/devfs_ruleset` remains the escape hatch (1.1.62)
 
 ### Services & IPC
 * **Managed services**: auto-start/stop in order, rc.conf generation
@@ -587,6 +587,22 @@ Destinations seen, sound/input/USB devices, Wayland sockets, unknown unix socket
 
 WARN marks an exposure worth a look rather than an error: a whole host area mounted read-write, raw disk or memory devices, keyboard devices, a host socket, a hostid equal to the host's. Exit status is 0, 1 (some WARN) or 2 (the probe did not run). `crate doctor` looks at the host, `crate audit` at one container; it needs root or the crated privops socket, like `crate console`.
 
+## Device classes
+
+Since 1.1.62 every jail gets a **private devfs ruleset** (firejail's `--nosound` / `--novideo` / `--no3d` / `--noinput` / `--nou2f`, inverted): everything in `/dev` is hidden, the basic nodes are unhidden (`null`, `zero`, `random`, `urandom`, `crypto`, `tty`, `ptmx`, `pts/*`, `fd/*`, `stdin`/`stdout`/`stderr`, `fuse`, `zfs`; `bpf*` with the `net` option), then the classes the spec names:
+
+```yaml
+devices:
+    sound: true      # /dev/dsp*, mixer*, sndstat, audio*, midi*
+    gpu: true        # /dev/dri, dri/*, drm/*, nvidia*   (implied by `gl` and gui gpu/auto/compositor)
+    video: true      # /dev/video*                        (implied by the `video` option)
+    input: true      # /dev/input/* — everything typed on the host is readable; implied by gui compositor's drm backend
+    usb: true        # /dev/usb/*, usbctl, ugen*, uhid*, u2f*
+    serial: true     # /dev/cua*, ttyu*, ttyU*
+```
+
+`devices: [sound, gpu]` is the list form; `devices: all` keeps the host's whole `/dev` visible, which is what every jail without `terminal/devfs_ruleset` got before 1.1.62 (disks, memory, keyboards included). `terminal/devfs_ruleset: N` is still honoured: the operator's ruleset is included in place of the built-in base and the classes go on top. `crate validate` warns about `all`, `input`, `usb` and `serial`; `crate audit` shows the resulting view from inside. The desktop examples carry `devices: {sound: true}`.
+
 ## Templates
 
 The `templates/` directory provides ready-made base configurations:
@@ -653,6 +669,7 @@ Top-level keys supported in `.crate` / `.yml` spec files:
 | `services` | Managed services (managed list, auto_start) |
 | `socket_proxy` | Socket forwarding (share, proxy with host/jail/direction) |
 | `terminal` | Terminal isolation (devfs_ruleset, allow_raw_tty) |
+| `devices` | Device classes visible in `/dev`: sound, gpu, video, input, usb, serial, or `all` (1.1.62) |
 | `security_advanced` | Capsicum, MAC bsdextended/portacl, hide_other_jails |
 
 ## Installation

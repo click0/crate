@@ -63,6 +63,7 @@ Spec::Spec(const Spec &o)
     firewallPolicy(clonePtr(o.firewallPolicy)),
     securityAdvanced(clonePtr(o.securityAdvanced)),
     terminalOptions(clonePtr(o.terminalOptions)),
+    devices(o.devices),
     guiOptions(clonePtr(o.guiOptions)),
     healthcheck(clonePtr(o.healthcheck)),
     restartPolicy(clonePtr(o.restartPolicy)),
@@ -1192,6 +1193,30 @@ static Spec parseSpecFromNode(YAML::Node top) {
           ERR("unknown element terminal/" << b.first << " in spec")
         }
       }
+    } else if (isKey(k, "devices")) {
+      // Device classes (1.1.62): `all` | `none` | [names] | {name: bool}
+      if (k.second.IsScalar()) {
+        auto v = AsString(k.second);
+        if (v == "all") spec.devices.all = true;
+        else if (v != "none")
+          ERR("devices: expected 'all', 'none', a list or a map of classes, got '" << v << "'")
+      } else if (k.second.IsSequence()) {
+        for (auto e : k.second) {
+          if (!e.IsScalar()) ERR("devices: list entries must be class names")
+          if (!DevicesPure::setClass(spec.devices, AsString(e), true))
+            ERR("devices: unknown class '" << AsString(e) << "' (sound, gpu, video, input, usb, serial)")
+        }
+      } else if (k.second.IsMap()) {
+        for (auto b : k.second) {
+          bool on = false;
+          if (!YAML::convert<bool>::decode(b.second, on))
+            ERR("devices/" << b.first << " must be a boolean")
+          if (!DevicesPure::setClass(spec.devices, AsString(b.first), on))
+            ERR("devices: unknown class '" << b.first << "' (sound, gpu, video, input, usb, serial)")
+        }
+      } else {
+        ERR("devices must be 'all', 'none', a list or a map")
+      }
     } else if (isKey(k, "gui")) {
       // GUI session management (§19).
       // 0.7.19: accept scalar shorthand `gui: auto` (or any other
@@ -1528,6 +1553,7 @@ Spec mergeSpecs(const Spec &base, const Spec &overlay) {
     result.terminalOptions = std::make_unique<Spec::TerminalOptions>();
     *result.terminalOptions = *overlay.terminalOptions;
   }
+  result.devices.merge(overlay.devices);   // 1.1.62: union of the classes
   if (overlay.guiOptions) {
     result.guiOptions = std::make_unique<Spec::GuiOptions>();
     *result.guiOptions = *overlay.guiOptions;

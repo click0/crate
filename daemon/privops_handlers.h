@@ -236,6 +236,10 @@ PrivOpsWirePure::DispatchResult handleApplyDevfsRuleset(const PrivOpsPure::Apply
 // applyset. Used by the GUI auto-unhide path in lib/run.cpp.
 PrivOpsWirePure::DispatchResult handleAddDevfsUnhideRule(const PrivOpsPure::AddDevfsUnhideRuleReq &r);
 
+// 1.1.62: fill a private devfs ruleset (delset, add each rule) and
+// apply it to the jail's /dev mount (ruleset N + applyset).
+PrivOpsWirePure::DispatchResult handleApplyDevfsRules(const PrivOpsPure::ApplyDevfsRulesReq &r);
+
 // 1.1.11: send a signal to all processes in a jail. Wraps
 // `jexec <jid> /bin/kill -<signal> -1`.
 PrivOpsWirePure::DispatchResult handleSignalJail(const PrivOpsPure::SignalJailReq &r);

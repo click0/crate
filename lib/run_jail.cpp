@@ -599,8 +599,9 @@ void createUserInJail(const Spec &spec, const std::string &jailPath, int jid,
     std::cerr << rang::fg::gray << "verify user " << user << " group membership" << rang::style::reset << std::endl;
   execInJail({"/usr/bin/id", user}, "verify user group membership");
 
-  // "video" option requires the corresponding user/group
-  if (spec.optionExists("video")) {
+  // "video" option (or the 1.1.62 `devices/video` class) requires the
+  // corresponding user/group
+  if (spec.optionExists("video") || spec.devices.video) {
     static const char *devName = "/dev/video";
     static unsigned devNameLen = ::strlen(devName);
     uid_t videoUid = std::numeric_limits<uid_t>::max();
