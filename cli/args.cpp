@@ -70,6 +70,7 @@ static void usage() {
   std::cout << "  vm-wrap VM --jail NAME     bhyve jailer: render devfs ruleset + jail.conf for a vnet enclosure" << std::endl;
   std::cout << "  update TARGET --pkg-only   in-place pkg upgrade in a running jail (-n dry-run, -y auto-yes)" << std::endl;
   std::cout << "  profile-from-trace -- CMD  run CMD under truss(1) and draft a minimal spec from what it touched" << std::endl;
+  std::cout << "  audit TARGET [-j]          what a running container can reach, seen from inside (mounts, devices, sockets, net)" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -465,6 +466,34 @@ static void usageProfileFromTrace() {
   std::cout << "Examples:" << std::endl;
   std::cout << "  crate profile-from-trace -o firefox.yml -- firefox https://www.freebsd.org/" << std::endl;
   std::cout << "  truss -f -s 1024 -o t.out nginx -g 'daemon off;'; crate profile-from-trace --trace-file t.out" << std::endl;
+  std::cout << "" << std::endl;
+}
+
+static void usageAudit() {
+  std::cout << "usage: crate audit <container|jid> [-j|--json] [--offline] [--dns <name>] [-h|--help]" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Report what a RUNNING container can actually reach, seen from the inside:" << std::endl;
+  std::cout << "one probe (/bin/sh with base-system tools) runs in the jail and its output" << std::endl;
+  std::cout << "is turned into the same PASS/WARN/FAIL table `crate doctor` uses." << std::endl;
+  std::cout << "  jail          securelevel, hostname/hostid vs the host, allow.* flags as seen from inside" << std::endl;
+  std::cout << "  mounts        host paths visible through nullfs (rw/ro), procfs, zfs, tmpfs" << std::endl;
+  std::cout << "  devfs         device classes: gpu, video, sound, input, usb, serial, disks, raw (mem/kmem/bpf)" << std::endl;
+  std::cout << "  interfaces    addresses and the default route" << std::endl;
+  std::cout << "  sockets       inet listeners; host unix sockets reachable (X11, D-Bus, Wayland, sound)" << std::endl;
+  std::cout << "  processes     who runs what inside" << std::endl;
+  std::cout << "  connectivity  one TCP connect to the default gateway, one DNS lookup" << std::endl;
+  std::cout << "WARN marks an exposure worth a look (a whole host area writable, raw devices," << std::endl;
+  std::cout << "a host socket, hostid equal to the host's); it is not an error." << std::endl;
+  std::cout << "Complements `crate doctor`, which looks at the host." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Options:" << std::endl;
+  std::cout << "  -j, --json                 machine-readable {checks: [...], summary}" << std::endl;
+  std::cout << "      --offline              no connect / DNS probes (nothing leaves the jail)" << std::endl;
+  std::cout << "      --dns <name>           name for the DNS probe (default: www.freebsd.org)" << std::endl;
+  std::cout << "  -h, --help                 show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Exit codes: 0 all PASS, 1 at least one WARN, 2 at least one FAIL (probe did not run)." << std::endl;
+  std::cout << "Needs root or the crated privops socket (exec_in_jail), like `crate console`." << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -1382,6 +1411,25 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.inspectTarget = argv[a];
         } else {
           err("too many arguments for 'inspect' command");
+        }
+        break;
+      case CmdAudit:
+        if (auto argShort = isShort(argv[a])) {
+          switch (argShort) {
+          case 'h': usageAudit(); exit(0);
+          case 'j': args.auditJson = true; break;
+          default:  err("unsupported short option '%s'", argv[a]);
+          }
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help"))         { usageAudit(); exit(0); }
+          else if (strEq(argLong, "json"))    args.auditJson = true;
+          else if (strEq(argLong, "offline")) args.auditOffline = true;
+          else if (strEq(argLong, "dns"))     args.auditDnsName = getArgParam(++a, argc, argv);
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.auditTarget.empty()) {
+          args.auditTarget = argv[a];
+        } else {
+          err("too many arguments for 'audit' command");
         }
         break;
       case CmdMigrate:

@@ -6,6 +6,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.61] — 2026-10-24
+
+**TODO §17.4: `crate audit <target>` — the sandbox seen from the inside.**
+
+- **`crate audit <container|jid> [-j] [--offline] [--dns <name>]`**
+  (firejail's `--audit`). One `/bin/sh` probe runs inside the running
+  jail with base-system tools only (`mount -p`, `ifconfig -a`,
+  `netstat -rn`, `sysctl`, `ls /dev`, `sockstat -l`, `find -type s`,
+  `ps`, `nc`, `drill`) and its output becomes the PASS/WARN/FAIL table
+  `crate doctor` uses, or JSON with `-j`:
+  `jail` (securelevel, hostname and `kern.hostid` compared with the
+  host's, the `allow.*` flags as the jail sees them, enforce_statfs,
+  devfs ruleset), `mounts` (every host path visible through nullfs with
+  rw/ro; procfs, zfs, tmpfs), `devfs` (device classes gpu, video, sound,
+  input, usb, serial, disks, raw), `interfaces` (addresses, default
+  route), `sockets` (inet listeners; unix sockets on the filesystem that
+  sit inside a nullfs mount are the host's: X11, system/session D-Bus,
+  Wayland, sound server), `processes` (who runs what), `connectivity`
+  (the resolver, one TCP connect to the default gateway, one DNS lookup).
+  WARN is an exposure worth a look, not an error: a whole host area
+  mounted read-write, raw disk or memory devices, keyboard devices, a
+  host socket, a hostid equal to the host's, raw sockets / mount /
+  chflags allowed, enforce_statfs 0. Exit status 0 / 1 (a WARN) / 2 (the
+  probe did not run). `--offline` leaves the two network probes out;
+  `--dns` picks the looked-up name (hostname charset only — it is pasted
+  into the script). Needs root or the crated privops socket
+  (exec_in_jail), like `crate console`.
+- `lib/jail_audit_pure` owns the probe script, the section splitter, the
+  parsers (mount, ifconfig, netstat, sockstat, sysctl, ps, resolv.conf),
+  the device and nc(1) classifiers and the report builder; it reuses the
+  `DoctorPure` Check/Report model, whose category order gained the audit
+  categories. `lib/jail_audit` is the jail lookup, the host-side sysctls
+  and the one `JailExec::execInJailGetOutput` call. Docs: `crate audit
+  -h`, crate.5 (Commands), README en/uk ("Audit from the inside"),
+  bash/zsh completion, hardware runbook §4d.
+
+Tests: `jail_audit_pure_test` (7 cases: the script's shape with and
+without the network probes; section splitting; the parsers; nc, device
+and host-path classification; a desktop jail report end to end with
+X11/D-Bus/home exposures; edge cases — empty and truncated probe output,
+a server jail with raw devices and listeners, offline, no default route,
+open / timed out / tool-missing connects). `args_validate_test` +3 (the
+`--dns` injection guard), `audit_pure_test` target. The probe's command
+set is base FreeBSD 14; a real run is runbook §4d.
+
+---
+
 ## [1.1.60] — 2026-10-23
 
 **TODO §17.3: `crate profile-from-trace` — a spec draft from one traced run.**

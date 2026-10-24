@@ -407,11 +407,58 @@ a line shape from a real trace is not recognised, paste the line into
 
 ---
 
+## 4d. 1.1.61 — `crate audit`
+
+The probe script and its parsers were written against the FreeBSD 14
+output formats of `mount -p`, `ifconfig -a`, `netstat -rn`, `sysctl -e`,
+`sockstat -l`, `ps -axo user=,pid=,ucomm=`, `nc -z` and `drill -Q`
+without a jail to run them in. First check: every section comes back
+and nothing lands in the `probe` category.
+
+```sh
+# a desktop jail with X11, D-Bus and the home shared
+crate run -f firefox.crate &          # or: crate run firefox
+crate audit firefox
+#   expect: no "probe:" category; jail: jailed PASS, vnet "own network stack", hostid PASS or WARN
+#   (WARN = kern.hostid inside equals the host's — tell us which); mounts: one line per nullfs
+#   share with "from host <path>", the home share WARN if the whole $HOME is rw; devfs: gpu
+#   (dri) when gl is on, no raw/disks/input; sockets: /tmp/.X11-unix/X0 WARN "host X11 display
+#   socket (nullfs from host /tmp/.X11-unix)", the D-Bus socket WARN, syslog sockets collapsed
+#   into "jail-local"; interfaces: lo0 + epair with the address, default-route via the host side;
+#   connectivity: gateway "reachable (tcp/22 refused)" or "tcp/22 open", dns "www.freebsd.org -> a.b.c.d"
+echo "exit $?"                        # 1 when any WARN, 0 when none, 2 only if the probe did not run
+crate audit firefox -j | python3 -m json.tool | head    # the doctor JSON shape: checks[] + summary
+
+# a network-less jail (templates/minimal.yml): the probes must be skipped, not failed
+crate audit minimal
+#   expect: interfaces default-route "none — no outbound network", connectivity gateway
+#   "no default route — outbound probes skipped", dns WARN "lookup ... failed ... no nameserver configured"
+crate audit minimal --offline         # connectivity: probes "skipped (--offline)", no dns line
+
+# rootless (operator in the privops group, crated running): same output through exec_in_jail
+crate audit firefox --dns example.org
+# negative
+crate audit nosuchjail                # "container 'nosuchjail' not found or not running"
+crate audit firefox --dns "a;id"      # "--dns: 'a;id' is not a valid host name"
+```
+
+Pass criteria: no `probe:` category on any jail (a section the script
+did not print means a tool is missing from base or its output shape
+changed — paste the raw output of that tool into
+`tests/unit/jail_audit_pure_test.cpp` as the regression); every nullfs
+share of the spec appears under `mounts` with the right rw/ro; the X11
+and D-Bus sockets are recognised as host sockets; the gateway probe
+says reachable on a `host`-enabled spec and "not reachable" on one
+without; `--offline` produces no traffic (watch with `tcpdump -ni
+epairNa` on the host).
+
+---
+
 ## 5. Reporting back
 
 ```sh
 sh scripts/on-hardware-validation.sh > /tmp/onhw-report.txt 2>&1
-# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b / §4c manual checks
+# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b / §4c / §4d manual checks
 ```
 
 Attach `/tmp/onhw-report.txt` plus the manual-section outcomes to the PR

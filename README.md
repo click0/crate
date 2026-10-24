@@ -11,7 +11,7 @@ Crate containers contain everything needed to run the containerized software —
 ## Features
 
 ### Container Management
-* **31 commands**: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`, `gui`, `stack`, `stats`, `logs`, `stop`, `restart`, `top`, `inter-dns`, `vpn`, `inspect`, `migrate`, `backup`, `backup-prune`, `restore`, `replicate`, `template`, `retune`, `throttle`, `doctor`, `vm-wrap`, `update` — all described in `crate(5)`
+* **33 commands**: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`, `gui`, `stack`, `stats`, `logs`, `stop`, `restart`, `top`, `inter-dns`, `vpn`, `inspect`, `migrate`, `backup`, `backup-prune`, `restore`, `replicate`, `template`, `retune`, `throttle`, `doctor`, `vm-wrap`, `update`, `profile-from-trace`, `audit` — all described in `crate(5)`
 * **YAML specification** with template inheritance (`--template`)
 * **ZFS integration**: snapshots (create/list/restore/delete/diff), COW clones, encryption (AES-256-GCM/CCM, AES-128), dataset attachment
 * **Copy-on-Write**: ephemeral or persistent modes via ZFS clone or unionfs
@@ -84,6 +84,7 @@ Crate containers contain everything needed to run the containerized software —
 | `crate run -f app.crate [-- args]` | Run a container |
 | `crate run NAME [-- args]` | Run a profile by name: spec from `~/.config/crate/profiles/`, `/usr/local/share/crate/profiles/` or the installed examples, `.crate` built on first use (1.1.59) |
 | `crate profile-from-trace -o spec.yml -- CMD [args]` | Run CMD once on the host under `truss(1)` and draft a minimal spec from what it touched (1.1.60) |
+| `crate audit TARGET [-j] [--offline]` | What a running container can actually reach, seen from inside: host paths, devices, sockets, net (1.1.61) |
 | `crate validate -s spec.yml` | Validate a specification |
 | `crate snapshot create\|list\|restore\|delete\|diff` | Manage ZFS snapshots |
 | `crate list [-j]` | List running containers (table or JSON) |
@@ -569,6 +570,22 @@ Since 1.1.59 `crate create --template` uses the same YAML merge and the merged s
 | `bind`+`listen`, datagram binds | `inbound-tcp`, `inbound-udp` |
 
 Destinations seen, sound/input/USB devices, Wayland sockets, unknown unix sockets and unowned `/usr/local` files become comments at the end. `--trace-file FILE` uses a saved `truss` output instead of running anything; `--keep-trace FILE` keeps the raw trace. Review the draft, then `crate validate -s app.yml` and `crate create`.
+
+## Audit from the inside
+
+`crate audit <container|jid>` (1.1.61, after firejail's `--audit`) answers the question the spec cannot: what does the running container *actually* reach? One `/bin/sh` probe runs inside the jail with base-system tools only (`mount`, `ifconfig`, `netstat`, `sysctl`, `ls`, `find`, `sockstat`, `ps`, `nc`, `drill`) and its output becomes the PASS/WARN/FAIL table `crate doctor` uses, or `-j` JSON:
+
+| Category | Reported |
+|---|---|
+| `jail` | securelevel, hostname and `kern.hostid` compared with the host's, the `allow.*` flags as the jail sees them (raw sockets, mount, chflags, sysvipc, socket_af, enforce_statfs, devfs ruleset) |
+| `mounts` | every host path visible through nullfs, rw or ro; procfs, zfs, tmpfs |
+| `devfs` | device classes: gpu, video, sound, input, usb, serial, disks, raw (`mem`, `kmem`, `bpf`, `pf`) |
+| `interfaces` | addresses and the default route |
+| `sockets` | inet listeners; unix sockets on the filesystem that belong to the host (X11, system/session D-Bus, Wayland, sound server) |
+| `processes` | who runs what inside |
+| `connectivity` | the resolver, one TCP connect to the default gateway, one DNS lookup (`--offline` skips both, `--dns NAME` picks the name) |
+
+WARN marks an exposure worth a look rather than an error: a whole host area mounted read-write, raw disk or memory devices, keyboard devices, a host socket, a hostid equal to the host's. Exit status is 0, 1 (some WARN) or 2 (the probe did not run). `crate doctor` looks at the host, `crate audit` at one container; it needs root or the crated privops socket, like `crate console`.
 
 ## Templates
 

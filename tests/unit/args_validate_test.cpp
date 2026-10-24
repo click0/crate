@@ -104,6 +104,31 @@ ATF_TEST_CASE_BODY(run_profile_bad_name_throws)
 	{ auto a = mkArgs(CmdRun); a.runProfile = "chromium+tor"; ATF_REQUIRE_THROW(Exception, a.validate()); }
 }
 
+// 1.1.61: `crate audit <target>`
+ATF_TEST_CASE_WITHOUT_HEAD(audit_requires_target);
+ATF_TEST_CASE_BODY(audit_requires_target)
+{
+	auto a = mkArgs(CmdAudit);
+	ATF_REQUIRE_THROW(Exception, a.validate());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(audit_ok);
+ATF_TEST_CASE_BODY(audit_ok)
+{
+	{ auto a = mkArgs(CmdAudit); a.auditTarget = "firefox"; a.validate(); }
+	{ auto a = mkArgs(CmdAudit); a.auditTarget = "12"; a.auditJson = true; a.auditOffline = true; a.validate(); }
+	{ auto a = mkArgs(CmdAudit); a.auditTarget = "web"; a.auditDnsName = "example.org"; a.validate(); }
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(audit_dns_name_is_pasted_into_a_script);
+ATF_TEST_CASE_BODY(audit_dns_name_is_pasted_into_a_script)
+{
+	// the name goes into the in-jail /bin/sh probe: hostname charset only
+	{ auto a = mkArgs(CmdAudit); a.auditTarget = "x"; a.auditDnsName = "a'; rm -rf /; echo '"; ATF_REQUIRE_THROW(Exception, a.validate()); }
+	{ auto a = mkArgs(CmdAudit); a.auditTarget = "x"; a.auditDnsName = "$(id)";                 ATF_REQUIRE_THROW(Exception, a.validate()); }
+	{ auto a = mkArgs(CmdAudit); a.auditTarget = "x"; a.auditDnsName = "";                      ATF_REQUIRE_THROW(Exception, a.validate()); }
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(run_profile_excludes_file_and_name);
 ATF_TEST_CASE_BODY(run_profile_excludes_file_and_name)
 {
@@ -396,6 +421,9 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, run_profile_ok);
 	ATF_ADD_TEST_CASE(tcs, run_profile_bad_name_throws);
 	ATF_ADD_TEST_CASE(tcs, run_profile_excludes_file_and_name);
+	ATF_ADD_TEST_CASE(tcs, audit_requires_target);
+	ATF_ADD_TEST_CASE(tcs, audit_ok);
+	ATF_ADD_TEST_CASE(tcs, audit_dns_name_is_pasted_into_a_script);
 	ATF_ADD_TEST_CASE(tcs, validate_requires_spec);
 	ATF_ADD_TEST_CASE(tcs, validate_with_spec_ok);
 	ATF_ADD_TEST_CASE(tcs, snapshot_requires_subcmd);

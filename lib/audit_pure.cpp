@@ -62,6 +62,7 @@ std::string pickTarget(const Args &args) {
   case CmdThrottle: return args.throttleTarget;
   case CmdDoctor:   return "";
   case CmdProfileFromTrace: return !args.traceFile.empty() ? args.traceFile : args.traceOutput;   // 1.1.60
+  case CmdAudit:    return args.auditTarget;   // 1.1.61
   case CmdList:
   case CmdClean:
   case CmdTop:

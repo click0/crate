@@ -83,6 +83,7 @@ Crate — контейнеризатор для FreeBSD. Пакує застос
 | `crate run -f app.crate [-- args]` | Запустити контейнер |
 | `crate run NAME [-- args]` | Запустити профіль за іменем: специфікація з `~/.config/crate/profiles/`, `/usr/local/share/crate/profiles/` або встановлених прикладів, `.crate` збирається при першому запуску (1.1.59) |
 | `crate profile-from-trace -o spec.yml -- CMD [args]` | Один раз запустити CMD на хості під `truss(1)` і скласти чернетку мінімальної специфікації з того, чого програма торкалась (1.1.60) |
+| `crate audit TARGET [-j] [--offline]` | Що запущений контейнер реально бачить зсередини: шляхи хоста, пристрої, сокети, мережа (1.1.61) |
 | `crate validate -s spec.yml` | Перевірити специфікацію |
 | `crate snapshot create\|list\|restore\|delete\|diff` | Керування ZFS-знімками |
 | `crate list [-j]` | Перелік запущених контейнерів (таблиця або JSON) |
@@ -529,6 +530,22 @@ limits:
 | `bind`+`listen`, прив'язки datagram-сокетів | `inbound-tcp`, `inbound-udp` |
 
 Побачені адреси, звукові/вхідні/USB-пристрої, сокети Wayland, невідомі unix-сокети й файли `/usr/local` без пакунка стають коментарями наприкінці. `--trace-file FILE` бере збережений вивід `truss` замість запуску; `--keep-trace FILE` зберігає сирий трейс. Перегляньте чернетку, потім `crate validate -s app.yml` і `crate create`.
+
+## Аудит зсередини
+
+`crate audit <контейнер|jid>` (1.1.61, за зразком `--audit` у firejail) відповідає на питання, якого специфікація не дає: до чого запущений контейнер *реально* має доступ? Один probe на `/bin/sh` виконується всередині jail лише з інструментами базової системи (`mount`, `ifconfig`, `netstat`, `sysctl`, `ls`, `find`, `sockstat`, `ps`, `nc`, `drill`), а його вивід стає таблицею PASS/WARN/FAIL, як у `crate doctor`, або JSON з `-j`:
+
+| Категорія | Що показує |
+|---|---|
+| `jail` | securelevel, hostname і `kern.hostid` у порівнянні з хостом, прапорці `allow.*` так, як їх бачить jail (raw sockets, mount, chflags, sysvipc, socket_af, enforce_statfs, devfs ruleset) |
+| `mounts` | кожний шлях хоста, видимий через nullfs, rw чи ro; procfs, zfs, tmpfs |
+| `devfs` | класи пристроїв: gpu, video, sound, input, usb, serial, disks, raw (`mem`, `kmem`, `bpf`, `pf`) |
+| `interfaces` | адреси й маршрут за замовчуванням |
+| `sockets` | inet-слухачі; unix-сокети на файловій системі, що належать хосту (X11, системний/сесійний D-Bus, Wayland, звуковий сервер) |
+| `processes` | хто що виконує всередині |
+| `connectivity` | резолвер, одне TCP-з'єднання до шлюзу за замовчуванням, один DNS-запит (`--offline` пропускає обидва, `--dns NAME` задає ім'я) |
+
+WARN позначає не помилку, а те, на що варто глянути: цілий каталог хоста змонтований на запис, сирі дискові чи memory-пристрої, клавіатурні пристрої, сокет хоста, hostid такий самий, як у хоста. Код виходу 0, 1 (є WARN) або 2 (probe не виконався). `crate doctor` дивиться на хост, `crate audit` — на один контейнер; потрібен root або privops-сокет crated, як для `crate console`.
 
 ## Шаблони
 
