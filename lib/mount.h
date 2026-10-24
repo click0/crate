@@ -22,6 +22,8 @@
 //
 
 #include <string>
+#include <utility>
+#include <vector>
 
 class Mount {
   bool mounted = false;
@@ -31,10 +33,16 @@ class Mount {
   int flags;
   // 0.9.19: cached privops socket path; empty means "use nmount(2)"
   std::string privopsSocket_;
+  // 1.1.63: extra nmount(2) string parameters (tmpfs: size, uid, gid,
+  // mode); carried to the mount_tmpfs privops verb under rootless
+  std::vector<std::pair<std::string, std::string>> params_;
 
 public:
   Mount(const char *newFstype, const std::string &newFspath, const std::string &newTarget, int newFlags = 0);
   ~Mount();
+
+  // 1.1.63: add a string parameter before mount(); tmpfs only today
+  void addParam(const std::string &name, const std::string &value);
 
   void mount();
   void unmount(bool doThrow = true); // unmount is normally called individually, or as part of a destructor when exception has orrurred

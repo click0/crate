@@ -24,3 +24,8 @@ options:
 # 1.1.62: the jail sees only basic device nodes plus the classes named here
 devices:
     sound: true
+
+# 1.1.63: a fresh tmpfs at every start; the cache is per run, nothing of it reaches the host
+tmpfs:
+    - /tmp
+    - $HOME/.cache

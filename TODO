@@ -888,11 +888,22 @@ Landlock, --restrict-namespaces.
   sndio/pulse socket plumbing) is still separate from the device class;
   per-device grants (`devices/usb: [ugen0.2]`).
 
-* (feature, MED value / SMALL size) `--private-tmp`, `--tmpfs`,
-  `--read-only`, `--private-etc`. `tmpfs: [/tmp, ~/.cache]` mounts
-  tmpfs at those paths inside the jail (mount verb or mount_tmpfs
-  through privops); `dirs/share` gains `:ro` like stack volumes;
-  `etc/keep: [resolv.conf, localtime, ...]` for the thin-jail /etc.
+* DONE 1.1.63 — `dirs/share` `:ro` (suffix or a third element),
+  `tmpfs: [paths]` / `{path: size}`, `etc/keep: [names]`
+  (lib/mounts_pure, Spec::Share/Tmpfs/etcKeep, privops mount_tmpfs).
+  Decisions taken: the share pair is {jail, host} and is now a named
+  struct — the strict validate's duplicate-destination check had read
+  the pair the other way round since it was written (fixed, test
+  corrected); file shares cannot be :ro (hard link / copy) and say so;
+  tmpfs is mounted after the shares, owned by the jail user (0700)
+  inside $HOME and by root (01777) elsewhere, refused on the
+  directories the jail cannot do without; etc/keep copies at CREATE
+  time (cp -RpP for directories), so a crate carries the host's
+  localtime/hosts/ssl from the machine it was built on — a thin jail's
+  pristine /etc is the main customer; stack volumes' :ro finally
+  reaches the mount (it was parsed and dropped). Leftovers: `tmpfs`
+  entries for stack members; `etc/keep` refresh at run time
+  (`etc/refresh`); a `dirs/share` `:nosuid`/`:noexec`.
 
 * (security, MED value / SMALL size) Non-root by default — firejail
   --noroot / --nonewprivs. `run/user: <name>` in the spec, default a

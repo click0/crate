@@ -43,6 +43,7 @@
 #include "per_user_net_pure.h"
 #include "runtime_paths_pure.h"
 #include "thin_jail_pure.h"   // 1.1.58: base/mode: host-ro
+#include "mounts_pure.h"      // 1.1.63: tmpfs
 
 #include <rang.hpp>
 
@@ -2044,21 +2045,23 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // add user to jail
   RunJail::createUserInJail(spec, jailPath, jid, user, homeDir, myuid, mygid, execInJail, runScript, args.logProgress);
 
-  // share directories if requested
+  // share directories if requested (1.1.63: `:ro` -> MNT_RDONLY)
   for (auto &dirShare : spec.dirsShare) {
-    const auto dirJail = Util::pathSubstituteVarsInPath(dirShare.first);
-    const auto dirHost = Util::pathSubstituteVarsInPath(dirShare.second);
+    const auto dirJail = Util::pathSubstituteVarsInPath(dirShare.jail);
+    const auto dirHost = Util::pathSubstituteVarsInPath(dirShare.host);
     Util::safePath(J(dirJail), jailPath, "shared directory (jail side)");
     if (!Util::Fs::dirExists(dirHost))
       ERR("shared directory '" << dirHost << "' doesn't exist on the host, can't run the app")
     std::filesystem::create_directories(J(dirJail));
-    mount(new Mount("nullfs", J(dirJail), dirHost, MNT_IGNORE));
+    mount(new Mount("nullfs", J(dirJail), dirHost, MNT_IGNORE | (dirShare.readOnly ? MNT_RDONLY : 0)));
+    if (dirShare.readOnly)
+      LOG("dirs/share: " << dirHost << " -> " << dirJail << " read-only")
   }
 
   // share files if requested
   for (auto &fileShare : spec.filesShare) {
-    const auto fileJail = Util::pathSubstituteVarsInPath(fileShare.first);
-    const auto fileHost = Util::pathSubstituteVarsInPath(fileShare.second);
+    const auto fileJail = Util::pathSubstituteVarsInPath(fileShare.jail);
+    const auto fileHost = Util::pathSubstituteVarsInPath(fileShare.host);
     Util::safePath(J(fileJail), jailPath, "shared file (jail side)");
     SharePure::FileShareInputs inp{
       Util::Fs::fileExists(fileHost),
@@ -2090,6 +2093,23 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
         LOG("file-share: cross-device path '" << fileHost << "' bound onto '" << J(fileJail) << "' via nullfs")
         break;
     }
+  }
+
+  // 1.1.63: tmpfs mounts (`tmpfs:`), after the shares so a tmpfs listed
+  // above a share is what the spec asked for (crate validate warns).
+  // Inside the user's home the tmpfs belongs to the user (0700), else
+  // to root with the sticky 01777 of a shared /tmp. Root: nmount(2);
+  // rootless: the mount_tmpfs privops verb, path-gated by the target.
+  for (auto &t : spec.tmpfs) {
+    const auto p = Util::pathSubstituteVarsInPath(t.path);
+    Util::safePath(J(p), jailPath, "tmpfs mount point");
+    std::filesystem::create_directories(J(p));
+    auto *m = new Mount("tmpfs", J(p), "", MNT_IGNORE);
+    const bool underHome = !homeDir.empty() && MountsPure::isUnder(p, homeDir);
+    for (auto &kv : MountsPure::tmpfsParams(t.size, underHome, (unsigned)myuid, (unsigned)mygid))
+      m->addParam(kv.first, kv.second);
+    mount(m);
+    LOG("tmpfs: " << p << (t.size.empty() ? "" : " (size " + t.size + ")") << (underHome ? " owned by the user" : ""))
   }
 
   // Socket proxying (§15)

@@ -28,7 +28,9 @@ Mount::Mount(const char *newFstype, const std::string &newFspath, const std::str
   // mount/unmount methods choose path based on this cached value.
   // Other fstypes (devfs, unionfs) skip detection — there's no
   // matching privops verb for them, so they keep using nmount(2).
-  if (::strcmp(newFstype, "nullfs") == 0)
+  // 1.1.63: tmpfs too (mount_tmpfs verb; unmount is the generic
+  // unmount_nullfs, which is unmount(2) on a path-gated target).
+  if (::strcmp(newFstype, "nullfs") == 0 || ::strcmp(newFstype, "tmpfs") == 0)
     privopsSocket_ = PrivOpsClient::detectSocketPath();
 }
 
@@ -37,9 +39,23 @@ Mount::~Mount() {
     unmount(false/*doThrow*/); // called after some failure: it will only warn about the failed mount, and the destructor would continue
 }
 
+void Mount::addParam(const std::string &name, const std::string &value) {
+  params_.emplace_back(name, value);
+}
+
 void Mount::mount() {
-  // 0.9.19 privops route — only for nullfs with a detected socket.
+  // 0.9.19 privops route — nullfs (and 1.1.63 tmpfs) with a detected socket.
   if (!privopsSocket_.empty()) {
+    if (::strcmp(fstype, "tmpfs") == 0) {
+      auto resp = PrivOpsClient::sendRequest(privopsSocket_,
+          PrivOpsClient::buildMountTmpfs(fspath, params_));
+      if (!resp.transportError.empty())
+        ERR("privops mount_tmpfs '" << fspath << "' transport error: " << resp.transportError)
+      if (resp.status >= 400)
+        ERR("privops mount_tmpfs '" << fspath << "' failed (status " << resp.status << "): " << resp.body)
+      mounted = true;
+      return;
+    }
     bool readOnly = (flags & MNT_RDONLY) != 0;
     auto resp = PrivOpsClient::sendRequest(privopsSocket_,
         PrivOpsClient::buildMountNullfs(target, fspath, readOnly));
@@ -76,6 +92,8 @@ void Mount::mount() {
   param("fspath", (void*)fspath.c_str(), (size_t)-1);
   if (!target.empty())
     param("target", (void*)target.c_str(), (size_t)-1);
+  for (auto &kv : params_)   // 1.1.63: tmpfs size/uid/gid/mode
+    param(kv.first.c_str(), (void*)kv.second.c_str(), (size_t)-1);
   param("errmsg", errmsg,                sizeof(errmsg));
   int res = ::nmount(&iov[0], iov.size(), flags);
   // Free strdup'd names BEFORE checking error — prevents leak if ERR throws

@@ -2,6 +2,7 @@
 
 #include "validate_pure.h"
 #include "spec.h"
+#include "mounts_pure.h"   // 1.1.63
 
 #include <cctype>
 #include <set>
@@ -151,6 +152,17 @@ std::vector<std::string> gatherWarnings(const Spec &spec) {
   for (const auto &dw : DevicesPure::warnings(spec.devices))
     w.push_back(dw);
 
+  // 1.1.63: shares and tmpfs
+  for (const auto &s : spec.dirsShare)
+    if (!s.readOnly && (s.host == "$HOME" || s.host == "/" || s.host == "/home" || s.host == "/usr/home"))
+      w.push_back("dirs/share: '" + s.host + "' is shared read-write as a whole; consider ':ro' or a subdirectory");
+  for (const auto &t : spec.tmpfs)
+    for (const auto &s : spec.dirsShare)
+      if (MountsPure::isUnder(s.jail, t.path) && s.jail != t.path)
+        w.push_back("tmpfs at '" + t.path + "' is mounted after the share at '" + s.jail + "' and hides it");
+  if (!spec.etcKeep.empty() && !spec.baseHostRo)
+    w.push_back("etc/keep copies host /etc entries at create time; the jail's /etc is a full copy from base.txz here, so only the named entries are replaced");
+
   return w;
 }
 
@@ -212,21 +224,23 @@ std::vector<std::string> gatherStrictErrors(const Spec &spec) {
   // Two different host paths mapping to the same jail-side path is
   // ambiguous: which one wins? Almost always a copy-paste error.
   // Same destination across dirsShare and filesShare is also flagged
-  // since they collide in the jail filesystem.
+  // since they collide in the jail filesystem. (1.1.63: keyed by the
+  // jail-side path; the pair's halves were read the wrong way round
+  // before, so one host directory shared under two jail paths was
+  // flagged and two hosts behind one jail path were not.)
   {
     std::unordered_map<std::string, std::string> dst2src;
-    auto check = [&](const char *kind,
-                     const std::vector<std::pair<std::string, std::string>> &v) {
-      for (const auto &[host, jail] : v) {
-        auto it = dst2src.find(jail);
-        if (it != dst2src.end() && it->second != host) {
+    auto check = [&](const char *kind, const std::vector<Spec::Share> &v) {
+      for (const auto &s : v) {
+        auto it = dst2src.find(s.jail);
+        if (it != dst2src.end() && it->second != s.host) {
           std::ostringstream o;
-          o << kind << " destination '" << jail
+          o << kind << " destination '" << s.jail
             << "' is mapped from two different host sources: '"
-            << it->second << "' and '" << host << "'";
+            << it->second << "' and '" << s.host << "'";
           e.push_back(o.str());
         } else {
-          dst2src[jail] = host;
+          dst2src[s.jail] = s.host;
         }
       }
     };
@@ -237,15 +251,15 @@ std::vector<std::string> gatherStrictErrors(const Spec &spec) {
   // --- Empty mount source/destination ---
   // Caught at run time today as a confusing error; --strict wants
   // it surfaced at validate time.
-  for (const auto &[host, jail] : spec.dirsShare) {
-    if (host.empty() || jail.empty())
+  for (const auto &s : spec.dirsShare) {
+    if (s.host.empty() || s.jail.empty())
       e.push_back("share/dir: empty source or destination ("
-                  "host='" + host + "', jail='" + jail + "')");
+                  "host='" + s.host + "', jail='" + s.jail + "')");
   }
-  for (const auto &[host, jail] : spec.filesShare) {
-    if (host.empty() || jail.empty())
+  for (const auto &s : spec.filesShare) {
+    if (s.host.empty() || s.jail.empty())
       e.push_back("share/file: empty source or destination ("
-                  "host='" + host + "', jail='" + jail + "')");
+                  "host='" + s.host + "', jail='" + s.jail + "')");
   }
 
   // --- x11/mode=shared promoted to error in strict mode ---

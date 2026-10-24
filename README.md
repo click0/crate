@@ -603,6 +603,28 @@ devices:
 
 `devices: [sound, gpu]` is the list form; `devices: all` keeps the host's whole `/dev` visible, which is what every jail without `terminal/devfs_ruleset` got before 1.1.62 (disks, memory, keyboards included). `terminal/devfs_ruleset: N` is still honoured: the operator's ruleset is included in place of the built-in base and the classes go on top. `crate validate` warns about `all`, `input`, `usb` and `serial`; `crate audit` shows the resulting view from inside. The desktop examples carry `devices: {sound: true}`.
 
+## Read-only shares, tmpfs, host /etc entries
+
+Three more knobs from the bwrap/firejail toolbox (1.1.63):
+
+```yaml
+dirs:
+    share:
+        - $HOME/Downloads                     # read-write, as before
+        - $HOME/Documents:ro                  # read-only (nullfs MNT_RDONLY)
+        - [$HOME/Music, /mnt/music, ro]       # [jail path, host path, ro|rw]
+
+tmpfs:                                        # a fresh tmpfs at every start
+    - /tmp                                    #   root-owned, sticky 01777
+    - $HOME/.cache                            #   inside the home: owned by the jail user, 0700
+# or with sizes:  tmpfs: {/tmp: 512m, $HOME/.cache: 2g}
+
+etc:
+    keep: [localtime, hosts, ssl]             # host /etc entries copied into the jail's /etc at create
+```
+
+A file share is a hard link or a copy and cannot be read-only — share its directory with `:ro`. tmpfs mounts come after the shares (a tmpfs above a share hides it; `crate validate` warns) and are refused on `/`, `/dev`, `/proc`, `/etc`, `/bin`, `/sbin`, `/lib`, `/libexec`, `/usr`, `/usr/local` and `/var/run`. The jail's `/etc` is the pristine one from base.txz — `etc/keep` is the way to carry the host's timezone, hosts file or certificate directory along (firejail's `--private-etc`, inverted); `resolv.conf` is written by `crate run` when the spec has networking. Stack volumes with `:ro` now reach the mount as read-only too. Under rootless the tmpfs goes through the new `mount_tmpfs` privops verb, path-gated like `mount_nullfs`.
+
 ## Templates
 
 The `templates/` directory provides ready-made base configurations:
@@ -670,6 +692,8 @@ Top-level keys supported in `.crate` / `.yml` spec files:
 | `socket_proxy` | Socket forwarding (share, proxy with host/jail/direction) |
 | `terminal` | Terminal isolation (devfs_ruleset, allow_raw_tty) |
 | `devices` | Device classes visible in `/dev`: sound, gpu, video, input, usb, serial, or `all` (1.1.62) |
+| `tmpfs` | Fresh tmpfs at these jail paths every start: `[/tmp, $HOME/.cache]` or `{/tmp: 512m}` (1.1.63) |
+| `etc` | `keep: [localtime, hosts, ssl]` — host `/etc` entries copied into the jail's pristine `/etc` at create (1.1.63) |
 | `security_advanced` | Capsicum, MAC bsdextended/portacl, hide_other_jails |
 
 ## Installation

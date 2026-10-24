@@ -320,7 +320,7 @@ ATF_TEST_CASE_BODY(authorize_path_own_target_allowed) {
   auto l = fixedOwner(77, "web", 1000, "/jails/web");
   for (Verb v : {Verb::MountNullfs, Verb::UnmountNullfs,
                  Verb::ApplyDevfsRuleset, Verb::AddDevfsUnhideRule,
-                 Verb::ApplyDevfsRules}) {   // 1.1.62
+                 Verb::ApplyDevfsRules, Verb::MountTmpfs}) {   // 1.1.62, 1.1.63
     ATF_REQUIRE(PrivOpsAuthzPure::authorize(v, reqPath("/jails/web/dev"), e, l)
                 == Decision::Allow);
     ATF_REQUIRE(PrivOpsAuthzPure::authorize(v, reqPath("/jails/web/etc/rc.conf"), e, l)
@@ -335,7 +335,7 @@ ATF_TEST_CASE_BODY(authorize_path_foreign_target_denied) {
   auto l = fixedOwner(77, "web", /*ownerUid=*/1001, "/jails/web");
   for (Verb v : {Verb::MountNullfs, Verb::UnmountNullfs,
                  Verb::ApplyDevfsRuleset, Verb::AddDevfsUnhideRule,
-                 Verb::ApplyDevfsRules}) {   // 1.1.62
+                 Verb::ApplyDevfsRules, Verb::MountTmpfs}) {   // 1.1.62, 1.1.63
     ATF_REQUIRE(PrivOpsAuthzPure::authorize(v, reqPath("/jails/web/dev"), e, l)
                 == Decision::DenyForeignPath);
     ATF_REQUIRE(PrivOpsAuthzPure::authorize(v, reqPath("/jails/web"), e, l)
@@ -387,7 +387,7 @@ ATF_TEST_CASE_BODY(authorize_path_unknown_target_confined_to_caller_prefix) {
   };
   for (Verb v : {Verb::MountNullfs, Verb::UnmountNullfs,
                  Verb::ApplyDevfsRuleset, Verb::AddDevfsUnhideRule,
-                 Verb::ApplyDevfsRules}) {   // 1.1.62
+                 Verb::ApplyDevfsRules, Verb::MountTmpfs}) {   // 1.1.62, 1.1.63
     for (const char *p : outside)
       if (PrivOpsAuthzPure::authorize(v, reqPath(p), e, l) != Decision::DenyUnownedPath)
         ATF_FAIL(std::string("verb ") + std::to_string((int)v) + " allowed unknown path " + p);

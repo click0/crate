@@ -116,6 +116,34 @@ ATF_TEST_CASE_BODY(dirsShare_absolute_ok)
 	auto s = mkValid();
 	s.dirsShare.push_back({"/host/data", "/jail/data"});
 	s.validate();
+	// 1.1.63: a read-only directory share is fine, a read-only file share is not
+	s.dirsShare.push_back({"/jail/ro", "/host/ro", true});
+	s.validate();
+	s.filesShare.push_back({"/jail/f", "/host/f", true});
+	ATF_REQUIRE_THROW(Exception, s.validate());
+}
+
+// 1.1.63: tmpfs and etc/keep
+ATF_TEST_CASE_WITHOUT_HEAD(tmpfs_and_etc_keep_validation);
+ATF_TEST_CASE_BODY(tmpfs_and_etc_keep_validation)
+{
+	// (Spec's copy constructor lives in the yaml-linked spec.cpp, so each
+	// variant is built afresh.)
+	auto base = [] {
+		auto s = mkValid();
+		s.tmpfs.push_back({"/tmp", ""});
+		s.tmpfs.push_back({"$HOME/.cache", "512m"});
+		s.etcKeep.push_back("localtime");
+		return s;
+	};
+	base().validate();
+	{ auto t = base(); t.tmpfs.push_back({"/tmp", "1g"});            ATF_REQUIRE_THROW(Exception, t.validate()); }   // twice
+	{ auto t = base(); t.tmpfs.push_back({"/etc", ""});              ATF_REQUIRE_THROW(Exception, t.validate()); }   // hides /etc
+	{ auto t = base(); t.tmpfs.push_back({"var/tmp", ""});           ATF_REQUIRE_THROW(Exception, t.validate()); }   // relative
+	{ auto t = base(); t.tmpfs.push_back({"/var/tmp", "lots"});      ATF_REQUIRE_THROW(Exception, t.validate()); }   // bad size
+	{ auto t = base(); t.dirsShare.push_back({"/tmp", "/host/tmp"}); ATF_REQUIRE_THROW(Exception, t.validate()); }   // tmpfs over a share
+	{ auto t = base(); t.etcKeep.push_back("ssl/certs");             ATF_REQUIRE_THROW(Exception, t.validate()); }
+	{ auto t = base(); t.etcKeep.push_back("../passwd");             ATF_REQUIRE_THROW(Exception, t.validate()); }
 }
 
 // ===================================================================
@@ -690,6 +718,7 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, dirsShare_relative_throws);
 	ATF_ADD_TEST_CASE(tcs, filesShare_relative_throws);
 	ATF_ADD_TEST_CASE(tcs, dirsShare_absolute_ok);
+	ATF_ADD_TEST_CASE(tcs, tmpfs_and_etc_keep_validation);
 
 	// options + scripts
 	ATF_ADD_TEST_CASE(tcs, unknown_option_throws);

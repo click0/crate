@@ -251,6 +251,18 @@ ATF_TEST_CASE_BODY(builders_1141_round_trip) {
     ATF_REQUIRE_EQ(dr.rules.size(), 3u);
     ATF_REQUIRE_EQ(PrivOpsPure::validateApplyDevfsRules(dr), std::string());
 
+    // 1.1.63: mount_tmpfs carries only the four known options
+    auto tm = PrivOpsClient::buildMountTmpfs("/jails/web/tmp",
+                 {{"size", "512m"}, {"uid", "1001"}, {"gid", "1001"}, {"mode", "0700"}, {"errmsg", "x"}});
+    ATF_REQUIRE_EQ(tm.at("verb"), std::string("mount_tmpfs"));
+    ATF_REQUIRE_EQ(tm.at("size"), std::string("512m"));
+    ATF_REQUIRE(tm.count("errmsg") == 0);
+    PrivOpsPure::MountTmpfsReq tr;
+    ATF_REQUIRE_EQ(PrivOpsNvPure::parseMountTmpfs(tm, tr), std::string());
+    ATF_REQUIRE_EQ(PrivOpsPure::validateMountTmpfs(tr), std::string());
+    auto tm2 = PrivOpsClient::buildMountTmpfs("/jails/web/tmp", {});
+    ATF_REQUIRE_EQ(tm2.size(), 2u);   // verb + target only
+
     auto m = PrivOpsClient::buildCreateBridge("bridge0");
     PrivOpsPure::CreateBridgeReq r;
     ATF_REQUIRE_EQ(m.at("verb"), std::string("create_bridge"));

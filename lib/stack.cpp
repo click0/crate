@@ -1056,7 +1056,7 @@ bool stackCommand(const Args &args) {
         for (auto &vm : e.volumeMounts) {
           auto it = volumes.find(vm.volumeName);
           if (it != volumes.end())
-            spec.dirsShare.push_back({vm.containerPath, it->second.hostPath});
+            spec.dirsShare.push_back({vm.containerPath, it->second.hostPath, vm.readOnly});   // 1.1.63: :ro reaches the mount
         }
 
         spec.validate();

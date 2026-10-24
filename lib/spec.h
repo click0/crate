@@ -143,8 +143,32 @@ public:
   std::string                                        runCmdArgs;              // can only be set when runCmdExecutable is set, always has a leading space when not blank
   std::vector<std::string>                           runServices;             // 0..oo services can be run
 
-  std::vector<std::pair<std::string, std::string>>   dirsShare;               // any number of directories can be shared, {from -> to} mappings are elements
-  std::vector<std::pair<std::string, std::string>>   filesShare;              // any number of files can be shared, {from -> to} mappings are elements
+  // A shared directory or file: `jail` is the path inside the jail,
+  // `host` the path on the host (a scalar entry uses the same path on
+  // both sides, a pair is [jail, host]). 1.1.63: `readOnly` from a
+  // ":ro" suffix or a third element "ro" — directories only (nullfs
+  // MNT_RDONLY); files are hard links or copies and cannot be.
+  struct Share {
+    std::string jail;
+    std::string host;
+    bool        readOnly = false;
+  };
+  std::vector<Share>                                 dirsShare;               // any number of directories can be shared
+  std::vector<Share>                                 filesShare;              // any number of files can be shared
+
+  // 1.1.63: tmpfs mounted at these jail paths at run time (bwrap/firejail
+  // --tmpfs, --private-tmp); `size` "" = no limit. Inside the user's
+  // home the mount belongs to the user, elsewhere to root with 01777.
+  struct Tmpfs {
+    std::string path;    // "/tmp", "$HOME/.cache"
+    std::string size;    // "512m", "" = unlimited
+  };
+  std::vector<Tmpfs>                                 tmpfs;
+  // 1.1.63: host /etc entries (file or directory names) copied into the
+  // jail's /etc when the crate is created — the jail's /etc is otherwise
+  // the pristine one from base.txz (firejail --private-etc, inverted:
+  // nothing of the host's /etc is there unless named here).
+  std::vector<std::string>                           etcKeep;
 
   std::map<std::string, std::shared_ptr<OptDetails>> options;                 // various options that this spec uses
 

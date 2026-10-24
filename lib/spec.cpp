@@ -6,6 +6,7 @@
 #include "compositor_pure.h"
 #include "privops_pure.h"   // 1.1.44: validateIfaceName for options/net/extra[]/interface
 #include "thin_jail_pure.h" // 1.1.58: base/host-dirs validation
+#include "mounts_pure.h"    // 1.1.63: share :ro, tmpfs, etc/keep
 #include "config.h"
 #include "util.h"
 #include "err.h"
@@ -42,6 +43,7 @@ Spec::Spec(const Spec &o)
     pkgInstall(o.pkgInstall), pkgLocalOverride(o.pkgLocalOverride), pkgAdd(o.pkgAdd), pkgNuke(o.pkgNuke),
     runCmdExecutable(o.runCmdExecutable), runCmdArgs(o.runCmdArgs),
     runServices(o.runServices), dirsShare(o.dirsShare), filesShare(o.filesShare),
+    tmpfs(o.tmpfs), etcKeep(o.etcKeep),
     options(o.options), zfsDatasets(o.zfsDatasets),
     allowSysvipc(o.allowSysvipc), allowMqueue(o.allowMqueue),
     ipcRawSocketsOverride(o.ipcRawSocketsOverride), ipcRawSocketsValue(o.ipcRawSocketsValue),
@@ -482,12 +484,25 @@ static Spec parseSpecFromNode(YAML::Node top) {
         if (isKey(b, "share")) {
           if (b.second.IsSequence()) {
             for (auto oneShare : b.second) {
-              if (oneShare.IsScalar())
-                spec.dirsShare.push_back({AsString(oneShare), AsString(oneShare)});
-              else if (oneShare.IsSequence() && oneShare.size() == 2) {
-                spec.dirsShare.push_back({AsString(oneShare[0]), AsString(oneShare[1])});
+              // 1.1.63: "path:ro" or [jail, host, ro|rw]
+              if (oneShare.IsScalar()) {
+                std::string p = AsString(oneShare);
+                bool ro = MountsPure::splitRoSuffix(p);
+                spec.dirsShare.push_back({p, p, ro});
+              } else if (oneShare.IsSequence() && (oneShare.size() == 2 || oneShare.size() == 3)) {
+                std::string jail = AsString(oneShare[0]), host = AsString(oneShare[1]);
+                bool ro = false;
+                if (oneShare.size() == 3) {
+                  std::string e;
+                  if (!MountsPure::parseRoFlag(AsString(oneShare[2]), ro, e))
+                    ERR("dirs/share: " << e)
+                } else {
+                  bool roJail = MountsPure::splitRoSuffix(jail);
+                  ro = MountsPure::splitRoSuffix(host) || roJail;
+                }
+                spec.dirsShare.push_back({jail, host, ro});
               } else {
-                ERR("elements of the dirs/share list have to be scalars or lists of size two (fromDir, toDir)")
+                ERR("elements of the dirs/share list have to be scalars or lists [jailDir, hostDir] or [jailDir, hostDir, ro|rw]")
               }
             }
           } else {
@@ -506,10 +521,15 @@ static Spec parseSpecFromNode(YAML::Node top) {
             ERR("files/share must be a list")   // 1.1.46: was silently ignored
           {
             for (auto oneShare : b.second) {
-              if (oneShare.IsScalar())
-                spec.filesShare.push_back({AsString(oneShare), AsString(oneShare)});
-              else if (oneShare.IsSequence() && oneShare.size() == 2) {
+              if (oneShare.IsScalar()) {
+                std::string p = AsString(oneShare);
+                if (MountsPure::splitRoSuffix(p))
+                  ERR("files/share: '" << AsString(oneShare) << "' — a file share is a hard link or a copy and cannot be read-only; share its directory with :ro instead")
+                spec.filesShare.push_back({p, p});
+              } else if (oneShare.IsSequence() && oneShare.size() == 2) {
                 spec.filesShare.push_back({AsString(oneShare[0]), AsString(oneShare[1])});
+              } else if (oneShare.IsSequence() && oneShare.size() == 3) {
+                ERR("files/share: a file share cannot be read-only (hard link or copy); share its directory with :ro instead")
               } else {
                 ERR("elements of the files/share list have to be scalars or lists of size two (fromFile, toFile)")
               }
@@ -517,6 +537,47 @@ static Spec parseSpecFromNode(YAML::Node top) {
           }
         } else {
           ERR("unknown element files/" << b.first << " in spec")   // 1.1.46
+        }
+      }
+    } else if (isKey(k, "tmpfs")) {
+      // 1.1.63: list of paths, or map path -> size (null = no limit)
+      auto add = [&spec](const std::string &path, const std::string &size) {
+        if (auto e = MountsPure::validateTmpfsPath(path); !e.empty()) ERR("tmpfs: " << e)
+        if (auto e = MountsPure::validateTmpfsSize(size); !e.empty()) ERR("tmpfs/" << path << ": " << e)
+        for (auto &t : spec.tmpfs)
+          if (t.path == path) ERR("tmpfs: '" << path << "' is listed twice")
+        spec.tmpfs.push_back({path, size});
+      };
+      if (k.second.IsSequence()) {
+        for (auto e : k.second) {
+          if (!e.IsScalar()) ERR("tmpfs: list entries must be paths")
+          add(AsString(e), "");
+        }
+      } else if (k.second.IsMap()) {
+        for (auto b : k.second) {
+          std::string size;
+          if (b.second.IsScalar()) size = AsString(b.second);
+          else if (!b.second.IsNull()) ERR("tmpfs/" << b.first << ": the size must be a scalar like 512m")
+          add(AsString(b.first), size);
+        }
+      } else {
+        ERR("tmpfs must be a list of paths or a map path -> size")
+      }
+    } else if (isKey(k, "etc")) {
+      // 1.1.63: etc/keep — host /etc entries copied into the jail at create time
+      if (!k.second.IsMap())
+        ERR("etc must be a map")
+      for (auto b : k.second) {
+        if (isKey(b, "keep")) {
+          std::vector<std::string> names;
+          listOrScalarOnly(b.second, names, "etc/keep");
+          for (auto &n : names) {
+            if (auto e = MountsPure::validateEtcKeepName(n); !e.empty()) ERR(e)
+            if (std::find(spec.etcKeep.begin(), spec.etcKeep.end(), n) == spec.etcKeep.end())
+              spec.etcKeep.push_back(n);
+          }
+        } else {
+          ERR("unknown element etc/" << b.first << " in spec")
         }
       }
     } else if (isKey(k, "network")) {
@@ -1474,6 +1535,15 @@ Spec mergeSpecs(const Spec &base, const Spec &overlay) {
   for (auto &v : overlay.runServices) result.runServices.push_back(v);
   for (auto &v : overlay.dirsShare) result.dirsShare.push_back(v);
   for (auto &v : overlay.filesShare) result.filesShare.push_back(v);
+  // 1.1.63
+  for (auto &v : overlay.tmpfs) {
+    bool dup = false;
+    for (auto &t : result.tmpfs) if (t.path == v.path) { t.size = v.size; dup = true; }
+    if (!dup) result.tmpfs.push_back(v);
+  }
+  for (auto &v : overlay.etcKeep)
+    if (std::find(result.etcKeep.begin(), result.etcKeep.end(), v) == result.etcKeep.end())
+      result.etcKeep.push_back(v);
   for (auto &v : overlay.zfsDatasets) result.zfsDatasets.push_back(v);
   for (auto &v : overlay.managedServices) result.managedServices.push_back(v);
 

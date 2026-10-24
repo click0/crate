@@ -82,6 +82,11 @@ PrivOpsNvPure::FieldMap buildMountNullfs(const std::string &source,
                                          bool readOnly);
 PrivOpsNvPure::FieldMap buildUnmountNullfs(const std::string &target,
                                            bool force);
+// 1.1.63: mount a tmpfs at `target`; `params` are the nmount(2) string
+// options Mount collected (size, uid, gid, mode) — anything else is
+// dropped here so the wire carries only what the daemon validates.
+PrivOpsNvPure::FieldMap buildMountTmpfs(const std::string &target,
+                                        const std::vector<std::pair<std::string, std::string>> &params);
 
 PrivOpsNvPure::FieldMap buildConfigureIface(long jid,
                                             const std::string &ifname,

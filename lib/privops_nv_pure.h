@@ -174,6 +174,9 @@ std::string parseCreateBridge(const FieldMap &m,
 // 1.1.62: "mount_path", "ruleset", "argc" + "rule0".."rule<argc-1>".
 std::string parseApplyDevfsRules(const FieldMap &m,
                                  PrivOpsPure::ApplyDevfsRulesReq &out);
+// 1.1.63: "target", optional "size", "uid", "gid", "mode".
+std::string parseMountTmpfs(const FieldMap &m,
+                            PrivOpsPure::MountTmpfsReq &out);
 
 // --- 1.1.43: request size cap (nvlist header pre-check) ---
 //

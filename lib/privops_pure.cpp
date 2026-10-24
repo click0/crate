@@ -7,6 +7,7 @@
 
 #include "per_user_rctl_pure.h"
 #include "retune_pure.h"
+#include "mounts_pure.h"   // 1.1.63: mount_tmpfs field validators
 
 #include <cctype>
 #include <cstdlib>
@@ -113,6 +114,7 @@ const char *verbName(Verb v) {
     case Verb::AcquireFwLease:       return "acquire_fw_lease";
     case Verb::ReleaseFwLease:       return "release_fw_lease";
     case Verb::ApplyDevfsRules:      return "apply_devfs_rules";
+    case Verb::MountTmpfs:           return "mount_tmpfs";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -157,6 +159,7 @@ Verb parseVerb(const std::string &name) {
   if (name == "acquire_fw_lease")        return Verb::AcquireFwLease;
   if (name == "release_fw_lease")        return Verb::ReleaseFwLease;
   if (name == "apply_devfs_rules")       return Verb::ApplyDevfsRules;
+  if (name == "mount_tmpfs")             return Verb::MountTmpfs;
   return Verb::Unknown;
 }
 
@@ -545,6 +548,20 @@ std::string validateMountNullfs(const MountNullfsReq &r) {
 
 std::string validateUnmountNullfs(const UnmountNullfsReq &r) {
   if (auto e = validateAbsolutePath(r.target); !e.empty()) return "target: " + e;
+  return "";
+}
+
+// 1.1.63
+std::string validateMountTmpfs(const MountTmpfsReq &r) {
+  if (auto e = validateAbsolutePath(r.target); !e.empty()) return "target: " + e;
+  if (auto e = MountsPure::validateTmpfsSize(r.size); !e.empty()) return "size: " + e;
+  if (!r.uid.empty())
+    if (auto e = MountsPure::validateDecimal(r.uid, "uid"); !e.empty()) return e;
+  if (!r.gid.empty())
+    if (auto e = MountsPure::validateDecimal(r.gid, "gid"); !e.empty()) return e;
+  if (r.uid.empty() != r.gid.empty()) return "uid and gid must be given together";
+  if (!r.mode.empty())
+    if (auto e = MountsPure::validateOctalMode(r.mode); !e.empty()) return e;
   return "";
 }
 

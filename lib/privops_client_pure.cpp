@@ -134,6 +134,18 @@ PrivOpsNvPure::FieldMap buildUnmountNullfs(const std::string &target,
   };
 }
 
+PrivOpsNvPure::FieldMap buildMountTmpfs(const std::string &target,
+                                        const std::vector<std::pair<std::string, std::string>> &params) {
+  PrivOpsNvPure::FieldMap m = {
+    {"verb", "mount_tmpfs"},
+    {"target", target},
+  };
+  for (const auto &kv : params)
+    if (kv.first == "size" || kv.first == "uid" || kv.first == "gid" || kv.first == "mode")
+      m[kv.first] = kv.second;
+  return m;
+}
+
 PrivOpsNvPure::FieldMap buildConfigureIface(long jid,
                                             const std::string &ifname,
                                             const std::string &bridge,

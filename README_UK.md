@@ -563,6 +563,28 @@ devices:
 
 `devices: [sound, gpu]` — форма списку; `devices: all` лишає видимим увесь `/dev` хоста — саме так до 1.1.62 бачив його кожний jail без `terminal/devfs_ruleset` (диски, пам'ять, клавіатури включно). `terminal/devfs_ruleset: N` далі працює: ruleset оператора включається замість вбудованої бази, класи додаються поверх. `crate validate` попереджає про `all`, `input`, `usb` і `serial`; `crate audit` показує результат зсередини. Десктопні приклади містять `devices: {sound: true}`.
 
+## Read-only shares, tmpfs, записи /etc хоста
+
+Ще три важелі з набору bwrap/firejail (1.1.63):
+
+```yaml
+dirs:
+    share:
+        - $HOME/Downloads                     # на читання і запис, як раніше
+        - $HOME/Documents:ro                  # лише читання (nullfs MNT_RDONLY)
+        - [$HOME/Music, /mnt/music, ro]       # [шлях у jail, шлях на хості, ro|rw]
+
+tmpfs:                                        # свіжий tmpfs при кожному старті
+    - /tmp                                    #   належить root, sticky 01777
+    - $HOME/.cache                            #   у домашньому каталозі: належить користувачу jail, 0700
+# або з розмірами:  tmpfs: {/tmp: 512m, $HOME/.cache: 2g}
+
+etc:
+    keep: [localtime, hosts, ssl]             # записи /etc хоста, скопійовані у /etc jail при створенні
+```
+
+Share файлу — це жорстке посилання або копія, тому read-only він бути не може: поділіться каталогом з `:ro`. tmpfs монтується після shares (tmpfs над share ховає його; `crate validate` попереджає) і забороняється на `/`, `/dev`, `/proc`, `/etc`, `/bin`, `/sbin`, `/lib`, `/libexec`, `/usr`, `/usr/local` і `/var/run`. `/etc` у jail — чистий, з base.txz; `etc/keep` — спосіб узяти з собою часовий пояс, hosts чи каталог сертифікатів хоста (аналог `--private-etc` у firejail, навпаки); `resolv.conf` пише `crate run`, коли специфікація має мережу. Томи стеків з `:ro` тепер справді монтуються лише на читання. Під rootless tmpfs іде через новий privops-verb `mount_tmpfs`, обмежений шляхом так само, як `mount_nullfs`.
+
 ## Шаблони
 
 Каталог `templates/` містить готові базові конфігурації:
@@ -627,6 +649,8 @@ nmap, amass, wget, aria2, fetch, gzip, yt-dlp, xeyes
 | `socket_proxy` | Проксі сокетів (share, proxy з host/jail/direction) |
 | `terminal` | Ізоляція терміналу (devfs_ruleset, allow_raw_tty) |
 | `devices` | Класи пристроїв, видимі у `/dev`: sound, gpu, video, input, usb, serial або `all` (1.1.62) |
+| `tmpfs` | Свіжий tmpfs за цими шляхами jail при кожному старті: `[/tmp, $HOME/.cache]` або `{/tmp: 512m}` (1.1.63) |
+| `etc` | `keep: [localtime, hosts, ssl]` — записи `/etc` хоста, скопійовані у чистий `/etc` jail при створенні (1.1.63) |
 | `security_advanced` | Capsicum, MAC bsdextended/portacl, hide_other_jails |
 
 ## Встановлення
