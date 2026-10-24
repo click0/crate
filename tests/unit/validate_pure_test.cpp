@@ -360,6 +360,24 @@ ATF_TEST_CASE_BODY(devices_classes_warn)
 	ATF_REQUIRE(hasMatch(gatherWarnings(a), "devices: all"));
 }
 
+// 1.1.64: run/user warnings
+ATF_TEST_CASE_WITHOUT_HEAD(run_user_warnings);
+ATF_TEST_CASE_BODY(run_user_warnings)
+{
+	auto s = mkSpec();
+	ATF_REQUIRE(!hasMatch(gatherWarnings(s), "run/user"));
+	s.runUser = "root";
+	ATF_REQUIRE(hasMatch(gatherWarnings(s), "runs as root inside the jail"));
+
+	auto t = mkSpec();
+	t.runUser = "www";
+	ATF_REQUIRE(!hasMatch(gatherWarnings(t), "run/user"));       // no $HOME shares, no GUI: quiet
+	t.dirsShare.push_back({"$HOME/www", "$HOME/www"});
+	ATF_REQUIRE(hasMatch(gatherWarnings(t), "belong to the operator"));
+	t.x11Options = std::make_unique<Spec::X11Options>();
+	ATF_REQUIRE(hasMatch(gatherWarnings(t), "X11 authority"));
+}
+
 // Sanity: combining multiple problems produces multiple warnings
 ATF_TEST_CASE_WITHOUT_HEAD(multiple_warnings);
 ATF_TEST_CASE_BODY(multiple_warnings)
@@ -616,6 +634,7 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, terminal_devfs_ruleset_warns);
 	ATF_ADD_TEST_CASE(tcs, devices_classes_warn);
 	ATF_ADD_TEST_CASE(tcs, mounts_1163_warnings);
+	ATF_ADD_TEST_CASE(tcs, run_user_warnings);
 	ATF_ADD_TEST_CASE(tcs, multiple_warnings);
 	// 0.7.16 strict-mode tests
 	ATF_ADD_TEST_CASE(tcs, strict_minimal_spec_still_unbounded);

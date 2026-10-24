@@ -905,12 +905,23 @@ Landlock, --restrict-namespaces.
   entries for stack members; `etc/keep` refresh at run time
   (`etc/refresh`); a `dirs/share` `:nosuid`/`:noexec`.
 
-* (security, MED value / SMALL size) Non-root by default — firejail
-  --noroot / --nonewprivs. `run/user: <name>` in the spec, default a
-  dedicated unprivileged user created at `crate create`; exec_in_jail
-  already switches user and applies the jail's login.conf limits
-  (1.1.56), so this is spec plumbing + a doc note that root inside the
-  jail stays available with `run/user: root`.
+* DONE 1.1.64 — `run/user` (RunPure::effectiveRunUser). Decisions
+  taken: the default stays the operator's mirrored account (shares
+  under $HOME, the X11 authority and `crate console` all assume it), so
+  "non-root by default" is a statement about the ROOT operator, whose
+  mirror was root — `pw groupadd root` failed, so `crate run` as root
+  had not worked since the user mirror was introduced; it now runs the
+  command as the dedicated `crate` account (created at run time if
+  missing, so the image is not polluted for everyone else).
+  `run/user: root` is the explicit opt-in (validate warns);
+  `run/user: <name>` is a jail account — a package's or one `crate
+  create` adds with pw(8) in the chroot (uid picked by pw; `crate run`
+  repeats the check for templates and older crates), not in wheel.
+  The service-only /run.sh is root-owned 0555 when the run user is not
+  the mirror. Leftovers: `--nonewprivs` has no FreeBSD equivalent short
+  of removing setuid binaries from the image (a `base/remove` preset
+  `setuid` would do); `crate console` default user when run/user is
+  set; `run/user` for stack members.
 
 * (feature, MED value / SMALL size) Machine-readable lifecycle —
   bwrap `--json-status-fd`, firejail `--timeout`. `crate run

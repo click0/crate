@@ -123,6 +123,27 @@ ATF_TEST_CASE_BODY(dirsShare_absolute_ok)
 	ATF_REQUIRE_THROW(Exception, s.validate());
 }
 
+// 1.1.64: run/user
+ATF_TEST_CASE_WITHOUT_HEAD(run_user_validation);
+ATF_TEST_CASE_BODY(run_user_validation)
+{
+	for (const char *ok : {"", "root", "www", "git", "_tor", "john.doe", "app-1"}) {
+		auto s = mkValid();
+		s.runUser = ok;
+		s.validate();
+	}
+	for (const char *bad : {"1www", "-x", "a b", "www;id", "../root"}) {
+		auto s = mkValid();
+		s.runUser = bad;
+		ATF_REQUIRE_THROW(Exception, s.validate());
+	}
+	{
+		auto s = mkValid();
+		s.runUser = std::string(33, 'a');   // one over the pw(8) limit
+		ATF_REQUIRE_THROW(Exception, s.validate());
+	}
+}
+
 // 1.1.63: tmpfs and etc/keep
 ATF_TEST_CASE_WITHOUT_HEAD(tmpfs_and_etc_keep_validation);
 ATF_TEST_CASE_BODY(tmpfs_and_etc_keep_validation)
@@ -719,6 +740,7 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, filesShare_relative_throws);
 	ATF_ADD_TEST_CASE(tcs, dirsShare_absolute_ok);
 	ATF_ADD_TEST_CASE(tcs, tmpfs_and_etc_keep_validation);
+	ATF_ADD_TEST_CASE(tcs, run_user_validation);
 
 	// options + scripts
 	ATF_ADD_TEST_CASE(tcs, unknown_option_throws);

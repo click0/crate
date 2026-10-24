@@ -61,4 +61,35 @@ bool epairUnit(const std::string &ifname, unsigned &unitOut);
 // printed an invalid literal past 0xffff).
 std::string epairIp6(unsigned num, unsigned idx);
 
+// 1.1.64 (TODO §17.7, firejail --noroot): the jail account the container
+// command runs as.
+//
+//   run/user absent  -> the operator's own account mirrored into the jail
+//                       (same name, uid, gid — what crate always did);
+//                       when the operator IS root the mirror would be root,
+//                       so the dedicated unprivileged account `crate` is
+//                       used instead (created in the jail if missing)
+//   run/user: root   -> root inside the jail, explicit opt-in
+//   run/user: <name> -> that jail account (a package's `www`, `git`, …,
+//                       or one `crate create` / `crate run` creates)
+struct RunUser {
+  std::string name;
+  bool root = false;        // runs as root inside the jail
+  bool mirrored = false;    // the operator's own mirrored account
+  bool dedicated = false;   // the built-in `crate` account (root operator, no run/user)
+};
+constexpr const char *kDedicatedRunUser = "crate";
+RunUser effectiveRunUser(const std::string &specUser, const std::string &operatorName,
+                         unsigned operatorUid);
+
+// true when the account must exist in the jail's passwd before the
+// command runs and crate has to make sure of it (not root, not the
+// mirrored operator — createUserInJail covers that one).
+bool runUserNeedsAccount(const RunUser &u);
+
+// `run/user` value rule: "" (default), "root", or a pw(8)-style login
+// name (letter or '_' first, then [A-Za-z0-9._-], <= 32 chars). Returns
+// "" when acceptable, otherwise the reason.
+std::string validateRunUser(const std::string &user);
+
 }

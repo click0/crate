@@ -163,6 +163,21 @@ std::vector<std::string> gatherWarnings(const Spec &spec) {
   if (!spec.etcKeep.empty() && !spec.baseHostRo)
     w.push_back("etc/keep copies host /etc entries at create time; the jail's /etc is a full copy from base.txz here, so only the named entries are replaced");
 
+  // 1.1.64: run/user
+  if (spec.runUser == "root") {
+    w.push_back("run/user: root — the command runs as root inside the jail; drop it unless the program needs it (the default is the operator's own account)");
+  } else if (!spec.runUser.empty()) {
+    bool homeShare = false;
+    for (const auto &s : spec.dirsShare)
+      if (s.host.compare(0, 5, "$HOME") == 0 || s.jail.compare(0, 5, "$HOME") == 0) homeShare = true;
+    for (const auto &s : spec.filesShare)
+      if (s.host.compare(0, 5, "$HOME") == 0 || s.jail.compare(0, 5, "$HOME") == 0) homeShare = true;
+    if (homeShare)
+      w.push_back("run/user: " + spec.runUser + " — shares under $HOME belong to the operator's uid; '" + spec.runUser + "' can read but not write them unless the host directories allow it");
+    if (spec.x11Options || spec.guiOptions || spec.optionExists("x11"))
+      w.push_back("run/user: " + spec.runUser + " — the X11 authority is copied for the operator's account; a GUI program running as '" + spec.runUser + "' may not reach the display");
+  }
+
   return w;
 }
 

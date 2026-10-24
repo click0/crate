@@ -44,6 +44,7 @@
 #include "runtime_paths_pure.h"
 #include "thin_jail_pure.h"   // 1.1.58: base/mode: host-ro
 #include "mounts_pure.h"      // 1.1.63: tmpfs
+#include "passwd_pure.h"      // 1.1.64: run/user account lookup
 
 #include <rang.hpp>
 
@@ -2045,6 +2046,30 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // add user to jail
   RunJail::createUserInJail(spec, jailPath, jid, user, homeDir, myuid, mygid, execInJail, runScript, args.logProgress);
 
+  // 1.1.64: the account the command runs as (run/user). The mirrored
+  // operator is what createUserInJail just made; root is root; any other
+  // name must exist in the jail's passwd — a package's account, one
+  // `crate create` added, or one made here (warm templates and crates
+  // from before 1.1.64 have none).
+  const RunPure::RunUser runUser = RunPure::effectiveRunUser(spec.runUser, user, (unsigned)myuid);
+  if (RunPure::runUserNeedsAccount(runUser)) {
+    std::string passwd;
+    {
+      std::ifstream f(J("/etc/master.passwd"), std::ios::binary);
+      std::ostringstream ss; ss << f.rdbuf(); passwd = ss.str();
+    }
+    PasswdPure::User found;
+    if (!PasswdPure::lookupUser(passwd, runUser.name, found)) {
+      LOG("run/user: creating the account '" << runUser.name << "' in the jail")
+      execInJail({"/usr/sbin/pw", "useradd", runUser.name, "-m", "-s", "/bin/sh", "-c", "crate run/user"},
+                 "create the run/user account in jail");
+    }
+  }
+  LOG("run/user: the command runs as '" << runUser.name << "'"
+      << (runUser.root ? " (root inside the jail, run/user: root)"
+          : runUser.dedicated ? " (operator is root: dedicated unprivileged account)"
+          : runUser.mirrored ? " (the operator's mirrored account)" : ""))
+
   // share directories if requested (1.1.63: `:ro` -> MNT_RDONLY)
   for (auto &dirShare : spec.dirsShare) {
     const auto dirJail = Util::pathSubstituteVarsInPath(dirShare.jail);
@@ -2207,7 +2232,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     auto innerCmd = STR("/usr/bin/env " << jailEnv
                         << (spec.optionExists("dbg-ktrace") ? " /usr/bin/ktrace" : "")
                         << " " << Util::shellQuote(spec.runCmdExecutable) << spec.runCmdArgs << argsToString(argc, argv));
-    int status = JailExec::execInJail(jid, {"/bin/sh", "-c", innerCmd}, user, "run command in jail");
+    int status = JailExec::execInJail(jid, {"/bin/sh", "-c", innerCmd}, runUser.name, "run command in jail");
     returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     // 0.8.28: surface OOM / RCTL / signal context to the operator
     // log so they don't have to correlate exit codes with rctl(8)
@@ -2239,8 +2264,14 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       ),
       cmdFile
     );
-    Util::Fs::chown(J(cmdFile), myuid, mygid);
-    Util::Fs::chmod(J(cmdFile), 0500);
+    // 1.1.64: readable by whoever run/user resolved to (root-owned 0555
+    // when it is not the mirrored operator)
+    if (runUser.mirrored) {
+      Util::Fs::chown(J(cmdFile), myuid, mygid);
+      Util::Fs::chmod(J(cmdFile), 0500);
+    } else {
+      Util::Fs::chmod(J(cmdFile), 0555);
+    }
 
     // Start background healthcheck monitor for service-only crates (§20)
     std::atomic<bool> hcStopFlag{false};
@@ -2254,10 +2285,10 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     } hcGuard{hcStopFlag, hcThread};
     if (spec.healthcheck) {
       LOG("starting background healthcheck monitor")
-      hcThread = std::thread(healthcheckMonitorLoop, jidStr, user, *spec.healthcheck, args.logProgress, std::ref(hcStopFlag));
+      hcThread = std::thread(healthcheckMonitorLoop, jidStr, runUser.name, *spec.healthcheck, args.logProgress, std::ref(hcStopFlag));
     }
     {
-      int status = JailExec::execInJail(jid, {cmdFile}, user, "run service command in jail");
+      int status = JailExec::execInJail(jid, {cmdFile}, runUser.name, "run service command in jail");
       returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
       // 0.8.28: same OOM / RCTL diagnosis hook as the
       // executable-mode path above. Service-only crates are MORE
