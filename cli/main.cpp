@@ -367,6 +367,9 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdVmWrap: {
     succ = vmWrapCommand(args);
     break;
+  } case CmdProfileFromTrace: {
+    succ = profileFromTraceCommand(args, argc - numArgsProcessed, argv + numArgsProcessed);
+    break;
   } case CmdUpdate: {
     succ = updateCommand(args);
     break;

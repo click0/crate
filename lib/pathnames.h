@@ -83,6 +83,9 @@
 #ifndef CRATE_PATH_CPUSET
 #define CRATE_PATH_CPUSET     "/usr/bin/cpuset"
 #endif
+#ifndef CRATE_PATH_TRUSS
+#define CRATE_PATH_TRUSS      "/usr/bin/truss"   // 1.1.60: crate profile-from-trace
+#endif
 
 // --- FreeBSD base system: /usr/sbin ---
 

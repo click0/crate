@@ -68,6 +68,7 @@ Command isCommand(const char *arg) {
   if (strEq(arg, "doctor"))    return CmdDoctor;
   if (strEq(arg, "vm-wrap"))   return CmdVmWrap;
   if (strEq(arg, "update"))    return CmdUpdate;
+  if (strEq(arg, "profile-from-trace")) return CmdProfileFromTrace;
   return CmdNone;
 }
 
@@ -288,6 +289,12 @@ void Args::validate() {
     if (!updatePkgOnly)
       ERR("`crate update` currently requires --pkg-only "
           "(full base-system update tracked separately)")
+    break;
+  case CmdProfileFromTrace:
+    // the command to trace lives after `--` and is not visible here; the
+    // runtime insists on either it or --trace-file
+    if (!traceFile.empty() && !std::ifstream(traceFile).good())
+      ERR("--trace-file: cannot open " << traceFile)
     break;
   default:
     ERR("no command was given")

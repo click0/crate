@@ -364,11 +364,54 @@ above prints the quoted reason and creates nothing.
 
 ---
 
+## 4c. 1.1.60 — `crate profile-from-trace`
+
+The parser was written against the truss(1) line shapes of FreeBSD 14
+(`open`/`openat`, `execve` with argv, `socket`, `connect`, `bind`,
+`listen`, `sendto`, `{ AF_INET a.b.c.d:port }` addresses) without a
+recorded trace to hand. The first thing to check is that a real trace
+parses at all.
+
+```sh
+# a base-system program: no pkg, a net option, certificates
+crate profile-from-trace --keep-trace /tmp/fetch.truss -o /tmp/fetch.yml -- fetch -o /dev/null https://www.freebsd.org/
+cat /tmp/fetch.yml
+#   expect: run/command "fetch -o /dev/null https://www.freebsd.org/", options net outbound [wan, dns]
+#   (or the plain `net` if the resolver is on the LAN and the host is also contacted), ssl-certs,
+#   "# outbound destinations seen:" with the resolver and the web server; no pkg: block
+grep -c . /tmp/fetch.truss                     # a few hundred lines
+crate validate -s /tmp/fetch.yml               # the draft is a valid spec
+crate profile-from-trace --trace-file /tmp/fetch.truss | diff - /tmp/fetch.yml
+#   expect: the only difference is the "## from one run of:" header (the trace file carries no command)
+
+# a desktop program: packages, state dirs, X11, GPU, D-Bus
+crate profile-from-trace -o /tmp/ff.yml -- firefox https://www.freebsd.org/      # close the window when it has loaded
+cat /tmp/ff.yml
+#   expect: pkg/install firefox (+ xdg-utils if a handler ran), "$HOME/.mozilla" in the state block,
+#   "$HOME/Downloads" only if something was saved, x11, gl (with /dev/dri), dbus session: true,
+#   net outbound [wan, dns], a sound note if audio was initialised, no /usr/local/* shares
+crate create -s /tmp/ff.yml -o /tmp/ff.crate && crate run -f /tmp/ff.crate      # the draft runs as-is
+
+# negative
+crate profile-from-trace                        # "give the command to trace after '--', or --trace-file"
+crate profile-from-trace --trace-file /etc/rc.conf   # "no syscalls recognised in N lines"
+crate profile-from-trace --trace-file /tmp/fetch.truss -- fetch   # "mutually exclusive"
+```
+
+Pass criteria: `summary.parsed` is non-zero on both traces (the first
+error message above would say otherwise); the generated specs validate
+and the firefox one starts; nothing under `/usr/local`, `/etc`, `/var`
+or `/tmp` appears in a share; `--trace-file` reproduces the `--` run. If
+a line shape from a real trace is not recognised, paste the line into
+`tests/unit/trace_pure_test.cpp` as the regression.
+
+---
+
 ## 5. Reporting back
 
 ```sh
 sh scripts/on-hardware-validation.sh > /tmp/onhw-report.txt 2>&1
-# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b manual checks
+# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b / §4c manual checks
 ```
 
 Attach `/tmp/onhw-report.txt` plus the manual-section outcomes to the PR
