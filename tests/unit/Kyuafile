@@ -92,3 +92,4 @@ atf_test_program{name="profile_pure_test"}
 atf_test_program{name="trace_pure_test"}
 atf_test_program{name="jail_audit_pure_test"}
 atf_test_program{name="devices_pure_test"}
+atf_test_program{name="mounts_pure_test"}

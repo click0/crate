@@ -115,7 +115,7 @@ privileged operations to crated(8)»*).
   за тим самим реєстром. 1.1.14 додає до того ж реєстру longest-prefix
   `byPath`-резолвер і поширює гейт на **path-scoped верби** —
   `mount_nullfs` / `unmount_nullfs` (за `target`) та
-  `apply_devfs_ruleset` / `add_devfs_unhide_rule` / `apply_devfs_rules` (за `mount_path`).
+  `apply_devfs_ruleset` / `add_devfs_unhide_rule` / `apply_devfs_rules` (за `mount_path`), `mount_tmpfs` (за `target`).
   Шлях, що лежить у jail, який в реєстрі належить іншому оператору,
   відбивається `403` (`DenyForeignPath`). 1.1.15 закриває останній
   вузький залишок: новенький `path`-аргумент `create_jail` зіставляється
@@ -342,7 +342,7 @@ privops безпечним для **взаємно недовірливих** о
    реєстрі відсутні — bootstrap-поступка пропускає їх, щоб не зламати
    upgrade-шлях.
    *Зроблено (1.1.14):* path-scoped верби — `mount_nullfs` /
-   `unmount_nullfs` (за `target`) та `apply_devfs_ruleset` / `apply_devfs_rules` /
+   `unmount_nullfs` / `mount_tmpfs` (за `target`) та `apply_devfs_ruleset` / `apply_devfs_rules` /
    `add_devfs_unhide_rule` (за `mount_path`). Реєстр віддає
    longest-prefix `byPath`-лукап; шлях у jail, що належить іншому
    uid'ові, відбивається `403` (`DenyForeignPath`); шлях поза будь-яким

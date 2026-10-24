@@ -6,6 +6,60 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.63] — 2026-10-24
+
+**TODO §17.6: read-only shares, `tmpfs:`, `etc/keep`.**
+
+- **`dirs/share` read-only** (bwrap `--ro-bind`, firejail
+  `--read-only`): the suffix `:ro` on a path (`$HOME/Documents:ro`) or a
+  third list element (`[$HOME/Music, /mnt/music, ro]`; `rw` is the
+  default) mounts the nullfs with MNT_RDONLY, under rootless through
+  `mount_nullfs`'s existing `read_only`. A file share is a hard link or
+  a copy and is refused with `:ro` ("share its directory instead").
+  Stack volumes' `:ro` now reaches the mount — it was parsed and
+  dropped on the way into the member's shares.
+- **`tmpfs:`** (bwrap `--tmpfs`, firejail `--private-tmp`): a list of
+  jail paths or a map path → size (`512m`, `2g`; null = no limit) that
+  get a fresh tmpfs at every start, mounted after the shares. Inside
+  the home the mount belongs to the jail user (0700), elsewhere to root
+  with 01777. Paths are absolute or `$HOME/...`, normalised, and never
+  `/`, `/dev`, `/proc`, `/etc`, `/bin`, `/sbin`, `/lib`, `/libexec`,
+  `/usr`, `/usr/local` or `/var/run`. **New privops verb `mount_tmpfs`**
+  (`target`, optional `size`/`uid`/`gid`/`mode` as validated strings),
+  path-gated by `target` like `unmount_nullfs`, which also does the
+  teardown (it is unmount(2) on a path). `Mount` gained string
+  parameters for nmount(2) and routes tmpfs through the verb.
+- **`etc/keep: [localtime, hosts, ssl]`** (firejail `--private-etc`,
+  inverted): names under the host's `/etc` — files or directories, one
+  path component each — copied into the jail's `/etc` when the crate is
+  created; the jail's `/etc` is otherwise the pristine one from base.txz
+  (a thin jail's `/etc` most of all). `resolv.conf` is handled by `crate
+  run` and only kept at create time when listed.
+- **Fixed:** the strict-mode "share destination mapped from two
+  different host sources" check read the share pair the wrong way round
+  (it flagged one host directory under two jail paths and missed two
+  host directories behind one jail path). The pair is now a named
+  `Spec::Share {jail, host, readOnly}`.
+- `crate validate` warns about a whole `$HOME` / `/` / `/home` shared
+  read-write, a tmpfs that hides a share beneath it, and `etc/keep` on a
+  full (non-thin) jail. Profiles: a `.local` may use `:ro` on its
+  shares; the host-path policy strips the suffix first.
+- Docs: crate.5 (Shared resources, new Temporary filesystems and Host
+  /etc entries), README en/uk, trust-model verb lists, runbook §4f;
+  `examples/firefox.yml` and `chromium.yml` carry `tmpfs: [/tmp,
+  $HOME/.cache]`.
+
+Tests: `mounts_pure_test` (4 cases: the `:ro` suffix and flag, tmpfs
+size and path rules incl. the refused directories, etc/keep names,
+`isUnder` and the tmpfs parameter sets, the privops field validators),
+`spec_validate_test` (read-only shares, tmpfs/etc rules),
+`validate_pure_test` (the corrected duplicate-destination check and the
+new warnings), `privops_pure_test` / nv / wire / client / authz
+(`mount_tmpfs`). kyua on Linux; nmount(2) tmpfs options unverified on
+FreeBSD — runbook §4f.
+
+---
+
 ## [1.1.62] — 2026-10-24
 
 **TODO §17.5: device classes — `devices: {sound, gpu, video, input, usb, serial}`; every jail gets a private devfs ruleset.**

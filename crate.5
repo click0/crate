@@ -317,13 +317,66 @@ Services to run (list or scalar).
 .Ss Shared resources
 .Bl -tag -width "files/share"
 .It Sy dirs/share
-Directories shared between host and jail.
+Directories shared between host and jail
+.Pq nullfs .
 Each entry is a path (same on both sides) or a pair
-.Pq from, to .
+.Pq jailDir, hostDir .
+Since 1.1.63 a share can be read-only: the suffix
+.Li :ro
+on a path
+.Pq Li $HOME/Documents:ro
+or a third element
+.Pq Li [$HOME/Music, /mnt/music, ro] .
 .It Sy files/share
 Files shared between host and jail.
 Same format as
-.Sy dirs/share .
+.Sy dirs/share ,
+but a file share is a hard link or a copy and cannot be read-only; share
+its directory with
+.Li :ro
+instead.
+.El
+.Ss Temporary filesystems
+.Bl -tag -width "tmpfs"
+.It Sy tmpfs
+Jail paths that get a fresh
+.Xr tmpfs 5
+at every start (1.1.63; bwrap
+.Fl -tmpfs ,
+firejail
+.Fl -private-tmp ) :
+a list of paths, or a map path \(-> size
+.Pq Li 512m , Li 2g ; null = no limit .
+Paths are absolute or start with
+.Li $HOME/ ;
+inside the home directory the mount belongs to the jail user (mode
+0700), elsewhere to root with the sticky 01777 of a shared
+.Pa /tmp .
+Mounted after the shares;
+.Pa / , /dev , /proc , /etc , /bin , /sbin , /lib , /libexec , /usr , /usr/local
+and
+.Pa /var/run
+are refused.
+.El
+.Ss Host /etc entries
+.Bl -tag -width "etc/keep"
+.It Sy etc/keep
+Names under the host's
+.Pa /etc
+(files or directories, one path component each) copied into the jail's
+.Pa /etc
+when the crate is created (1.1.63; firejail
+.Fl -private-etc ,
+inverted: the jail's
+.Pa /etc
+is the pristine one from base.txz and holds nothing of the host's unless
+named here).
+Typical:
+.Li [localtime, hosts, ssl] .
+.Pa resolv.conf
+is handled by
+.Nm crate run
+when the spec has networking and need not be listed.
 .El
 .Ss Options
 The

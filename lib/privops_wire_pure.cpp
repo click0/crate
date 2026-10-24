@@ -525,6 +525,23 @@ std::string parseSignalJail(const std::string &body,
   return "";
 }
 
+// 1.1.63
+std::string parseMountTmpfs(const std::string &body,
+                            PrivOpsPure::MountTmpfsReq &out) {
+  if (auto e = requireStringField(body, "target", out.target); !e.empty()) return e;
+  extractStringField(body, "size", out.size);
+  extractStringField(body, "uid",  out.uid);
+  extractStringField(body, "gid",  out.gid);
+  extractStringField(body, "mode", out.mode);
+  return "";
+}
+
+std::string formatMountTmpfsSuccess(const std::string &target) {
+  std::ostringstream o;
+  o << "{\"mounted\":true,\"target\":\"" << JsonPure::escape(target) << "\"}";
+  return o.str();
+}
+
 // 1.1.62
 std::string parseApplyDevfsRules(const std::string &body,
                                  PrivOpsPure::ApplyDevfsRulesReq &out) {
@@ -1075,6 +1092,8 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       return runVerb<ReleaseFwLeaseReq>(body, v, parseReleaseFwLease, validateReleaseFwLease);
     case Verb::ApplyDevfsRules:   // 1.1.62
       return runVerb<ApplyDevfsRulesReq>(body, v, parseApplyDevfsRules, validateApplyDevfsRules);
+    case Verb::MountTmpfs:        // 1.1.63
+      return runVerb<MountTmpfsReq>(body, v, parseMountTmpfs, validateMountTmpfs);
     case Verb::Unknown:
       break;
   }

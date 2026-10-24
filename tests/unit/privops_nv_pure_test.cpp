@@ -298,6 +298,26 @@ ATF_TEST_CASE_BODY(parsers_same_required_field_set_as_json) {
   ATF_REQUIRE(err.find("missing") != std::string::npos);
 }
 
+// --- mount_tmpfs (1.1.63) ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(parse_mount_tmpfs);
+ATF_TEST_CASE_BODY(parse_mount_tmpfs) {
+  PrivOpsPure::MountTmpfsReq r;
+  ATF_REQUIRE_EQ(parseMountTmpfs({
+      {"verb", "mount_tmpfs"}, {"target", "/jails/web/tmp"}, {"size", "512m"},
+      {"uid", "1001"}, {"gid", "1001"}, {"mode", "0700"},
+    }, r), std::string());
+  ATF_REQUIRE_EQ(r.target, std::string("/jails/web/tmp"));
+  ATF_REQUIRE_EQ(r.size, std::string("512m"));
+  ATF_REQUIRE_EQ(r.uid, std::string("1001"));
+  ATF_REQUIRE_EQ(r.mode, std::string("0700"));
+  ATF_REQUIRE_EQ(PrivOpsPure::validateMountTmpfs(r), std::string());
+  PrivOpsPure::MountTmpfsReq r2;
+  ATF_REQUIRE_EQ(parseMountTmpfs({{"target", "/jails/web/tmp"}}, r2), std::string());
+  ATF_REQUIRE(r2.size.empty() && r2.uid.empty() && r2.mode.empty());
+  ATF_REQUIRE(parseMountTmpfs({{"size", "1m"}}, r2).find("missing") != std::string::npos);
+}
+
 // --- apply_devfs_rules (1.1.62) ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(parse_apply_devfs_rules);
@@ -455,6 +475,7 @@ ATF_TEST_CASE_BODY(nvlist_header_parse_and_limits) {
 
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, parse_apply_devfs_rules);
+  ATF_ADD_TEST_CASE(tcs, parse_mount_tmpfs);
   ATF_ADD_TEST_CASE(tcs, require_string_present_absent);
   ATF_ADD_TEST_CASE(tcs, require_long_typical);
   ATF_ADD_TEST_CASE(tcs, require_long_rejects_garbage);

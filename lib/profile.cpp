@@ -2,6 +2,7 @@
 
 #include "profile.h"
 #include "profile_pure.h"
+#include "mounts_pure.h"   // 1.1.63: ":ro" suffix on .local shares
 #include "args.h"
 #include "spec.h"
 #include "misc.h"
@@ -171,10 +172,11 @@ void checkLocalOverlay(const YAML::Node &overlay, const std::string &home, const
         std::string host;
         if (entry.IsScalar())
           host = entry.as<std::string>();
-        else if (entry.IsSequence() && entry.size() == 2 && entry[1].IsScalar())
-          host = entry[1].as<std::string>();   // [jail path, host path] — see lib/run.cpp
+        else if (entry.IsSequence() && (entry.size() == 2 || entry.size() == 3) && entry[1].IsScalar())
+          host = entry[1].as<std::string>();   // [jail path, host path(, ro|rw)] — see lib/run.cpp
         else
           continue;
+        MountsPure::splitRoSuffix(host);   // 1.1.63: "path:ro" is still the path
         if (auto e = ProfilePure::checkLocalShareHostPath(host, home); !e.empty())
           ERR(path << ": " << key << "/share: " << e)
       }

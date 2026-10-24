@@ -393,6 +393,17 @@ std::string parseApplyDevfsRules(const FieldMap &m,
   return "";
 }
 
+// 1.1.63
+std::string parseMountTmpfs(const FieldMap &m,
+                            PrivOpsPure::MountTmpfsReq &out) {
+  if (auto e = requireString(m, "target", out.target); !e.empty()) return e;
+  if (auto e = optionalString(m, "size", out.size); !e.empty()) return e;
+  if (auto e = optionalString(m, "uid",  out.uid);  !e.empty()) return e;
+  if (auto e = optionalString(m, "gid",  out.gid);  !e.empty()) return e;
+  if (auto e = optionalString(m, "mode", out.mode); !e.empty()) return e;
+  return "";
+}
+
 // --- 1.1.43: nvlist header pre-check ---
 
 std::string parseNvlistHeader(const unsigned char *buf, size_t len, NvlistHeader &out) {

@@ -561,6 +561,25 @@ bool createCrate(const Args &args, const Spec &spec) {
   // copy /etc/resolv.conf into the jail directory such that pkg would be able to resolve addresses
   Util::Fs::copyFile("/etc/resolv.conf", STR(jailPath << "/etc/resolv.conf"));
 
+  // 1.1.63: etc/keep — the named host /etc entries (files or directories)
+  // go into the jail's /etc, which is otherwise the pristine one from
+  // base.txz. Names were validated by the spec parser (one path
+  // component, no "/" or "..").
+  for (auto &name : spec.etcKeep) {
+    const std::string src = "/etc/" + name;
+    const std::string dst = STR(jailPath << "/etc/" << name);
+    if (Util::Fs::dirExists(src)) {
+      if (Util::Fs::dirExists(dst))
+        Util::Fs::rmdirHier(dst);
+      Util::execCommand({"/bin/cp", "-RpP", src, dst}, CSTR("etc/keep: copy /etc/" << name));
+    } else if (Util::Fs::fileExists(src)) {
+      Util::Fs::copyFile(src, dst);
+    } else {
+      ERR("etc/keep: /etc/" << name << " does not exist on the host")
+    }
+    LOG("etc/keep: /etc/" << name << " copied into the jail")
+  }
+
   // mount devfs (MNT_IGNORE hides it from df/mount output)
   LOG("mounting devfs in jail")
   Mount mountDevfs("devfs", STR(jailPath << "/dev"), "", MNT_IGNORE);
@@ -603,8 +622,10 @@ bool createCrate(const Args &args, const Spec &spec) {
     removeRedundantJailParts(jailPath, spec);
   }
 
-  // remove /etc/resolv.conf in the jail directory
-  Util::Fs::unlink(STR(jailPath << "/etc/resolv.conf"));
+  // remove /etc/resolv.conf in the jail directory (unless etc/keep asked
+  // for it; `crate run` writes its own when the spec has networking)
+  if (std::find(spec.etcKeep.begin(), spec.etcKeep.end(), "resolv.conf") == spec.etcKeep.end())
+    Util::Fs::unlink(STR(jailPath << "/etc/resolv.conf"));
 
   // write the +CRATE-SPEC file
   LOG("write the +CRATE.SPEC file")

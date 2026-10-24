@@ -503,11 +503,60 @@ and the emitter in `lib/devices_pure.cpp` are the places to fix.
 
 ---
 
+## 4f. 1.1.63 — `:ro` shares, `tmpfs:`, `etc/keep`
+
+```sh
+# a spec with all three
+cat > /tmp/m.yml <<'EOF'
+pkg: {install: [fetch]}
+run: {command: /bin/sh}
+dirs:
+    share:
+        - $HOME/Downloads
+        - $HOME/Documents:ro
+tmpfs:
+    /tmp: 64m
+    $HOME/.cache:
+etc:
+    keep: [localtime, hosts]
+options: [net]
+EOF
+crate validate -s /tmp/m.yml                   # no errors; no warnings except the etc/keep one on a full jail
+crate create -s /tmp/m.yml -o /tmp/m.crate
+tar -tJf /tmp/m.crate | grep -E '^\./etc/(localtime|hosts)$'   # both present in the archive
+crate run -f /tmp/m.crate -- -c 'mount -p; touch $HOME/Documents/x; echo rc=$?; df -h /tmp $HOME/.cache; ls -ld /tmp $HOME/.cache'
+#   expect: the Documents nullfs line says ro, touch fails "Read-only file system"; two tmpfs lines
+#   (/tmp 64M, $HOME/.cache unlimited); /tmp is drwxrwxrwt root, $HOME/.cache drwx------ <user>
+crate audit <name>                             # mounts: "/home/<u>/Documents nullfs ro from host ...", tmpfs rw lines
+
+# rootless: same through mount_nullfs(read_only) and the new mount_tmpfs verb
+sudo -u alice crate run -f /tmp/m.crate -- -c 'mount -p'
+
+# a stack volume with :ro now mounts read-only (it was parsed and dropped before 1.1.63)
+#   volumes: [certs:/etc/letsencrypt:ro] in a stack -> mount -p inside the member says ro
+
+# negative
+#   files: {share: [$HOME/x:ro]}        -> "a file share is a hard link or a copy and cannot be read-only"
+#   tmpfs: [/etc]                        -> "tmpfs on /etc would hide the jail's own files"
+#   tmpfs: {/tmp: 64mb}                  -> "tmpfs size must be digits with an optional k/m/g suffix"
+#   etc: {keep: [ssl/certs]}             -> "only a plain name under /etc is allowed"
+```
+
+Pass criteria: the read-only share refuses writes from inside; both
+tmpfs mounts appear with the right owner, mode and size; the kept
+`/etc` entries are in the archive and in the running jail; nothing
+regressed for specs without the new keys (shares mount rw as before).
+If nmount(2) rejects a tmpfs option string (`size`, `uid`, `gid`,
+`mode`), paste the errmsg: `lib/mounts_pure.cpp` (`tmpfsParams`) is the
+one place that formats them.
+
+---
+
 ## 5. Reporting back
 
 ```sh
 sh scripts/on-hardware-validation.sh > /tmp/onhw-report.txt 2>&1
-# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b / §4c / §4d / §4e manual checks
+# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b / §4c / §4d / §4e / §4f manual checks
 ```
 
 Attach `/tmp/onhw-report.txt` plus the manual-section outcomes to the PR

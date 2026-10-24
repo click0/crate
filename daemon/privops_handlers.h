@@ -240,6 +240,9 @@ PrivOpsWirePure::DispatchResult handleAddDevfsUnhideRule(const PrivOpsPure::AddD
 // apply it to the jail's /dev mount (ruleset N + applyset).
 PrivOpsWirePure::DispatchResult handleApplyDevfsRules(const PrivOpsPure::ApplyDevfsRulesReq &r);
 
+// 1.1.63: nmount(2) a tmpfs at the target with the given options.
+PrivOpsWirePure::DispatchResult handleMountTmpfs(const PrivOpsPure::MountTmpfsReq &r);
+
 // 1.1.11: send a signal to all processes in a jail. Wraps
 // `jexec <jid> /bin/kill -<signal> -1`.
 PrivOpsWirePure::DispatchResult handleSignalJail(const PrivOpsPure::SignalJailReq &r);

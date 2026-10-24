@@ -208,6 +208,9 @@ std::string parseExecInJail(const std::string &body,
 // 1.1.62: "mount_path", "ruleset", "argc" + "rule0".."rule<argc-1>".
 std::string parseApplyDevfsRules(const std::string &body,
                                  PrivOpsPure::ApplyDevfsRulesReq &out);
+// 1.1.63: "target", optional "size", "uid", "gid", "mode" (all strings).
+std::string parseMountTmpfs(const std::string &body,
+                            PrivOpsPure::MountTmpfsReq &out);
 // 1.1.41
 std::string parseSetIfaceMac(const std::string &body,
                              PrivOpsPure::SetIfaceMacReq &out);
@@ -390,6 +393,9 @@ std::string formatApplyDevfsRulesetSuccess(const std::string &mountPath,
 // 1.1.10: 200 OK body for add_devfs_unhide_rule.
 std::string formatAddDevfsUnhideRuleSuccess(const std::string &mountPath,
                                             const std::string &pathPattern);
+
+// 1.1.63: 200 OK body for mount_tmpfs. {"mounted":true,"target":"..."}
+std::string formatMountTmpfsSuccess(const std::string &target);
 
 // 1.1.62: 200 OK body for apply_devfs_rules.
 // {"applied":true,"mount_path":"...","ruleset":N,"rules":<count>}

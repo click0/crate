@@ -482,11 +482,41 @@ ATF_TEST_CASE_BODY(strict_duplicate_share_destination)
 {
 	auto s = mkBoundedSpec();
 	// Two different host paths -> same jail-side destination.
-	s.dirsShare.push_back({"/home/alice/data",  "/data"});
-	s.dirsShare.push_back({"/home/bob/data",    "/data"});
+	// (Share is {jail, host}: the jail-side path comes first, as in
+	// the spec's [jailDir, hostDir] pairs.)
+	s.dirsShare.push_back({"/data", "/home/alice/data"});
+	s.dirsShare.push_back({"/data", "/home/bob/data"});
 	auto e = gatherStrictErrors(s);
 	ATF_REQUIRE(hasMatch(e, "/data"));
 	ATF_REQUIRE(hasMatch(e, "two different host sources"));
+	// 1.1.63: one host directory under two jail paths is not a conflict
+	auto t = mkBoundedSpec();
+	t.dirsShare.push_back({"/data",   "/home/alice/data"});
+	t.dirsShare.push_back({"/backup", "/home/alice/data"});
+	for (auto &m : gatherStrictErrors(t))
+		ATF_REQUIRE(m.find("two different host sources") == std::string::npos);
+}
+
+// 1.1.63: tmpfs / :ro / etc/keep warnings
+ATF_TEST_CASE_WITHOUT_HEAD(mounts_1163_warnings);
+ATF_TEST_CASE_BODY(mounts_1163_warnings)
+{
+	auto s = mkSpec();
+	s.dirsShare.push_back({"/home/alice", "$HOME"});
+	ATF_REQUIRE(hasMatch(gatherWarnings(s), "shared read-write as a whole"));
+	s.dirsShare.back().readOnly = true;
+	ATF_REQUIRE(!hasMatch(gatherWarnings(s), "shared read-write as a whole"));
+
+	auto t = mkSpec();
+	t.dirsShare.push_back({"/home/alice/.cache/x", "/host/x"});
+	t.tmpfs.push_back({"/home/alice/.cache", ""});
+	ATF_REQUIRE(hasMatch(gatherWarnings(t), "hides it"));
+
+	auto u = mkSpec();
+	u.etcKeep.push_back("localtime");
+	ATF_REQUIRE(hasMatch(gatherWarnings(u), "etc/keep"));
+	u.baseHostRo = true;
+	ATF_REQUIRE(!hasMatch(gatherWarnings(u), "etc/keep"));
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(strict_same_share_twice_not_a_conflict);
@@ -585,6 +615,7 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, mac_rules_warns);
 	ATF_ADD_TEST_CASE(tcs, terminal_devfs_ruleset_warns);
 	ATF_ADD_TEST_CASE(tcs, devices_classes_warn);
+	ATF_ADD_TEST_CASE(tcs, mounts_1163_warnings);
 	ATF_ADD_TEST_CASE(tcs, multiple_warnings);
 	// 0.7.16 strict-mode tests
 	ATF_ADD_TEST_CASE(tcs, strict_minimal_spec_still_unbounded);

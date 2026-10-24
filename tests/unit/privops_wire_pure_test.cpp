@@ -595,6 +595,7 @@ ATF_TEST_CASE_BODY(dispatch_covers_every_verb) {
     Verb::SetIfaceMac, Verb::DeleteIpfwNat, Verb::CreateBridge,   // 1.1.41
     Verb::AcquireFwLease, Verb::ReleaseFwLease,                   // 1.1.57
     Verb::ApplyDevfsRules,                                        // 1.1.62
+    Verb::MountTmpfs,                                             // 1.1.63
   };
   for (auto v : verbs) {
     auto r = parseValidateAndDispatch(v, "{}");
@@ -661,6 +662,25 @@ ATF_TEST_CASE_BODY(format_query_jail_rctl_escapes_newlines) {
   ATF_REQUIRE_EQ(extractStringField(body, "output", recovered),
                  std::string(kPresent));
   ATF_REQUIRE_EQ(recovered, std::string("memoryuse=512M\nmaxproc=64\n"));
+}
+
+// --- mount_tmpfs (1.1.63) ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(parse_mount_tmpfs_fields);
+ATF_TEST_CASE_BODY(parse_mount_tmpfs_fields) {
+  PrivOpsPure::MountTmpfsReq r;
+  ATF_REQUIRE_EQ(parseMountTmpfs(R"({"target":"/jails/web/tmp","size":"512m","uid":"1001","gid":"1001","mode":"0700"})", r),
+                 std::string());
+  ATF_REQUIRE_EQ(r.size, std::string("512m"));
+  ATF_REQUIRE_EQ(r.gid, std::string("1001"));
+  PrivOpsPure::MountTmpfsReq r2;
+  ATF_REQUIRE_EQ(parseMountTmpfs(R"({"target":"/jails/web/tmp"})", r2), std::string());
+  ATF_REQUIRE(r2.size.empty());
+  ATF_REQUIRE(!parseMountTmpfs(R"({"size":"1m"})", r2).empty());
+  ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::MountTmpfs, R"({"target":"/jails/web/tmp","mode":"01777"})").status, 501);
+  ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::MountTmpfs, R"({"target":"/jails/web/tmp","size":"big"})").status, 400);
+  ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::MountTmpfs, R"({"target":"relative"})").status, 400);
+  ATF_REQUIRE(formatMountTmpfsSuccess("/jails/web/tmp").find("\"mounted\":true") != std::string::npos);
 }
 
 // --- apply_devfs_rules (1.1.62) ---
@@ -884,6 +904,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, format_query_jail_rctl_escapes_newlines);
   ATF_ADD_TEST_CASE(tcs, parse_exec_in_jail_argv_fields);
   ATF_ADD_TEST_CASE(tcs, parse_apply_devfs_rules_fields);
+  ATF_ADD_TEST_CASE(tcs, parse_mount_tmpfs_fields);
   ATF_ADD_TEST_CASE(tcs, parse_1141_verbs_and_rctl_limits);
   ATF_ADD_TEST_CASE(tcs, escape_round_trips_control_bytes);
 }

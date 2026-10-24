@@ -32,6 +32,7 @@ ATF_TEST_CASE_BODY(verb_token_roundtrips_for_every_verb) {
     Verb::SetIfaceMac, Verb::DeleteIpfwNat, Verb::CreateBridge,   // 1.1.41
     Verb::AcquireFwLease, Verb::ReleaseFwLease,                   // 1.1.57
     Verb::ApplyDevfsRules,                                        // 1.1.62
+    Verb::MountTmpfs,                                             // 1.1.63
   };
   for (Verb v : verbs) {
     std::string token = verbName(v);
@@ -1125,6 +1126,29 @@ ATF_TEST_CASE_BODY(apply_devfs_rules_validation) {
   ATF_REQUIRE(!validateApplyDevfsRules(r).empty());
 }
 
+// 1.1.63: mount_tmpfs.
+ATF_TEST_CASE_WITHOUT_HEAD(mount_tmpfs_validation);
+ATF_TEST_CASE_BODY(mount_tmpfs_validation) {
+  ATF_REQUIRE_EQ(verbName(Verb::MountTmpfs), std::string("mount_tmpfs"));
+  ATF_REQUIRE(parseVerb("mount_tmpfs") == Verb::MountTmpfs);
+  MountTmpfsReq r;
+  r.target = "/jails/web/tmp";
+  ATF_REQUIRE_EQ(validateMountTmpfs(r), std::string());
+  r.size = "512m"; r.uid = "1001"; r.gid = "1001"; r.mode = "0700";
+  ATF_REQUIRE_EQ(validateMountTmpfs(r), std::string());
+  r.mode = "01777";                       ATF_REQUIRE_EQ(validateMountTmpfs(r), std::string());
+  r.mode = "0778";                        ATF_REQUIRE(!validateMountTmpfs(r).empty());
+  r.mode = "";
+  r.gid = "";                             ATF_REQUIRE(!validateMountTmpfs(r).empty());   // uid without gid
+  r.gid = "wheel";                        ATF_REQUIRE(!validateMountTmpfs(r).empty());
+  r.gid = "0";
+  r.size = "lots";                        ATF_REQUIRE(!validateMountTmpfs(r).empty());
+  r.size = "0";                           ATF_REQUIRE(!validateMountTmpfs(r).empty());
+  r.size = "";
+  r.target = "jails/web/tmp";             ATF_REQUIRE(!validateMountTmpfs(r).empty());
+  r.target = "/jails/web/../../tmp";      ATF_REQUIRE(!validateMountTmpfs(r).empty());
+}
+
 // 1.1.57: acquire/release_fw_lease + set_iface_inet_addr inet6.
 ATF_TEST_CASE_WITHOUT_HEAD(fw_lease_and_inet6_validation);
 ATF_TEST_CASE_BODY(fw_lease_and_inet6_validation) {
@@ -1157,6 +1181,7 @@ ATF_TEST_CASE_BODY(fw_lease_and_inet6_validation) {
 
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, apply_devfs_rules_validation);
+  ATF_ADD_TEST_CASE(tcs, mount_tmpfs_validation);
   ATF_ADD_TEST_CASE(tcs, fw_lease_and_inet6_validation);
   ATF_ADD_TEST_CASE(tcs, verb_token_roundtrips_for_every_verb);
   ATF_ADD_TEST_CASE(tcs, verb_unknown_token_returns_unknown);

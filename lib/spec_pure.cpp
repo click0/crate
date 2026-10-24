@@ -15,6 +15,7 @@
 #include "util.h"   // Util::toUInt
 #include "err.h"
 #include "netaddr_pure.h"   // 1.1.44: isV4 / isV6
+#include "mounts_pure.h"    // 1.1.63: tmpfs / etc/keep
 #include "privops_pure.h"   // 1.1.44: validateIpv4Cidr / validateIpv6Cidr
 
 namespace SpecPure {
@@ -210,13 +211,30 @@ void Spec::validate() const {
 
   // shared directories must be full paths
   for (auto &dirShare : dirsShare)
-    if (!isFullPath(Util::pathSubstituteVarsInPath(dirShare.first)) || !isFullPath(Util::pathSubstituteVarsInPath(dirShare.second)))
-      ERR("the shared directory paths have to be a full paths, share=" << dirShare.first << "->" << dirShare.second)
+    if (!isFullPath(Util::pathSubstituteVarsInPath(dirShare.jail)) || !isFullPath(Util::pathSubstituteVarsInPath(dirShare.host)))
+      ERR("the shared directory paths have to be a full paths, share=" << dirShare.jail << "->" << dirShare.host)
 
   // shared files must be full paths
-  for (auto &fileShare : filesShare)
-    if (!isFullPath(Util::pathSubstituteVarsInPath(fileShare.first)) || !isFullPath(Util::pathSubstituteVarsInPath(fileShare.second)))
-      ERR("the shared directory paths have to be a full paths, share=" << fileShare.first << "->" << fileShare.second)
+  for (auto &fileShare : filesShare) {
+    if (!isFullPath(Util::pathSubstituteVarsInPath(fileShare.jail)) || !isFullPath(Util::pathSubstituteVarsInPath(fileShare.host)))
+      ERR("the shared directory paths have to be a full paths, share=" << fileShare.jail << "->" << fileShare.host)
+    if (fileShare.readOnly)
+      ERR("files/share: a file share cannot be read-only: " << fileShare.jail)
+  }
+
+  // 1.1.63: tmpfs mount points and etc/keep names (the parser checks
+  // them too; a Spec built in code goes through here only)
+  for (size_t i = 0; i < tmpfs.size(); i++) {
+    if (auto e = MountsPure::validateTmpfsPath(tmpfs[i].path); !e.empty()) ERR("tmpfs: " << e)
+    if (auto e = MountsPure::validateTmpfsSize(tmpfs[i].size); !e.empty()) ERR("tmpfs/" << tmpfs[i].path << ": " << e)
+    for (size_t j = 0; j < i; j++)
+      if (tmpfs[j].path == tmpfs[i].path) ERR("tmpfs: '" << tmpfs[i].path << "' is listed twice")
+    for (auto &d : dirsShare)
+      if (d.jail == tmpfs[i].path)
+        ERR("tmpfs: '" << tmpfs[i].path << "' is also a dirs/share destination — the tmpfs would hide the share")
+  }
+  for (auto &n : etcKeep)
+    if (auto e = MountsPure::validateEtcKeepName(n); !e.empty()) ERR(e)
 
   // pkg/add entries must be absolute paths to .txz package files on the host
   for (auto &p : pkgAdd)

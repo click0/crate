@@ -256,6 +256,13 @@ enum class Verb {
   // whatever ruleset the mount happened to have (none, or a shared
   // stock one).
   ApplyDevfsRules,
+
+  // 1.1.63: mount a tmpfs at a path inside a jail (spec `tmpfs:`).
+  // Optional size (digits + k/m/g), uid/gid (decimal) and mode (octal)
+  // travel as strings and are passed to nmount(2) as tmpfs options.
+  // Path-scoped by `target` like unmount_nullfs; the unmount at
+  // teardown is unmount_nullfs itself (unmount(2) on the target).
+  MountTmpfs,
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -475,6 +482,15 @@ struct ApplyDevfsRulesReq {
 };
 constexpr unsigned kApplyDevfsRulesMaxRules = 128;
 
+// 1.1.63: mount_tmpfs. Optional fields are "" when absent.
+struct MountTmpfsReq {
+  std::string target;   // absolute mount point under the jail prefix
+  std::string size;     // "512m"; "" = no limit
+  std::string uid;      // decimal; "" = root
+  std::string gid;      // decimal; "" = wheel
+  std::string mode;     // octal "01777" / "0700"; "" = tmpfs default
+};
+
 // 1.1.62: one devfs rulespec: "hide" | "include <1..65535>" |
 // "path <glob> unhide" (glob: alnum . _ - / *, no leading slash,
 // <=256 chars). "" when valid, otherwise the reason.
@@ -599,6 +615,7 @@ std::string validateCreateBridge(const CreateBridgeReq &r);
 std::string validateAcquireFwLease(const AcquireFwLeaseReq &r);
 std::string validateReleaseFwLease(const ReleaseFwLeaseReq &r);
 std::string validateApplyDevfsRules(const ApplyDevfsRulesReq &r);   // 1.1.62
+std::string validateMountTmpfs(const MountTmpfsReq &r);             // 1.1.63
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //
