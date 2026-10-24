@@ -8,6 +8,7 @@
 #include "privops_handlers.h"
 #include "privops_wire_pure.h"
 #include "rate_limit.h"
+#include "status_fd.h"   // 1.1.65: spawnCrateRun over a --status-fd pipe
 #include "routes_pure.h"
 #include "transfer_pure.h"
 
@@ -98,20 +99,11 @@ static std::string getClientId(const httplib::Request &req) {
 //       first jail's firewall slot and the first teardown removed the
 //       shared NAT rule while other jails still ran.
 // A child process has its own pid, signal handlers and lifetime.
-// Returns the child pid, or -1 on fork failure.
-static pid_t spawnCrateRun(const std::string &crateFile) {
-  pid_t pid = ::fork();
-  if (pid < 0) return -1;
-  if (pid == 0) {
-    ::setsid();                       // no controlling tty; survives crated teardown
-    ::close(0); ::close(1); ::close(2);
-    ::open("/dev/null", O_RDONLY);
-    ::open("/dev/null", O_WRONLY);
-    ::open("/dev/null", O_WRONLY);
-    ::execl(CRATE_PATH_CRATE, "crate", "run", "-f", crateFile.c_str(), nullptr);
-    ::_exit(127);
-  }
-  return pid;
+// 1.1.65: StatusFd::spawnCrateRun — setsid, stdio to /dev/null, and a
+// `--status-fd` pipe whose read end registerSpawnedJailOwner consumes.
+// pid < 0 on fork failure.
+static StatusFd::Spawned spawnCrateRun(const std::string &crateFile) {
+  return StatusFd::spawnCrateRun({"-f", crateFile});
 }
 
 // Cap constants live in daemon/rate_limit.h since 0.7.15.
@@ -335,7 +327,8 @@ static void handleContainerStart(const httplib::Request &req, httplib::Response 
     return;
   }
 
-  pid_t pid = spawnCrateRun(crateFile);
+  auto spawned = spawnCrateRun(crateFile);
+  pid_t pid = spawned.pid;
   if (pid < 0) {
     jsonError(res, 500, "failed to start container: fork failed");
     return;
@@ -343,7 +336,7 @@ static void handleContainerStart(const httplib::Request &req, httplib::Response 
   // 1.1.42: bearer-token path has no operator uid — the jail is
   // recorded as admin-owned (uid 0), so tenants' jid-scoped privops
   // verbs no longer get the bootstrap Allow on it.
-  Crated::registerSpawnedJailOwner(pid, 0, name);
+  Crated::registerSpawnedJailOwner(pid, 0, name, spawned.statusFd);
   // The child is the jail's foreground supervisor and outlives this
   // request: "started" now means "spawned". Poll
   // GET /api/v1/containers/:name for the running state.
@@ -669,12 +662,13 @@ static void handleContainerRestart(const httplib::Request &req, httplib::Respons
     jsonError(res, 404, "no saved .crate file for '" + name + "'; container stopped but cannot restart");
     return;
   }
-  pid_t pid = spawnCrateRun(crateFile);
+  auto spawned = spawnCrateRun(crateFile);
+  pid_t pid = spawned.pid;
   if (pid < 0) {
     jsonError(res, 500, "failed to start container after stop: fork failed");
     return;
   }
-  Crated::registerSpawnedJailOwner(pid, 0, name);   // 1.1.42: admin-owned
+  Crated::registerSpawnedJailOwner(pid, 0, name, spawned.statusFd);   // 1.1.42: admin-owned
   jsonOk(res, "{\"restarted\":true,\"async\":true,\"pid\":" + std::to_string(pid)
               + ",\"name\":\"" + name + "\"}");
 }

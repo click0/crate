@@ -13,6 +13,7 @@
 
 #include "spec.h"
 #include "spec_pure.h"
+#include "run_pure.h"   // 1.1.65: kRunTimeoutMax
 #include "err.h"
 
 // Build a minimal valid Spec — having a runCmdExecutable is enough.
@@ -140,6 +141,27 @@ ATF_TEST_CASE_BODY(run_user_validation)
 	{
 		auto s = mkValid();
 		s.runUser = std::string(33, 'a');   // one over the pw(8) limit
+		ATF_REQUIRE_THROW(Exception, s.validate());
+	}
+}
+
+// 1.1.65: run/timeout range (the parser range-checks; validate() guards a
+// constructed/merged Spec)
+ATF_TEST_CASE_WITHOUT_HEAD(run_timeout_validation);
+ATF_TEST_CASE_BODY(run_timeout_validation)
+{
+	{
+		auto s = mkValid();
+		s.runTimeoutSec = 0;
+		s.validate();
+		s.runTimeoutSec = 90;
+		s.validate();
+		s.runTimeoutSec = RunPure::kRunTimeoutMax;
+		s.validate();
+	}
+	{
+		auto s = mkValid();
+		s.runTimeoutSec = RunPure::kRunTimeoutMax + 1;
 		ATF_REQUIRE_THROW(Exception, s.validate());
 	}
 }
@@ -741,6 +763,7 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, dirsShare_absolute_ok);
 	ATF_ADD_TEST_CASE(tcs, tmpfs_and_etc_keep_validation);
 	ATF_ADD_TEST_CASE(tcs, run_user_validation);
+	ATF_ADD_TEST_CASE(tcs, run_timeout_validation);
 
 	// options + scripts
 	ATF_ADD_TEST_CASE(tcs, unknown_option_throws);

@@ -83,6 +83,7 @@ Crate — контейнеризатор для FreeBSD. Пакує застос
 | `crate create -s spec.yml --template base.yml` | Створити з успадкуванням шаблону |
 | `crate run -f app.crate [-- args]` | Запустити контейнер |
 | `crate run NAME [-- args]` | Запустити профіль за іменем: специфікація з `~/.config/crate/profiles/`, `/usr/local/share/crate/profiles/` або встановлених прикладів, `.crate` збирається при першому запуску (1.1.59) |
+| `crate run --status-fd N ...` | Те саме, плюс по JSON-об'єкту на подію життєвого циклу (`jail_created`, `net_ready`, `exited`, ...) у дескриптор N (1.1.65) |
 | `crate profile-from-trace -o spec.yml -- CMD [args]` | Один раз запустити CMD на хості під `truss(1)` і скласти чернетку мінімальної специфікації з того, чого програма торкалась (1.1.60) |
 | `crate audit TARGET [-j] [--offline]` | Що запущений контейнер реально бачить зсередини: шляхи хоста, пристрої, сокети, мережа (1.1.61) |
 | `crate validate -s spec.yml` | Перевірити специфікацію |
@@ -586,6 +587,29 @@ etc:
 
 Share файлу — це жорстке посилання або копія, тому read-only він бути не може: поділіться каталогом з `:ro`. tmpfs монтується після shares (tmpfs над share ховає його; `crate validate` попереджає) і забороняється на `/`, `/dev`, `/proc`, `/etc`, `/bin`, `/sbin`, `/lib`, `/libexec`, `/usr`, `/usr/local` і `/var/run`. `/etc` у jail — чистий, з base.txz; `etc/keep` — спосіб узяти з собою часовий пояс, hosts чи каталог сертифікатів хоста (аналог `--private-etc` у firejail, навпаки); `resolv.conf` пише `crate run`, коли специфікація має мережу. Томи стеків з `:ro` тепер справді монтуються лише на читання. Під rootless tmpfs іде через новий privops-verb `mount_tmpfs`, обмежений шляхом так само, як `mount_nullfs`.
 
+## Потік життєвого циклу і `run/timeout`
+
+`crate run --status-fd N` (1.1.65; bwrap `--json-status-fd`) пише по одному JSON-об'єкту на рядок у дескриптор, який відкрив той, хто викликає, — по рядку на фазу, щоб скрипт, CI чи супервізор отримували точні фази замість grep по логах:
+
+```sh
+crate run --status-fd 3 -f nginx.crate 3>nginx.status.jsonl
+```
+```json
+{"event":"started","ts":1761300000,"pid":4242}
+{"event":"jail_created","ts":1761300001,"jid":12,"name":"nginx_pid4242","path":"/var/run/crate/jail-nginx-1a2b"}
+{"event":"net_ready","ts":1761300001,"mode":"bridge","ip":"10.0.0.7"}
+{"event":"mounts_ready","ts":1761300001}
+{"event":"services_started","ts":1761300002}
+{"event":"healthy","ts":1761300004}
+{"event":"exec_started","ts":1761300004,"user":"alice","command":"/run.sh"}
+{"event":"exited","ts":1761303604,"code":0,"reason":"exited normally","timed_out":false}
+{"event":"teardown_done","ts":1761303605}
+```
+
+Запуск, що впав до старту команди, закінчується `failed` (з текстом помилки) і `teardown_done`. Значення — плоскі рядки, цілі числа й булеві; `ip` є, коли адреса відома. `crate stack up` і `crated` запускають контейнери через такий канал і читають його до `jail_created` замість опитування `jls`, тож член стека, який не стартував, каже чому.
+
+`run/timeout: 15m` (firejail `--timeout`; секунди або `s`/`m`/`h`) запускає команду під `timeout(1)`: SIGTERM на дедлайні, SIGKILL через десять секунд, код виходу 124, `"timed_out": true` у події `exited` і звичайне прибирання.
+
 ## Шаблони
 
 Каталог `templates/` містить готові базові конфігурації:
@@ -629,7 +653,7 @@ nmap, amass, wget, aria2, fetch, gzip, yt-dlp, xeyes
 |---|---|
 | `base` | `keep`, `keep-wildcard`, `remove` — керування файлами базової системи |
 | `pkg` | `install`, `local-override`, `nuke` — керування пакунками |
-| `run` | `command`, `service`, `user` — що запускати в контейнері і від кого (1.1.64: за замовчуванням віддзеркалений обліковий запис оператора, `crate` коли оператор — root, `root` на явну вимогу, або обліковий запис у jail) |
+| `run` | `command`, `service`, `user`, `timeout` — що запускати в контейнері, від кого (1.1.64: за замовчуванням віддзеркалений обліковий запис оператора, `crate` коли оператор — root, `root` на явну вимогу, або обліковий запис у jail) і щонайбільше як довго (1.1.65: `90`, `15m`, `2h` → timeout(1), код 124) |
 | `dirs` | `share` — спільні теки (host<->jail) |
 | `files` | `share` — спільні файли (host<->jail) |
 | `options` | `net`, `x11`, `ssl-certs`, `tor`, `video`, `gl`, `no-rm-static-libs`, `dbg-ktrace` |

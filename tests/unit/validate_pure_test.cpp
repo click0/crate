@@ -378,6 +378,31 @@ ATF_TEST_CASE_BODY(run_user_warnings)
 	ATF_REQUIRE(hasMatch(gatherWarnings(t), "X11 authority"));
 }
 
+// 1.1.65: run/timeout
+ATF_TEST_CASE_WITHOUT_HEAD(run_timeout_warnings);
+ATF_TEST_CASE_BODY(run_timeout_warnings)
+{
+	auto s = mkSpec();
+	ATF_REQUIRE(!hasMatch(gatherWarnings(s), "run/timeout"));
+	s.runTimeoutSec = 90;
+	ATF_REQUIRE(!hasMatch(gatherWarnings(s), "run/timeout"));    // a command with a limit: quiet
+
+	auto t = mkSpec();
+	t.runCmdExecutable.clear();
+	t.runServices.push_back("nginx");
+	t.runTimeoutSec = 3600;
+	ATF_REQUIRE(hasMatch(gatherWarnings(t), "service-only"));
+
+	auto u = mkSpec();
+	u.runTimeoutSec = 30;
+	u.healthcheck = std::make_unique<Spec::Healthcheck>();
+	u.healthcheck->test = "/bin/true";
+	u.healthcheck->startPeriodSec = 30;
+	ATF_REQUIRE(hasMatch(gatherWarnings(u), "start_period"));
+	u.healthcheck->startPeriodSec = 5;
+	ATF_REQUIRE(!hasMatch(gatherWarnings(u), "start_period"));
+}
+
 // Sanity: combining multiple problems produces multiple warnings
 ATF_TEST_CASE_WITHOUT_HEAD(multiple_warnings);
 ATF_TEST_CASE_BODY(multiple_warnings)
@@ -635,6 +660,7 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, devices_classes_warn);
 	ATF_ADD_TEST_CASE(tcs, mounts_1163_warnings);
 	ATF_ADD_TEST_CASE(tcs, run_user_warnings);
+	ATF_ADD_TEST_CASE(tcs, run_timeout_warnings);
 	ATF_ADD_TEST_CASE(tcs, multiple_warnings);
 	// 0.7.16 strict-mode tests
 	ATF_ADD_TEST_CASE(tcs, strict_minimal_spec_still_unbounded);

@@ -6,6 +6,62 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.65] — 2026-10-24
+
+**TODO §17.8: machine-readable lifecycle — `crate run --status-fd N`,
+`run/timeout`, `stack up`/crated without polling.**
+
+- **`crate run --status-fd N`** (bwrap `--json-status-fd`): one JSON
+  object per line on an inherited descriptor (3 or higher, opened by the
+  caller: `3>status.jsonl`), one line per phase: `started` (pid),
+  `jail_created` (jid, name, path), `net_ready` (mode, ip when known),
+  `mounts_ready`, `services_started`, `healthy`/`unhealthy` (healthcheck
+  specs; the service-only monitor reports every transition),
+  `exec_started` (user, command), `exited` (code, reason, timed_out),
+  `teardown_done`; a run that throws ends with `failed` (error) and
+  `teardown_done`. Values are flat strings/integers/booleans with an
+  epoch `ts`. The descriptor is close-on-exec so nothing inside the jail
+  inherits it; a reader that goes away gets the stream switched off
+  (SIGPIPE blocked around the write), the run continues. Descriptors
+  0-2 and closed ones are refused up front.
+- **`run/timeout`** (firejail `--timeout`): `90`, `90s`, `15m`, `2h`
+  (1 s .. 30 days). The command, or the service-only `/run.sh`, runs
+  under `timeout(1) -k 10`: SIGTERM at the deadline, SIGKILL ten seconds
+  later, exit 124 reported as "timed out after N s (run/timeout)" and
+  `"timed_out": true`, then the usual teardown. `crate validate` warns on
+  a service-only crate (the limit stops the container) and when the
+  limit is not longer than `healthcheck/start_period`.
+- **`crate stack up`** starts each member as a detached
+  `crate run --status-fd 3` over a pipe and reads the stream until
+  `jail_created` instead of polling jls(8) every 100 ms for a
+  `<name>_pid<pid>` jail (1.1.51 `waitForStackJail`). A member whose
+  run fails now says why ("Failed to start: db — crate run failed:
+  ...") instead of a bare failure after 120 s.
+- **crated**: the `start`/`restart` paths (control socket and HTTP)
+  spawn the same way; `registerSpawnedJailOwner` records the jid, name
+  and path from the `jail_created` event the moment the jail exists
+  (was: a thread probing jls once a second for up to ten minutes). The
+  poll remains the fallback when the pipe could not be made. Three
+  copies of the fork/setsid/exec spawner (stack, routes, control socket)
+  are now one `StatusFd::spawnCrateRun`.
+- New `lib/status_pure.{h,cpp}` (the format: event names, `renderLine`,
+  `parseLine` — a complete reader of what the writer emits —
+  `LineBuffer`, `parseStatusFd`) and `lib/status_fd.{h,cpp}` (Writer,
+  spawnCrateRun, waitForJail); `RunPure::parseRunTimeout`,
+  `runTimeoutPrefix`, `runTimedOut`.
+- Docs: crate.5 (`run/timeout`, the "Lifecycle stream" subsection, an
+  example), `crate run -h`, README en/uk, completions, runbook §4h.
+
+Tests: `status_pure_test` (render/parse round trip, 21 rejected
+shapes, the line buffer incl. oversize lines, `--status-fd` values,
+`run/timeout` parsing and the timeout(1) prefix), `validate_pure_test`
+(`run_timeout_warnings`), `spec_validate_test` (`run_timeout_validation`).
+kyua on Linux; the stream on a real run, timeout(1) inside the jail,
+`stack up` and crated over the pipe are unverified on FreeBSD — runbook
+§4h.
+
+---
+
 ## [1.1.64] — 2026-10-24
 
 **TODO §17.7: `run/user` — non-root by default, root on request.**

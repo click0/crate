@@ -320,7 +320,12 @@ void setFwLeaseRegistry(::FwLeaseRegistry *registry);
 // control-socket peer, or 0 (admin-owned) for the bearer-token HTTP
 // path. Stops early when the child exits first (and reaps it). No-op
 // without a registry.
+// 1.1.65: `statusFd` (>= 0) is the read end of the child's
+// `--status-fd` pipe (StatusFd::spawnCrateRun): the jid, name and path
+// come from its `jail_created` event the moment the jail exists, and a
+// run that fails before that says why in the daemon log. The fd is
+// closed here. With statusFd < 0 the jls(8) poll above is used.
 void registerSpawnedJailOwner(long crateRunPid, uint32_t ownerUid,
-                              const std::string &container);
+                              const std::string &container, int statusFd = -1);
 
 } // namespace Crated

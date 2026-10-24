@@ -588,11 +588,73 @@ jail shows no `wheel` for the created account.
 
 ---
 
+## 4h. 1.1.65 — `--status-fd`, `run/timeout`, `stack up` over the status pipe
+
+```sh
+# the stream, end to end
+crate run --status-fd 3 -f fetch.crate 3>/tmp/st.jsonl -- -o /dev/null https://www.freebsd.org/
+cat /tmp/st.jsonl
+#   expect, in order: started(pid) jail_created(jid,name,path) net_ready(mode,ip?) mounts_ready
+#   services_started exec_started(user,command) exited(code 0, "exited normally", timed_out false) teardown_done
+#   every line parses: python3 -c 'import json,sys; [json.loads(l) for l in sys.stdin]' < /tmp/st.jsonl
+crate run --status-fd 2 -f fetch.crate               # refused: "descriptor 2 is stdin/stdout/stderr"
+crate run --status-fd 7 -f fetch.crate               # refused: "not an open descriptor"
+crate run --status-fd 3 -f sh.crate 3>&- 2>&1 -- -c 'ls -l /dev/fd/'   # (3>&- closes it: refused too)
+
+# nothing inside the jail sees the descriptor
+crate run --status-fd 3 -f sh.crate 3>/tmp/st2.jsonl -- -c 'ls /dev/fd; sleep 1'
+#   expect: 0 1 2 only (close-on-exec)
+
+# a failing run: failed + teardown_done, non-zero exit
+crate run --status-fd 3 --var X=1 -f broken.crate 3>/tmp/st3.jsonl; tail -2 /tmp/st3.jsonl
+
+# the reader goes away: the run must continue
+( crate run --status-fd 3 -f sh.crate -- -c 'sleep 5; echo alive' ) 3>&1 | head -1
+#   expect: "alive" printed after ~5 s, exit 0, no SIGPIPE death
+
+# run/timeout
+cat > /tmp/t.yml <<'EOF'
+run: {command: /bin/sleep 300, timeout: 5}
+EOF
+crate create -s /tmp/t.yml -o /tmp/t.crate
+time crate run --status-fd 3 -f /tmp/t.crate 3>/tmp/st4.jsonl; echo "exit=$?"
+#   expect: ~5 s, "run/timeout: the command was killed after 5 s", exit=124,
+#   exited line has "code":124,"reason":"timed out after 5 s (run/timeout)","timed_out":true
+crate validate -s /tmp/t.yml                          # no warning
+printf 'run: {service: [sshd], timeout: 1h}\n' > /tmp/t2.yml; crate validate -s /tmp/t2.yml
+#   expect: warning "service-only crate — the container itself is stopped"
+printf 'run: {command: /bin/true, timeout: 0}\n' > /tmp/t3.yml; crate validate -s /tmp/t3.yml   # error: 0 means no timeout
+printf 'run: {command: /bin/true, timeout: 31d}\n' > /tmp/t4.yml; crate validate -s /tmp/t4.yml  # error: unknown unit
+
+# stack up without polling
+crate stack up -f examples/stack-web.yml -p
+#   expect: each member "Started:" as soon as its jail exists (no 100 ms jls polling in truss),
+#   a member with a broken spec: "[stack] Failed to start: <name> — crate run failed: <error text>"
+#   instead of a bare "Failed to start" after 120 s
+truss -f -p $(pgrep -n crate) 2>&1 | grep -c jail_get   # 0 while waiting for the next member
+
+# crated: owner recorded from the stream
+crate-ctl start nginx     # or the control socket / HTTP start
+tail -f /var/log/crated.log
+#   expect: "container 'nginx' started as pid N -> jail nginx_pidN (jid J) recorded for uid U" within
+#   a second of the jail appearing (was: up to 1 s poll); a failing start logs
+#   "crated: container 'nginx' (pid N): crate run failed: ... ; owner not recorded"
+```
+
+Pass criteria: the event order above on every mode (NAT, bridge with a
+static IP shows `ip`, DHCP omits it); refusals for descriptors 0-2 and
+closed ones; no descriptor leaks into the jail; a closed reader never
+kills the run; `run/timeout` gives exit 124 and the timed_out event at
+the deadline (+ up to 10 s for a program that ignores SIGTERM); `stack
+up` and crated report the failure reason instead of timing out.
+
+---
+
 ## 5. Reporting back
 
 ```sh
 sh scripts/on-hardware-validation.sh > /tmp/onhw-report.txt 2>&1
-# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b / §4c / §4d / §4e / §4f / §4g manual checks
+# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b / §4c / §4d / §4e / §4f / §4g / §4h manual checks
 ```
 
 Attach `/tmp/onhw-report.txt` plus the manual-section outcomes to the PR

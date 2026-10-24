@@ -45,6 +45,8 @@
 #include "thin_jail_pure.h"   // 1.1.58: base/mode: host-ro
 #include "mounts_pure.h"      // 1.1.63: tmpfs
 #include "passwd_pure.h"      // 1.1.64: run/user account lookup
+#include "status_fd.h"        // 1.1.65: --status-fd lifecycle stream
+#include "status_pure.h"
 
 #include <rang.hpp>
 
@@ -278,9 +280,18 @@ static bool waitForHealthy(const std::string &jidStr, const std::string &user,
 }
 
 // Background healthcheck monitor thread: periodically runs healthcheck and logs failures
+// 1.1.65: `status` gets healthy/unhealthy on every transition (and the
+// first verdict).
 static void healthcheckMonitorLoop(const std::string jidStr, const std::string user,
                                    Spec::Healthcheck hc, bool logProgress,
-                                   std::atomic<bool> &stopFlag) {
+                                   std::atomic<bool> &stopFlag, StatusFd::Writer *status) {
+  int lastVerdict = -1;   // -1 none yet, 0 unhealthy, 1 healthy
+  auto report = [&](bool healthy) {
+    int v = healthy ? 1 : 0;
+    if (v == lastVerdict || !status) return;
+    lastVerdict = v;
+    status->emit(healthy ? StatusPure::kHealthy : StatusPure::kUnhealthy);
+  };
   if (hc.startPeriodSec > 0) {
     for (unsigned i = 0; i < hc.startPeriodSec && !stopFlag.load(); i++)
       ::sleep(1);
@@ -298,6 +309,7 @@ static void healthcheckMonitorLoop(const std::string jidStr, const std::string u
         std::cerr << rang::fg::green << "healthcheck: recovered"
                   << rang::style::reset << std::endl;
       consecutiveFailures = 0;
+      report(true);
     } else {
       consecutiveFailures++;
       if (logProgress)
@@ -309,15 +321,53 @@ static void healthcheckMonitorLoop(const std::string jidStr, const std::string u
                   << consecutiveFailures << " consecutive failures"
                   << rang::style::reset << std::endl;
         consecutiveFailures = 0; // reset and keep monitoring
+        report(false);
       }
     }
   }
 }
 
+// 1.1.65: the network mode name for the net_ready event
+static const char *netModeName(const Spec::NetOptDetails *n) {
+  if (!n) return "none";
+  switch (n->mode) {
+    case Spec::NetOptDetails::Mode::Nat:         return "nat";
+    case Spec::NetOptDetails::Mode::Bridge:      return "bridge";
+    case Spec::NetOptDetails::Mode::Passthrough: return "passthrough";
+    case Spec::NetOptDetails::Mode::Netgraph:    return "netgraph";
+    case Spec::NetOptDetails::Mode::Auto:        return "auto";
+  }
+  return "unknown";
+}
+
 //
 // interface
 //
+static bool runCrateInner(const Args &args, int argc, char** argv, int &outReturnCode,
+                          StatusFd::Writer &status);
+
+// 1.1.65: the --status-fd stream wraps the whole run: `started` before
+// anything, and after runCrateInner returned or threw — i.e. after every
+// RunAtEnd has run — `failed` (with the error) and `teardown_done`.
 bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
+  StatusFd::Writer status(args.runStatusFd);
+  if (auto e = status.open(); !e.empty())
+    ERR(e)
+  status.emit(StatusPure::kStarted, {StatusPure::num("pid", (long long)::getpid())});
+  bool ok = false;
+  try {
+    ok = runCrateInner(args, argc, argv, outReturnCode, status);
+  } catch (const std::exception &e) {
+    status.emit(StatusPure::kFailed, {StatusPure::str("error", e.what())});
+    status.emit(StatusPure::kTeardownDone);
+    throw;
+  }
+  status.emit(StatusPure::kTeardownDone);
+  return ok;
+}
+
+static bool runCrateInner(const Args &args, int argc, char** argv, int &outReturnCode,
+                          StatusFd::Writer &status) {
   LOG("'run' command is invoked, " << argc << " arguments are provided")
 
   // Install signal handlers so SIGINT/SIGTERM don't kill the process immediately.
@@ -1129,6 +1179,9 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   runScript("run:after-create-jail");
   LOG("jail " << jailXname << " has been created, jid=" << jid)
+  status.emit(StatusPure::kJailCreated, {StatusPure::num("jid", jid),
+                                         StatusPure::str("name", jailXname),
+                                         StatusPure::str("path", jailPath)});
 
   // 1.1.5: securelevel + children.max are applied at jail creation
   // when the privops path is used (RunJail::createJail packs them
@@ -1220,6 +1273,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   std::vector<RunAtEnd> destroyExtraInterfaces;
   auto optionNet = spec.optionNet();
   std::string jailSideIface; // jail-side network interface name (for all modes)
+  std::string statusJailIp;  // 1.1.65: the jail's IPv4 when known, for the net_ready event
 
   if (optionNet && optionNet->mode == Spec::NetOptDetails::Mode::Bridge) {
     //
@@ -1684,6 +1738,8 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
       LOG("bridge mode: static IPv6 " << optionNet->staticIp6 << " on " << bridgeInfo.ifaceB)
     }
 
+    statusJailIp = bridgeJailIp;
+
     // 1.1.38: per-container firewall policy in bridge/auto mode. It
     // was composed only in the NAT branch, so a bridge jail with
     // `firewall: {default: block}` ran wide open while crate.5 promised
@@ -2043,6 +2099,17 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   else if (isNatMode && spec.optionExists("net"))
     execInJail({"/bin/sh", "-c", "service ipfw start > /dev/null 2>&1"}, "start firewall in jail");
 
+  // 1.1.65: every network mode has set the jail up by here (NAT: epair +
+  // ipfw; bridge/passthrough/netgraph: the interface, address, pf
+  // anchor). The IP is the bridge-family address when one is known.
+  {
+    if (statusJailIp.empty() && optionNet && !optionNet->staticIp.empty())
+      statusJailIp = optionNet->staticIp.substr(0, optionNet->staticIp.find('/'));
+    std::vector<StatusPure::Field> f = {StatusPure::str("mode", spec.optionExists("net") ? netModeName(optionNet) : "none")};
+    if (!statusJailIp.empty()) f.push_back(StatusPure::str("ip", statusJailIp));
+    status.emit(StatusPure::kNetReady, f);
+  }
+
   // add user to jail
   RunJail::createUserInJail(spec, jailPath, jid, user, homeDir, myuid, mygid, execInJail, runScript, args.logProgress);
 
@@ -2136,6 +2203,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     mount(m);
     LOG("tmpfs: " << p << (t.size.empty() ? "" : " (size " + t.size + ")") << (underHome ? " owned by the user" : ""))
   }
+  status.emit(StatusPure::kMountsReady);
 
   // Socket proxying (§15)
   RunAtEnd destroySocatProxies = RunServices::setupSocketProxy(spec, jailPath, args.logProgress);
@@ -2201,6 +2269,7 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
 
   // start services
   RunServices::startServices(spec, execInJail, runScript);
+  status.emit(StatusPure::kServicesStarted);
 
   // Healthcheck: wait for container to become healthy after services start (§20)
   if (spec.healthcheck) {
@@ -2208,8 +2277,18 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     if (!waitForHealthy(jidStr, user, *spec.healthcheck, args.logProgress)) {
       std::cerr << rang::fg::red << "container failed healthcheck — proceeding anyway"
                 << rang::style::reset << std::endl;
+      status.emit(StatusPure::kUnhealthy);
+    } else {
+      status.emit(StatusPure::kHealthy);
     }
   }
+
+  // 1.1.65: run/timeout — timeout(1) in front of the command (TERM at the
+  // deadline, KILL kRunTimeoutKillAfter seconds later); exit 124 is then
+  // "timed out" rather than the program's own code.
+  const auto timeoutPrefix = RunPure::runTimeoutPrefix(spec.runTimeoutSec);
+  if (spec.runTimeoutSec)
+    LOG("run/timeout: the command is limited to " << spec.runTimeoutSec << " s")
 
   // copy X11 authentication files into the user's home directory in jail
   RunGui::copyX11Auth(spec, jailPath, homeDir, myuid, mygid);
@@ -2227,20 +2306,31 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   // run the process
   runScript("run:before-execute");
   int returnCode = 0;
+  std::string exitReason = "exited normally";
+  bool timedOut = false;
   if (!spec.runCmdExecutable.empty()) {
     LOG("running the command in jail: env=" << jailEnv)
-    auto innerCmd = STR("/usr/bin/env " << jailEnv
+    std::string prefix;
+    for (auto &p : timeoutPrefix) prefix += p + " ";
+    auto innerCmd = STR(prefix << "/usr/bin/env " << jailEnv
                         << (spec.optionExists("dbg-ktrace") ? " /usr/bin/ktrace" : "")
                         << " " << Util::shellQuote(spec.runCmdExecutable) << spec.runCmdArgs << argsToString(argc, argv));
-    int status = JailExec::execInJail(jid, {"/bin/sh", "-c", innerCmd}, runUser.name, "run command in jail");
-    returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+    status.emit(StatusPure::kExecStarted, {StatusPure::str("user", runUser.name),
+                                           StatusPure::str("command", spec.runCmdExecutable)});
+    int st = JailExec::execInJail(jid, {"/bin/sh", "-c", innerCmd}, runUser.name, "run command in jail");
+    returnCode = WIFEXITED(st) ? WEXITSTATUS(st) : 1;
+    timedOut = WIFEXITED(st) && RunPure::runTimedOut(spec.runTimeoutSec, returnCode);
     // 0.8.28: surface OOM / RCTL / signal context to the operator
     // log so they don't have to correlate exit codes with rctl(8)
     // by hand. diagnoseExitReason returns "exited normally" for
     // clean exits — only log when something interesting happened.
-    if (returnCode != 0 || !WIFEXITED(status)) {
-      auto reason = RunJail::diagnoseExitReason(jid, status);
-      LOG("command has finished in jail: returnCode=" << returnCode << " (" << reason << ")")
+    if (timedOut) {
+      exitReason = STR("timed out after " << spec.runTimeoutSec << " s (run/timeout)");
+      std::cerr << rang::fg::yellow << "run/timeout: the command was killed after "
+                << spec.runTimeoutSec << " s" << rang::style::reset << std::endl;
+    } else if (returnCode != 0 || !WIFEXITED(st)) {
+      exitReason = RunJail::diagnoseExitReason(jid, st);
+      LOG("command has finished in jail: returnCode=" << returnCode << " (" << exitReason << ")")
     } else {
       LOG("command has finished in jail: returnCode=" << returnCode)
     }
@@ -2285,20 +2375,29 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
     } hcGuard{hcStopFlag, hcThread};
     if (spec.healthcheck) {
       LOG("starting background healthcheck monitor")
-      hcThread = std::thread(healthcheckMonitorLoop, jidStr, runUser.name, *spec.healthcheck, args.logProgress, std::ref(hcStopFlag));
+      hcThread = std::thread(healthcheckMonitorLoop, jidStr, runUser.name, *spec.healthcheck, args.logProgress,
+                             std::ref(hcStopFlag), &status);
     }
     {
-      int status = JailExec::execInJail(jid, {cmdFile}, runUser.name, "run service command in jail");
-      returnCode = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+      std::vector<std::string> cmd = timeoutPrefix;
+      cmd.push_back(cmdFile);
+      status.emit(StatusPure::kExecStarted, {StatusPure::str("user", runUser.name),
+                                             StatusPure::str("command", cmdFile)});
+      int st = JailExec::execInJail(jid, cmd, runUser.name, "run service command in jail");
+      returnCode = WIFEXITED(st) ? WEXITSTATUS(st) : 1;
+      timedOut = WIFEXITED(st) && RunPure::runTimedOut(spec.runTimeoutSec, returnCode);
       // 0.8.28: same OOM / RCTL diagnosis hook as the
       // executable-mode path above. Service-only crates are MORE
       // likely to hit RCTL (memoryuse caps trip after weeks of
       // accumulating cache); the diagnosis line saves operators
       // a syslog dive.
-      if (returnCode != 0 || !WIFEXITED(status)) {
-        auto reason = RunJail::diagnoseExitReason(jid, status);
+      if (timedOut) {
+        exitReason = STR("timed out after " << spec.runTimeoutSec << " s (run/timeout)");
+        LOG("run/timeout: the service-only container reached its time limit")
+      } else if (returnCode != 0 || !WIFEXITED(st)) {
+        exitReason = RunJail::diagnoseExitReason(jid, st);
         LOG("service command has finished in jail: returnCode=" << returnCode
-            << " (" << reason << ")")
+            << " (" << exitReason << ")")
       }
     }
     // Stop healthcheck monitor
@@ -2312,7 +2411,12 @@ bool runCrate(const Args &args, int argc, char** argv, int &outReturnCode) {
   if (g_signalReceived != 0) {
     LOG("interrupted by signal " << g_signalReceived << ", skipping post-exec, cleaning up")
     returnCode = 128 + g_signalReceived;
-  } else {
+    exitReason = STR("interrupted by signal " << g_signalReceived);
+  }
+  status.emit(StatusPure::kExited, {StatusPure::num("code", returnCode),
+                                    StatusPure::str("reason", exitReason),
+                                    StatusPure::boolean("timed_out", timedOut)});
+  if (g_signalReceived == 0) {
     runScript("run:after-execute");
 
     // stop managed services in reverse order (§14)

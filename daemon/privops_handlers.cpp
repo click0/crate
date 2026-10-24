@@ -20,6 +20,7 @@
 #include "../lib/runtime_paths_pure.h"
 #include "../lib/passwd_pure.h"        // 1.1.56: exec_in_jail user lookup in the parent
 #include "../lib/fw_lease_registry.h"  // 1.1.57: acquire/release_fw_lease
+#include "../lib/status_fd.h"          // 1.1.65: registerSpawnedJailOwner over the status pipe
 
 #include <iostream>
 #include <thread>                      // 1.1.42: registerSpawnedJailOwner
@@ -1972,12 +1973,36 @@ void setIfaceOwnerRegistry(::IfaceOwnerRegistry *registry) {
 }
 
 void registerSpawnedJailOwner(long crateRunPid, uint32_t ownerUid,
-                              const std::string &container) {
-  if (!g_jidOwnerRegistry || crateRunPid <= 0) return;
+                              const std::string &container, int statusFd) {
+  if (!g_jidOwnerRegistry || crateRunPid <= 0) {
+    if (statusFd >= 0) ::close(statusFd);
+    return;
+  }
   // A cold `crate run` extracts the image before jail_setv; give it
   // ten minutes. One probe per second is negligible against a daemon
   // that already reconciles the registry on every lookup.
   constexpr int kMaxProbes = 600;
+
+  // 1.1.65: the status stream names the jail the moment it exists.
+  if (statusFd >= 0) {
+    std::thread([crateRunPid, ownerUid, container, statusFd]() {
+      StatusPure::Event ev;
+      auto w = StatusFd::waitForJail(statusFd, (pid_t)crateRunPid, (unsigned)kMaxProbes, ev);
+      long long jid = 0;
+      if (w == StatusFd::Wait::JailCreated && ev.getInt("jid", jid) && jid > 0) {
+        g_jidOwnerRegistry->recordCreate(static_cast<unsigned>(jid), ownerUid,
+                                         ev.get("name"), ev.get("path"));
+        std::cerr << "crated: container '" << container << "' started as pid "
+                  << crateRunPid << " -> jail " << ev.get("name") << " (jid " << jid
+                  << ") recorded for uid " << ownerUid << std::endl;
+        return;
+      }
+      std::cerr << "crated: container '" << container << "' (pid " << crateRunPid
+                << "): " << StatusFd::describe(w, ev) << "; owner not recorded" << std::endl;
+    }).detach();
+    return;
+  }
+
   std::thread([crateRunPid, ownerUid, container]() {
     for (int i = 0; i < kMaxProbes; i++) {
       try {

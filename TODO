@@ -923,14 +923,26 @@ Landlock, --restrict-namespaces.
   `setuid` would do); `crate console` default user when run/user is
   set; `run/user` for stack members.
 
-* (feature, MED value / SMALL size) Machine-readable lifecycle —
-  bwrap `--json-status-fd`, firejail `--timeout`. `crate run
-  --status-fd N` writes one JSON object per event (jail_created jid,
-  mounts_ready, net_ready ip, exec_started pid, healthy/unhealthy,
-  exited code, teardown_done); `stack up` and crated's spawned runs
-  stop polling for the jail to appear (1.1.51 waitForStackJail) and
-  the hub/CI get exact phases. `run/timeout: <seconds>` kills the
-  command and tears down when exceeded.
+* DONE 1.1.65 — Machine-readable lifecycle (StatusPure / StatusFd).
+  Decisions taken: one flat JSON object per line (strings, integers,
+  booleans, epoch `ts`), so the reader is forty lines and not a JSON
+  library; the stream wraps the whole run — `started` before the
+  extract, `failed`+`teardown_done` after every RunAtEnd has run — so
+  a consumer has one terminal rule (exited / failed / EOF).
+  `exec_started` carries user+command, not a pid: execInJail is
+  synchronous and the in-jail pid is not known to the supervisor.
+  `net_ready` has `ip` for static/pool addresses only (DHCP is not
+  known at that point). The descriptor is CLOEXEC and the write
+  blocks SIGPIPE: a vanished reader must never take the jail down.
+  `stack up` and crated spawn over a pipe on fd 3 and stop at
+  `jail_created`; crated falls back to the jls poll only when the pipe
+  could not be made. `run/timeout` is timeout(1) `-k 10` in front of
+  the command (exit 124 → "timed out"), no second supervisor thread.
+  Leftovers: the hub/crated REST surface does not relay the events yet
+  (`GET /containers/:name/events` as SSE would be the natural home);
+  `run/timeout` for stack members; a `--status-fd` for `crate create`
+  (extract/pkg phases); `exec_started` pid via a pidfile the in-jail
+  `sh -c` writes.
 
 * (feature, LOW value / SMALL size) Desktop integration — firecfg.
   `crate wrap install <profile>` writes a launcher to ~/.local/bin (or

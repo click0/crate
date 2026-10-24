@@ -12,6 +12,7 @@
 #include "privops_client.h"
 #include "runtime_paths_pure.h"
 #include "stack_pure.h"
+#include "status_fd.h"   // 1.1.65: detached `crate run --status-fd`
 
 #include <rang.hpp>
 #include <yaml-cpp/yaml.h>
@@ -76,48 +77,30 @@ struct StackEntry {
 // calling runCrate() in-process. runCrate() is the jail's foreground
 // supervisor and returns only when the jail exits — so a service-only
 // first container meant the second was never started. The child is
-// spawned like daemon/routes.cpp spawnCrateRun (setsid, stdio to
-// /dev/null); we then wait for its jail "<name>_pid<pid>" to appear so
-// `depends:` ordering still means "the previous one is up".
-static pid_t spawnCrateRunDetached(const std::string &crateFile,
-                                   const std::map<std::string, std::string> &vars,
-                                   bool logProgress) {
-  std::vector<std::string> argv = {CRATE_PATH_CRATE, "run"};
+// spawned like daemon/routes.cpp (setsid, stdio to /dev/null).
+// 1.1.65: over a `--status-fd` pipe (StatusFd::spawnCrateRun); we then
+// read its lifecycle stream until `jail_created` instead of polling
+// jls(8) for a "<name>_pid<pid>" jail, so `depends:` ordering still
+// means "the previous one is up" and a run that fails says why.
+static StatusFd::Spawned spawnCrateRunDetached(const std::string &crateFile,
+                                               const std::map<std::string, std::string> &vars,
+                                               bool logProgress) {
+  std::vector<std::string> argv;
   if (logProgress) argv.push_back("--log-progress");
   for (auto &kv : vars) { argv.push_back("--var"); argv.push_back(kv.first + "=" + kv.second); }
   argv.push_back("-f");
   argv.push_back(crateFile);
-  pid_t pid = ::fork();
-  if (pid < 0) return -1;
-  if (pid == 0) {
-    ::setsid();
-    ::close(0); ::close(1); ::close(2);
-    ::open("/dev/null", O_RDONLY);
-    ::open("/dev/null", O_WRONLY);
-    ::open("/dev/null", O_WRONLY);
-    std::vector<char*> cargv;
-    for (auto &a : argv) cargv.push_back(const_cast<char*>(a.c_str()));
-    cargv.push_back(nullptr);
-    ::execv(CRATE_PATH_CRATE, cargv.data());
-    ::_exit(127);
-  }
-  return pid;
+  return StatusFd::spawnCrateRun(argv);
 }
 
-// Wait up to `timeoutSec` for the jail of container `name` started by
-// `pid` to appear. Returns false when the child exited first or the
-// time ran out.
-static bool waitForStackJail(const std::string &name, pid_t pid, unsigned timeoutSec) {
-  for (unsigned i = 0; i < timeoutSec * 10; i++) {
-    try {
-      for (auto &j : JailQuery::getAllJails(true))
-        if (!j.dying && StackPure::jailNameMatchesContainer(j.name, name)) return true;
-    } catch (...) {}
-    int st = 0;
-    if (::waitpid(pid, &st, WNOHANG) == pid) return false;   // supervisor died before its jail
-    ::usleep(100000);
-  }
-  return false;
+// Wait up to `timeoutSec` for the jail of the container started as `s`
+// to be created. False (with the reason in `why`) when the run ended or
+// failed first, the child died, or the time ran out.
+static bool waitForStackJail(const StatusFd::Spawned &s, unsigned timeoutSec, std::string &why) {
+  StatusPure::Event ev;
+  auto w = StatusFd::waitForJail(s.statusFd, s.pid, timeoutSec, ev);
+  why = StatusFd::describe(w, ev);
+  return w == StatusFd::Wait::JailCreated;
 }
 
 // Parse networks section from a stack YAML
@@ -973,16 +956,11 @@ bool stackCommand(const Args &args) {
       // If spec file is provided, create first then run
       // If crate file is provided, run directly
       if (!e.crateFile.empty()) {
-        // Run the .crate file
-        // Build argv for runCrate
-        std::vector<std::string> runArgs = {"crate", "run", "-f", e.crateFile};
-        std::vector<char*> runArgv;
-        for (auto &a : runArgs) runArgv.push_back(const_cast<char*>(a.c_str()));
-        runArgv.push_back(nullptr);
-
-        pid_t pid = spawnCrateRunDetached(e.crateFile, e.vars, args.logProgress);
-        if (pid < 0 || !waitForStackJail(e.name, pid, 120)) {
-          std::cerr << rang::fg::red << "  [stack] Failed to start: " << e.name
+        // Run the .crate file as a detached supervisor
+        auto s = spawnCrateRunDetached(e.crateFile, e.vars, args.logProgress);
+        std::string why = "fork failed";
+        if (s.pid < 0 || !waitForStackJail(s, 120, why)) {
+          std::cerr << rang::fg::red << "  [stack] Failed to start: " << e.name << " — " << why
                     << rang::style::reset << std::endl;
           return false;
         }
@@ -1079,9 +1057,10 @@ bool stackCommand(const Args &args) {
         }
 
         // Now run the created crate (detached supervisor, 1.1.51)
-        pid_t pid = spawnCrateRunDetached(crateOutput, e.vars, args.logProgress);
-        if (pid < 0 || !waitForStackJail(e.name, pid, 120)) {
-          std::cerr << rang::fg::red << "  [stack] Failed to run: " << e.name
+        auto s = spawnCrateRunDetached(crateOutput, e.vars, args.logProgress);
+        std::string why = "fork failed";
+        if (s.pid < 0 || !waitForStackJail(s, 120, why)) {
+          std::cerr << rang::fg::red << "  [stack] Failed to run: " << e.name << " — " << why
                     << rang::style::reset << std::endl;
           return false;
         }

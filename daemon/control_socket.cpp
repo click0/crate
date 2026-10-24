@@ -46,6 +46,7 @@
 #include "../lib/spec_registry.h"
 #include "../lib/util.h"
 #include "../lib/pathnames.h"
+#include "../lib/status_fd.h"   // 1.1.65: spawnCrateRun over a --status-fd pipe
 
 #include <fcntl.h>
 #include <grp.h>
@@ -233,27 +234,14 @@ void handleStats(std::string &resBody, int &status, const std::string &name) {
 // exec target is /usr/local/bin/crate — mode 0755 since 1.0.0 (no
 // longer setuid) — so the child simply inherits crated's own uid
 // (root). That holds whether crated is started by an operator at the
-// console or from /etc/rc.d/crated. Returns the child pid, -1 on fork
-// failure (errno set). 1.1.37: shared by start and restart.
-pid_t spawnCrateRun(const std::string &cratePath) {
-  pid_t pid = ::fork();
-  if (pid < 0) return -1;
-  if (pid == 0) {
-    // Child: detach from controlling terminal so the spawned
-    // crate process survives crated's own teardown / SIGHUP.
-    ::setsid();
-    // Close stdio. Errors from the spawned crate go to its own
-    // log file (lib/audit.cpp) — there's no way to surface them
-    // back to the control-socket caller, who already got 202.
-    ::close(0); ::close(1); ::close(2);
-    ::open("/dev/null", O_RDONLY);
-    ::open("/dev/null", O_WRONLY);
-    ::open("/dev/null", O_WRONLY);
-    ::execl(CRATE_PATH_CRATE, "crate", "run", "-f", cratePath.c_str(),
-            nullptr);
-    ::_exit(127);
-  }
-  return pid;
+// console or from /etc/rc.d/crated. 1.1.37: shared by start and
+// restart. 1.1.65: StatusFd::spawnCrateRun — stdio still goes to
+// /dev/null (errors land in the run's own log, lib/audit.cpp; the
+// caller already got 202), and the child's `--status-fd` pipe lets
+// registerSpawnedJailOwner record the jail the moment it exists.
+// pid < 0 on fork failure (errno set).
+StatusFd::Spawned spawnCrateRun(const std::string &cratePath) {
+  return StatusFd::spawnCrateRun({"-f", cratePath});
 }
 
 // 1.1.42: `peerUid` is the control-socket peer (getpeereid); the jail
@@ -300,14 +288,15 @@ void handleStart(std::string &resBody, int &status, const std::string &name,
     return;
   }
 
-  pid_t pid = spawnCrateRun(cratePath);
+  auto spawned = spawnCrateRun(cratePath);
+  pid_t pid = spawned.pid;
   if (pid < 0) {
     status  = 500;
     resBody = ControlSocketPure::renderErrorJson(
       std::string("fork failed: ") + std::strerror(errno));
     return;
   }
-  Crated::registerSpawnedJailOwner(pid, peerUid > 0 ? (uint32_t)peerUid : 0u, name);
+  Crated::registerSpawnedJailOwner(pid, peerUid > 0 ? (uint32_t)peerUid : 0u, name, spawned.statusFd);
   // Parent: don't wait — the child runs the jail's foreground
   // supervisor for as long as the jail is up, which can be hours.
   // We reply 202 immediately and let the operator poll
@@ -395,14 +384,15 @@ void handleRestart(std::string &resBody, int &status, const std::string &name,
       std::string("stop phase failed: ") + e.what());
     return;
   }
-  pid_t pid = spawnCrateRun(cratePath);
+  auto spawned = spawnCrateRun(cratePath);
+  pid_t pid = spawned.pid;
   if (pid < 0) {
     status  = 500;
     resBody = ControlSocketPure::renderErrorJson(
       std::string("stopped, but fork for restart failed: ") + std::strerror(errno));
     return;
   }
-  Crated::registerSpawnedJailOwner(pid, peerUid > 0 ? (uint32_t)peerUid : 0u, name);
+  Crated::registerSpawnedJailOwner(pid, peerUid > 0 ? (uint32_t)peerUid : 0u, name, spawned.statusFd);
   status  = 202;
   resBody = R"({"status":"restarting","container":")" + name +
             R"(","crate_path":")" + cratePath + R"("})";

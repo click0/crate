@@ -84,6 +84,7 @@ Crate containers contain everything needed to run the containerized software —
 | `crate create -s spec.yml --template base.yml` | Create with template inheritance |
 | `crate run -f app.crate [-- args]` | Run a container |
 | `crate run NAME [-- args]` | Run a profile by name: spec from `~/.config/crate/profiles/`, `/usr/local/share/crate/profiles/` or the installed examples, `.crate` built on first use (1.1.59) |
+| `crate run --status-fd N ...` | Same, plus one JSON object per lifecycle event (`jail_created`, `net_ready`, `exited`, ...) on descriptor N (1.1.65) |
 | `crate profile-from-trace -o spec.yml -- CMD [args]` | Run CMD once on the host under `truss(1)` and draft a minimal spec from what it touched (1.1.60) |
 | `crate audit TARGET [-j] [--offline]` | What a running container can actually reach, seen from inside: host paths, devices, sockets, net (1.1.61) |
 | `crate validate -s spec.yml` | Validate a specification |
@@ -626,6 +627,29 @@ etc:
 
 A file share is a hard link or a copy and cannot be read-only — share its directory with `:ro`. tmpfs mounts come after the shares (a tmpfs above a share hides it; `crate validate` warns) and are refused on `/`, `/dev`, `/proc`, `/etc`, `/bin`, `/sbin`, `/lib`, `/libexec`, `/usr`, `/usr/local` and `/var/run`. The jail's `/etc` is the pristine one from base.txz — `etc/keep` is the way to carry the host's timezone, hosts file or certificate directory along (firejail's `--private-etc`, inverted); `resolv.conf` is written by `crate run` when the spec has networking. Stack volumes with `:ro` now reach the mount as read-only too. Under rootless the tmpfs goes through the new `mount_tmpfs` privops verb, path-gated like `mount_nullfs`.
 
+## Lifecycle stream and `run/timeout`
+
+`crate run --status-fd N` (1.1.65; bwrap `--json-status-fd`) writes one JSON object per line to a descriptor the caller opened, one line per phase, so a script, a CI job or a supervisor gets exact phases instead of grepping logs:
+
+```sh
+crate run --status-fd 3 -f nginx.crate 3>nginx.status.jsonl
+```
+```json
+{"event":"started","ts":1761300000,"pid":4242}
+{"event":"jail_created","ts":1761300001,"jid":12,"name":"nginx_pid4242","path":"/var/run/crate/jail-nginx-1a2b"}
+{"event":"net_ready","ts":1761300001,"mode":"bridge","ip":"10.0.0.7"}
+{"event":"mounts_ready","ts":1761300001}
+{"event":"services_started","ts":1761300002}
+{"event":"healthy","ts":1761300004}
+{"event":"exec_started","ts":1761300004,"user":"alice","command":"/run.sh"}
+{"event":"exited","ts":1761303604,"code":0,"reason":"exited normally","timed_out":false}
+{"event":"teardown_done","ts":1761303605}
+```
+
+A run that fails before the command ran ends with `failed` (with the error text) and `teardown_done`. Values are flat strings, integers and booleans; `ip` appears when the address is known. `crate stack up` and `crated` start containers over such a pipe and read it until `jail_created` instead of polling `jls` for the jail to appear, so a member that fails to start says why.
+
+`run/timeout: 15m` (firejail `--timeout`; seconds, or `s`/`m`/`h`) starts the command under `timeout(1)`: SIGTERM at the deadline, SIGKILL ten seconds later, exit code 124, `"timed_out": true` in the `exited` event, and the usual teardown.
+
 ## Templates
 
 The `templates/` directory provides ready-made base configurations:
@@ -672,7 +696,7 @@ Top-level keys supported in `.crate` / `.yml` spec files:
 |---|---|
 | `base` | `mode` (`full` or `host-ro` — thin jail on nullfs, see below), `host-dirs`, `keep`, `keep-wildcard`, `remove` — base system layout |
 | `pkg` | `install`, `local-override`, `nuke` — package management |
-| `run` | `command`, `service`, `user` — what to execute in the container and as whom (1.1.64: the operator's mirrored account by default, `crate` when the operator is root, `root` on explicit request, or a jail account) |
+| `run` | `command`, `service`, `user`, `timeout` — what to execute in the container, as whom (1.1.64: the operator's mirrored account by default, `crate` when the operator is root, `root` on explicit request, or a jail account) and for how long at most (1.1.65: `90`, `15m`, `2h` → timeout(1), exit 124) |
 | `dirs` | `share` — shared directories (host<->jail) |
 | `files` | `share` — shared files (host<->jail) |
 | `options` | `net`, `x11`, `ssl-certs`, `tor`, `video`, `gl`, `no-rm-static-libs`, `dbg-ktrace` |

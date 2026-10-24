@@ -7,6 +7,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace RunPure {
 
@@ -91,5 +92,25 @@ bool runUserNeedsAccount(const RunUser &u);
 // name (letter or '_' first, then [A-Za-z0-9._-], <= 32 chars). Returns
 // "" when acceptable, otherwise the reason.
 std::string validateRunUser(const std::string &user);
+
+// 1.1.65 (TODO §17.8, firejail --timeout): `run/timeout` — how long the
+// container command may run. "90" / "90s" seconds, "15m" minutes, "2h"
+// hours; 1 .. kRunTimeoutMax seconds. Returns "" and sets `secondsOut`,
+// otherwise the reason ("" / "0" are rejected: omit the key instead).
+constexpr unsigned kRunTimeoutMax = 30u * 24 * 3600;   // 30 days
+std::string parseRunTimeout(const std::string &text, unsigned &secondsOut);
+
+// The timeout(1) prefix that wraps the command inside the jail:
+// `/usr/bin/timeout -k <kRunTimeoutKillAfter> <seconds>` — TERM at the
+// deadline, KILL kRunTimeoutKillAfter seconds later. Empty when seconds
+// is 0 (no timeout). timeout(1) is in FreeBSD base.
+constexpr unsigned kRunTimeoutKillAfter = 10;
+constexpr int kRunTimeoutExitCode = 124;   // timeout(1): the deadline was hit
+std::vector<std::string> runTimeoutPrefix(unsigned seconds);
+
+// true when `exitCode` of a command wrapped by runTimeoutPrefix(seconds)
+// means the deadline fired (false without a timeout: 124 is then the
+// program's own code).
+bool runTimedOut(unsigned seconds, int exitCode);
 
 }

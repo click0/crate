@@ -213,6 +213,10 @@ void Spec::validate() const {
   // 1.1.64: run/user
   if (auto e = RunPure::validateRunUser(runUser); !e.empty())
     ERR(e)
+  // 1.1.65: run/timeout (parse already range-checks; a merged/constructed
+  // Spec may carry anything)
+  if (runTimeoutSec > RunPure::kRunTimeoutMax)
+    ERR("run/timeout exceeds the 30-day maximum")
 
   // shared directories must be full paths
   for (auto &dirShare : dirsShare)

@@ -3,6 +3,7 @@
 
 #include "args.h"
 #include "args_pure.h"
+#include "status_pure.h"   // 1.1.65: --status-fd
 #include "util.h"
 #include "err.h"
 #include "version.h"   // 1.1.52: generated from VERSION by the Makefile
@@ -118,6 +119,10 @@ static void usageRun() {
   std::cout << "" << std::endl;
   std::cout << "Common options:" << std::endl;
   std::cout << "      --var KEY=VALUE                substitute ${KEY} with VALUE in embedded spec (repeatable)" << std::endl;
+  std::cout << "      --status-fd N                  write one JSON object per lifecycle event to descriptor N" << std::endl;
+  std::cout << "                                    (started, jail_created jid, net_ready ip, mounts_ready," << std::endl;
+  std::cout << "                                    services_started, healthy/unhealthy, exec_started, exited" << std::endl;
+  std::cout << "                                    code, failed, teardown_done); N >= 3, opened by the caller" << std::endl;
   std::cout << "  -h, --help                         show this help screen" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Examples:" << std::endl;
@@ -125,6 +130,7 @@ static void usageRun() {
   std::cout << "  crate run firefox                       # shipped example as a profile" << std::endl;
   std::cout << "  crate run fetch -- -o /dev/null https://www.freebsd.org/" << std::endl;
   std::cout << "  crate run --warm-base tank/templates/firefox-warm --name firefox" << std::endl;
+  std::cout << "  crate run --status-fd 3 -f nginx.crate 3>nginx.status.jsonl" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -945,6 +951,11 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
             args.runWarmBase = getArgParam(++a, argc, argv);
           } else if (strEq(argLong, "name")) {
             args.runName = getArgParam(++a, argc, argv);
+          } else if (strEq(argLong, "status-fd")) {
+            // 1.1.65: lifecycle events as JSON lines on an inherited fd
+            const char *v = getArgParam(++a, argc, argv);
+            if (auto e = StatusPure::parseStatusFd(v, args.runStatusFd); !e.empty())
+              err("%s", e.c_str());
           } else {
             err("unsupported long option '%s'", argv[a]);
           }

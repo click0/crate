@@ -178,6 +178,14 @@ std::vector<std::string> gatherWarnings(const Spec &spec) {
       w.push_back("run/user: " + spec.runUser + " — the X11 authority is copied for the operator's account; a GUI program running as '" + spec.runUser + "' may not reach the display");
   }
 
+  // 1.1.65: run/timeout
+  if (spec.runTimeoutSec > 0) {
+    if (spec.runCmdExecutable.empty())
+      w.push_back("run/timeout: " + std::to_string(spec.runTimeoutSec) + "s on a service-only crate — the container itself is stopped after that long (the services get `service stop`), which is rarely what a daemon wants");
+    if (spec.healthcheck && spec.healthcheck->startPeriodSec >= spec.runTimeoutSec)
+      w.push_back("run/timeout: " + std::to_string(spec.runTimeoutSec) + "s is not longer than healthcheck/start_period; the command would be killed before the first probe");
+  }
+
   return w;
 }
 
