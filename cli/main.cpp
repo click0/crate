@@ -370,6 +370,9 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdProfileFromTrace: {
     succ = profileFromTraceCommand(args, argc - numArgsProcessed, argv + numArgsProcessed);
     break;
+  } case CmdAudit: {
+    succ = jailAuditCommand(args);
+    break;
   } case CmdUpdate: {
     succ = updateCommand(args);
     break;

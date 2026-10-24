@@ -188,6 +188,31 @@ What cannot be mapped is left as a comment.
 reads a saved trace instead of running;
 .Fl -keep-trace Ar file
 keeps the raw one.
+.It Cm audit Ar target Oo Fl j Oc Oo Fl -offline Oc Op Fl -dns Ar name
+What a running container can actually reach, seen from the inside.
+One
+.Xr sh 1
+probe runs in the jail with base-system tools only and its output
+becomes the PASS/WARN/FAIL table of
+.Cm doctor :
+securelevel, hostname and hostid compared with the host's, the
+.Sy allow.*
+flags as the jail sees them, host paths visible through nullfs
+(read-write or read-only), device classes in
+.Pa /dev
+(gpu, video, sound, input, usb, serial, disks, raw), interfaces and the
+default route, inet listeners, host unix sockets reachable (X11, D-Bus,
+Wayland, sound), who runs what, one TCP connect to the default gateway
+and one DNS lookup.
+WARN marks an exposure worth a look, not an error.
+.Fl -offline
+skips the two network probes,
+.Fl -dns
+picks the name looked up (default
+.Li www.freebsd.org ) .
+Needs root or the crated privops socket, like
+.Cm console .
+Exit status 0, 1 (a WARN) or 2 (the probe did not run).
 .El
 .Ss Global options
 .Bl -tag -width "--log-progress"

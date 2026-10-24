@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdBackupPrune, CmdReplicate, CmdTemplate, CmdRetune, CmdThrottle, CmdDoctor, CmdVmWrap, CmdUpdate, CmdProfileFromTrace};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdBackupPrune, CmdReplicate, CmdTemplate, CmdRetune, CmdThrottle, CmdDoctor, CmdVmWrap, CmdUpdate, CmdProfileFromTrace, CmdAudit};
 
 class Args {
 public:
@@ -183,6 +183,12 @@ public:
   std::string traceOutput;           // -o/--output: spec file (default stdout)
   std::string traceFile;             // --trace-file: parse a saved truss(1) output instead of running
   std::string traceKeep;             // --keep-trace: write the raw truss output here
+
+  // audit parameters (1.1.61): what a running container can reach, seen from inside
+  std::string auditTarget;           // positional: jail name or JID
+  bool        auditJson = false;     // -j/--json
+  bool        auditOffline = false;  // --offline: no connect / DNS probes inside the jail
+  std::string auditDnsName = "www.freebsd.org";   // --dns <name>: the name the in-jail resolver is asked for
 
   // vm-wrap parameters (bhyve jailer)
   std::string vmWrapVmName;          // positional: bhyve VM name

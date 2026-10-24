@@ -90,3 +90,4 @@ atf_test_program{name="fw_lease_pure_test"}
 atf_test_program{name="thin_jail_pure_test"}
 atf_test_program{name="profile_pure_test"}
 atf_test_program{name="trace_pure_test"}
+atf_test_program{name="jail_audit_pure_test"}

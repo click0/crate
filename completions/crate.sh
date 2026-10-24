@@ -19,7 +19,7 @@ if [ -n "$BASH_VERSION" ]; then
                     snapshot export import gui stack stats logs \
                     stop restart top inter-dns vpn inspect migrate \
                     backup restore backup-prune replicate template \
-                    retune throttle doctor vm-wrap update profile-from-trace"
+                    retune throttle doctor vm-wrap update profile-from-trace audit"
     local global_opts="-h --help -V --version --no-color -p --log-progress"
 
     case "$prev" in
@@ -157,6 +157,10 @@ if [ -n "$BASH_VERSION" ]; then
         COMPREPLY=( $(compgen -W "-o --output --trace-file --keep-trace -h --help --" -- "$cur") )
         return
         ;;
+      audit)
+        COMPREPLY=( $(compgen -W "-j --json --offline --dns -h --help" -- "$cur") )
+        return
+        ;;
       -s|--spec)
         COMPREPLY=( $(compgen -f -X '!*.yml' -- "$cur") )
         return
@@ -244,6 +248,7 @@ if [ -n "$ZSH_VERSION" ]; then
       'vm-wrap:bhyve jailer; render devfs ruleset + jail.conf'
       'update:in-place pkg upgrade in a running jail'
       'profile-from-trace:draft a spec from one run under truss(1)'
+      'audit:what a running container can reach, seen from inside'
     )
 
     _arguments -C \
@@ -460,6 +465,14 @@ if [ -n "$ZSH_VERSION" ]; then
               '--keep-trace[keep the raw truss output]:file:_files' \
               '(-h --help)'{-h,--help}'[show help]' \
               '*:command to trace (after --):_command_names -e'
+            ;;
+          audit)
+            _arguments \
+              '(-j --json)'{-j,--json}'[machine-readable output]' \
+              '--offline[no connect / DNS probes inside the jail]' \
+              '--dns[name for the DNS probe]:name:' \
+              '(-h --help)'{-h,--help}'[show help]' \
+              '1:container:'
             ;;
           update)
             _arguments \

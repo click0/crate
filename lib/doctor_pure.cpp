@@ -65,6 +65,15 @@ int categoryRank(const std::string &c) {
   if (c == "network")    return 8;  // 0.8.14
   if (c == "gui")        return 9;  // 0.8.23
   if (c == "native-api") return 10; // 0.8.26
+  // 1.1.61: `crate audit` (view from inside a jail) shares the renderer.
+  if (c == "probe")        return 11;
+  if (c == "jail")         return 12;
+  if (c == "mounts")       return 13;
+  if (c == "devfs")        return 14;
+  if (c == "interfaces")   return 15;
+  if (c == "sockets")      return 16;
+  if (c == "processes")    return 17;
+  if (c == "connectivity") return 18;
   return 100;  // unknown -> after known
 }
 

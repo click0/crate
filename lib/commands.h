@@ -38,3 +38,4 @@ bool doctorCommand(const Args &args);
 bool vmWrapCommand(const Args &args);
 bool updateCommand(const Args &args);
 bool profileFromTraceCommand(const Args &args, int argc, char** argv);   // 1.1.60: argv = the command after `--`
+bool jailAuditCommand(const Args &args);                                 // 1.1.61: `crate audit <target>`

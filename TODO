@@ -845,13 +845,24 @@ Landlock, --restrict-namespaces.
   once dirs/share gains `:ro`, a sound mapping once a sound option
   exists, `--merge` into an existing spec.
 
-* (feature, MED value / SMALL size) Sandbox audit from the inside —
-  firejail `--audit`. `crate audit <target|spec>`: exec_in_jail a
-  probe that reports what the container can actually reach: host
-  paths visible (mounts), unix sockets, interfaces/addresses/routes,
-  devfs entries, uid/gids, securelevel, allow.* flags, outbound
-  connectivity (one connect to the host gateway, one DNS lookup).
-  Complements `doctor`, which looks at the host. Table + `-j` JSON.
+* DONE 1.1.61 — `crate audit <target>` (lib/jail_audit_pure,
+  lib/jail_audit). Decisions taken: the probe is ONE /bin/sh script
+  with base-system tools (one exec_in_jail round trip; a missing tool
+  is text in its section, not a failed run), the parsing happens on
+  the host so the pipeline is unit-tested on Linux; the allow.* flags
+  are read as the jail sees them (security.jail.* view sysctls), not
+  from jail(8) params on the host; host sockets are recognised by
+  sitting inside a nullfs mount; the two active probes are one TCP
+  connect to the default gateway (port 22 — "refused" proves
+  reachability as well as "open") and one `drill` lookup, both behind
+  `--offline`; WARN is reserved for clear exposures (host area rw, raw
+  / disk / input devices, host sockets, hostid = host's, raw sockets /
+  mount / chflags allowed, enforce_statfs 0) — securelevel, sysvipc
+  and socket_af are reported, not judged. Leftovers: the `<spec>`
+  form (start a throw-away jail from a spec and audit it); comparing
+  the findings with the jail's +CRATE.SPEC (the spec registry knows
+  the crate path) to flag what the spec did not ask for; per-fs
+  mount_*_allowed flags.
 
 * (feature, MED value / SMALL size) Device classes instead of a
   hand-written devfs ruleset — firejail --nosound/--novideo/--no3d/

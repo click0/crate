@@ -2,7 +2,8 @@
 
 #include "args_pure.h"
 #include "args.h"
-#include "profile_pure.h"   // 1.1.59: `crate run <profile>` name rule
+#include "profile_pure.h"
+#include "netaddr_pure.h"   // 1.1.61: audit --dns   // 1.1.59: `crate run <profile>` name rule
 #include "util.h"
 #include "err.h"
 
@@ -69,6 +70,7 @@ Command isCommand(const char *arg) {
   if (strEq(arg, "vm-wrap"))   return CmdVmWrap;
   if (strEq(arg, "update"))    return CmdUpdate;
   if (strEq(arg, "profile-from-trace")) return CmdProfileFromTrace;
+  if (strEq(arg, "audit"))     return CmdAudit;
   return CmdNone;
 }
 
@@ -295,6 +297,13 @@ void Args::validate() {
     // runtime insists on either it or --trace-file
     if (!traceFile.empty() && !std::ifstream(traceFile).good())
       ERR("--trace-file: cannot open " << traceFile)
+    break;
+  case CmdAudit:
+    if (auditTarget.empty())
+      ERR("the 'audit' command requires a container name or JID")
+    // pasted into the in-jail probe script: hostname charset only
+    if (!NetAddrPure::isHostname(auditDnsName))
+      ERR("--dns: '" << auditDnsName << "' is not a valid host name")
     break;
   default:
     ERR("no command was given")
