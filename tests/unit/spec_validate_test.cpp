@@ -132,9 +132,14 @@ ATF_TEST_CASE_BODY(run_user_validation)
 		s.runUser = ok;
 		s.validate();
 	}
-	for (const char *bad : {"1www", "-x", "a b", "www;id", "../root", std::string(33, 'a').c_str()}) {
+	for (const char *bad : {"1www", "-x", "a b", "www;id", "../root"}) {
 		auto s = mkValid();
 		s.runUser = bad;
+		ATF_REQUIRE_THROW(Exception, s.validate());
+	}
+	{
+		auto s = mkValid();
+		s.runUser = std::string(33, 'a');   // one over the pw(8) limit
 		ATF_REQUIRE_THROW(Exception, s.validate());
 	}
 }
