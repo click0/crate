@@ -552,11 +552,47 @@ one place that formats them.
 
 ---
 
+## 4g. 1.1.64 — `run/user`
+
+```sh
+# default: the operator's mirrored account (unchanged)
+crate run -f fetch.crate -- -o - https://www.freebsd.org/ >/dev/null; crate run -f sh.crate -- -c id
+#   expect: uid=<operator uid>(<operator>) — as before 1.1.64
+
+# a root operator: the dedicated account instead of root
+sudo crate run -f sh.crate -- -c 'id; ls -ld $HOME'
+#   expect: "run/user: the command runs as 'crate' (operator is root: dedicated unprivileged account)",
+#   id -> uid=100x(crate), home /home/crate created by pw; no "group root already exists" error
+
+# an explicit account the image creates
+cat > /tmp/u.yml <<'EOF'
+pkg: {install: [nginx]}
+run: {command: /usr/bin/id, user: www}
+EOF
+crate create -s /tmp/u.yml -o /tmp/u.crate     # "run/user: account 'www' exists in the jail (uid 80)" — nginx's package user
+crate run -f /tmp/u.crate                      # uid=80(www)
+sed -i '' 's/user: www/user: appuser/' /tmp/u.yml
+crate create -s /tmp/u.yml -o /tmp/u2.crate    # "run/user: creating the account 'appuser' in the jail"
+crate run -f /tmp/u2.crate                     # uid=1001(appuser) or whatever pw picked; not in wheel
+crate audit <name>                             # processes: the command's user, not root
+
+# root on request
+crate validate -s x.yml                        # run: {user: root} -> warning "runs as root inside the jail"
+```
+
+Pass criteria: no behaviour change for a non-root operator without
+`run/user`; `sudo crate run` works and runs the command as `crate`; a
+package account is picked up without creating anything; a new account is
+created once at `crate create` and found at `crate run`; `id` inside the
+jail shows no `wheel` for the created account.
+
+---
+
 ## 5. Reporting back
 
 ```sh
 sh scripts/on-hardware-validation.sh > /tmp/onhw-report.txt 2>&1
-# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b / §4c / §4d / §4e / §4f manual checks
+# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b / §4c / §4d / §4e / §4f / §4g manual checks
 ```
 
 Attach `/tmp/onhw-report.txt` plus the manual-section outcomes to the PR

@@ -16,6 +16,7 @@
 #include "err.h"
 #include "netaddr_pure.h"   // 1.1.44: isV4 / isV6
 #include "mounts_pure.h"    // 1.1.63: tmpfs / etc/keep
+#include "run_pure.h"       // 1.1.64: run/user
 #include "privops_pure.h"   // 1.1.44: validateIpv4Cidr / validateIpv6Cidr
 
 namespace SpecPure {
@@ -208,6 +209,10 @@ void Spec::validate() const {
   if (!runCmdExecutable.empty())
     if (!isFullPath(runCmdExecutable))
       ERR("the executable path has to be a full path, executable=" << runCmdExecutable)
+
+  // 1.1.64: run/user
+  if (auto e = RunPure::validateRunUser(runUser); !e.empty())
+    ERR(e)
 
   // shared directories must be full paths
   for (auto &dirShare : dirsShare)

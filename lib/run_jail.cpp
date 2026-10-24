@@ -2,6 +2,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "run_jail.h"
+#include "run_pure.h"   // 1.1.64: kDedicatedRunUser
 #include "jail_query.h"
 #include "privops_client.h"
 #include "spec.h"
@@ -575,6 +576,18 @@ void createUserInJail(const Spec &spec, const std::string &jailPath, int jid,
   auto J = [&jailPath](auto subdir) {
     return STR(jailPath << subdir);
   };
+
+  // 1.1.64: a root operator has no account to mirror — `pw groupadd root`
+  // would fail on the existing group and root's home is there already.
+  // The command runs as the dedicated `crate` account instead (run.cpp).
+  if (uid == 0) {
+    if (logProgress)
+      std::cerr << rang::fg::gray << "operator is root: no mirrored account; the command runs as "
+                << RunPure::kDedicatedRunUser << rang::style::reset << std::endl;
+    runScript("run:before-create-users");
+    runScript("run:after-create-users");
+    return;
+  }
 
   if (logProgress)
     std::cerr << rang::fg::gray << "create user's home directory " << homeDir << ", uid=" << uid << " gid=" << gid << rang::style::reset << std::endl;
