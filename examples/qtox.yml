@@ -12,3 +12,7 @@ options:
     - net
     - x11
     - video
+
+# 1.1.62: the jail sees only basic device nodes plus the classes named here
+devices:
+    sound: true

@@ -243,6 +243,19 @@ enum class Verb {
   // the sysctls itself on the first / last user. jid-gated.
   AcquireFwLease,
   ReleaseFwLease,
+
+  // 1.1.62: fill a PRIVATE devfs ruleset for one jail and apply it to
+  // the jail's /dev mount in one round trip: `devfs rule -s N delset`
+  // (a stale set with the same number from an old run), `devfs rule -s
+  // N add <rulespec>` for each rule, `devfs -m <mount> ruleset N`,
+  // `devfs -m <mount> rule applyset`. The rulespec grammar is closed
+  // (validateDevfsRuleSpec): "hide", "include <n>", "path <glob>
+  // unhide" — the three shapes lib/devices_pure.cpp emits. Path-scoped
+  // by mount_path like apply_devfs_ruleset. Replaces the per-pattern
+  // add_devfs_unhide_rule calls of `crate run`, which added rules to
+  // whatever ruleset the mount happened to have (none, or a shared
+  // stock one).
+  ApplyDevfsRules,
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -452,6 +465,21 @@ struct ReleaseFwLeaseReq {
   unsigned jid = 0;
 };
 
+// 1.1.62: apply_devfs_rules (see Verb::ApplyDevfsRules). `rules` travels
+// as "argc" + "rule0".."rule<argc-1>" string fields, like exec_in_jail's
+// argv. Each rule is one devfs rulespec without the leading "add".
+struct ApplyDevfsRulesReq {
+  std::string              mountPath;
+  unsigned                 ruleset = 0;    // 1..65535
+  std::vector<std::string> rules;
+};
+constexpr unsigned kApplyDevfsRulesMaxRules = 128;
+
+// 1.1.62: one devfs rulespec: "hide" | "include <1..65535>" |
+// "path <glob> unhide" (glob: alnum . _ - / *, no leading slash,
+// <=256 chars). "" when valid, otherwise the reason.
+std::string validateDevfsRuleSpec(const std::string &rule);
+
 // 1.1.8: configure an ipfw NAT instance. The `config` field is
 // the textual body following `ipfw nat <number> config` — e.g.
 // "ip 192.168.1.1" or "redirect_port tcp 10.0.0.1:80 192.168.1.1:80".
@@ -570,6 +598,7 @@ std::string validateDeleteIpfwNat(const DeleteIpfwNatReq &r);
 std::string validateCreateBridge(const CreateBridgeReq &r);
 std::string validateAcquireFwLease(const AcquireFwLeaseReq &r);
 std::string validateReleaseFwLease(const ReleaseFwLeaseReq &r);
+std::string validateApplyDevfsRules(const ApplyDevfsRulesReq &r);   // 1.1.62
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //

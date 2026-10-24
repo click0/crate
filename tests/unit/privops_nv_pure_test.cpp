@@ -298,6 +298,32 @@ ATF_TEST_CASE_BODY(parsers_same_required_field_set_as_json) {
   ATF_REQUIRE(err.find("missing") != std::string::npos);
 }
 
+// --- apply_devfs_rules (1.1.62) ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(parse_apply_devfs_rules);
+ATF_TEST_CASE_BODY(parse_apply_devfs_rules) {
+  PrivOpsPure::ApplyDevfsRulesReq r;
+  ATF_REQUIRE_EQ(parseApplyDevfsRules({
+      {"verb", "apply_devfs_rules"}, {"mount_path", "/jails/web/dev"}, {"ruleset", "10042"},
+      {"argc", "3"}, {"rule0", "hide"}, {"rule2", "path dri/* unhide"}, {"rule1", "path null unhide"},
+    }, r), std::string());
+  ATF_REQUIRE_EQ(r.mountPath, std::string("/jails/web/dev"));
+  ATF_REQUIRE_EQ(r.ruleset, 10042u);
+  ATF_REQUIRE_EQ(r.rules.size(), 3u);
+  ATF_REQUIRE_EQ(r.rules[1], std::string("path null unhide"));   // by index, not map order
+  ATF_REQUIRE_EQ(r.rules[2], std::string("path dri/* unhide"));
+  ATF_REQUIRE_EQ(PrivOpsPure::validateApplyDevfsRules(r), std::string());
+
+  PrivOpsPure::ApplyDevfsRulesReq r2;
+  ATF_REQUIRE(parseApplyDevfsRules({{"mount_path", "/j/dev"}, {"ruleset", "5"}, {"argc", "2"}, {"rule0", "hide"}}, r2)
+              .find("rule1") != std::string::npos);
+  ATF_REQUIRE(!parseApplyDevfsRules({{"mount_path", "/j/dev"}, {"ruleset", "5"}, {"argc", "0"}}, r2).empty());
+  ATF_REQUIRE(parseApplyDevfsRules({{"mount_path", "/j/dev"}, {"ruleset", "5"}, {"argc", "9999"}}, r2)
+              .find("exceeds") != std::string::npos);
+  ATF_REQUIRE(parseApplyDevfsRules({{"ruleset", "5"}, {"argc", "1"}, {"rule0", "hide"}}, r2).find("missing") != std::string::npos);
+  ATF_REQUIRE(parseApplyDevfsRules({{"mount_path", "/j/dev"}, {"argc", "1"}, {"rule0", "hide"}}, r2).find("missing") != std::string::npos);
+}
+
 // --- exec_in_jail (1.1.40) ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(parse_exec_in_jail);
@@ -428,6 +454,7 @@ ATF_TEST_CASE_BODY(nvlist_header_parse_and_limits) {
 }
 
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, parse_apply_devfs_rules);
   ATF_ADD_TEST_CASE(tcs, require_string_present_absent);
   ATF_ADD_TEST_CASE(tcs, require_long_typical);
   ATF_ADD_TEST_CASE(tcs, require_long_rejects_garbage);

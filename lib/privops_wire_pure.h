@@ -205,6 +205,9 @@ std::string parseAddDevfsUnhideRule(const std::string &body,
 
 std::string parseExecInJail(const std::string &body,
                             PrivOpsPure::ExecInJailReq &out);
+// 1.1.62: "mount_path", "ruleset", "argc" + "rule0".."rule<argc-1>".
+std::string parseApplyDevfsRules(const std::string &body,
+                                 PrivOpsPure::ApplyDevfsRulesReq &out);
 // 1.1.41
 std::string parseSetIfaceMac(const std::string &body,
                              PrivOpsPure::SetIfaceMacReq &out);
@@ -387,6 +390,11 @@ std::string formatApplyDevfsRulesetSuccess(const std::string &mountPath,
 // 1.1.10: 200 OK body for add_devfs_unhide_rule.
 std::string formatAddDevfsUnhideRuleSuccess(const std::string &mountPath,
                                             const std::string &pathPattern);
+
+// 1.1.62: 200 OK body for apply_devfs_rules.
+// {"applied":true,"mount_path":"...","ruleset":N,"rules":<count>}
+std::string formatApplyDevfsRulesSuccess(const std::string &mountPath,
+                                         unsigned ruleset, unsigned rules);
 
 // 1.1.11: 200 OK body for signal_jail.
 std::string formatSignalJailSuccess(unsigned jid, const std::string &signal);

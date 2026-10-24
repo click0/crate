@@ -864,12 +864,29 @@ Landlock, --restrict-namespaces.
   the crate path) to flag what the spec did not ask for; per-fs
   mount_*_allowed flags.
 
-* (feature, MED value / SMALL size) Device classes instead of a
-  hand-written devfs ruleset — firejail --nosound/--novideo/--no3d/
-  --noinput/--nou2f. `devices: {sound: bool, video: bool, gpu: bool,
-  input: bool, usb: bool, serial: bool}` → crate generates the devfs
-  unhide rules (and the gui/gpu_device passthrough) itself;
-  terminal/devfs_ruleset stays as the escape hatch.
+* DONE 1.1.62 — device classes, `devices: {sound, gpu, video, input,
+  usb, serial}` (lib/devices_pure, run.cpp, privops apply_devfs_rules).
+  Found on the way: crate mounted the jail's devfs from the host with
+  NO ruleset, so every jail without terminal/devfs_ruleset saw the
+  host's whole /dev (disks, mem/kmem, keyboards) — the 0.8.11 "auto-
+  unhide /dev/dri" and 0.8.45 compositor unhide added rules to a mount
+  that had no ruleset to add them to. Decisions taken: every jail now
+  gets a PRIVATE ruleset (10000 + pid % 50000; delset before fill, so a
+  reused number cannot leak rules) with hide-all + the basic nodes
+  spelled out (not `include 1..3`: does not depend on the host having
+  loaded /etc/defaults/devfs.rules) + the classes; `gl`, `video` and
+  the gui gpu/auto/compositor modes imply their classes; a custom
+  terminal/devfs_ruleset is `include`d instead of the base and the
+  classes go on top; `devices: all` restores the old full view; a
+  devfs failure is a loud yellow warning, not a refusal (unverified on
+  hardware — the one place where failing closed could have taken every
+  jail down); one new privops verb `apply_devfs_rules` (closed rulespec
+  grammar: hide | include N | path GLOB unhide, path-scoped by
+  mount_path) replaces the per-pattern add_devfs_unhide_rule calls,
+  which stay for compatibility. Leftovers: `crate audit` could compare
+  the devfs view with the spec's classes; a `sound` *option* (OSS +
+  sndio/pulse socket plumbing) is still separate from the device class;
+  per-device grants (`devices/usb: [ugen0.2]`).
 
 * (feature, MED value / SMALL size) `--private-tmp`, `--tmpfs`,
   `--read-only`, `--private-etc`. `tmpfs: [/tmp, ~/.cache]` mounts

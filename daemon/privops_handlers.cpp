@@ -676,6 +676,38 @@ DispatchResult handleAddDevfsUnhideRule(const PrivOpsPure::AddDevfsUnhideRuleReq
                   r.mountPath, r.pathPattern)};
 }
 
+// --- handleApplyDevfsRules (1.1.62) ---
+
+DispatchResult handleApplyDevfsRules(const PrivOpsPure::ApplyDevfsRulesReq &r) {
+  if (auto e = nonCanonicalReason(r.mountPath, "mount_path"); !e.empty()) return rejectNonCanonical(e);
+  std::string rs = std::to_string(r.ruleset);
+  try {
+    // A stale set with this number (an earlier crate(1) with the same
+    // pid) must not leak its rules into this jail. A missing set is
+    // not an error here.
+    try {
+      Util::execCommand({CRATE_PATH_DEVFS, "rule", "-s", rs, "delset"},
+                        "privops apply_devfs_rules (delset)");
+    } catch (...) {}
+    for (const auto &rule : r.rules) {
+      // the validator admitted only "hide", "include N", "path G unhide":
+      // single-space separated tokens, passed as separate argv entries
+      std::vector<std::string> argv = {CRATE_PATH_DEVFS, "rule", "-s", rs, "add"};
+      for (const auto &tok : Util::splitString(rule, " "))
+        if (!tok.empty()) argv.push_back(tok);
+      Util::execCommand(argv, "privops apply_devfs_rules (add)");
+    }
+    Util::execCommand({CRATE_PATH_DEVFS, "-m", r.mountPath, "ruleset", rs},
+                      "privops apply_devfs_rules (ruleset)");
+    Util::execCommand({CRATE_PATH_DEVFS, "-m", r.mountPath, "rule", "applyset"},
+                      "privops apply_devfs_rules (applyset)");
+  } catch (const std::exception &e) {
+    return {500, PrivOpsWirePure::formatHandlerError("devfs_failed", e.what())};
+  }
+  return {200, PrivOpsWirePure::formatApplyDevfsRulesSuccess(r.mountPath, r.ruleset,
+                                                              (unsigned)r.rules.size())};
+}
+
 // --- handleSignalJail (1.1.11) ---
 
 DispatchResult handleSignalJail(const PrivOpsPure::SignalJailReq &r) {
@@ -1359,6 +1391,14 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleAddDevfsUnhideRule(r);
     }
+    case Verb::ApplyDevfsRules: {   // 1.1.62
+      PrivOpsPure::ApplyDevfsRulesReq r;
+      if (auto e = PrivOpsWirePure::parseApplyDevfsRules(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateApplyDevfsRules(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleApplyDevfsRules(r);
+    }
     case Verb::SignalJail: {
       PrivOpsPure::SignalJailReq r;
       if (auto e = PrivOpsWirePure::parseSignalJail(body, r); !e.empty())
@@ -1483,7 +1523,8 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
         break;
       case Verb::UnmountNullfs:        req.path = field("target");     break;
       case Verb::ApplyDevfsRuleset:
-      case Verb::AddDevfsUnhideRule:   req.path = field("mount_path"); break;
+      case Verb::AddDevfsUnhideRule:
+      case Verb::ApplyDevfsRules:      req.path = field("mount_path"); break;   // 1.1.62
       // 1.1.15: create_jail's path argument is checked against the
       // caller's per-user path prefix (env.pathPrefix); not a registry
       // lookup (the jail doesn't exist yet).
@@ -1771,6 +1812,14 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       if (auto e = PrivOpsPure::validateAddDevfsUnhideRule(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleAddDevfsUnhideRule(r);
+    }
+    case Verb::ApplyDevfsRules: {   // 1.1.62
+      PrivOpsPure::ApplyDevfsRulesReq r;
+      if (auto e = PrivOpsNvPure::parseApplyDevfsRules(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateApplyDevfsRules(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleApplyDevfsRules(r);
     }
     case Verb::SignalJail: {
       PrivOpsPure::SignalJailReq r;

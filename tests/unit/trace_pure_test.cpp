@@ -245,6 +245,11 @@ ATF_TEST_CASE_BODY(generate_firefox_like_spec) {
   ATF_REQUIRE(yaml.find("files:\n    share:\n        - [$HOME/notes.txt, $HOME/notes.txt]") != std::string::npos);
   ATF_REQUIRE(yaml.find("options:\n    net:\n        outbound: [wan, dns]\n    x11:\n    gl:\n    ssl-certs:\n") != std::string::npos);
   ATF_REQUIRE(yaml.find("dbus:\n    session: true\n") != std::string::npos);
+  // 1.1.62: the sound device becomes a devices/sound class, not only a note
+  ATF_REQUIRE(g.devSound);
+  ATF_REQUIRE(!g.devInput);
+  ATF_REQUIRE(yaml.find("devices:\n    sound: true\n") != std::string::npos);
+  ATF_REQUIRE(yaml.find("input: true") == std::string::npos);
   ATF_REQUIRE(yaml.find("# outbound destinations seen:") != std::string::npos);
   ATF_REQUIRE(yaml.find("Secret") == std::string::npos);
 }

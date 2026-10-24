@@ -239,6 +239,18 @@ ATF_TEST_CASE_BODY(builders_1141_round_trip) {
     ATF_REQUIRE(ir.inet6);
     ATF_REQUIRE_EQ(PrivOpsPure::validateSetIfaceInetAddr(ir), std::string());
 
+    // 1.1.62: apply_devfs_rules round trip, rules by index
+    auto dv = PrivOpsClient::buildApplyDevfsRules("/jails/web/dev", 10042,
+                                                  {"hide", "path null unhide", "path dri/* unhide"});
+    ATF_REQUIRE_EQ(dv.at("verb"), std::string("apply_devfs_rules"));
+    ATF_REQUIRE_EQ(dv.at("argc"), std::string("3"));
+    ATF_REQUIRE_EQ(dv.at("rule2"), std::string("path dri/* unhide"));
+    PrivOpsPure::ApplyDevfsRulesReq dr;
+    ATF_REQUIRE_EQ(PrivOpsNvPure::parseApplyDevfsRules(dv, dr), std::string());
+    ATF_REQUIRE_EQ(dr.ruleset, 10042u);
+    ATF_REQUIRE_EQ(dr.rules.size(), 3u);
+    ATF_REQUIRE_EQ(PrivOpsPure::validateApplyDevfsRules(dr), std::string());
+
     auto m = PrivOpsClient::buildCreateBridge("bridge0");
     PrivOpsPure::CreateBridgeReq r;
     ATF_REQUIRE_EQ(m.at("verb"), std::string("create_bridge"));

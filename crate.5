@@ -663,10 +663,70 @@ is a host-side path chosen by the operator and is not confined.
 .Ss Terminal
 .Bl -tag -width "allow_raw_tty"
 .It Sy terminal/devfs_ruleset
-Devfs ruleset number (0-65535).
+Devfs ruleset number (0-65535) of the operator's own rules.
+Since 1.1.62 it is
+.Em included
+into the jail's private ruleset in place of the built-in base (see
+.Sx Devices ) ;
+the device classes are added on top.
 .It Sy terminal/allow_raw_tty
 Allow raw TTY access.
 .El
+.Ss Devices
+What the jail's
+.Pa /dev
+shows (1.1.62).
+Every jail gets a private
+.Xr devfs 8
+ruleset: everything hidden, then the basic nodes
+.Pq null, zero, random, urandom, crypto, tty, ptmx, pts/*, fd/*, stdin/stdout/stderr, fuse, zfs ,
+.Pa bpf*
+with the
+.Sy net
+option, then the classes named here.
+Before 1.1.62 a jail without
+.Sy terminal/devfs_ruleset
+saw the host's whole
+.Pa /dev .
+.Bl -tag -width "serial"
+.It Sy devices/sound
+.Pa dsp* , mixer* , sndstat , audio* , midi* .
+.It Sy devices/gpu
+.Pa dri , dri/* , drm/* , nvidia* .
+Implied by the
+.Sy gl
+option and the
+.Sy gui
+gpu, auto and compositor modes.
+.It Sy devices/video
+.Pa video*
+(cameras).
+Implied by the
+.Sy video
+option.
+.It Sy devices/input
+.Pa input/*
+(evdev: keyboards, mice).
+Everything typed on the host is readable from inside; implied by the
+compositor's drm backend.
+.It Sy devices/usb
+.Pa usb/* , usbctl , ugen* , uhid* , u2f* :
+every USB device of the host.
+.It Sy devices/serial
+.Pa cua* , ttyu* , ttyU* .
+.El
+.Pp
+Forms:
+.Dl devices: {sound: true, gpu: true}
+.Dl devices: [sound, gpu]
+.Dl devices: all
+The last keeps the host's whole
+.Pa /dev
+visible (the pre-1.1.62 behaviour);
+.Nm crate validate
+warns about it and about input, usb and serial.
+.Nm crate audit
+shows the resulting view from inside.
 .Ss Advanced security
 .Bl -tag -width "mac_bsdextended"
 .It Sy security_advanced/capsicum

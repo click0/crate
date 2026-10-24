@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "devices_pure.h"   // 1.1.62: Spec::devices
+
 #include <string>
 #include <vector>
 #include <map>
@@ -262,6 +264,12 @@ public:
     bool allowRawTty = false;              // allow raw TTY access
   };
   std::unique_ptr<TerminalOptions>                   terminalOptions;
+
+  // Device classes (1.1.62): what the jail's devfs shows beyond the
+  // basic nodes. See lib/devices_pure.h. `gl` implies gpu, `video`
+  // implies video, gui gpu/compositor modes imply gpu (+ input for the
+  // drm backend) at run time.
+  DevicesPure::Devices                               devices;
 
   // GUI session management (§19)
   struct GuiOptions {

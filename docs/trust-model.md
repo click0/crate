@@ -117,7 +117,7 @@ differs by transport:
   different operator are denied `403` against the same registry. 1.1.14
   extends the same registry with a longest-prefix `byPath` lookup that
   gates the **path-scoped verbs** — `mount_nullfs` / `unmount_nullfs`
-  (by `target`) and `apply_devfs_ruleset` / `add_devfs_unhide_rule` (by
+  (by `target`) and `apply_devfs_ruleset` / `add_devfs_unhide_rule` / `apply_devfs_rules` (by
   `mount_path`). A path that lies inside another operator's registered
   jail is denied `403` (`DenyForeignPath`). 1.1.15 closes the last
   narrow item: `create_jail`'s brand-new `path` argument is matched
@@ -347,7 +347,7 @@ security boundary:
    bootstrap concession allows them through to preserve the upgrade
    path.
    *Done (1.1.14):* the path-scoped verbs — `mount_nullfs` /
-   `unmount_nullfs` (gated by `target`) and `apply_devfs_ruleset` /
+   `unmount_nullfs` (gated by `target`) and `apply_devfs_ruleset` / `apply_devfs_rules` /
    `add_devfs_unhide_rule` (gated by `mount_path`). The registry now
    exposes a longest-prefix `byPath` lookup; a path inside a tracked
    jail owned by another uid is denied `403` (`DenyForeignPath`); paths

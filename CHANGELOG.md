@@ -6,6 +6,69 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.62] — 2026-10-24
+
+**TODO §17.5: device classes — `devices: {sound, gpu, video, input, usb, serial}`; every jail gets a private devfs ruleset.**
+
+- **Behaviour change.** `crate run` mounts the jail's devfs from the
+  host before the jail exists, and nothing ever applied a ruleset to
+  it: a jail without `terminal/devfs_ruleset` saw the host's **whole
+  `/dev`** — disks, `mem`/`kmem`, keyboards, USB. (The 0.8.11 "auto-
+  unhide /dev/dri" and the 0.8.45 compositor unhide added rules to a
+  mount that had no ruleset to add them to.) Since 1.1.62 every jail
+  gets a **private ruleset**: everything hidden, the basic nodes
+  unhidden (`null`, `zero`, `random`, `urandom`, `crypto`, `tty`,
+  `ptmx`, `pts/*`, `fd/*`, `stdin`/`stdout`/`stderr`, `fuse`, `zfs`;
+  `bpf*` with the `net` option), then the device classes the spec
+  names. A program that used `/dev/dsp` without asking now needs
+  `devices: {sound: true}` — the desktop examples carry it. `devices:
+  all` restores the old full view (`crate validate` warns).
+- **`devices:`** (firejail's `--nosound`/`--novideo`/`--no3d`/
+  `--noinput`/`--nou2f`, inverted) — map `{name: bool}`, list
+  `[sound, gpu]`, or `all`/`none`. Classes: `sound` (`dsp*`, `mixer*`,
+  `sndstat`, `audio*`, `midi*`), `gpu` (`dri`, `dri/*`, `drm/*`,
+  `nvidia*`), `video` (`video*`), `input` (`input/*`), `usb` (`usb/*`,
+  `usbctl`, `ugen*`, `uhid*`, `u2f*`), `serial` (`cua*`, `ttyu*`,
+  `ttyU*`). `gl` implies gpu, `video` implies video, the gui gpu/auto/
+  compositor modes imply gpu and the compositor's drm backend input, so
+  existing specs keep working. `terminal/devfs_ruleset: N` stays the
+  escape hatch: the operator's ruleset is `include`d in place of the
+  built-in base and the classes go on top. `crate validate` warns about
+  `all`, `input`, `usb` and `serial`. Templates merge their classes
+  with the spec's (union). The `video` class also sets up the videoops
+  group like the `video` option did.
+- The ruleset number is `10000 + pid % 50000` (above the stock 1..5
+  and hand-picked numbers, unique among running jails) and is deleted
+  before it is filled, so a number reused after a long time cannot
+  leak an old jail's rules. The base rules are spelled out rather than
+  `include 1..3`, so a jail does not depend on the host having loaded
+  `/etc/defaults/devfs.rules`. A devfs failure is a loud yellow warning
+  with a `crate audit` pointer, not a refusal.
+- **New privops verb `apply_devfs_rules`** (`mount_path`, `ruleset`,
+  `argc` + `rule0..N`): `devfs rule -s N delset`, `add` each rule,
+  `devfs -m <mount> ruleset N`, `rule applyset` — one round trip under
+  rootless. The rulespec grammar is closed (`hide` | `include <n>` |
+  `path <glob> unhide`; glob charset as before, no quoting, no
+  mode/user/group). Path-scoped by `mount_path` like
+  `apply_devfs_ruleset`, which stays (used with `devices: all`), as
+  does `add_devfs_unhide_rule` (no caller left in crate).
+- `crate profile-from-trace` now emits a `devices:` block (sound,
+  input, usb) instead of the "needs terminal/devfs_ruleset" notes.
+- Docs: crate.5 (new Devices section, Terminal), README en/uk ("Device
+  classes"), trust-model (verb lists), runbook §4e; `lib/devices_pure`.
+
+Tests: `devices_pure_test` (4 cases: classes, patterns, base and built
+rules incl. the custom-ruleset include and the privops grammar
+round-trip, ruleset numbers and warnings), `privops_pure_test` (the
+rulespec grammar, the request), `privops_nv_pure_test` /
+`privops_wire_pure_test` / `privops_client_pure_test` (parse, dispatch,
+format, round trip), `privops_authz_pure_test` (path gating of the new
+verb), `validate_pure_test`, `trace_pure_test`. kyua on Linux. The
+devfs(8) sequence is unverified on FreeBSD — runbook §4e is the first
+thing to run; a failure leaves the host view with a warning, as before.
+
+---
+
 ## [1.1.61] — 2026-10-24
 
 **TODO §17.4: `crate audit <target>` — the sandbox seen from the inside.**

@@ -525,6 +525,25 @@ std::string parseSignalJail(const std::string &body,
   return "";
 }
 
+// 1.1.62
+std::string parseApplyDevfsRules(const std::string &body,
+                                 PrivOpsPure::ApplyDevfsRulesReq &out) {
+  if (auto e = requireStringField(body, "mount_path", out.mountPath); !e.empty()) return e;
+  if (auto e = requireUnsignedField(body, "ruleset", out.ruleset); !e.empty()) return e;
+  unsigned argc = 0;
+  if (auto e = requireUnsignedField(body, "argc", argc); !e.empty()) return e;
+  if (argc == 0) return "field 'argc' must be >= 1";
+  if (argc > PrivOpsPure::kApplyDevfsRulesMaxRules)
+    return "field 'argc' exceeds " + std::to_string(PrivOpsPure::kApplyDevfsRulesMaxRules);
+  out.rules.clear();
+  for (unsigned i = 0; i < argc; i++) {
+    std::string r;
+    if (auto e = requireStringField(body, "rule" + std::to_string(i), r); !e.empty()) return e;
+    out.rules.push_back(std::move(r));
+  }
+  return "";
+}
+
 // --- Verb routing helper ---
 
 PrivOpsPure::Verb parseVerbFromPath(const std::string &path) {
@@ -908,6 +927,17 @@ std::string formatAddDevfsUnhideRuleSuccess(const std::string &mountPath,
   return o.str();
 }
 
+std::string formatApplyDevfsRulesSuccess(const std::string &mountPath,
+                                         unsigned ruleset, unsigned rules) {
+  std::ostringstream o;
+  o << "{\"applied\":true"
+    << ",\"mount_path\":\"" << escape(mountPath) << "\""
+    << ",\"ruleset\":" << ruleset
+    << ",\"rules\":" << rules
+    << "}";
+  return o.str();
+}
+
 std::string formatSetIfaceMacSuccess(const std::string &ifname, const std::string &mac) {
   std::ostringstream o;
   o << "{\"set\":true,\"ifname\":\"" << escape(ifname)
@@ -1043,6 +1073,8 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       return runVerb<AcquireFwLeaseReq>(body, v, parseAcquireFwLease, validateAcquireFwLease);
     case Verb::ReleaseFwLease:
       return runVerb<ReleaseFwLeaseReq>(body, v, parseReleaseFwLease, validateReleaseFwLease);
+    case Verb::ApplyDevfsRules:   // 1.1.62
+      return runVerb<ApplyDevfsRulesReq>(body, v, parseApplyDevfsRules, validateApplyDevfsRules);
     case Verb::Unknown:
       break;
   }

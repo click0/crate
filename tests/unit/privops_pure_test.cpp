@@ -31,6 +31,7 @@ ATF_TEST_CASE_BODY(verb_token_roundtrips_for_every_verb) {
     Verb::ExecInJail,   // 1.1.40
     Verb::SetIfaceMac, Verb::DeleteIpfwNat, Verb::CreateBridge,   // 1.1.41
     Verb::AcquireFwLease, Verb::ReleaseFwLease,                   // 1.1.57
+    Verb::ApplyDevfsRules,                                        // 1.1.62
   };
   for (Verb v : verbs) {
     std::string token = verbName(v);
@@ -1077,6 +1078,53 @@ ATF_TEST_CASE_BODY(host_primitives_1141_validation) {
   b.name = "";          ATF_REQUIRE(!validateCreateBridge(b).empty());
 }
 
+// 1.1.62: apply_devfs_rules — the closed rulespec grammar.
+ATF_TEST_CASE_WITHOUT_HEAD(apply_devfs_rules_validation);
+ATF_TEST_CASE_BODY(apply_devfs_rules_validation) {
+  ATF_REQUIRE_EQ(verbName(Verb::ApplyDevfsRules), std::string("apply_devfs_rules"));
+  ATF_REQUIRE(parseVerb("apply_devfs_rules") == Verb::ApplyDevfsRules);
+
+  // rulespecs
+  ATF_REQUIRE_EQ(validateDevfsRuleSpec("hide"), std::string());
+  ATF_REQUIRE_EQ(validateDevfsRuleSpec("include 4"), std::string());
+  ATF_REQUIRE_EQ(validateDevfsRuleSpec("include 65535"), std::string());
+  ATF_REQUIRE_EQ(validateDevfsRuleSpec("path null unhide"), std::string());
+  ATF_REQUIRE_EQ(validateDevfsRuleSpec("path dri/* unhide"), std::string());
+  ATF_REQUIRE_EQ(validateDevfsRuleSpec("path ugen0.2 unhide"), std::string());
+  ATF_REQUIRE(!validateDevfsRuleSpec("").empty());
+  ATF_REQUIRE(!validateDevfsRuleSpec("unhide").empty());                 // hide-all's inverse is not a rule
+  ATF_REQUIRE(!validateDevfsRuleSpec("path dri/* hide").empty());        // only unhide
+  ATF_REQUIRE(!validateDevfsRuleSpec("path /dri/* unhide").empty());     // relative to the mount
+  ATF_REQUIRE(!validateDevfsRuleSpec("path dri/* unhide extra").empty());
+  ATF_REQUIRE(!validateDevfsRuleSpec("path  dri unhide").empty());       // double space
+  ATF_REQUIRE(!validateDevfsRuleSpec("path dri unhide ").empty());       // trailing space
+  ATF_REQUIRE(!validateDevfsRuleSpec("path\tdri unhide").empty());
+  ATF_REQUIRE(!validateDevfsRuleSpec("path 'dri' unhide").empty());      // no quoting, devfs gets argv
+  ATF_REQUIRE(!validateDevfsRuleSpec("path dri;id unhide").empty());
+  ATF_REQUIRE(!validateDevfsRuleSpec("include 0").empty());
+  ATF_REQUIRE(!validateDevfsRuleSpec("include 65536").empty());
+  ATF_REQUIRE(!validateDevfsRuleSpec("include 4 5").empty());
+  ATF_REQUIRE(!validateDevfsRuleSpec("include x").empty());
+  ATF_REQUIRE(!validateDevfsRuleSpec("path mem mode 0666").empty());     // mode/user/group are not offered
+  ATF_REQUIRE(!validateDevfsRuleSpec("hide path null").empty());
+
+  // the request
+  ApplyDevfsRulesReq r;
+  r.mountPath = "/jails/web/dev"; r.ruleset = 10042;
+  r.rules = {"hide", "path null unhide", "path dri/* unhide"};
+  ATF_REQUIRE_EQ(validateApplyDevfsRules(r), std::string());
+  r.ruleset = 0;      ATF_REQUIRE(!validateApplyDevfsRules(r).empty());
+  r.ruleset = 65536;  ATF_REQUIRE(!validateApplyDevfsRules(r).empty());
+  r.ruleset = 10042;
+  r.rules.clear();    ATF_REQUIRE(!validateApplyDevfsRules(r).empty());
+  r.rules.assign(kApplyDevfsRulesMaxRules + 1, "hide");
+  ATF_REQUIRE(!validateApplyDevfsRules(r).empty());
+  r.rules = {"hide", "path dri/* hide"};
+  ATF_REQUIRE(validateApplyDevfsRules(r).find("rule1") != std::string::npos);
+  r.rules = {"hide"}; r.mountPath = "jails/web/dev";
+  ATF_REQUIRE(!validateApplyDevfsRules(r).empty());
+}
+
 // 1.1.57: acquire/release_fw_lease + set_iface_inet_addr inet6.
 ATF_TEST_CASE_WITHOUT_HEAD(fw_lease_and_inet6_validation);
 ATF_TEST_CASE_BODY(fw_lease_and_inet6_validation) {
@@ -1108,6 +1156,7 @@ ATF_TEST_CASE_BODY(fw_lease_and_inet6_validation) {
 }
 
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, apply_devfs_rules_validation);
   ATF_ADD_TEST_CASE(tcs, fw_lease_and_inet6_validation);
   ATF_ADD_TEST_CASE(tcs, verb_token_roundtrips_for_every_verb);
   ATF_ADD_TEST_CASE(tcs, verb_unknown_token_returns_unknown);

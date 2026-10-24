@@ -48,3 +48,7 @@ scripts:
         - "echo '[General]' >> $HOME/.mozilla/firefox/profiles.ini"
         - "echo 'StartWithLastProfile=1' >> $HOME/.mozilla/firefox/profiles.ini"
         - "chown -R $USER $HOME/.mozilla"
+
+# 1.1.62: the jail sees only basic device nodes plus the classes named here
+devices:
+    sound: true

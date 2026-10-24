@@ -373,6 +373,26 @@ std::string parseExecInJail(const FieldMap &m,
   return "";
 }
 
+// 1.1.62
+std::string parseApplyDevfsRules(const FieldMap &m,
+                                 PrivOpsPure::ApplyDevfsRulesReq &out) {
+  if (auto e = requireString(m, "mount_path", out.mountPath); !e.empty()) return e;
+  if (auto e = requireUnsigned(m, "ruleset", out.ruleset); !e.empty()) return e;
+  unsigned argc = 0;
+  if (auto e = requireUnsigned(m, "argc", argc); !e.empty()) return e;
+  if (argc == 0) return "field 'argc' must be >= 1";
+  if (argc > PrivOpsPure::kApplyDevfsRulesMaxRules)
+    return "field 'argc' exceeds " + std::to_string(PrivOpsPure::kApplyDevfsRulesMaxRules);
+  out.rules.clear();
+  out.rules.reserve(argc);
+  for (unsigned i = 0; i < argc; i++) {
+    std::string r;
+    if (auto e = requireString(m, "rule" + std::to_string(i), r); !e.empty()) return e;
+    out.rules.push_back(std::move(r));
+  }
+  return "";
+}
+
 // --- 1.1.43: nvlist header pre-check ---
 
 std::string parseNvlistHeader(const unsigned char *buf, size_t len, NvlistHeader &out) {

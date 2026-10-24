@@ -64,3 +64,7 @@ limits:
     memoryuse: 1G
     pcpu: 100
     maxproc: 256
+
+# 1.1.62: the jail sees only basic device nodes plus the classes named here
+devices:
+    sound: true

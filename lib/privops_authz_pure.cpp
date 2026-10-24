@@ -261,6 +261,7 @@ Decision authorize(PrivOpsPure::Verb v,
     case V::UnmountNullfs:
     case V::ApplyDevfsRuleset:
     case V::AddDevfsUnhideRule:
+    case V::ApplyDevfsRules:   // 1.1.62
       return checkOwnedPath(req.path, env, lookup);
 
     // 1.1.17: mount_nullfs gates BOTH ends — the target (must be inside

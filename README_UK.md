@@ -62,7 +62,7 @@ Crate — контейнеризатор для FreeBSD. Пакує застос
 * **JAIL_OWN_DESC**: race-free видалення jail (FreeBSD 15+)
 * **Захист від directory traversal**: валідація шляхів перед розпакуванням
 * **Signal-safe RAII cleanup**: гарантоване очищення ресурсів при SIGINT/SIGTERM
-* **Ізоляція терміналу**: налаштовуваний devfs ruleset, TTY контроль
+* **Класи пристроїв**: у `/dev` jail видно лише базові вузли плюс класи з `devices:` у специфікації (sound, gpu, video, input, usb, serial); `terminal/devfs_ruleset` лишається запасним ходом (1.1.62)
 
 ### Сервіси та IPC
 * **Керовані сервіси**: авто-старт/стоп у порядку, генерація rc.conf
@@ -547,6 +547,22 @@ limits:
 
 WARN позначає не помилку, а те, на що варто глянути: цілий каталог хоста змонтований на запис, сирі дискові чи memory-пристрої, клавіатурні пристрої, сокет хоста, hostid такий самий, як у хоста. Код виходу 0, 1 (є WARN) або 2 (probe не виконався). `crate doctor` дивиться на хост, `crate audit` — на один контейнер; потрібен root або privops-сокет crated, як для `crate console`.
 
+## Класи пристроїв
+
+З 1.1.62 кожний jail отримує **приватний devfs ruleset** (аналог `--nosound` / `--novideo` / `--no3d` / `--noinput` / `--nou2f` у firejail, навпаки): у `/dev` ховається все, відкриваються базові вузли (`null`, `zero`, `random`, `urandom`, `crypto`, `tty`, `ptmx`, `pts/*`, `fd/*`, `stdin`/`stdout`/`stderr`, `fuse`, `zfs`; `bpf*` з опцією `net`), а далі — класи, названі у специфікації:
+
+```yaml
+devices:
+    sound: true      # /dev/dsp*, mixer*, sndstat, audio*, midi*
+    gpu: true        # /dev/dri, dri/*, drm/*, nvidia*   (мається на увазі з `gl` та gui gpu/auto/compositor)
+    video: true      # /dev/video*                        (мається на увазі з опції `video`)
+    input: true      # /dev/input/* — усе набране на хості читається зсередини; мається на увазі з drm-бекендом compositor
+    usb: true        # /dev/usb/*, usbctl, ugen*, uhid*, u2f*
+    serial: true     # /dev/cua*, ttyu*, ttyU*
+```
+
+`devices: [sound, gpu]` — форма списку; `devices: all` лишає видимим увесь `/dev` хоста — саме так до 1.1.62 бачив його кожний jail без `terminal/devfs_ruleset` (диски, пам'ять, клавіатури включно). `terminal/devfs_ruleset: N` далі працює: ruleset оператора включається замість вбудованої бази, класи додаються поверх. `crate validate` попереджає про `all`, `input`, `usb` і `serial`; `crate audit` показує результат зсередини. Десктопні приклади містять `devices: {sound: true}`.
+
 ## Шаблони
 
 Каталог `templates/` містить готові базові конфігурації:
@@ -610,6 +626,7 @@ nmap, amass, wget, aria2, fetch, gzip, yt-dlp, xeyes
 | `services` | Керовані сервіси (managed list, auto_start) |
 | `socket_proxy` | Проксі сокетів (share, proxy з host/jail/direction) |
 | `terminal` | Ізоляція терміналу (devfs_ruleset, allow_raw_tty) |
+| `devices` | Класи пристроїв, видимі у `/dev`: sound, gpu, video, input, usb, serial або `all` (1.1.62) |
 | `security_advanced` | Capsicum, MAC bsdextended/portacl, hide_other_jails |
 
 ## Встановлення

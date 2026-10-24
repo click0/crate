@@ -33,3 +33,7 @@ gui:
     novnc: true
     # gpu_driver: nvidia       # auto-detected if omitted
     # gpu_device: "PCI:1:0:0"  # auto-detected if omitted
+
+# 1.1.62: the jail sees only basic device nodes plus the classes named here
+devices:
+    sound: true

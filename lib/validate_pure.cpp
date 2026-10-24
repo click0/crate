@@ -147,6 +147,10 @@ std::vector<std::string> gatherWarnings(const Spec &spec) {
       w.push_back("custom devfs_ruleset may affect device visibility inside the jail");
   }
 
+  // 1.1.62: device classes that are a real privilege grant
+  for (const auto &dw : DevicesPure::warnings(spec.devices))
+    w.push_back(dw);
+
   return w;
 }
 
