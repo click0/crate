@@ -43,7 +43,7 @@ Spec::Spec(const Spec &o)
     baseHostRo(o.baseHostRo), baseHostDirs(o.baseHostDirs),
     pkgInstall(o.pkgInstall), pkgLocalOverride(o.pkgLocalOverride), pkgAdd(o.pkgAdd), pkgNuke(o.pkgNuke),
     runCmdExecutable(o.runCmdExecutable), runCmdArgs(o.runCmdArgs),
-    runServices(o.runServices), runUser(o.runUser), dirsShare(o.dirsShare), filesShare(o.filesShare),
+    runServices(o.runServices), runUser(o.runUser), runTimeoutSec(o.runTimeoutSec), dirsShare(o.dirsShare), filesShare(o.filesShare),
     tmpfs(o.tmpfs), etcKeep(o.etcKeep),
     options(o.options), zfsDatasets(o.zfsDatasets),
     allowSysvipc(o.allowSysvipc), allowMqueue(o.allowMqueue),
@@ -480,6 +480,11 @@ static Spec parseSpecFromNode(YAML::Node top) {
           // 1.1.64: the jail account the command runs as
           scalar(b.second, spec.runUser, "run/user");
           if (auto e = RunPure::validateRunUser(spec.runUser); !e.empty()) ERR(e)
+        } else if (isKey(b, "timeout")) {
+          // 1.1.65: seconds (or Ns/Nm/Nh) before the command is killed
+          std::string t;
+          scalar(b.second, t, "run/timeout");
+          if (auto e = RunPure::parseRunTimeout(t, spec.runTimeoutSec); !e.empty()) ERR(e)
         } else {
           ERR("unknown element run/" << b.first << " in spec")
         }
@@ -1554,6 +1559,7 @@ Spec mergeSpecs(const Spec &base, const Spec &overlay) {
 
   // Scalars: overlay wins if non-default
   if (!overlay.runUser.empty()) result.runUser = overlay.runUser;   // 1.1.64
+  if (overlay.runTimeoutSec) result.runTimeoutSec = overlay.runTimeoutSec;   // 1.1.65
   if (!overlay.runCmdExecutable.empty()) {
     result.runCmdExecutable = overlay.runCmdExecutable;
     result.runCmdArgs = overlay.runCmdArgs;

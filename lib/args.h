@@ -35,6 +35,8 @@ public:
   std::string runProfile;              // 1.1.59: positional profile name (no -f): spec found by name,
                                        // ~/.config/crate/profiles/<name>.local.yml merged, .crate built on
                                        // first use under ~/.local/share/crate/profiles/ (lib/profile.h)
+  int         runStatusFd = -1;        // 1.1.65: --status-fd N: one JSON object per lifecycle event
+                                       // is written to this inherited descriptor (lib/status_pure.h)
 
   // validate parameters
   std::string validateSpec;

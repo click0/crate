@@ -38,7 +38,7 @@ if [ -n "$BASH_VERSION" ]; then
           [ -d "$d" ] || continue
           profiles="$profiles $(cd "$d" && ls *.yml 2>/dev/null | grep -v '\.local\.yml$' | sed 's/\.yml$//')"
         done
-        COMPREPLY=( $(compgen -W "$profiles -f --file --warm-base --name --var -h --help --" -- "$cur") )
+        COMPREPLY=( $(compgen -W "$profiles -f --file --warm-base --name --var --status-fd -h --help --" -- "$cur") )
         return
         ;;
       validate)
@@ -279,6 +279,7 @@ if [ -n "$ZSH_VERSION" ]; then
               '(-f --file)'{-f,--file}'[crate file]:file:_files -g "*.crate"' \
               '--warm-base[clone from warm-template ZFS dataset]:dataset:' \
               '--name[jail name (with --warm-base)]:name:' \
+              '--status-fd[JSON lifecycle events to descriptor N]:fd:' \
               '*--var[KEY=VALUE substitution]:var:' \
               '(-h --help)'{-h,--help}'[show help]' \
               '1:profile or crate file:_crate_profiles'

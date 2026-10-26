@@ -345,7 +345,73 @@ belong to the operator's uid, and the X11 authority is copied for the
 operator's account, so a GUI program under another
 .Sy run/user
 may not reach the display.
+.It Sy run/timeout
+How long the command may run (1.1.65; firejail
+.Fl -timeout ) :
+seconds, or a number with
+.Li s ,
+.Li m
+or
+.Li h
+.Pq Li 90 , Li 15m , Li 2h ,
+1 second to 30 days.
+The command is started under
+.Xr timeout 1
+.Pq Fl k Li 10 :
+SIGTERM at the deadline, SIGKILL ten seconds later; the jail is then torn
+down as after any exit, the exit code is 124 and the
+.Fl -status-fd
+.Li exited
+event says
+.Li "timed_out": true .
+On a service-only crate the limit stops the container itself
+.Nm ( crate validate
+warns).
+Absent: no limit.
 .El
+.Ss Lifecycle stream
+.Nm crate run --status-fd Ar N
+(1.1.65; bwrap
+.Fl -json-status-fd )
+writes one JSON object per line to the inherited descriptor
+.Ar N
+.Pq 3 or higher, opened by the caller: Li 3>status.jsonl
+as the run moves through its phases:
+.Bd -literal -offset indent
+{"event":"started","ts":1761300000,"pid":4242}
+{"event":"jail_created","ts":...,"jid":12,"name":"nginx_pid4242","path":"/var/run/crate/jail-nginx-1a2b"}
+{"event":"net_ready","ts":...,"mode":"bridge","ip":"10.0.0.7"}
+{"event":"mounts_ready","ts":...}
+{"event":"services_started","ts":...}
+{"event":"healthy","ts":...}                         (healthcheck: only; or "unhealthy")
+{"event":"exec_started","ts":...,"user":"alice","command":"/usr/local/bin/firefox"}
+{"event":"exited","ts":...,"code":0,"reason":"exited normally","timed_out":false}
+{"event":"teardown_done","ts":...}
+.Ed
+.Pp
+A run that fails before the command ran ends with
+.Li {"event":"failed","error":"..."}
+followed by
+.Li teardown_done .
+Values are strings, integers or booleans, never nested;
+.Li ip
+is present when the address is known (static or pool; not DHCP),
+.Li ts
+is the epoch second.
+A consumer waiting for the container to be up stops at the first of
+.Li jail_created ,
+.Li exited ,
+.Li failed
+or end of stream.
+.Nm crate stack up
+and
+.Xr crated 8
+start containers this way (a pipe on descriptor 3) instead of polling
+.Xr jls 8
+for the jail to appear, so a member that fails to start reports why.
+The descriptor is marked close-on-exec: nothing inside the jail inherits
+it.
+A reader that closes its end switches the stream off; the run continues.
 .Ss Shared resources
 .Bl -tag -width "files/share"
 .It Sy dirs/share
@@ -1462,6 +1528,13 @@ Create and run a container:
 .Bd -literal -offset indent
 crate create -s examples/firefox.yml -o firefox.crate
 crate run -f firefox.crate
+.Ed
+.Pp
+Follow the lifecycle from a script, with a time limit on the command:
+.Bd -literal -offset indent
+# spec: run: {command: /usr/local/bin/build.sh, timeout: 30m}
+crate run --status-fd 3 -f build.crate 3>build.status.jsonl
+grep '"event":"exited"' build.status.jsonl
 .Ed
 .Pp
 Create with template inheritance:

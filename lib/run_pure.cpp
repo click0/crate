@@ -135,4 +135,33 @@ std::string epairIp6(unsigned num, unsigned idx) {
   return ss.str();
 }
 
+std::string parseRunTimeout(const std::string &text, unsigned &secondsOut) {
+  if (text.empty()) return "run/timeout: empty value (omit the key for no timeout)";
+  size_t n = 0;
+  while (n < text.size() && text[n] >= '0' && text[n] <= '9') n++;
+  if (n == 0) return "run/timeout: '" + text + "' must be a number of seconds, optionally with s/m/h";
+  if (n > 9) return "run/timeout: '" + text + "' is out of range";
+  unsigned long long v = std::strtoull(text.substr(0, n).c_str(), nullptr, 10);
+  std::string unit = text.substr(n);
+  unsigned long long mult = 1;
+  if (unit.empty() || unit == "s") mult = 1;
+  else if (unit == "m") mult = 60;
+  else if (unit == "h") mult = 3600;
+  else return "run/timeout: unknown unit '" + unit + "' in '" + text + "' (s, m or h)";
+  v *= mult;
+  if (v == 0) return "run/timeout: 0 means no timeout — omit the key instead";
+  if (v > kRunTimeoutMax) return "run/timeout: '" + text + "' exceeds the 30-day maximum";
+  secondsOut = (unsigned)v;
+  return "";
+}
+
+std::vector<std::string> runTimeoutPrefix(unsigned seconds) {
+  if (seconds == 0) return {};
+  return {"/usr/bin/timeout", "-k", std::to_string(kRunTimeoutKillAfter), std::to_string(seconds)};
+}
+
+bool runTimedOut(unsigned seconds, int exitCode) {
+  return seconds > 0 && exitCode == kRunTimeoutExitCode;
+}
+
 }

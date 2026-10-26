@@ -143,6 +143,7 @@ public:
   std::string                                        runCmdArgs;              // can only be set when runCmdExecutable is set, always has a leading space when not blank
   std::vector<std::string>                           runServices;             // 0..oo services can be run
   std::string                                        runUser;                 // 1.1.64: run/user — "" = the operator mirrored (root operator -> `crate`), "root", or a jail account
+  unsigned                                           runTimeoutSec = 0;       // 1.1.65: run/timeout — the command is killed and the jail torn down after this many seconds (0 = none)
 
   // A shared directory or file: `jail` is the path inside the jail,
   // `host` the path on the host (a scalar entry uses the same path on
