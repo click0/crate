@@ -213,6 +213,54 @@ picks the name looked up (default
 Needs root or the crated privops socket, like
 .Cm console .
 Exit status 0, 1 (a WARN) or 2 (the probe did not run).
+.It Cm wrap install Ar profile Oo Fl -desktop Oc Oo Fl -no-launcher Oc Oo Fl -name Ar file Oc Oo Fl -icon Ar name Oc Op Fl -force
+.It Cm wrap remove Ar profile Op Fl -name Ar file
+.It Cm wrap list
+Put a profile's container in front of a program (1.1.66; firejail's
+firecfg).
+.Cm install
+writes the launcher
+.Pa ~/.local/bin/ Ns Ar profile
+.Po
+.Li exec crate run Ar profile Li -- \&"$@\&"
+.Pc ,
+so a program started from the shell runs in its container when
+.Pa ~/.local/bin
+comes before
+.Pa /usr/local/bin
+in
+.Ev PATH
+(a note is printed when it does not); with
+.Fl -desktop
+also
+.Pa ~/.local/share/applications/crate- Ns Ar profile Ns Pa .desktop
+.Po Ev XDG_DATA_HOME
+honoured
+.Pc
+with
+.Li Exec=crate run Ar profile Li -- \&%U ,
+.Li Terminal=true
+unless the profile has x11/gui,
+.Li Icon=
+the profile name or
+.Fl -icon .
+.Fl -no-launcher
+writes the desktop entry only,
+.Fl -name
+picks another launcher file name.
+Both files carry a marker naming the profile;
+.Cm remove
+and
+.Cm list
+only touch files that carry it, and
+.Cm install
+refuses to replace a file without it unless
+.Fl -force .
+The profile must be one
+.Cm run
+can find.
+Everything is written in the invoking user's home; no privilege is
+needed.
 .El
 .Ss Global options
 .Bl -tag -width "--log-progress"

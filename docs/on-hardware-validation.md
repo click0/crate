@@ -650,11 +650,53 @@ up` and crated report the failure reason instead of timing out.
 
 ---
 
+## 4i. 1.1.66 — `crate wrap install|remove|list`
+
+```sh
+# as an ordinary user (nothing here needs root)
+crate wrap list                                   # "no launchers installed by `crate wrap` in ..."
+crate wrap install fetch
+#   expect: "installed /home/<u>/.local/bin/fetch  ->  crate run fetch -- "$@"" and, when ~/.local/bin
+#   is not in $PATH, the yellow note; file mode 0755, 4 lines, "# crate wrap: fetch (crate 1.1.66)"
+PATH=$HOME/.local/bin:$PATH fetch -o /dev/null https://www.freebsd.org/
+#   expect: the fetch profile's container runs (first time: the profile build / chown recipe as with `crate run fetch`)
+crate wrap install firefox --desktop
+#   expect: both files; the .desktop has Exec=/usr/local/bin/crate run firefox -- %U, Terminal=false, Icon=firefox
+desktop-file-validate ~/.local/share/applications/crate-firefox.desktop   # from devel/desktop-file-utils: no errors
+crate wrap install nginx --desktop --no-launcher   # Terminal=true (no x11/gui in the profile); no ~/.local/bin/nginx
+crate wrap install fetch --name sfetch             # a second launcher name for the same profile
+crate wrap list                                    # fetch: two launchers; firefox: launcher + desktop; nginx: desktop
+XDG_DATA_HOME=/tmp/xdg crate wrap install mpv --desktop --no-launcher; ls /tmp/xdg/applications/
+
+# never clobber the operator's own files
+printf '#!/bin/sh\necho mine\n' > ~/.local/bin/gimp; chmod 755 ~/.local/bin/gimp
+crate wrap install gimp                            # refused: "exists and was not written by `crate wrap`; use --force"
+crate wrap remove gimp                             # "kept ...: not written by `crate wrap`", file still there
+crate wrap install gimp --force; crate wrap remove gimp; rm -f ~/.local/bin/gimp
+crate wrap install no-such-profile                 # refused: "profile 'no-such-profile' not found; searched ..."
+crate wrap install firefox --name crate            # refused by validate: would shadow crate itself
+
+# in a desktop session: the menu entry starts the container
+#   open the application menu, "Firefox (crate)" -> `crate list` shows firefox_pid<N>; a URL dropped on it
+#   arrives in the containerised firefox (%U)
+
+crate wrap remove firefox; crate wrap remove fetch; crate wrap remove fetch --name sfetch; crate wrap remove nginx
+crate wrap list                                   # empty again
+```
+
+Pass criteria: the launcher starts the profile's container with the
+arguments passed through; the `.desktop` entry validates and works from
+a menu; files not written by `crate wrap` are neither replaced (without
+`--force`) nor removed; `--name`, `--no-launcher`, `--icon` and
+`XDG_DATA_HOME` do what the help says.
+
+---
+
 ## 5. Reporting back
 
 ```sh
 sh scripts/on-hardware-validation.sh > /tmp/onhw-report.txt 2>&1
-# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b / §4c / §4d / §4e / §4f / §4g / §4h manual checks
+# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b / §4c / §4d / §4e / §4f / §4g / §4h / §4i manual checks
 ```
 
 Attach `/tmp/onhw-report.txt` plus the manual-section outcomes to the PR

@@ -6,6 +6,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.66] — 2026-10-26
+
+**TODO §17.9: `crate wrap install|remove|list` — launchers that start a
+profile's container (firejail's firecfg).**
+
+- **`crate wrap install <profile>`** writes `~/.local/bin/<profile>`, a
+  four-line sh script ending in `exec /usr/local/bin/crate run <profile>
+  -- "$@"`, so a program started from the shell runs in its container
+  when `~/.local/bin` precedes `/usr/local/bin` in `PATH` (a note is
+  printed when it does not). **`--desktop`** also writes
+  `~/.local/share/applications/crate-<profile>.desktop` (`XDG_DATA_HOME`
+  honoured): `Exec=/usr/local/bin/crate run <profile> -- %U`,
+  `Name=<Profile> (crate)`, `Icon=` the profile name or `--icon`,
+  `Terminal=true` unless the profile has x11/gui, `Categories=X-Crate;`.
+  `--no-launcher` writes the desktop entry only; `--name` picks another
+  launcher file name; the profile must be one `crate run` can find.
+- Both files carry a marker naming the profile (`# crate wrap: <profile>`
+  / `X-Crate-Profile=`). **`wrap remove`** deletes only files that carry
+  it (a foreign file is kept with a note), **`wrap list`** shows what is
+  installed, and `install` refuses to replace a file without the marker
+  unless `--force`. Launcher names follow the profile-name rule and may
+  not be `crate` (the launcher would exec itself). Files are written
+  atomically (temp + rename), 0755 / 0644, in the invoking user's home;
+  no privilege is used.
+- New `lib/wrap_pure.{h,cpp}` (paths, the launcher and Desktop Entry
+  text with sh / Exec quoting, marker parsing, `PATH` check, list
+  rendering) and `lib/wrap.cpp` (the file I/O and profile lookup);
+  `CmdWrap` in the CLI, bash/zsh completion, crate.5 (Commands), README
+  en/uk ("Desktop launchers"), runbook §4i.
+
+Tests: `wrap_pure_test` (4 cases: paths and `XDG_DATA_HOME`, launcher
+and desktop round trips incl. quoting and foreign/garbled files,
+display names, `PATH` matching, the list), `args_validate_test`
+(`wrap_ok`, `wrap_rejects`: subcommands, the name rule, `crate` as a
+name, option combinations). kyua on Linux; a desktop session starting
+the entry is runbook §4i.
+
+---
+
 ## [1.1.65] — 2026-10-24
 
 **TODO §17.8: machine-readable lifecycle — `crate run --status-fd N`,

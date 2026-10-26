@@ -944,10 +944,19 @@ Landlock, --restrict-namespaces.
   (extract/pkg phases); `exec_started` pid via a pidfile the in-jail
   `sh -c` writes.
 
-* (feature, LOW value / SMALL size) Desktop integration — firecfg.
-  `crate wrap install <profile>` writes a launcher to ~/.local/bin (or
-  a .desktop with `Exec=crate run <profile> -- %U`) so programs started
-  from a menu run in their container; `wrap remove` undoes it.
+* DONE 1.1.66 — Desktop integration (WrapPure, lib/wrap.cpp).
+  Decisions taken: per-user files only (~/.local/bin and the XDG
+  applications dir), never /usr/local/bin symlinks the way firecfg does
+  — crate is not setuid and a system-wide shadow of `firefox` would
+  surprise every other user; the launcher is a script, not a symlink,
+  so `crate run <profile>` is spelled out and the marker travels with
+  the file. The marker is what `remove`/`list` trust: a file without it
+  is the operator's and is neither replaced (without --force) nor
+  deleted. Terminal= is derived from the profile's x11/gui. Leftovers:
+  `wrap install --all` over the shipped examples; a `wrap check` that
+  reports launchers whose profile vanished; MIME types from the spec
+  (`MimeType=` so file associations pick the container); an uninstall
+  hook when a profile is removed.
 
 * (privacy, LOW value / SMALL size) `--machine-id` / `--hostname`.
   `privacy/hostid: random` generates a per-container /etc/hostid (and

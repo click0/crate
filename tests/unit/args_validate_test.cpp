@@ -129,6 +129,40 @@ ATF_TEST_CASE_BODY(audit_dns_name_is_pasted_into_a_script)
 	{ auto a = mkArgs(CmdAudit); a.auditTarget = "x"; a.auditDnsName = "";                      ATF_REQUIRE_THROW(Exception, a.validate()); }
 }
 
+// 1.1.66: `crate wrap install|remove|list`
+ATF_TEST_CASE_WITHOUT_HEAD(wrap_ok);
+ATF_TEST_CASE_BODY(wrap_ok)
+{
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "install"; a.wrapProfile = "firefox"; a.validate(); }
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "install"; a.wrapProfile = "firefox-gpu"; a.wrapDesktop = true; a.wrapIcon = "firefox"; a.validate(); }
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "install"; a.wrapProfile = "fetch"; a.wrapName = "sfetch"; a.wrapForce = true; a.validate(); }
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "install"; a.wrapProfile = "x"; a.wrapDesktop = true; a.wrapNoLauncher = true; a.wrapIcon = "/usr/local/share/icons/x.png"; a.validate(); }
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "remove"; a.wrapProfile = "firefox"; a.validate(); }
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "remove"; a.wrapProfile = "fetch"; a.wrapName = "sfetch"; a.validate(); }
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "list"; a.validate(); }
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(wrap_rejects);
+ATF_TEST_CASE_BODY(wrap_rejects)
+{
+	{ auto a = mkArgs(CmdWrap);                                                             ATF_REQUIRE_THROW(Exception, a.validate()); }   // no subcommand
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "add"; a.wrapProfile = "x";                  ATF_REQUIRE_THROW(Exception, a.validate()); }
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "install";                                   ATF_REQUIRE_THROW(Exception, a.validate()); }   // no profile
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "list"; a.wrapProfile = "x";                 ATF_REQUIRE_THROW(Exception, a.validate()); }
+	// the profile name is a file name under ~/.local/bin and goes into Exec=
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "install"; a.wrapProfile = "../etc";         ATF_REQUIRE_THROW(Exception, a.validate()); }
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "install"; a.wrapProfile = "a b";            ATF_REQUIRE_THROW(Exception, a.validate()); }
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "install"; a.wrapProfile = "x; rm -rf ~";    ATF_REQUIRE_THROW(Exception, a.validate()); }
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "install"; a.wrapProfile = "crate";          ATF_REQUIRE_THROW(Exception, a.validate()); }   // would shadow crate
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "install"; a.wrapProfile = "crate"; a.wrapName = "sandboxed-crate"; a.validate(); }           // ...unless named otherwise
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "install"; a.wrapProfile = "x"; a.wrapName = "crate";   ATF_REQUIRE_THROW(Exception, a.validate()); }
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "install"; a.wrapProfile = "x"; a.wrapName = "../y";    ATF_REQUIRE_THROW(Exception, a.validate()); }
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "install"; a.wrapProfile = "x"; a.wrapNoLauncher = true; ATF_REQUIRE_THROW(Exception, a.validate()); }   // nothing to install
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "install"; a.wrapProfile = "x"; a.wrapDesktop = true; a.wrapIcon = "a b"; ATF_REQUIRE_THROW(Exception, a.validate()); }
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "remove"; a.wrapProfile = "x"; a.wrapDesktop = true;   ATF_REQUIRE_THROW(Exception, a.validate()); }
+	{ auto a = mkArgs(CmdWrap); a.wrapSubcmd = "remove"; a.wrapProfile = "x"; a.wrapForce = true;     ATF_REQUIRE_THROW(Exception, a.validate()); }
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(run_profile_excludes_file_and_name);
 ATF_TEST_CASE_BODY(run_profile_excludes_file_and_name)
 {
@@ -424,6 +458,8 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, audit_requires_target);
 	ATF_ADD_TEST_CASE(tcs, audit_ok);
 	ATF_ADD_TEST_CASE(tcs, audit_dns_name_is_pasted_into_a_script);
+	ATF_ADD_TEST_CASE(tcs, wrap_ok);
+	ATF_ADD_TEST_CASE(tcs, wrap_rejects);
 	ATF_ADD_TEST_CASE(tcs, validate_requires_spec);
 	ATF_ADD_TEST_CASE(tcs, validate_with_spec_ok);
 	ATF_ADD_TEST_CASE(tcs, snapshot_requires_subcmd);

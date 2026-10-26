@@ -4,6 +4,7 @@
 #include "args.h"
 #include "profile_pure.h"
 #include "netaddr_pure.h"   // 1.1.61: audit --dns   // 1.1.59: `crate run <profile>` name rule
+#include "wrap_pure.h"      // 1.1.66: wrap --name
 #include "util.h"
 #include "err.h"
 
@@ -71,6 +72,7 @@ Command isCommand(const char *arg) {
   if (strEq(arg, "update"))    return CmdUpdate;
   if (strEq(arg, "profile-from-trace")) return CmdProfileFromTrace;
   if (strEq(arg, "audit"))     return CmdAudit;
+  if (strEq(arg, "wrap"))      return CmdWrap;
   return CmdNone;
 }
 
@@ -304,6 +306,36 @@ void Args::validate() {
     // pasted into the in-jail probe script: hostname charset only
     if (!NetAddrPure::isHostname(auditDnsName))
       ERR("--dns: '" << auditDnsName << "' is not a valid host name")
+    break;
+  case CmdWrap:
+    // 1.1.66: the profile name becomes a file name under ~/.local/bin and
+    // is pasted into the launcher and the .desktop Exec= line
+    if (wrapSubcmd.empty())
+      ERR("the 'wrap' command requires a subcommand (install, remove, list)")
+    if (wrapSubcmd != "install" && wrapSubcmd != "remove" && wrapSubcmd != "list")
+      ERR("'wrap " << wrapSubcmd << "' is not supported (install, remove, list)")
+    if (wrapSubcmd == "list") {
+      if (!wrapProfile.empty())
+        ERR("'wrap list' takes no profile name")
+    } else {
+      if (wrapProfile.empty())
+        ERR("'wrap " << wrapSubcmd << "' requires a profile name")
+      if (auto e = ProfilePure::validateProfileName(wrapProfile); !e.empty())
+        ERR(e)
+      if (!wrapName.empty())
+        if (auto e = WrapPure::validateLauncherName(wrapName); !e.empty())
+          ERR(e)
+      if (wrapName.empty())
+        if (auto e = WrapPure::validateLauncherName(wrapProfile); !e.empty())
+          ERR(e)
+      if (wrapSubcmd == "remove" && (wrapDesktop || wrapNoLauncher || wrapForce || !wrapIcon.empty()))
+        ERR("'wrap remove' takes only --name")
+      if (wrapNoLauncher && !wrapDesktop)
+        ERR("--no-launcher needs --desktop (nothing would be installed)")
+      for (char c : wrapIcon)
+        if (!(isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.' || c == '/'))
+          ERR("--icon: '" << wrapIcon << "' is not an icon name or path ([A-Za-z0-9._/-])")
+    }
     break;
   default:
     ERR("no command was given")

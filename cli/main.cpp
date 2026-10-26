@@ -373,6 +373,9 @@ static int mainGuarded(int argc, char** argv) {
   } case CmdAudit: {
     succ = jailAuditCommand(args);
     break;
+  } case CmdWrap: {
+    succ = wrapCommand(args);
+    break;
   } case CmdUpdate: {
     succ = updateCommand(args);
     break;

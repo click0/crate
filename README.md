@@ -11,7 +11,7 @@ Crate containers contain everything needed to run the containerized software —
 ## Features
 
 ### Container Management
-* **33 commands**: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`, `gui`, `stack`, `stats`, `logs`, `stop`, `restart`, `top`, `inter-dns`, `vpn`, `inspect`, `migrate`, `backup`, `backup-prune`, `restore`, `replicate`, `template`, `retune`, `throttle`, `doctor`, `vm-wrap`, `update`, `profile-from-trace`, `audit` — all described in `crate(5)`
+* **34 commands**: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`, `gui`, `stack`, `stats`, `logs`, `stop`, `restart`, `top`, `inter-dns`, `vpn`, `inspect`, `migrate`, `backup`, `backup-prune`, `restore`, `replicate`, `template`, `retune`, `throttle`, `doctor`, `vm-wrap`, `update`, `profile-from-trace`, `audit`, `wrap` — all described in `crate(5)`
 * **YAML specification** with template inheritance (`--template`)
 * **ZFS integration**: snapshots (create/list/restore/delete/diff), COW clones, encryption (AES-256-GCM/CCM, AES-128), dataset attachment
 * **Copy-on-Write**: ephemeral or persistent modes via ZFS clone or unionfs
@@ -87,6 +87,7 @@ Crate containers contain everything needed to run the containerized software —
 | `crate run --status-fd N ...` | Same, plus one JSON object per lifecycle event (`jail_created`, `net_ready`, `exited`, ...) on descriptor N (1.1.65) |
 | `crate profile-from-trace -o spec.yml -- CMD [args]` | Run CMD once on the host under `truss(1)` and draft a minimal spec from what it touched (1.1.60) |
 | `crate audit TARGET [-j] [--offline]` | What a running container can actually reach, seen from inside: host paths, devices, sockets, net (1.1.61) |
+| `crate wrap install PROFILE [--desktop]` | A launcher in `~/.local/bin` (and a `.desktop` entry) that starts the profile's container; `wrap remove`, `wrap list` (1.1.66) |
 | `crate validate -s spec.yml` | Validate a specification |
 | `crate snapshot create\|list\|restore\|delete\|diff` | Manage ZFS snapshots |
 | `crate list [-j]` | List running containers (table or JSON) |
@@ -557,6 +558,17 @@ limits:
 It may **not** loosen what the profile author chose: `security_advanced`, `dbus`, `base`, `scripts`, `encrypted`, `securelevel`, `socket_proxy` and shares of host paths outside your home are refused with the reason. For those, copy the profile into `~/.config/crate/profiles/` and edit the copy. The merged spec is written next to the archive as `NAME.yml` (generated) and is what `+CRATE.SPEC` contains. Profile names follow the jail-name rule (`[A-Za-z0-9._-]`), so the `chromium+tor`-style examples need a copy under a dash name.
 
 Since 1.1.59 `crate create --template` uses the same YAML merge and the merged spec goes into the archive; before, the template only affected the build and a `--template privacy` crate ran without tor, encryption, COW or the DNS filter.
+
+### Desktop launchers (`crate wrap`)
+
+`crate wrap install PROFILE` (1.1.66, after firejail's `firecfg`) puts the container in front of the program: it writes `~/.local/bin/PROFILE` with `exec crate run PROFILE -- "$@"`, so `firefox` typed in a shell runs the firefox profile when `~/.local/bin` comes before `/usr/local/bin` in `PATH` (the command tells you when it does not). `--desktop` adds `~/.local/share/applications/crate-PROFILE.desktop` (`Exec=crate run PROFILE -- %U`, `Terminal=true` unless the profile has x11/gui, `Icon=` the profile name or `--icon`) so menu entries and file associations start the container too; `--no-launcher` writes only that, `--name` picks another launcher name. Both files carry a marker naming the profile: `wrap remove PROFILE` and `wrap list` only touch files that carry it, and `install` refuses to overwrite a file without it unless `--force`. Everything lives in your home, no privilege is needed.
+
+```sh
+crate wrap install firefox --desktop     # `firefox` and the menu entry start the container
+crate wrap install fetch --name sfetch   # ~/.local/bin/sfetch -> crate run fetch
+crate wrap list
+crate wrap remove firefox
+```
 
 ## Spec draft from a trace
 

@@ -11,7 +11,7 @@ Crate — контейнеризатор для FreeBSD. Пакує застос
 ## Можливості
 
 ### Керування контейнерами
-* **11 команд**: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`, `gui`
+* **34 команди**: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`, `gui`, `stack`, `stats`, `logs`, `stop`, `restart`, `top`, `inter-dns`, `vpn`, `inspect`, `migrate`, `backup`, `backup-prune`, `restore`, `replicate`, `template`, `retune`, `throttle`, `doctor`, `vm-wrap`, `update`, `profile-from-trace`, `audit`, `wrap` — усі описані в `crate(5)`
 * **YAML-специфікація** з успадкуванням шаблонів (`--template`)
 * **Інтеграція з ZFS**: знімки (create/list/restore/delete/diff), COW-клони, шифрування (AES-256-GCM/CCM, AES-128), підключення datasets
 * **Copy-on-Write**: ефемерний або персистентний режим через ZFS clone або unionfs
@@ -86,6 +86,7 @@ Crate — контейнеризатор для FreeBSD. Пакує застос
 | `crate run --status-fd N ...` | Те саме, плюс по JSON-об'єкту на подію життєвого циклу (`jail_created`, `net_ready`, `exited`, ...) у дескриптор N (1.1.65) |
 | `crate profile-from-trace -o spec.yml -- CMD [args]` | Один раз запустити CMD на хості під `truss(1)` і скласти чернетку мінімальної специфікації з того, чого програма торкалась (1.1.60) |
 | `crate audit TARGET [-j] [--offline]` | Що запущений контейнер реально бачить зсередини: шляхи хоста, пристрої, сокети, мережа (1.1.61) |
+| `crate wrap install PROFILE [--desktop]` | Лаунчер у `~/.local/bin` (і `.desktop`-запис), що запускає контейнер профілю; `wrap remove`, `wrap list` (1.1.66) |
 | `crate validate -s spec.yml` | Перевірити специфікацію |
 | `crate snapshot create\|list\|restore\|delete\|diff` | Керування ZFS-знімками |
 | `crate list [-j]` | Перелік запущених контейнерів (таблиця або JSON) |
@@ -517,6 +518,17 @@ limits:
 Він **не може** послабити те, що обрав автор профілю: `security_advanced`, `dbus`, `base`, `scripts`, `encrypted`, `securelevel`, `socket_proxy` і спільні каталоги поза домашнім відхиляються з поясненням. Для такого скопіюйте профіль у `~/.config/crate/profiles/` і редагуйте копію. Злита специфікація записується поряд з архівом як `NAME.yml` (згенерований файл) і саме вона потрапляє у `+CRATE.SPEC`. Імена профілів підпорядковуються правилу імен jail (`[A-Za-z0-9._-]`), тож приклади на кшталт `chromium+tor` потребують копії з дефісом в імені.
 
 З 1.1.59 `crate create --template` використовує те саме YAML-злиття, і злита специфікація потрапляє в архів; раніше шаблон впливав лише на збірку, і crate із `--template privacy` запускався без tor, шифрування, COW та DNS-фільтра.
+
+### Лаунчери для робочого стола (`crate wrap`)
+
+`crate wrap install PROFILE` (1.1.66, за зразком `firecfg` у firejail) ставить контейнер перед програмою: пише `~/.local/bin/PROFILE` з `exec crate run PROFILE -- "$@"`, тож набраний у shell `firefox` запускає профіль firefox, якщо `~/.local/bin` стоїть у `PATH` перед `/usr/local/bin` (команда підказує, коли це не так). `--desktop` додає `~/.local/share/applications/crate-PROFILE.desktop` (`Exec=crate run PROFILE -- %U`, `Terminal=true`, якщо профіль не має x11/gui, `Icon=` — ім'я профілю або `--icon`), щоб пункти меню і файлові асоціації також запускали контейнер; `--no-launcher` пише лише його, `--name` обирає інше ім'я лаунчера. Обидва файли мають маркер з іменем профілю: `wrap remove PROFILE` і `wrap list` чіпають лише файли з маркером, а `install` відмовляється перезаписати файл без нього, якщо не вказано `--force`. Усе живе в домашньому каталозі, привілеї не потрібні.
+
+```sh
+crate wrap install firefox --desktop     # `firefox` і пункт меню запускають контейнер
+crate wrap install fetch --name sfetch   # ~/.local/bin/sfetch -> crate run fetch
+crate wrap list
+crate wrap remove firefox
+```
 
 ## Чернетка специфікації з трейсу
 
