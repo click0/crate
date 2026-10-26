@@ -650,11 +650,104 @@ up` and crated report the failure reason instead of timing out.
 
 ---
 
+## 4i. 1.1.66 — `crate wrap install|remove|list`
+
+```sh
+# as an ordinary user (nothing here needs root)
+crate wrap list                                   # "no launchers installed by `crate wrap` in ..."
+crate wrap install fetch
+#   expect: "installed /home/<u>/.local/bin/fetch  ->  crate run fetch -- "$@"" and, when ~/.local/bin
+#   is not in $PATH, the yellow note; file mode 0755, 4 lines, "# crate wrap: fetch (crate 1.1.66)"
+PATH=$HOME/.local/bin:$PATH fetch -o /dev/null https://www.freebsd.org/
+#   expect: the fetch profile's container runs (first time: the profile build / chown recipe as with `crate run fetch`)
+crate wrap install firefox --desktop
+#   expect: both files; the .desktop has Exec=/usr/local/bin/crate run firefox -- %U, Terminal=false, Icon=firefox
+desktop-file-validate ~/.local/share/applications/crate-firefox.desktop   # from devel/desktop-file-utils: no errors
+crate wrap install nginx --desktop --no-launcher   # Terminal=true (no x11/gui in the profile); no ~/.local/bin/nginx
+crate wrap install fetch --name sfetch             # a second launcher name for the same profile
+crate wrap list                                    # fetch: two launchers; firefox: launcher + desktop; nginx: desktop
+XDG_DATA_HOME=/tmp/xdg crate wrap install mpv --desktop --no-launcher; ls /tmp/xdg/applications/
+
+# never clobber the operator's own files
+printf '#!/bin/sh\necho mine\n' > ~/.local/bin/gimp; chmod 755 ~/.local/bin/gimp
+crate wrap install gimp                            # refused: "exists and was not written by `crate wrap`; use --force"
+crate wrap remove gimp                             # "kept ...: not written by `crate wrap`", file still there
+crate wrap install gimp --force; crate wrap remove gimp; rm -f ~/.local/bin/gimp
+crate wrap install no-such-profile                 # refused: "profile 'no-such-profile' not found; searched ..."
+crate wrap install firefox --name crate            # refused by validate: would shadow crate itself
+
+# in a desktop session: the menu entry starts the container
+#   open the application menu, "Firefox (crate)" -> `crate list` shows firefox_pid<N>; a URL dropped on it
+#   arrives in the containerised firefox (%U)
+
+crate wrap remove firefox; crate wrap remove fetch; crate wrap remove fetch --name sfetch; crate wrap remove nginx
+crate wrap list                                   # empty again
+```
+
+Pass criteria: the launcher starts the profile's container with the
+arguments passed through; the `.desktop` entry validates and works from
+a menu; files not written by `crate wrap` are neither replaced (without
+`--force`) nor removed; `--name`, `--no-launcher`, `--icon` and
+`XDG_DATA_HOME` do what the help says.
+
+---
+
+## 4j. 1.1.67 — `privacy/hostid`, `privacy/hostname`
+
+```sh
+sysctl kern.hostuuid kern.hostid kern.hostname            # the host's values, for comparison
+
+# default: unchanged — the jail carries the host's identity
+crate run -f sh.crate -- -c 'sysctl -n kern.hostuuid kern.hostid kern.hostname; cat /etc/hostid'
+#   expect: the host's three values; /etc/hostid as in the image
+crate audit <name>                                       # jail/hostid WARN "same as the host", hostname WARN
+
+# random: new every run
+cat > /tmp/p.yml <<'EOF'
+privacy: {hostid: random, hostname: random}
+run: {command: /bin/sh}
+EOF
+crate create -s /tmp/p.yml -o /tmp/p.crate
+crate run -p -f /tmp/p.crate -- -c 'sysctl -n kern.hostuuid kern.hostid kern.hostname; cat /etc/hostid'
+#   expect: -p prints "privacy: jail hostname crate-xxxxxxxx" and "privacy: jail host UUID <uuid> (kern.hostid N)";
+#   inside: that UUID, that N (decimal), that hostname; /etc/hostid == the UUID;
+#   md5 check: echo -n <uuid> | md5 | cut -c1-8 == printf %08x N
+crate run -f /tmp/p.crate -- -c 'sysctl -n kern.hostuuid'   # a different UUID the second time
+crate audit <name>                                            # jail/hostid PASS "(differs from the host)"
+
+# fixed: stable for the crate
+sed -i '' 's/hostid: random/hostid: 123e4567-e89b-12d3-a456-426614174000/; s/hostname: random/hostname: box/' /tmp/p.yml
+crate create -s /tmp/p.yml -o /tmp/p2.crate
+crate run -f /tmp/p2.crate -- -c 'sysctl -n kern.hostuuid kern.hostid kern.hostname'
+#   expect: 123e4567-e89b-12d3-a456-426614174000 / 993178332 / box, every run
+
+# rootless (crated privops): the same through create_jail's parameter list
+crate run -p -f /tmp/p.crate -- -c 'sysctl -n kern.hostuuid'  # as an unprivileged member of the privops group
+#   expect: a UUID != the host's; crated log shows create_jail with host.hostuuid=... host.hostid=...
+#   a hand-crafted request with host.hostid=4294967296 or host.hostuuid=x is refused (400) by the validator
+
+# validation and the shipped specs
+printf 'options: [tor]\nrun: {command: /bin/sh}\n' > /tmp/t.yml; crate validate -s /tmp/t.yml
+#   expect: warning "tor/i2pd without privacy/hostid"
+crate validate -s examples/tor.yml; crate validate -s examples/chromium+tor.yml; crate validate -s templates/privacy.yml   # no such warning
+printf 'privacy: {hostid: yes}\n' > /tmp/b.yml; crate validate -s /tmp/b.yml     # error: not 'host', 'random' or a UUID
+printf 'privacy: {hostname: "a b"}\n' > /tmp/b.yml; crate validate -s /tmp/b.yml  # error: not a host name
+```
+
+Pass criteria: no change without `privacy:`; `random` gives a UUID, a
+matching decimal hostid (first 32 bits of md5 of the UUID text) and a
+`crate-<hex>` hostname that differ from the host's and between runs;
+a literal UUID / name is used as given; `/etc/hostid` inside equals
+`kern.hostuuid`; the same holds through crated; `crate audit` turns the
+hostid row from WARN to PASS.
+
+---
+
 ## 5. Reporting back
 
 ```sh
 sh scripts/on-hardware-validation.sh > /tmp/onhw-report.txt 2>&1
-# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b / §4c / §4d / §4e / §4f / §4g / §4h manual checks
+# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b / §4c / §4d / §4e / §4f / §4g / §4h / §4i / §4j manual checks
 ```
 
 Attach `/tmp/onhw-report.txt` plus the manual-section outcomes to the PR

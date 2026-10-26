@@ -145,6 +145,32 @@ ATF_TEST_CASE_BODY(run_user_validation)
 	}
 }
 
+// 1.1.67: privacy/hostid, privacy/hostname
+ATF_TEST_CASE_WITHOUT_HEAD(privacy_validation);
+ATF_TEST_CASE_BODY(privacy_validation)
+{
+	for (const char *ok : {"", "host", "random", "123e4567-e89b-12d3-a456-426614174000"}) {
+		auto s = mkValid();
+		s.privacyHostid = ok;
+		s.validate();
+	}
+	for (const char *ok : {"", "host", "random", "box", "web-01.example.org"}) {
+		auto s = mkValid();
+		s.privacyHostname = ok;
+		s.validate();
+	}
+	for (const char *bad : {"yes", "123e4567", "0x1"}) {
+		auto s = mkValid();
+		s.privacyHostid = bad;
+		ATF_REQUIRE_THROW(Exception, s.validate());
+	}
+	for (const char *bad : {"a b", "-x", "$(id)", "x;y"}) {
+		auto s = mkValid();
+		s.privacyHostname = bad;
+		ATF_REQUIRE_THROW(Exception, s.validate());
+	}
+}
+
 // 1.1.65: run/timeout range (the parser range-checks; validate() guards a
 // constructed/merged Spec)
 ATF_TEST_CASE_WITHOUT_HEAD(run_timeout_validation);
@@ -764,6 +790,7 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, tmpfs_and_etc_keep_validation);
 	ATF_ADD_TEST_CASE(tcs, run_user_validation);
 	ATF_ADD_TEST_CASE(tcs, run_timeout_validation);
+	ATF_ADD_TEST_CASE(tcs, privacy_validation);
 
 	// options + scripts
 	ATF_ADD_TEST_CASE(tcs, unknown_option_throws);

@@ -479,10 +479,21 @@ ATF_TEST_CASE_BODY(jail_parameters_rejects_bad_values) {
     "children.max=-1",
     "children.max=1e3",
     "children.max=99999999999",
+    // 1.1.67: privacy/hostid
+    "host.hostuuid=not-a-uuid",
+    "host.hostuuid=123e4567-e89b-12d3-a456-42661417400",
+    "host.hostuuid=123e4567-e89b-12d3-a456-42661417400g",
+    "host.hostid=4294967296",
+    "host.hostid=-1",
+    "host.hostid=0x3b32b2dc",
+    "host.hostname=evil",   // the hostname travels in its own validated field, never here
   };
   for (const char *p : bad)
     if (validateJailParameters(p).empty())
       ATF_FAIL(std::string("accepted: ") + p);
+  // 1.1.67: what PrivacyPure::jailParams composes is accepted
+  ATF_REQUIRE_EQ(validateJailParameters("host.hostuuid=123e4567-e89b-12d3-a456-426614174000 host.hostid=993178332"), std::string());
+  ATF_REQUIRE_EQ(validateJailParameters("host.hostid=4294967295 host.hostuuid=00000000-0000-4000-8000-000000000000"), std::string());
   // The pre-1.1.35 line/metachar rules still apply on top.
   ATF_REQUIRE(!validateJailParameters("allow.raw_sockets=1\nexec.prestart=/x").empty());
   ATF_REQUIRE(!validateJailParameters("allow.raw_sockets=$(id)").empty());

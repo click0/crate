@@ -11,7 +11,7 @@ Crate — контейнеризатор для FreeBSD. Пакує застос
 ## Можливості
 
 ### Керування контейнерами
-* **11 команд**: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`, `gui`
+* **34 команди**: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`, `gui`, `stack`, `stats`, `logs`, `stop`, `restart`, `top`, `inter-dns`, `vpn`, `inspect`, `migrate`, `backup`, `backup-prune`, `restore`, `replicate`, `template`, `retune`, `throttle`, `doctor`, `vm-wrap`, `update`, `profile-from-trace`, `audit`, `wrap` — усі описані в `crate(5)`
 * **YAML-специфікація** з успадкуванням шаблонів (`--template`)
 * **Інтеграція з ZFS**: знімки (create/list/restore/delete/diff), COW-клони, шифрування (AES-256-GCM/CCM, AES-128), підключення datasets
 * **Copy-on-Write**: ефемерний або персистентний режим через ZFS clone або unionfs
@@ -86,6 +86,7 @@ Crate — контейнеризатор для FreeBSD. Пакує застос
 | `crate run --status-fd N ...` | Те саме, плюс по JSON-об'єкту на подію життєвого циклу (`jail_created`, `net_ready`, `exited`, ...) у дескриптор N (1.1.65) |
 | `crate profile-from-trace -o spec.yml -- CMD [args]` | Один раз запустити CMD на хості під `truss(1)` і скласти чернетку мінімальної специфікації з того, чого програма торкалась (1.1.60) |
 | `crate audit TARGET [-j] [--offline]` | Що запущений контейнер реально бачить зсередини: шляхи хоста, пристрої, сокети, мережа (1.1.61) |
+| `crate wrap install PROFILE [--desktop]` | Лаунчер у `~/.local/bin` (і `.desktop`-запис), що запускає контейнер профілю; `wrap remove`, `wrap list` (1.1.66) |
 | `crate validate -s spec.yml` | Перевірити специфікацію |
 | `crate snapshot create\|list\|restore\|delete\|diff` | Керування ZFS-знімками |
 | `crate list [-j]` | Перелік запущених контейнерів (таблиця або JSON) |
@@ -518,6 +519,17 @@ limits:
 
 З 1.1.59 `crate create --template` використовує те саме YAML-злиття, і злита специфікація потрапляє в архів; раніше шаблон впливав лише на збірку, і crate із `--template privacy` запускався без tor, шифрування, COW та DNS-фільтра.
 
+### Лаунчери для робочого стола (`crate wrap`)
+
+`crate wrap install PROFILE` (1.1.66, за зразком `firecfg` у firejail) ставить контейнер перед програмою: пише `~/.local/bin/PROFILE` з `exec crate run PROFILE -- "$@"`, тож набраний у shell `firefox` запускає профіль firefox, якщо `~/.local/bin` стоїть у `PATH` перед `/usr/local/bin` (команда підказує, коли це не так). `--desktop` додає `~/.local/share/applications/crate-PROFILE.desktop` (`Exec=crate run PROFILE -- %U`, `Terminal=true`, якщо профіль не має x11/gui, `Icon=` — ім'я профілю або `--icon`), щоб пункти меню і файлові асоціації також запускали контейнер; `--no-launcher` пише лише його, `--name` обирає інше ім'я лаунчера. Обидва файли мають маркер з іменем профілю: `wrap remove PROFILE` і `wrap list` чіпають лише файли з маркером, а `install` відмовляється перезаписати файл без нього, якщо не вказано `--force`. Усе живе в домашньому каталозі, привілеї не потрібні.
+
+```sh
+crate wrap install firefox --desktop     # `firefox` і пункт меню запускають контейнер
+crate wrap install fetch --name sfetch   # ~/.local/bin/sfetch -> crate run fetch
+crate wrap list
+crate wrap remove firefox
+```
+
 ## Чернетка специфікації з трейсу
 
 `crate profile-from-trace -o app.yml -- <команда> [аргументи]` (1.1.60, за зразком `--build` у firejail) **один раз запускає програму на хості, без пісочниці**, під `truss -f` і перетворює трейс на чернетку мінімальної специфікації:
@@ -548,6 +560,18 @@ limits:
 | `connectivity` | резолвер, одне TCP-з'єднання до шлюзу за замовчуванням, один DNS-запит (`--offline` пропускає обидва, `--dns NAME` задає ім'я) |
 
 WARN позначає не помилку, а те, на що варто глянути: цілий каталог хоста змонтований на запис, сирі дискові чи memory-пристрої, клавіатурні пристрої, сокет хоста, hostid такий самий, як у хоста. Код виходу 0, 1 (є WARN) або 2 (probe не виконався). `crate doctor` дивиться на хост, `crate audit` — на один контейнер; потрібен root або privops-сокет crated, як для `crate console`.
+
+## Ідентичність машини (`privacy:`)
+
+Jail успадковує `kern.hostuuid` / `kern.hostid` хоста, якщо не створений зі своїми, а crate передавав ім'я хоста як hostname jail, тож кожний jail ідентифікував машину будь-кому, хто їх читає (`crate audit` попереджає про це з 1.1.61). З 1.1.67 (аналог `--machine-id`, `--hostname` у bwrap/firejail):
+
+```yaml
+privacy:
+    hostid: random        # host | random (свіжий UUID v4 при кожному запуску) | буквальний UUID (сталий для crate)
+    hostname: random      # host | random (crate-<8 hex>) | буквальне ім'я хоста
+```
+
+Jail створюється з `host.hostuuid` і `host.hostid`, виведеним так, як це робить `/etc/rc.d/hostid` (перші 32 біти md5 від тексту UUID); у `/etc/hostid` jail записується UUID, щоб `rc(8)` усередині збігався з ядром. `crate validate` попереджає, коли `tor` чи `i2pd` використано без `privacy/hostid`; `templates/privacy.yml` і приклади tor / i2pd мають обидва ключі. Під rootless обидва параметри йдуть у whitelist-списку параметрів `create_jail`.
 
 ## Класи пристроїв
 
@@ -669,6 +693,7 @@ nmap, amass, wget, aria2, fetch, gzip, yt-dlp, xeyes
 | `x11` | X11 дисплей (mode: nested/shared/none, resolution, clipboard) |
 | `gui` | GUI сесія (mode: nested/headless/gpu/auto, vnc, novnc, resolution) |
 | `clipboard` | Ізоляція буфера обміну (mode: isolated/shared/none, direction) |
+| `privacy` | `hostid: host\|random\|<uuid>` — власні `kern.hostuuid`/`kern.hostid` і `/etc/hostid` jail; `hostname: host\|random\|<ім'я>` (1.1.67) |
 | `dbus` | D-Bus політика (system, session, policy/allow_own/deny_send) |
 | `services` | Керовані сервіси (managed list, auto_start) |
 | `socket_proxy` | Проксі сокетів (share, proxy з host/jail/direction) |

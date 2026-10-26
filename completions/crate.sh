@@ -19,7 +19,7 @@ if [ -n "$BASH_VERSION" ]; then
                     snapshot export import gui stack stats logs \
                     stop restart top inter-dns vpn inspect migrate \
                     backup restore backup-prune replicate template \
-                    retune throttle doctor vm-wrap update profile-from-trace audit"
+                    retune throttle doctor vm-wrap update profile-from-trace audit wrap"
     local global_opts="-h --help -V --version --no-color -p --log-progress"
 
     case "$prev" in
@@ -161,6 +161,10 @@ if [ -n "$BASH_VERSION" ]; then
         COMPREPLY=( $(compgen -W "-j --json --offline --dns -h --help" -- "$cur") )
         return
         ;;
+      wrap)
+        COMPREPLY=( $(compgen -W "install remove list --desktop --no-launcher --name --icon --force -h --help" -- "$cur") )
+        return
+        ;;
       -s|--spec)
         COMPREPLY=( $(compgen -f -X '!*.yml' -- "$cur") )
         return
@@ -249,6 +253,7 @@ if [ -n "$ZSH_VERSION" ]; then
       'update:in-place pkg upgrade in a running jail'
       'profile-from-trace:draft a spec from one run under truss(1)'
       'audit:what a running container can reach, seen from inside'
+      'wrap:launchers (~/.local/bin, .desktop) that start a profile in its container'
     )
 
     _arguments -C \
@@ -474,6 +479,17 @@ if [ -n "$ZSH_VERSION" ]; then
               '--dns[name for the DNS probe]:name:' \
               '(-h --help)'{-h,--help}'[show help]' \
               '1:container:'
+            ;;
+          wrap)
+            _arguments \
+              '1:subcommand:(install remove list)' \
+              '2:profile:_crate_profiles' \
+              '--desktop[also write the .desktop entry]' \
+              '--no-launcher[the .desktop entry only]' \
+              '--name[launcher file name in ~/.local/bin]:name:' \
+              '--icon[Icon= of the .desktop entry]:icon:' \
+              '--force[replace a file crate wrap did not write]' \
+              '(-h --help)'{-h,--help}'[show help]'
             ;;
           update)
             _arguments \

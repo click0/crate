@@ -46,6 +46,7 @@
 #include "mounts_pure.h"      // 1.1.63: tmpfs
 #include "passwd_pure.h"      // 1.1.64: run/user account lookup
 #include "status_fd.h"        // 1.1.65: --status-fd lifecycle stream
+#include "privacy_pure.h"     // 1.1.67: privacy/hostid, privacy/hostname
 #include "status_pure.h"
 
 #include <rang.hpp>
@@ -1065,7 +1066,27 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   runScript("run:before-create-jail");
   LOG("creating jail " << jailXname)
 
-  auto jailInfo = RunJail::createJail(spec, jailPath, jailXname, args.logProgress);
+  // 1.1.67: privacy — the hostname and host UUID the jail presents.
+  // `random` is drawn once per run; a literal value is used as given.
+  RunJail::JailIdentity identity;
+  {
+    PrivacyPure::Mode m; std::string v;
+    if (PrivacyPure::parseHostid(spec.privacyHostid, m, v).empty()) {
+      if (m == PrivacyPure::Mode::Random) identity.hostuuid = PrivacyPure::uuidFromHex(Util::randomHex(16));
+      else if (m == PrivacyPure::Mode::Fixed) identity.hostuuid = v;
+    }
+    if (PrivacyPure::parseHostname(spec.privacyHostname, m, v).empty()) {
+      if (m == PrivacyPure::Mode::Random) identity.hostname = PrivacyPure::randomHostname(Util::randomHex(4));
+      else if (m == PrivacyPure::Mode::Fixed) identity.hostname = v;
+    }
+    if (!identity.hostname.empty())
+      LOG("privacy: jail hostname " << identity.hostname)
+    if (!identity.hostuuid.empty())
+      LOG("privacy: jail host UUID " << identity.hostuuid << " (kern.hostid "
+          << PrivacyPure::hostidFromUuid(identity.hostuuid) << ")")
+  }
+
+  auto jailInfo = RunJail::createJail(spec, jailPath, jailXname, args.logProgress, identity);
   int jid = jailInfo.jid;
 
   // 0.8.31: publish jid to the MAC bsdextended cleanup handler so
@@ -1263,6 +1284,12 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   auto appendFileInJail = [J](auto str, auto file) {
     Util::Fs::appendFile(str, J(file));
   };
+
+  // 1.1.67: /etc/hostid inside the jail names the UUID the kernel was
+  // given, so rc.d/hostid and anything that reads the file agree with
+  // kern.hostuuid.
+  if (!identity.hostuuid.empty())
+    writeFileInJail(PrivacyPure::hostidFileContent(identity.hostuuid), "/etc/hostid");
 
   // set up networking
   // 0.8.2: ipfw NAT rule + instance cleanup. Only used on hosts

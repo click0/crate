@@ -6,6 +6,83 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.67] — 2026-10-26
+
+**TODO §17.10: `privacy/hostid`, `privacy/hostname` — the jail's own
+machine identity (bwrap/firejail `--machine-id`, `--hostname`).**
+
+- A jail shares the host's `kern.hostuuid` / `kern.hostid` unless it is
+  created with its own, and crate passed only the host's name as the
+  jail hostname, so every jail identified the machine to anything that
+  read them (`crate audit` has warned since 1.1.61). **`privacy/hostid`**:
+  `host` (the default, as before), `random` (a fresh UUID v4 every run)
+  or a literal UUID (stable for the crate). The jail is created with
+  `host.hostuuid` and `host.hostid` — derived the way `/etc/rc.d/hostid`
+  does, the first 32 bits of md5 of the UUID text — and its `/etc/hostid`
+  gets the UUID so rc(8) inside agrees with the kernel.
+  **`privacy/hostname`**: `host`, `random` (`crate-<8 hex>`) or a literal
+  host name. Root path: jail_setv with the two extra parameters;
+  rootless: the privops `create_jail` parameter whitelist gained
+  `host.hostuuid` (a UUID) and `host.hostid` (a 32-bit unsigned).
+- `crate validate` warns when the `tor` or `i2pd` option is used without
+  `privacy/hostid`. `templates/privacy.yml` and the tor / i2pd examples
+  (`tor`, `chromium+tor`, `chromium-privacy`, `i2pd`, `chromium+i2pd`,
+  `firefox+i2pd`, `qbittorrent+i2pd`) carry
+  `privacy: {hostid: random, hostname: random}`.
+- New `lib/privacy_pure.{h,cpp}` (modes, UUID v4 from random hex, a
+  self-contained MD5 for the hostid derivation, the jail parameters);
+  `RunJail::JailIdentity` on `createJail`. Docs: crate.5 (new Privacy
+  subsection), README en/uk ("Machine identity"), runbook §4j.
+
+Tests: `privacy_pure_test` (4 cases: the hostid/hostname modes, UUID
+shaping incl. version/variant bits, MD5 against the RFC 1321 vectors and
+the padding boundaries, the hostid derivation and jail parameters),
+`privops_pure_test` (the two new whitelist keys and their shapes),
+`spec_validate_test` (`privacy_validation`), `validate_pure_test`
+(`privacy_warnings`). kyua on Linux; jail_setv with `host.hostuuid` /
+`host.hostid` and the in-jail sysctls are runbook §4j.
+
+---
+
+## [1.1.66] — 2026-10-26
+
+**TODO §17.9: `crate wrap install|remove|list` — launchers that start a
+profile's container (firejail's firecfg).**
+
+- **`crate wrap install <profile>`** writes `~/.local/bin/<profile>`, a
+  four-line sh script ending in `exec /usr/local/bin/crate run <profile>
+  -- "$@"`, so a program started from the shell runs in its container
+  when `~/.local/bin` precedes `/usr/local/bin` in `PATH` (a note is
+  printed when it does not). **`--desktop`** also writes
+  `~/.local/share/applications/crate-<profile>.desktop` (`XDG_DATA_HOME`
+  honoured): `Exec=/usr/local/bin/crate run <profile> -- %U`,
+  `Name=<Profile> (crate)`, `Icon=` the profile name or `--icon`,
+  `Terminal=true` unless the profile has x11/gui, `Categories=X-Crate;`.
+  `--no-launcher` writes the desktop entry only; `--name` picks another
+  launcher file name; the profile must be one `crate run` can find.
+- Both files carry a marker naming the profile (`# crate wrap: <profile>`
+  / `X-Crate-Profile=`). **`wrap remove`** deletes only files that carry
+  it (a foreign file is kept with a note), **`wrap list`** shows what is
+  installed, and `install` refuses to replace a file without the marker
+  unless `--force`. Launcher names follow the profile-name rule and may
+  not be `crate` (the launcher would exec itself). Files are written
+  atomically (temp + rename), 0755 / 0644, in the invoking user's home;
+  no privilege is used.
+- New `lib/wrap_pure.{h,cpp}` (paths, the launcher and Desktop Entry
+  text with sh / Exec quoting, marker parsing, `PATH` check, list
+  rendering) and `lib/wrap.cpp` (the file I/O and profile lookup);
+  `CmdWrap` in the CLI, bash/zsh completion, crate.5 (Commands), README
+  en/uk ("Desktop launchers"), runbook §4i.
+
+Tests: `wrap_pure_test` (4 cases: paths and `XDG_DATA_HOME`, launcher
+and desktop round trips incl. quoting and foreign/garbled files,
+display names, `PATH` matching, the list), `args_validate_test`
+(`wrap_ok`, `wrap_rejects`: subcommands, the name rule, `crate` as a
+name, option combinations). kyua on Linux; a desktop session starting
+the entry is runbook §4i.
+
+---
+
 ## [1.1.65] — 2026-10-24
 
 **TODO §17.8: machine-readable lifecycle — `crate run --status-fd N`,

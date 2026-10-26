@@ -72,6 +72,7 @@ static void usage() {
   std::cout << "  update TARGET --pkg-only   in-place pkg upgrade in a running jail (-n dry-run, -y auto-yes)" << std::endl;
   std::cout << "  profile-from-trace -- CMD  run CMD under truss(1) and draft a minimal spec from what it touched" << std::endl;
   std::cout << "  audit TARGET [-j]          what a running container can reach, seen from inside (mounts, devices, sockets, net)" << std::endl;
+  std::cout << "  wrap install|remove|list   launchers (~/.local/bin, .desktop) that start a profile's container" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -472,6 +473,35 @@ static void usageProfileFromTrace() {
   std::cout << "Examples:" << std::endl;
   std::cout << "  crate profile-from-trace -o firefox.yml -- firefox https://www.freebsd.org/" << std::endl;
   std::cout << "  truss -f -s 1024 -o t.out nginx -g 'daemon off;'; crate profile-from-trace --trace-file t.out" << std::endl;
+  std::cout << "" << std::endl;
+}
+
+static void usageWrap() {
+  std::cout << "usage: crate wrap install <profile> [--desktop] [--no-launcher] [--name <file>] [--icon <name>] [--force]" << std::endl;
+  std::cout << "       crate wrap remove <profile> [--name <file>]" << std::endl;
+  std::cout << "       crate wrap list" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Put a profile's container in front of a program (firejail's firecfg): a program" << std::endl;
+  std::cout << "started from the shell or a desktop menu then runs with `crate run <profile>`." << std::endl;
+  std::cout << "  install       writes ~/.local/bin/<profile>: `exec crate run <profile> -- \"$@\"`" << std::endl;
+  std::cout << "                (found before /usr/local/bin/<profile> when ~/.local/bin leads $PATH)" << std::endl;
+  std::cout << "  --desktop     also ~/.local/share/applications/crate-<profile>.desktop" << std::endl;
+  std::cout << "                ($XDG_DATA_HOME honoured) with Exec=crate run <profile> -- %U;" << std::endl;
+  std::cout << "                Terminal=true unless the profile has x11/gui" << std::endl;
+  std::cout << "  --no-launcher the .desktop entry only" << std::endl;
+  std::cout << "  --name <file> launcher file name (default: the profile name)" << std::endl;
+  std::cout << "  --icon <name> Icon= for the .desktop entry (default: the profile name)" << std::endl;
+  std::cout << "  --force       replace a file that `crate wrap` did not write" << std::endl;
+  std::cout << "  remove        deletes both files; only files written by `crate wrap` are touched" << std::endl;
+  std::cout << "  list          what is installed" << std::endl;
+  std::cout << "The profile must exist (see `crate run -h` for where profiles are looked up);" << std::endl;
+  std::cout << "everything is written in your home, no privilege is needed." << std::endl;
+  std::cout << "  -h, --help    show this help screen" << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Examples:" << std::endl;
+  std::cout << "  crate wrap install firefox --desktop     # `firefox` and the menu entry start the container" << std::endl;
+  std::cout << "  crate wrap install fetch --name sfetch   # ~/.local/bin/sfetch -> crate run fetch" << std::endl;
+  std::cout << "  crate wrap remove firefox" << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -1441,6 +1471,26 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           args.auditTarget = argv[a];
         } else {
           err("too many arguments for 'audit' command");
+        }
+        break;
+      case CmdWrap:
+        if (auto argShort = isShort(argv[a])) {
+          if (argShort == 'h') { usageWrap(); exit(0); }
+          err("unsupported short option '%s'", argv[a]);
+        } else if (auto argLong = isLong(argv[a])) {
+          if (strEq(argLong, "help"))              { usageWrap(); exit(0); }
+          else if (strEq(argLong, "desktop"))      args.wrapDesktop = true;
+          else if (strEq(argLong, "no-launcher"))  args.wrapNoLauncher = true;
+          else if (strEq(argLong, "force"))        args.wrapForce = true;
+          else if (strEq(argLong, "name"))         args.wrapName = getArgParam(++a, argc, argv);
+          else if (strEq(argLong, "icon"))         args.wrapIcon = getArgParam(++a, argc, argv);
+          else err("unsupported long option '%s'", argv[a]);
+        } else if (args.wrapSubcmd.empty()) {
+          args.wrapSubcmd = argv[a];
+        } else if (args.wrapProfile.empty()) {
+          args.wrapProfile = argv[a];
+        } else {
+          err("too many arguments for 'wrap' command");
         }
         break;
       case CmdMigrate:

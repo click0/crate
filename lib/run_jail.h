@@ -26,8 +26,17 @@ struct JailInfo {
 // provide a stable `jailName` since the privops verb identifies
 // jails by name (the kernel auto-names libjail-created jails by
 // jid string, but the verb-driven path needs an explicit name).
+// 1.1.67 (privacy): what the jail presents as the machine. Empty
+// hostname = the host's own (as before); empty hostuuid = share the
+// host's kern.hostuuid/kern.hostid (as before). Non-empty hostuuid adds
+// host.hostuuid=<uuid> and host.hostid=<PrivacyPure::hostidFromUuid>.
+struct JailIdentity {
+  std::string hostname;
+  std::string hostuuid;
+};
 JailInfo createJail(const Spec &spec, const std::string &jailPath,
-                    const std::string &jailName, bool logProgress);
+                    const std::string &jailName, bool logProgress,
+                    const JailIdentity &identity = JailIdentity());
 
 // Remove a jail (race-free via descriptor if available)
 void removeJail(const JailInfo &info);

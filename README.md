@@ -11,7 +11,7 @@ Crate containers contain everything needed to run the containerized software —
 ## Features
 
 ### Container Management
-* **33 commands**: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`, `gui`, `stack`, `stats`, `logs`, `stop`, `restart`, `top`, `inter-dns`, `vpn`, `inspect`, `migrate`, `backup`, `backup-prune`, `restore`, `replicate`, `template`, `retune`, `throttle`, `doctor`, `vm-wrap`, `update`, `profile-from-trace`, `audit` — all described in `crate(5)`
+* **34 commands**: `create`, `run`, `validate`, `snapshot`, `list`, `info`, `console`, `clean`, `export`, `import`, `gui`, `stack`, `stats`, `logs`, `stop`, `restart`, `top`, `inter-dns`, `vpn`, `inspect`, `migrate`, `backup`, `backup-prune`, `restore`, `replicate`, `template`, `retune`, `throttle`, `doctor`, `vm-wrap`, `update`, `profile-from-trace`, `audit`, `wrap` — all described in `crate(5)`
 * **YAML specification** with template inheritance (`--template`)
 * **ZFS integration**: snapshots (create/list/restore/delete/diff), COW clones, encryption (AES-256-GCM/CCM, AES-128), dataset attachment
 * **Copy-on-Write**: ephemeral or persistent modes via ZFS clone or unionfs
@@ -87,6 +87,7 @@ Crate containers contain everything needed to run the containerized software —
 | `crate run --status-fd N ...` | Same, plus one JSON object per lifecycle event (`jail_created`, `net_ready`, `exited`, ...) on descriptor N (1.1.65) |
 | `crate profile-from-trace -o spec.yml -- CMD [args]` | Run CMD once on the host under `truss(1)` and draft a minimal spec from what it touched (1.1.60) |
 | `crate audit TARGET [-j] [--offline]` | What a running container can actually reach, seen from inside: host paths, devices, sockets, net (1.1.61) |
+| `crate wrap install PROFILE [--desktop]` | A launcher in `~/.local/bin` (and a `.desktop` entry) that starts the profile's container; `wrap remove`, `wrap list` (1.1.66) |
 | `crate validate -s spec.yml` | Validate a specification |
 | `crate snapshot create\|list\|restore\|delete\|diff` | Manage ZFS snapshots |
 | `crate list [-j]` | List running containers (table or JSON) |
@@ -558,6 +559,17 @@ It may **not** loosen what the profile author chose: `security_advanced`, `dbus`
 
 Since 1.1.59 `crate create --template` uses the same YAML merge and the merged spec goes into the archive; before, the template only affected the build and a `--template privacy` crate ran without tor, encryption, COW or the DNS filter.
 
+### Desktop launchers (`crate wrap`)
+
+`crate wrap install PROFILE` (1.1.66, after firejail's `firecfg`) puts the container in front of the program: it writes `~/.local/bin/PROFILE` with `exec crate run PROFILE -- "$@"`, so `firefox` typed in a shell runs the firefox profile when `~/.local/bin` comes before `/usr/local/bin` in `PATH` (the command tells you when it does not). `--desktop` adds `~/.local/share/applications/crate-PROFILE.desktop` (`Exec=crate run PROFILE -- %U`, `Terminal=true` unless the profile has x11/gui, `Icon=` the profile name or `--icon`) so menu entries and file associations start the container too; `--no-launcher` writes only that, `--name` picks another launcher name. Both files carry a marker naming the profile: `wrap remove PROFILE` and `wrap list` only touch files that carry it, and `install` refuses to overwrite a file without it unless `--force`. Everything lives in your home, no privilege is needed.
+
+```sh
+crate wrap install firefox --desktop     # `firefox` and the menu entry start the container
+crate wrap install fetch --name sfetch   # ~/.local/bin/sfetch -> crate run fetch
+crate wrap list
+crate wrap remove firefox
+```
+
 ## Spec draft from a trace
 
 `crate profile-from-trace -o app.yml -- <command> [args]` (1.1.60, after firejail's `--build`) runs the program **once on the host, unsandboxed**, under `truss -f`, and turns the trace into a minimal spec draft:
@@ -588,6 +600,18 @@ Destinations seen, sound/input/USB devices, Wayland sockets, unknown unix socket
 | `connectivity` | the resolver, one TCP connect to the default gateway, one DNS lookup (`--offline` skips both, `--dns NAME` picks the name) |
 
 WARN marks an exposure worth a look rather than an error: a whole host area mounted read-write, raw disk or memory devices, keyboard devices, a host socket, a hostid equal to the host's. Exit status is 0, 1 (some WARN) or 2 (the probe did not run). `crate doctor` looks at the host, `crate audit` at one container; it needs root or the crated privops socket, like `crate console`.
+
+## Machine identity (`privacy:`)
+
+A jail shares the host's `kern.hostuuid` / `kern.hostid` unless it is created with its own, and crate passed the host's name as the jail hostname, so every jail identified the machine to anything that read them (`crate audit` has warned about it since 1.1.61). Since 1.1.67 (bwrap/firejail `--machine-id`, `--hostname`):
+
+```yaml
+privacy:
+    hostid: random        # host | random (a fresh UUID v4 every run) | a literal UUID (stable for the crate)
+    hostname: random      # host | random (crate-<8 hex>) | a literal host name
+```
+
+The jail is created with `host.hostuuid` set and `host.hostid` derived the way `/etc/rc.d/hostid` does it (the first 32 bits of md5 of the UUID text); the jail's `/etc/hostid` gets the UUID so `rc(8)` inside agrees with the kernel. `crate validate` warns when `tor` or `i2pd` is used without `privacy/hostid`; `templates/privacy.yml` and the tor / i2pd examples carry both keys. Under rootless the two parameters travel in `create_jail`'s whitelisted parameter list.
 
 ## Device classes
 
@@ -712,6 +736,7 @@ Top-level keys supported in `.crate` / `.yml` spec files:
 | `x11` | X11 display (mode: nested/shared/none, resolution, clipboard) |
 | `gui` | GUI session (mode: nested/headless/gpu/auto/wayland/compositor, backend, compositor, vnc, novnc, resolution) |
 | `clipboard` | Clipboard isolation (mode: isolated/shared/none, direction) |
+| `privacy` | `hostid: host\|random\|<uuid>` — the jail's own `kern.hostuuid`/`kern.hostid` and `/etc/hostid`; `hostname: host\|random\|<name>` (1.1.67) |
 | `dbus` | D-Bus policy (system, session, policy/allow_own/deny_send) |
 | `services` | Managed services (managed list, auto_start) |
 | `socket_proxy` | Socket forwarding (share, proxy with host/jail/direction) |

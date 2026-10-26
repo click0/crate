@@ -944,15 +944,35 @@ Landlock, --restrict-namespaces.
   (extract/pkg phases); `exec_started` pid via a pidfile the in-jail
   `sh -c` writes.
 
-* (feature, LOW value / SMALL size) Desktop integration — firecfg.
-  `crate wrap install <profile>` writes a launcher to ~/.local/bin (or
-  a .desktop with `Exec=crate run <profile> -- %U`) so programs started
-  from a menu run in their container; `wrap remove` undoes it.
+* DONE 1.1.66 — Desktop integration (WrapPure, lib/wrap.cpp).
+  Decisions taken: per-user files only (~/.local/bin and the XDG
+  applications dir), never /usr/local/bin symlinks the way firecfg does
+  — crate is not setuid and a system-wide shadow of `firefox` would
+  surprise every other user; the launcher is a script, not a symlink,
+  so `crate run <profile>` is spelled out and the marker travels with
+  the file. The marker is what `remove`/`list` trust: a file without it
+  is the operator's and is neither replaced (without --force) nor
+  deleted. Terminal= is derived from the profile's x11/gui. Leftovers:
+  `wrap install --all` over the shipped examples; a `wrap check` that
+  reports launchers whose profile vanished; MIME types from the spec
+  (`MimeType=` so file associations pick the container); an uninstall
+  hook when a profile is removed.
 
-* (privacy, LOW value / SMALL size) `--machine-id` / `--hostname`.
-  `privacy/hostid: random` generates a per-container /etc/hostid (and
-  the jail hostname is already per container); belongs in
-  templates/privacy.yml and the tor examples.
+* DONE 1.1.67 — `privacy/hostid`, `privacy/hostname` (PrivacyPure).
+  Decisions taken: the kernel is the source of truth — the jail is
+  created with `host.hostuuid`/`host.hostid` (jail_setv; whitelisted in
+  the privops create_jail parameters), and /etc/hostid inside is written
+  to match, rather than only writing the file (rc.d/hostid does not run
+  in a crate jail, so a file alone changes nothing). The hostid is
+  derived from the UUID exactly as rc.d/hostid does (first 32 bits of
+  md5), with a self-contained MD5 so the arithmetic is unit-tested on
+  Linux. The TODO's premise that the hostname was already per container
+  was wrong: crate passed the HOST's name as host.hostname, hence
+  `privacy/hostname` too (`random` = crate-<8 hex>). Default stays
+  `host` for both — identical jail to before. Leftovers: a per-run
+  machine-id for programs that read /etc/machine-id or D-Bus's
+  machine-id (`dbus-uuidgen` in the jail at start); `privacy/hostname`
+  with a domain (`host.domainname`); a `privacy` row in `crate inspect`.
 
 === Done (removed) ===
 

@@ -1,6 +1,11 @@
 # Privacy template: Tor routing, encrypted storage, ephemeral COW, DNS filtering
 # Usage: crate create --template privacy -s myapp.yml -o myapp.crate
 
+# 1.1.67: the jail presents its own host UUID / hostid and hostname, not the machine's
+privacy:
+  hostid: random
+  hostname: random
+
 options:
   tor:
     control-port: false

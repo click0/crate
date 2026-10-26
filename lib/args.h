@@ -7,7 +7,7 @@
 #include <vector>
 #include <map>
 
-enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdBackupPrune, CmdReplicate, CmdTemplate, CmdRetune, CmdThrottle, CmdDoctor, CmdVmWrap, CmdUpdate, CmdProfileFromTrace, CmdAudit};
+enum Command {CmdNone, CmdCreate, CmdRun, CmdValidate, CmdSnapshot, CmdExport, CmdImport, CmdGui, CmdList, CmdInfo, CmdClean, CmdConsole, CmdStack, CmdStats, CmdLogs, CmdStop, CmdRestart, CmdTop, CmdInterDns, CmdVpn, CmdInspect, CmdMigrate, CmdBackup, CmdRestore, CmdBackupPrune, CmdReplicate, CmdTemplate, CmdRetune, CmdThrottle, CmdDoctor, CmdVmWrap, CmdUpdate, CmdProfileFromTrace, CmdAudit, CmdWrap};
 
 class Args {
 public:
@@ -191,6 +191,15 @@ public:
   bool        auditJson = false;     // -j/--json
   bool        auditOffline = false;  // --offline: no connect / DNS probes inside the jail
   std::string auditDnsName = "www.freebsd.org";   // --dns <name>: the name the in-jail resolver is asked for
+
+  // wrap parameters (1.1.66): launchers that start a profile's container
+  std::string wrapSubcmd;            // "install", "remove", "list"
+  std::string wrapProfile;           // positional: profile name (install, remove)
+  std::string wrapName;              // --name: launcher file name in ~/.local/bin (default: the profile)
+  std::string wrapIcon;              // --icon: Icon= of the .desktop entry (default: the profile)
+  bool        wrapDesktop = false;   // --desktop: also write ~/.local/share/applications/crate-<profile>.desktop
+  bool        wrapNoLauncher = false;// --no-launcher: the .desktop only
+  bool        wrapForce = false;     // --force: replace a file not written by crate wrap
 
   // vm-wrap parameters (bhyve jailer)
   std::string vmWrapVmName;          // positional: bhyve VM name
