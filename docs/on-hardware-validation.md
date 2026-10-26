@@ -692,11 +692,62 @@ a menu; files not written by `crate wrap` are neither replaced (without
 
 ---
 
+## 4j. 1.1.67 — `privacy/hostid`, `privacy/hostname`
+
+```sh
+sysctl kern.hostuuid kern.hostid kern.hostname            # the host's values, for comparison
+
+# default: unchanged — the jail carries the host's identity
+crate run -f sh.crate -- -c 'sysctl -n kern.hostuuid kern.hostid kern.hostname; cat /etc/hostid'
+#   expect: the host's three values; /etc/hostid as in the image
+crate audit <name>                                       # jail/hostid WARN "same as the host", hostname WARN
+
+# random: new every run
+cat > /tmp/p.yml <<'EOF'
+privacy: {hostid: random, hostname: random}
+run: {command: /bin/sh}
+EOF
+crate create -s /tmp/p.yml -o /tmp/p.crate
+crate run -p -f /tmp/p.crate -- -c 'sysctl -n kern.hostuuid kern.hostid kern.hostname; cat /etc/hostid'
+#   expect: -p prints "privacy: jail hostname crate-xxxxxxxx" and "privacy: jail host UUID <uuid> (kern.hostid N)";
+#   inside: that UUID, that N (decimal), that hostname; /etc/hostid == the UUID;
+#   md5 check: echo -n <uuid> | md5 | cut -c1-8 == printf %08x N
+crate run -f /tmp/p.crate -- -c 'sysctl -n kern.hostuuid'   # a different UUID the second time
+crate audit <name>                                            # jail/hostid PASS "(differs from the host)"
+
+# fixed: stable for the crate
+sed -i '' 's/hostid: random/hostid: 123e4567-e89b-12d3-a456-426614174000/; s/hostname: random/hostname: box/' /tmp/p.yml
+crate create -s /tmp/p.yml -o /tmp/p2.crate
+crate run -f /tmp/p2.crate -- -c 'sysctl -n kern.hostuuid kern.hostid kern.hostname'
+#   expect: 123e4567-e89b-12d3-a456-426614174000 / 993178332 / box, every run
+
+# rootless (crated privops): the same through create_jail's parameter list
+crate run -p -f /tmp/p.crate -- -c 'sysctl -n kern.hostuuid'  # as an unprivileged member of the privops group
+#   expect: a UUID != the host's; crated log shows create_jail with host.hostuuid=... host.hostid=...
+#   a hand-crafted request with host.hostid=4294967296 or host.hostuuid=x is refused (400) by the validator
+
+# validation and the shipped specs
+printf 'options: [tor]\nrun: {command: /bin/sh}\n' > /tmp/t.yml; crate validate -s /tmp/t.yml
+#   expect: warning "tor/i2pd without privacy/hostid"
+crate validate -s examples/tor.yml; crate validate -s examples/chromium+tor.yml; crate validate -s templates/privacy.yml   # no such warning
+printf 'privacy: {hostid: yes}\n' > /tmp/b.yml; crate validate -s /tmp/b.yml     # error: not 'host', 'random' or a UUID
+printf 'privacy: {hostname: "a b"}\n' > /tmp/b.yml; crate validate -s /tmp/b.yml  # error: not a host name
+```
+
+Pass criteria: no change without `privacy:`; `random` gives a UUID, a
+matching decimal hostid (first 32 bits of md5 of the UUID text) and a
+`crate-<hex>` hostname that differ from the host's and between runs;
+a literal UUID / name is used as given; `/etc/hostid` inside equals
+`kern.hostuuid`; the same holds through crated; `crate audit` turns the
+hostid row from WARN to PASS.
+
+---
+
 ## 5. Reporting back
 
 ```sh
 sh scripts/on-hardware-validation.sh > /tmp/onhw-report.txt 2>&1
-# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b / §4c / §4d / §4e / §4f / §4g / §4h / §4i manual checks
+# also paste the outcomes of any §1.* / §2.* / §3.* / §4.* / §4a / §4b / §4c / §4d / §4e / §4f / §4g / §4h / §4i / §4j manual checks
 ```
 
 Attach `/tmp/onhw-report.txt` plus the manual-section outcomes to the PR

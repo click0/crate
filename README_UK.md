@@ -561,6 +561,18 @@ crate wrap remove firefox
 
 WARN позначає не помилку, а те, на що варто глянути: цілий каталог хоста змонтований на запис, сирі дискові чи memory-пристрої, клавіатурні пристрої, сокет хоста, hostid такий самий, як у хоста. Код виходу 0, 1 (є WARN) або 2 (probe не виконався). `crate doctor` дивиться на хост, `crate audit` — на один контейнер; потрібен root або privops-сокет crated, як для `crate console`.
 
+## Ідентичність машини (`privacy:`)
+
+Jail успадковує `kern.hostuuid` / `kern.hostid` хоста, якщо не створений зі своїми, а crate передавав ім'я хоста як hostname jail, тож кожний jail ідентифікував машину будь-кому, хто їх читає (`crate audit` попереджає про це з 1.1.61). З 1.1.67 (аналог `--machine-id`, `--hostname` у bwrap/firejail):
+
+```yaml
+privacy:
+    hostid: random        # host | random (свіжий UUID v4 при кожному запуску) | буквальний UUID (сталий для crate)
+    hostname: random      # host | random (crate-<8 hex>) | буквальне ім'я хоста
+```
+
+Jail створюється з `host.hostuuid` і `host.hostid`, виведеним так, як це робить `/etc/rc.d/hostid` (перші 32 біти md5 від тексту UUID); у `/etc/hostid` jail записується UUID, щоб `rc(8)` усередині збігався з ядром. `crate validate` попереджає, коли `tor` чи `i2pd` використано без `privacy/hostid`; `templates/privacy.yml` і приклади tor / i2pd мають обидва ключі. Під rootless обидва параметри йдуть у whitelist-списку параметрів `create_jail`.
+
 ## Класи пристроїв
 
 З 1.1.62 кожний jail отримує **приватний devfs ruleset** (аналог `--nosound` / `--novideo` / `--no3d` / `--noinput` / `--nou2f` у firejail, навпаки): у `/dev` ховається все, відкриваються базові вузли (`null`, `zero`, `random`, `urandom`, `crypto`, `tty`, `ptmx`, `pts/*`, `fd/*`, `stdin`/`stdout`/`stderr`, `fuse`, `zfs`; `bpf*` з опцією `net`), а далі — класи, названі у специфікації:
@@ -681,6 +693,7 @@ nmap, amass, wget, aria2, fetch, gzip, yt-dlp, xeyes
 | `x11` | X11 дисплей (mode: nested/shared/none, resolution, clipboard) |
 | `gui` | GUI сесія (mode: nested/headless/gpu/auto, vnc, novnc, resolution) |
 | `clipboard` | Ізоляція буфера обміну (mode: isolated/shared/none, direction) |
+| `privacy` | `hostid: host\|random\|<uuid>` — власні `kern.hostuuid`/`kern.hostid` і `/etc/hostid` jail; `hostname: host\|random\|<ім'я>` (1.1.67) |
 | `dbus` | D-Bus політика (system, session, policy/allow_own/deny_send) |
 | `services` | Керовані сервіси (managed list, auto_start) |
 | `socket_proxy` | Проксі сокетів (share, proxy з host/jail/direction) |

@@ -17,6 +17,7 @@
 #include "netaddr_pure.h"   // 1.1.44: isV4 / isV6
 #include "mounts_pure.h"    // 1.1.63: tmpfs / etc/keep
 #include "run_pure.h"       // 1.1.64: run/user
+#include "privacy_pure.h"   // 1.1.67: privacy
 #include "privops_pure.h"   // 1.1.44: validateIpv4Cidr / validateIpv6Cidr
 
 namespace SpecPure {
@@ -217,6 +218,12 @@ void Spec::validate() const {
   // Spec may carry anything)
   if (runTimeoutSec > RunPure::kRunTimeoutMax)
     ERR("run/timeout exceeds the 30-day maximum")
+  // 1.1.67: privacy
+  {
+    PrivacyPure::Mode m; std::string v;
+    if (auto e = PrivacyPure::parseHostid(privacyHostid, m, v); !e.empty()) ERR(e)
+    if (auto e = PrivacyPure::parseHostname(privacyHostname, m, v); !e.empty()) ERR(e)
+  }
 
   // shared directories must be full paths
   for (auto &dirShare : dirsShare)

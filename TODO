@@ -958,10 +958,21 @@ Landlock, --restrict-namespaces.
   (`MimeType=` so file associations pick the container); an uninstall
   hook when a profile is removed.
 
-* (privacy, LOW value / SMALL size) `--machine-id` / `--hostname`.
-  `privacy/hostid: random` generates a per-container /etc/hostid (and
-  the jail hostname is already per container); belongs in
-  templates/privacy.yml and the tor examples.
+* DONE 1.1.67 — `privacy/hostid`, `privacy/hostname` (PrivacyPure).
+  Decisions taken: the kernel is the source of truth — the jail is
+  created with `host.hostuuid`/`host.hostid` (jail_setv; whitelisted in
+  the privops create_jail parameters), and /etc/hostid inside is written
+  to match, rather than only writing the file (rc.d/hostid does not run
+  in a crate jail, so a file alone changes nothing). The hostid is
+  derived from the UUID exactly as rc.d/hostid does (first 32 bits of
+  md5), with a self-contained MD5 so the arithmetic is unit-tested on
+  Linux. The TODO's premise that the hostname was already per container
+  was wrong: crate passed the HOST's name as host.hostname, hence
+  `privacy/hostname` too (`random` = crate-<8 hex>). Default stays
+  `host` for both — identical jail to before. Leftovers: a per-run
+  machine-id for programs that read /etc/machine-id or D-Bus's
+  machine-id (`dbus-uuidgen` in the jail at start); `privacy/hostname`
+  with a domain (`host.domainname`); a `privacy` row in `crate inspect`.
 
 === Done (removed) ===
 

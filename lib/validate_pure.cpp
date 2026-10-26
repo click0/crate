@@ -178,6 +178,10 @@ std::vector<std::string> gatherWarnings(const Spec &spec) {
       w.push_back("run/user: " + spec.runUser + " — the X11 authority is copied for the operator's account; a GUI program running as '" + spec.runUser + "' may not reach the display");
   }
 
+  // 1.1.67: privacy — an anonymity network with the host's identity
+  if ((spec.optionExists("tor") || spec.optionExists("i2pd")) && spec.privacyHostid.empty())
+    w.push_back("options: tor/i2pd without privacy/hostid — the jail carries the host's kern.hostuuid/kern.hostid; add `privacy: {hostid: random, hostname: random}` so programs inside cannot identify the machine");
+
   // 1.1.65: run/timeout
   if (spec.runTimeoutSec > 0) {
     if (spec.runCmdExecutable.empty())

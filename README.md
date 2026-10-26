@@ -601,6 +601,18 @@ Destinations seen, sound/input/USB devices, Wayland sockets, unknown unix socket
 
 WARN marks an exposure worth a look rather than an error: a whole host area mounted read-write, raw disk or memory devices, keyboard devices, a host socket, a hostid equal to the host's. Exit status is 0, 1 (some WARN) or 2 (the probe did not run). `crate doctor` looks at the host, `crate audit` at one container; it needs root or the crated privops socket, like `crate console`.
 
+## Machine identity (`privacy:`)
+
+A jail shares the host's `kern.hostuuid` / `kern.hostid` unless it is created with its own, and crate passed the host's name as the jail hostname, so every jail identified the machine to anything that read them (`crate audit` has warned about it since 1.1.61). Since 1.1.67 (bwrap/firejail `--machine-id`, `--hostname`):
+
+```yaml
+privacy:
+    hostid: random        # host | random (a fresh UUID v4 every run) | a literal UUID (stable for the crate)
+    hostname: random      # host | random (crate-<8 hex>) | a literal host name
+```
+
+The jail is created with `host.hostuuid` set and `host.hostid` derived the way `/etc/rc.d/hostid` does it (the first 32 bits of md5 of the UUID text); the jail's `/etc/hostid` gets the UUID so `rc(8)` inside agrees with the kernel. `crate validate` warns when `tor` or `i2pd` is used without `privacy/hostid`; `templates/privacy.yml` and the tor / i2pd examples carry both keys. Under rootless the two parameters travel in `create_jail`'s whitelisted parameter list.
+
 ## Device classes
 
 Since 1.1.62 every jail gets a **private devfs ruleset** (firejail's `--nosound` / `--novideo` / `--no3d` / `--noinput` / `--nou2f`, inverted): everything in `/dev` is hidden, the basic nodes are unhidden (`null`, `zero`, `random`, `urandom`, `crypto`, `tty`, `ptmx`, `pts/*`, `fd/*`, `stdin`/`stdout`/`stderr`, `fuse`, `zfs`; `bpf*` with the `net` option), then the classes the spec names:
@@ -724,6 +736,7 @@ Top-level keys supported in `.crate` / `.yml` spec files:
 | `x11` | X11 display (mode: nested/shared/none, resolution, clipboard) |
 | `gui` | GUI session (mode: nested/headless/gpu/auto/wayland/compositor, backend, compositor, vnc, novnc, resolution) |
 | `clipboard` | Clipboard isolation (mode: isolated/shared/none, direction) |
+| `privacy` | `hostid: host\|random\|<uuid>` — the jail's own `kern.hostuuid`/`kern.hostid` and `/etc/hostid`; `hostname: host\|random\|<name>` (1.1.67) |
 | `dbus` | D-Bus policy (system, session, policy/allow_own/deny_send) |
 | `services` | Managed services (managed list, auto_start) |
 | `socket_proxy` | Socket forwarding (share, proxy with host/jail/direction) |

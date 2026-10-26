@@ -232,6 +232,12 @@ public:
   };
   std::unique_ptr<ClipboardOptions>                  clipboardOptions;
 
+  // 1.1.67: privacy — what the jail tells a program about the machine
+  // (PrivacyPure). Raw spec text, validated at parse: "" / "host" (as
+  // before), "random", or a UUID / host name.
+  std::string                                        privacyHostid;
+  std::string                                        privacyHostname;
+
   // D-Bus isolation (§13)
   struct DbusOptions {
     bool systemBus = false;

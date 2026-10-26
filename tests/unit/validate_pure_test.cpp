@@ -378,6 +378,18 @@ ATF_TEST_CASE_BODY(run_user_warnings)
 	ATF_REQUIRE(hasMatch(gatherWarnings(t), "X11 authority"));
 }
 
+// 1.1.67: privacy
+ATF_TEST_CASE_WITHOUT_HEAD(privacy_warnings);
+ATF_TEST_CASE_BODY(privacy_warnings)
+{
+	auto s = mkSpec();
+	ATF_REQUIRE(!hasMatch(gatherWarnings(s), "privacy/hostid"));      // no anonymity network: quiet
+	s.options["tor"] = std::make_shared<Spec::TorOptDetails>();
+	ATF_REQUIRE(hasMatch(gatherWarnings(s), "tor/i2pd without privacy/hostid"));
+	s.privacyHostid = "random";
+	ATF_REQUIRE(!hasMatch(gatherWarnings(s), "privacy/hostid"));
+}
+
 // 1.1.65: run/timeout
 ATF_TEST_CASE_WITHOUT_HEAD(run_timeout_warnings);
 ATF_TEST_CASE_BODY(run_timeout_warnings)
@@ -661,6 +673,7 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, mounts_1163_warnings);
 	ATF_ADD_TEST_CASE(tcs, run_user_warnings);
 	ATF_ADD_TEST_CASE(tcs, run_timeout_warnings);
+	ATF_ADD_TEST_CASE(tcs, privacy_warnings);
 	ATF_ADD_TEST_CASE(tcs, multiple_warnings);
 	// 0.7.16 strict-mode tests
 	ATF_ADD_TEST_CASE(tcs, strict_minimal_spec_still_unbounded);

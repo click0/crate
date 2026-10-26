@@ -8,6 +8,7 @@
 #include "thin_jail_pure.h" // 1.1.58: base/host-dirs validation
 #include "mounts_pure.h"    // 1.1.63: share :ro, tmpfs, etc/keep
 #include "run_pure.h"       // 1.1.64: run/user
+#include "privacy_pure.h"   // 1.1.67: privacy/hostid, privacy/hostname
 #include "config.h"
 #include "util.h"
 #include "err.h"
@@ -59,6 +60,7 @@ Spec::Spec(const Spec &o)
     cowOptions(clonePtr(o.cowOptions)),
     x11Options(clonePtr(o.x11Options)),
     clipboardOptions(clonePtr(o.clipboardOptions)),
+    privacyHostid(o.privacyHostid), privacyHostname(o.privacyHostname),
     dbusOptions(clonePtr(o.dbusOptions)),
     managedServices(o.managedServices), servicesAutoStart(o.servicesAutoStart),
     servicesAutoStartExplicit(o.servicesAutoStartExplicit),
@@ -1066,6 +1068,23 @@ static Spec parseSpecFromNode(YAML::Node top) {
       } else {
         ERR("x11 must be a map or boolean")
       }
+    } else if (isKey(k, "privacy")) {
+      // 1.1.67: hostid / hostname the jail presents (PrivacyPure)
+      if (!k.second.IsMap())
+        ERR("privacy must be a map (hostid, hostname)")
+      for (auto b : k.second) {
+        PrivacyPure::Mode mode;
+        std::string v;
+        if (isKey(b, "hostid")) {
+          scalar(b.second, spec.privacyHostid, "privacy/hostid");
+          if (auto e = PrivacyPure::parseHostid(spec.privacyHostid, mode, v); !e.empty()) ERR(e)
+        } else if (isKey(b, "hostname")) {
+          scalar(b.second, spec.privacyHostname, "privacy/hostname");
+          if (auto e = PrivacyPure::parseHostname(spec.privacyHostname, mode, v); !e.empty()) ERR(e)
+        } else {
+          ERR("unknown element privacy/" << b.first << " in spec")
+        }
+      }
     } else if (isKey(k, "clipboard")) {
       // Clipboard isolation (§12)
       if (!k.second.IsMap())
@@ -1560,6 +1579,8 @@ Spec mergeSpecs(const Spec &base, const Spec &overlay) {
   // Scalars: overlay wins if non-default
   if (!overlay.runUser.empty()) result.runUser = overlay.runUser;   // 1.1.64
   if (overlay.runTimeoutSec) result.runTimeoutSec = overlay.runTimeoutSec;   // 1.1.65
+  if (!overlay.privacyHostid.empty()) result.privacyHostid = overlay.privacyHostid;       // 1.1.67
+  if (!overlay.privacyHostname.empty()) result.privacyHostname = overlay.privacyHostname;
   if (!overlay.runCmdExecutable.empty()) {
     result.runCmdExecutable = overlay.runCmdExecutable;
     result.runCmdArgs = overlay.runCmdArgs;

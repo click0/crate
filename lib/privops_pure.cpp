@@ -451,7 +451,7 @@ namespace {
 // single-line/no-metachar check let all of it through, so any
 // privops-group member had host root. The whitelist is exactly what
 // lib/run_jail.cpp composes; anything else is a config-file job.
-enum class ParamKind { Bool, EnforceStatfs, Securelevel, Unsigned };
+enum class ParamKind { Bool, EnforceStatfs, Securelevel, Unsigned, Uint32, Uuid };
 
 struct ParamSpec { const char *key; ParamKind kind; };
 
@@ -468,6 +468,8 @@ const ParamSpec kJailParamWhitelist[] = {
   {"enforce_statfs",     ParamKind::EnforceStatfs},
   {"securelevel",        ParamKind::Securelevel},
   {"children.max",       ParamKind::Unsigned},
+  {"host.hostuuid",      ParamKind::Uuid},     // 1.1.67: privacy/hostid
+  {"host.hostid",        ParamKind::Uint32},
 };
 
 bool allDigits(const std::string &s) {
@@ -490,6 +492,18 @@ std::string validateJailParamValue(ParamKind kind, const std::string &v) {
     case ParamKind::Unsigned:
       if (allDigits(v) && v.size() <= 9) return "";
       return "expected an unsigned integer";
+    case ParamKind::Uint32:
+      if (allDigits(v) && v.size() <= 10 && std::stoull(v) <= 4294967295ull) return "";
+      return "expected a 32-bit unsigned integer";
+    case ParamKind::Uuid: {
+      if (v.size() != 36) return "expected a UUID";
+      for (size_t i = 0; i < v.size(); i++) {
+        bool dash = i == 8 || i == 13 || i == 18 || i == 23;
+        bool hex = (v[i] >= '0' && v[i] <= '9') || (v[i] >= 'a' && v[i] <= 'f') || (v[i] >= 'A' && v[i] <= 'F');
+        if (dash ? v[i] != '-' : !hex) return "expected a UUID";
+      }
+      return "";
+    }
   }
   return "unknown parameter kind";
 }
@@ -517,7 +531,7 @@ std::string validateJailParameters(const std::string &parameters) {
       return "jail parameters: '" + key + "' is not an allowed jail parameter "
              "(allowed: allow.raw_sockets allow.socket_af allow.sysvipc allow.mount "
              "allow.mount.zfs allow.quotas allow.set_hostname allow.chflags allow.mlock "
-             "enforce_statfs securelevel children.max)";
+             "enforce_statfs securelevel children.max host.hostuuid host.hostid)";
     if (auto e = validateJailParamValue(spec->kind, val); !e.empty())
       return "jail parameters: '" + key + "=" + val + "': " + e;
   }

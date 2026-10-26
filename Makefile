@@ -29,7 +29,7 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/json_pure.cpp lib/netaddr_pure.cpp
            lib/jail_audit_pure.cpp lib/jail_audit.cpp \
            lib/devices_pure.cpp lib/mounts_pure.cpp \
            lib/status_pure.cpp lib/status_fd.cpp \
-           lib/wrap_pure.cpp lib/wrap.cpp \
+           lib/wrap_pure.cpp lib/wrap.cpp lib/privacy_pure.cpp \
            lib/privops_client_pure.cpp lib/privops_client.cpp \
            lib/runtime_paths_pure.cpp lib/per_user_net_pure.cpp \
            lib/per_user_rctl_pure.cpp lib/per_user_env_pure.cpp \
@@ -297,7 +297,7 @@ UNIT_TESTS = util_test spec_test spec_netopt_test lifecycle_test \
              mac_pure_test passwd_pure_test fw_lease_pure_test \
              thin_jail_pure_test profile_pure_test trace_pure_test \
              jail_audit_pure_test devices_pure_test mounts_pure_test \
-             status_pure_test wrap_pure_test \
+             status_pure_test wrap_pure_test privacy_pure_test \
              runtime_paths_pure_test per_user_net_pure_test \
              per_user_rctl_pure_test per_user_env_pure_test \
              audit_per_user_pure_test \
@@ -373,7 +373,7 @@ TEST_LINK_SRCS = lib/util_pure.cpp lib/err.cpp lib/json_pure.cpp lib/netaddr_pur
                  lib/fw_lease_pure.cpp lib/fw_lease_registry.cpp \
                  lib/thin_jail_pure.cpp lib/profile_pure.cpp lib/trace_pure.cpp \
                  lib/jail_audit_pure.cpp lib/devices_pure.cpp lib/mounts_pure.cpp \
-                 lib/status_pure.cpp lib/wrap_pure.cpp \
+                 lib/status_pure.cpp lib/wrap_pure.cpp lib/privacy_pure.cpp \
                  lib/privops_client_pure.cpp \
                  lib/runtime_paths_pure.cpp lib/per_user_net_pure.cpp \
                  lib/per_user_rctl_pure.cpp lib/per_user_env_pure.cpp \

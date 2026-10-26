@@ -765,6 +765,58 @@ Boolean; default true.
 .Sy x11: true
 is accepted as the short form of the option; any other scalar is
 rejected.
+.Ss Privacy
+What a program inside the jail learns about the machine (1.1.67; bwrap
+and firejail
+.Fl -machine-id ,
+.Fl -hostname ) .
+A jail shares the host's
+.Va kern.hostuuid
+and
+.Va kern.hostid
+unless it is created with its own, and crate passed only the host's
+name as the jail hostname, so every jail identified the machine to
+anything that reads them
+.Nm ( crate audit
+warns since 1.1.61).
+.Bl -tag -width "hostname"
+.It Sy privacy/hostid
+.Cm host
+(the default, as before),
+.Cm random
+(a fresh UUID v4 every run) or a literal UUID (stable for the crate).
+The jail is created with
+.Li host.hostuuid
+set to it and
+.Li host.hostid
+derived the way
+.Pa /etc/rc.d/hostid
+does (the first 32 bits of md5 of the UUID text); the jail's
+.Pa /etc/hostid
+gets the UUID so
+.Xr rc 8
+inside agrees with the kernel.
+.It Sy privacy/hostname
+.Cm host
+(the default: the host's own name, as before),
+.Cm random
+.Pq Li crate-<8 hex> , drawn every run
+or a literal host name.
+.El
+.Pp
+.Nm crate validate
+warns when the
+.Cm tor
+or
+.Cm i2pd
+option is used without
+.Sy privacy/hostid .
+.Pa templates/privacy.yml
+and the tor / i2pd examples carry
+.Li "privacy: {hostid: random, hostname: random}" .
+Under rootless the two parameters travel in
+.Li create_jail Ns 's
+whitelisted parameter list.
 .Ss Clipboard
 .Bl -tag -width "direction"
 .It Sy clipboard/mode

@@ -4,5 +4,10 @@
 
 ---
 
+# 1.1.67: the jail presents its own host UUID / hostid and hostname, not the machine's
+privacy:
+    hostid: random
+    hostname: random
+
 options:
     - tor

@@ -3,6 +3,7 @@
 
 #include "run_jail.h"
 #include "run_pure.h"   // 1.1.64: kDedicatedRunUser
+#include "privacy_pure.h"   // 1.1.67: host.hostuuid / host.hostid
 #include "jail_query.h"
 #include "privops_client.h"
 #include "spec.h"
@@ -39,7 +40,14 @@ extern "C" {
 
 namespace RunJail {
 
-JailInfo createJail(const Spec &spec, const std::string &jailPath, const std::string &jailName, bool logProgress) {
+JailInfo createJail(const Spec &spec, const std::string &jailPath, const std::string &jailName, bool logProgress,
+                    const JailIdentity &identity) {
+  // 1.1.67: privacy — the hostname the jail presents and, when set, its
+  // own host UUID / hostid (otherwise the kernel hands out the host's).
+  const std::string hostname = identity.hostname.empty() ? Util::gethostname() : identity.hostname;
+  const std::string hostuuid = identity.hostuuid;
+  const std::string hostidDec = hostuuid.empty() ? std::string()
+                                : std::to_string(PrivacyPure::hostidFromUuid(hostuuid));
   const char *optNet = spec.optionExists("net") ? "true" : "false";
   const char *optRawSockets = spec.ipcRawSocketsOverride
     ? (spec.ipcRawSocketsValue ? "true" : "false")
@@ -101,9 +109,11 @@ JailInfo createJail(const Spec &spec, const std::string &jailPath, const std::st
       params << " securelevel=" << securelevelStr;
     if (!childrenMaxStr.empty())
       params << " children.max=" << childrenMaxStr;
+    for (auto &p : PrivacyPure::jailParams(hostuuid))
+      params << " " << p;
     auto resp = PrivOpsClient::sendRequest(privopsSocket,
         PrivOpsClient::buildCreateJail(jailName, jailPath,
-                                        Util::gethostname(),
+                                        hostname,
                                         /*vnet=*/true,
                                         params.str()));
     if (!resp.transportError.empty())
@@ -119,26 +129,53 @@ JailInfo createJail(const Spec &spec, const std::string &jailPath, const std::st
     return info;
   }
 
+  // Root path: libjail. jail_setv() is variadic, so the call with the
+  // host UUID / hostid pair (privacy/hostid) and the one without it are
+  // spelled out; a spec without `privacy:` gets exactly the pre-1.1.67
+  // jail, whose host=new copies kern.hostuuid/kern.hostid from the host.
+  const char *hostUuidC = hostuuid.empty() ? nullptr : hostuuid.c_str();
+  const char *hostIdC = hostidDec.empty() ? nullptr : hostidDec.c_str();
+
 #ifdef JAIL_OWN_DESC
   if (Util::getFreeBSDMajorVersion() >= 15) {
     char descBuf[32] = {0};
-    res = ::jail_setv(JAIL_CREATE | JAIL_OWN_DESC,
-      "path", jailPath.c_str(),
-      "host.hostname", Util::gethostname().c_str(),
-      "persist", nullptr,
-      "allow.raw_sockets", optRawSockets,
-      "allow.socket_af", optNet,
-      "allow.sysvipc", optSysvipc,
-      "allow.mount", optZfsMount,
-      "allow.mount.zfs", optZfsMount,
-      "allow.quotas", optAllowQuotas,
-      "allow.set_hostname", optSetHostname,
-      "allow.chflags", optAllowChflags,
-      "allow.mlock", optAllowMlock,
-      "enforce_statfs", optEnforceStatfs,
-      "vnet", nullptr,
-      "desc", descBuf,
-      nullptr);
+    res = hostUuidC
+      ? ::jail_setv(JAIL_CREATE | JAIL_OWN_DESC,
+          "path", jailPath.c_str(),
+          "host.hostname", hostname.c_str(),
+          "host.hostuuid", hostUuidC,
+          "host.hostid", hostIdC,
+          "persist", nullptr,
+          "allow.raw_sockets", optRawSockets,
+          "allow.socket_af", optNet,
+          "allow.sysvipc", optSysvipc,
+          "allow.mount", optZfsMount,
+          "allow.mount.zfs", optZfsMount,
+          "allow.quotas", optAllowQuotas,
+          "allow.set_hostname", optSetHostname,
+          "allow.chflags", optAllowChflags,
+          "allow.mlock", optAllowMlock,
+          "enforce_statfs", optEnforceStatfs,
+          "vnet", nullptr,
+          "desc", descBuf,
+          nullptr)
+      : ::jail_setv(JAIL_CREATE | JAIL_OWN_DESC,
+          "path", jailPath.c_str(),
+          "host.hostname", hostname.c_str(),
+          "persist", nullptr,
+          "allow.raw_sockets", optRawSockets,
+          "allow.socket_af", optNet,
+          "allow.sysvipc", optSysvipc,
+          "allow.mount", optZfsMount,
+          "allow.mount.zfs", optZfsMount,
+          "allow.quotas", optAllowQuotas,
+          "allow.set_hostname", optSetHostname,
+          "allow.chflags", optAllowChflags,
+          "allow.mlock", optAllowMlock,
+          "enforce_statfs", optEnforceStatfs,
+          "vnet", nullptr,
+          "desc", descBuf,
+          nullptr);
     if (res == -1)
       ERR("failed to create jail: " << jail_errmsg)
     info.jid = res;
@@ -148,26 +185,48 @@ JailInfo createJail(const Spec &spec, const std::string &jailPath, const std::st
   } else
 #endif
   {
-    res = ::jail_setv(JAIL_CREATE,
-      "path", jailPath.c_str(),
-      "host.hostname", Util::gethostname().c_str(),
-      "persist", nullptr,
-      "allow.raw_sockets", optRawSockets,
-      "allow.socket_af", optNet,
-      "allow.sysvipc", optSysvipc,
-      "allow.mount", optZfsMount,
-      "allow.mount.zfs", optZfsMount,
-      "allow.quotas", optAllowQuotas,
-      "allow.set_hostname", optSetHostname,
-      "allow.chflags", optAllowChflags,
-      "allow.mlock", optAllowMlock,
-      "enforce_statfs", optEnforceStatfs,
-      "vnet", nullptr,
-      nullptr);
+    res = hostUuidC
+      ? ::jail_setv(JAIL_CREATE,
+          "path", jailPath.c_str(),
+          "host.hostname", hostname.c_str(),
+          "host.hostuuid", hostUuidC,
+          "host.hostid", hostIdC,
+          "persist", nullptr,
+          "allow.raw_sockets", optRawSockets,
+          "allow.socket_af", optNet,
+          "allow.sysvipc", optSysvipc,
+          "allow.mount", optZfsMount,
+          "allow.mount.zfs", optZfsMount,
+          "allow.quotas", optAllowQuotas,
+          "allow.set_hostname", optSetHostname,
+          "allow.chflags", optAllowChflags,
+          "allow.mlock", optAllowMlock,
+          "enforce_statfs", optEnforceStatfs,
+          "vnet", nullptr,
+          nullptr)
+      : ::jail_setv(JAIL_CREATE,
+          "path", jailPath.c_str(),
+          "host.hostname", hostname.c_str(),
+          "persist", nullptr,
+          "allow.raw_sockets", optRawSockets,
+          "allow.socket_af", optNet,
+          "allow.sysvipc", optSysvipc,
+          "allow.mount", optZfsMount,
+          "allow.mount.zfs", optZfsMount,
+          "allow.quotas", optAllowQuotas,
+          "allow.set_hostname", optSetHostname,
+          "allow.chflags", optAllowChflags,
+          "allow.mlock", optAllowMlock,
+          "enforce_statfs", optEnforceStatfs,
+          "vnet", nullptr,
+          nullptr);
     if (res == -1)
       ERR("failed to create jail: " << jail_errmsg)
     info.jid = res;
   }
+  if (logProgress && !hostuuid.empty())
+    std::cerr << rang::fg::gray << "privacy: host.hostuuid=" << hostuuid << " host.hostid=" << hostidDec
+              << rang::style::reset << std::endl;
 
   return info;
 }

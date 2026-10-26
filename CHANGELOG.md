@@ -6,6 +6,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.67] — 2026-10-26
+
+**TODO §17.10: `privacy/hostid`, `privacy/hostname` — the jail's own
+machine identity (bwrap/firejail `--machine-id`, `--hostname`).**
+
+- A jail shares the host's `kern.hostuuid` / `kern.hostid` unless it is
+  created with its own, and crate passed only the host's name as the
+  jail hostname, so every jail identified the machine to anything that
+  read them (`crate audit` has warned since 1.1.61). **`privacy/hostid`**:
+  `host` (the default, as before), `random` (a fresh UUID v4 every run)
+  or a literal UUID (stable for the crate). The jail is created with
+  `host.hostuuid` and `host.hostid` — derived the way `/etc/rc.d/hostid`
+  does, the first 32 bits of md5 of the UUID text — and its `/etc/hostid`
+  gets the UUID so rc(8) inside agrees with the kernel.
+  **`privacy/hostname`**: `host`, `random` (`crate-<8 hex>`) or a literal
+  host name. Root path: jail_setv with the two extra parameters;
+  rootless: the privops `create_jail` parameter whitelist gained
+  `host.hostuuid` (a UUID) and `host.hostid` (a 32-bit unsigned).
+- `crate validate` warns when the `tor` or `i2pd` option is used without
+  `privacy/hostid`. `templates/privacy.yml` and the tor / i2pd examples
+  (`tor`, `chromium+tor`, `chromium-privacy`, `i2pd`, `chromium+i2pd`,
+  `firefox+i2pd`, `qbittorrent+i2pd`) carry
+  `privacy: {hostid: random, hostname: random}`.
+- New `lib/privacy_pure.{h,cpp}` (modes, UUID v4 from random hex, a
+  self-contained MD5 for the hostid derivation, the jail parameters);
+  `RunJail::JailIdentity` on `createJail`. Docs: crate.5 (new Privacy
+  subsection), README en/uk ("Machine identity"), runbook §4j.
+
+Tests: `privacy_pure_test` (4 cases: the hostid/hostname modes, UUID
+shaping incl. version/variant bits, MD5 against the RFC 1321 vectors and
+the padding boundaries, the hostid derivation and jail parameters),
+`privops_pure_test` (the two new whitelist keys and their shapes),
+`spec_validate_test` (`privacy_validation`), `validate_pure_test`
+(`privacy_warnings`). kyua on Linux; jail_setv with `host.hostuuid` /
+`host.hostid` and the in-jail sysctls are runbook §4j.
+
+---
+
 ## [1.1.66] — 2026-10-26
 
 **TODO §17.9: `crate wrap install|remove|list` — launchers that start a
