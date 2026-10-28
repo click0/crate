@@ -127,7 +127,7 @@ ATF_TEST_CASE_BODY(formatHeader_contains_all_columns) {
   ATF_REQUIRE(h.find("IP")   != std::string::npos);
   ATF_REQUIRE(h.find("CPU%") != std::string::npos);
   ATF_REQUIRE(h.find("MEM")  != std::string::npos);
-  ATF_REQUIRE(h.find("DISK") != std::string::npos);
+  ATF_REQUIRE(h.find("WRITE/s") != std::string::npos);
   ATF_REQUIRE(h.find("PROC") != std::string::npos);
   // No trailing whitespace.
   ATF_REQUIRE(h.empty() || h.back() != ' ');
@@ -142,7 +142,7 @@ ATF_TEST_CASE_BODY(formatRow_aligns_and_humanises) {
   r.ip = "10.0.0.1";
   r.cpuPct = 12.5;
   r.memBytes = 1024 * 1024 * 50; // 50 MB
-  r.diskBytes = 1024;
+  r.writeBps = 1024;
   r.pcount = 7;
   auto line = formatRow(r, cw);
   ATF_REQUIRE(line.find("myjail")    != std::string::npos);
@@ -219,8 +219,28 @@ ATF_TEST_CASE_BODY(applyRctl_picks_known_keys_ignores_others) {
     "garbageline\n";
   applyRctlOutput(input, r);
   ATF_REQUIRE_EQ(r.memBytes,  (uint64_t)12345);
-  ATF_REQUIRE_EQ(r.diskBytes, (uint64_t)999);
+  ATF_REQUIRE_EQ(r.writeBps, (uint64_t)999);
+  ATF_REQUIRE(!r.hasPcpu);   // no pcpu line: the caller falls back to the cputime delta
   ATF_REQUIRE_EQ(r.pcount,    (uint64_t)7);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(applyRctl_pcpu_and_write_rate);
+ATF_TEST_CASE_BODY(applyRctl_pcpu_and_write_rate) {
+  // 1.1.69: pcpu is racct's own CPU percentage — preferred over the
+  // whole-second cputime delta; writebps is a RATE and renders as one.
+  Row r;
+  applyRctlOutput("cputime=17\npcpu=142\nwritebps=1048576\n", r);
+  ATF_REQUIRE(r.hasPcpu);
+  ATF_REQUIRE_EQ(r.cpuPct, 142.0);
+  ATF_REQUIRE_EQ(r.writeBps, (uint64_t)1048576);
+  ATF_REQUIRE_EQ(TopPure::humanRate(r.writeBps), std::string("1.0 MB/s"));
+  ATF_REQUIRE_EQ(TopPure::humanRate(0), std::string("0 B/s"));
+  ColWidths cw;
+  auto h = formatHeader(cw);
+  ATF_REQUIRE(h.find("DISK") == std::string::npos);
+  r.name = "w"; r.jid = 1;
+  ATF_REQUIRE(formatRow(r, cw).find("1.0 MB/s") != std::string::npos);
+  ATF_REQUIRE(formatFooter({r}).find("WRITE 1.0 MB/s") != std::string::npos);
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(applyRctl_tolerates_empty_and_malformed);
@@ -232,7 +252,7 @@ ATF_TEST_CASE_BODY(applyRctl_tolerates_empty_and_malformed) {
   // Non-numeric value must be ignored without throwing.
   applyRctlOutput("memoryuse=abc\nwritebps=NaN\n", r);
   ATF_REQUIRE_EQ(r.memBytes,  (uint64_t)0);
-  ATF_REQUIRE_EQ(r.diskBytes, (uint64_t)0);
+  ATF_REQUIRE_EQ(r.writeBps, (uint64_t)0);
 }
 
 ATF_INIT_TEST_CASES(tcs) {
@@ -256,5 +276,6 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, formatFooter_zero_jails);
   ATF_ADD_TEST_CASE(tcs, formatFrame_assembles_header_rows_footer);
   ATF_ADD_TEST_CASE(tcs, applyRctl_picks_known_keys_ignores_others);
+  ATF_ADD_TEST_CASE(tcs, applyRctl_pcpu_and_write_rate);
   ATF_ADD_TEST_CASE(tcs, applyRctl_tolerates_empty_and_malformed);
 }

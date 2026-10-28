@@ -24,18 +24,26 @@ std::string datasetForJail(const std::string &name,
   return Util::Fs::getZfsDataset(j->path);
 }
 
-std::string findLatestBackupSuffix(const std::string &dataset) {
+std::vector<std::string> listSnapshotsArgv(const std::string &dataset) {
+  // 1.1.69: `-d 1` — this dataset's own snapshots only. `-r` listed the
+  // descendants too (tank/jails/web/data@backup-…) and the parser did
+  // not pin the dataset, so a child's snapshot could be picked as the
+  // incremental base of the parent's stream.
+  return {"/sbin/zfs", "list", "-H", "-t", "snapshot", "-o", "name", "-d", "1", dataset};
+}
+
+std::string listSnapshots(const std::string &dataset) {
   try {
-    auto raw = Util::execCommandGetOutput(
-      {"/sbin/zfs", "list", "-H", "-t", "snapshot",
-       "-o", "name", "-r", dataset},
-      "list ZFS snapshots");
-    return ZfsDatasetPure::pickLatestBackupSuffix(raw);
+    return Util::execCommandGetOutput(listSnapshotsArgv(dataset), "list ZFS snapshots");
   } catch (...) {
-    // No snapshots, or ZFS error — caller treats as "no prior",
+    // No snapshots, or ZFS error — callers treat as "no prior",
     // matching the pre-0.8.25 backup.cpp / replicate.cpp behaviour.
     return "";
   }
+}
+
+std::string findLatestBackupSuffix(const std::string &dataset) {
+  return ZfsDatasetPure::pickLatestSuffix(listSnapshots(dataset), dataset, "backup-");
 }
 
 } // namespace ZfsDataset

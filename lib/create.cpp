@@ -11,6 +11,7 @@
 #include "pathnames.h"
 #include "log_pure.h"
 #include "thin_jail_pure.h"   // 1.1.58: base/mode: host-ro
+#include "dir_lock.h"         // 1.1.69: the chroot directory is locked against `crate clean`
 #include "passwd_pure.h"      // 1.1.64: run/user account lookup
 #include "util.h"
 #include "err.h"
@@ -145,6 +146,7 @@ static void installAndAddPackagesInJail(const std::string &jailPath,
                                         const std::vector<std::string> &pkgsAdd,
                                         const std::vector<std::pair<std::string, std::string>> &pkgLocalOverride,
                                         const std::vector<std::string> &pkgNuke,
+                                        bool keepPkg,
                                         const std::string &logFile = "") {
   // local helpers
   auto J = [&jailPath](auto subdir) {
@@ -189,9 +191,13 @@ static void installAndAddPackagesInJail(const std::string &jailPath,
 
   // write the +CRATE.PKGS file (stdout-redirected; not logged)
   runChrootCommand(jailPath, {CRATE_PATH_PKG, "info"}, "write +CRATE.PKGS file", J("/+CRATE.PKGS"));
-  // cleanup: delete the pkg package: it will not be needed any more, and delete the added package files
-  runChrootCommand(jailPath, {CRATE_PATH_PKG, "delete", "-f", "pkg"}, "remove the 'pkg' package from jail",
-                   "", logFile);
+  // cleanup: delete the pkg package when the operator does not want the
+  // image upgradable (1.1.69: kept by default — `crate update --pkg-only`
+  // runs pkg INSIDE the jail and needs both the tool and /var/db/pkg),
+  // and delete the added package files
+  if (!keepPkg)
+    runChrootCommand(jailPath, {CRATE_PATH_PKG, "delete", "-f", "pkg"}, "remove the 'pkg' package from jail",
+                     "", logFile);
   if (!pkgsAdd.empty())
     for (const auto &entry : std::filesystem::directory_iterator(STR(jailPath << "/tmp")))
       if (!entry.is_directory())
@@ -317,9 +323,12 @@ static void removeRedundantJailParts(const std::string &jailPath, const Spec &sp
   keepFile("/usr/sbin/pwd_mkdb"); // allow to add users in jail
   keepFile("/usr/libexec/ld-elf.so.1"); // needed to run elf executables
 
-  if (!spec.pkgInstall.empty() || !spec.pkgAdd.empty())
+  if (!spec.pkgInstall.empty() || !spec.pkgAdd.empty()) {
     for (auto &e : Fs::findElfFiles(J(prefix)))
       toJailPath(getElfDependencies(fromJailPath(e), jailPath, [isBasePath](const std::string &path) {return isBasePath(path);}), except);
+    if (spec.pkgKeepPkg)
+      keepFile("/usr/sbin/pkg");   // 1.1.69: the base bootstrap stub `crate update` execs (it runs /usr/local/sbin/pkg)
+  }
 
   // remove items
   Fs::rmdirFlatExcept(J("/bin"), except);
@@ -351,7 +360,8 @@ static void removeRedundantJailParts(const std::string &jailPath, const Spec &sp
   Fs::rmdirFlat(J("/rescue"));
   if (!spec.pkgInstall.empty() || !spec.pkgAdd.empty()) {
     Fs::rmdirFlat(J("/var/cache/pkg"));
-    Fs::rmdirFlat(J("/var/db/pkg"));
+    if (!spec.pkgKeepPkg)
+      Fs::rmdirFlat(J("/var/db/pkg"));   // 1.1.69: the package database stays with pkg/keep-pkg (default)
   }
 
   // remove static libs if not requested to keep them
@@ -447,6 +457,9 @@ bool createCrate(const Args &args, const Spec &spec) {
   res = mkdir(jailPath.c_str(), S_IRUSR|S_IWUSR|S_IXUSR);
   if (res == -1)
     ERR("failed to create the jail directory '" << jailPath << "': " << strerror(errno))
+  // 1.1.69: held until this function returns — `crate clean` now sweeps
+  // chroot-create-* directories too and must skip one being populated.
+  DirLock::Guard chrootLock(jailPath);
 
   // log if jail directory is on encrypted ZFS
   if (Util::Fs::isOnZfs(jailPath)) {
@@ -606,7 +619,7 @@ bool createCrate(const Args &args, const Spec &spec) {
                                            Util::filePathToBareName(crateFileName));
     LOG("installing packages ... (output -> " << logFile << ")")
     installAndAddPackagesInJail(jailPath, spec.pkgInstall, spec.pkgAdd,
-                                spec.pkgLocalOverride, spec.pkgNuke, logFile);
+                                spec.pkgLocalOverride, spec.pkgNuke, spec.pkgKeepPkg, logFile);
     LOG("done installing packages")
   }
 

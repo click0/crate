@@ -244,6 +244,18 @@ ATF_TEST_CASE_BODY(plan_since_empty_value_is_error) {
   ATF_REQUIRE(!p.reason.empty());
 }
 
+
+ATF_TEST_CASE_WITHOUT_HEAD(suffix_with_repl_prefix);
+ATF_TEST_CASE_BODY(suffix_with_repl_prefix) {
+  // 1.1.69: replicate snapshots are repl-<ts>; same timestamp body as backup-<ts>.
+  ATF_REQUIRE_EQ(std::string(BackupPure::kBackupPrefix), std::string("backup-"));
+  ATF_REQUIRE_EQ(std::string(BackupPure::kReplPrefix), std::string("repl-"));
+  ATF_REQUIRE_EQ(BackupPure::snapshotSuffixWithPrefix(BackupPure::kReplPrefix, 1730000000L),
+                 std::string("repl-2024-10-27T03:33:20Z"));
+  ATF_REQUIRE_EQ(BackupPure::snapshotSuffixWithPrefix(BackupPure::kBackupPrefix, 1730000000L),
+                 BackupPure::snapshotSuffix(1730000000L));
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, suffix_unix_epoch_is_iso8601_utc);
   ATF_ADD_TEST_CASE(tcs, suffix_lexicographic_matches_chronological);
@@ -268,4 +280,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, plan_auto_incremental_uses_prior);
   ATF_ADD_TEST_CASE(tcs, plan_auto_incremental_falls_back_to_full);
   ATF_ADD_TEST_CASE(tcs, plan_since_empty_value_is_error);
+  ATF_ADD_TEST_CASE(tcs, suffix_with_repl_prefix);
 }

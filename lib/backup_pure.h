@@ -39,6 +39,15 @@ namespace BackupPure {
 // chronological order (cron-friendly).
 std::string snapshotSuffix(long unixEpoch);
 
+// 1.1.69: the same timestamp under another family prefix. `crate
+// replicate` names its snapshots "repl-<utc-iso>" so that a file backup
+// (--auto-incremental picks the newest backup-*) never bases its stream
+// on a snapshot no .zstream holds, and a replicate never bases its
+// `zfs send -i` on a snapshot the remote has never seen.
+extern const char *const kBackupPrefix;   // "backup-"
+extern const char *const kReplPrefix;     // "repl-"
+std::string snapshotSuffixWithPrefix(const std::string &prefix, long unixEpoch);
+
 // Build the full snapshot identifier:
 //   pool/jails/foo, "backup-2024-10-27T03:33:20Z" -> pool/jails/foo@<that>
 std::string fullSnapshotName(const std::string &dataset,

@@ -277,12 +277,15 @@ create up`) і знищує при teardown лише якщо саме crate с�
 перевищувати 100% на багатоядерних клітках — наприклад, рядок
 build-ci нижче використовує близько трьох ядер:
 
+Колонка `WRITE/s` — швидкість запису (RCTL `writebps`, байтів за
+секунду), а не зайнятий диск; CPU% береться з RCTL `pcpu`.
+
 ```
-NAME               JID              IP    CPU%        MEM       DISK  PROC
-postgres            12      10.0.0.20    14.2    420.0 MB    12.5 MB    23
-nginx-edge          15      10.0.0.21     3.1     48.0 MB     0 B        7
-build-ci            18      10.0.0.22   210.5      1.2 GB    340.0 MB   42
-3 jails  CPU 227.8%  MEM 1.7 GB  DISK 352.5 MB  PROC 72
+NAME               JID              IP    CPU%        MEM     WRITE/s  PROC
+postgres            12      10.0.0.20    14.2    420.0 MB   12.5 MB/s    23
+nginx-edge          15      10.0.0.21     3.1     48.0 MB      0 B/s     7
+build-ci            18      10.0.0.22   210.5      1.2 GB  340.0 MB/s    42
+3 jails  CPU 227.8%  MEM 1.7 GB  WRITE 352.5 MB/s  PROC 72
 ```
 
 Якщо stdout не є терміналом (`crate top | grep`, `watch crate top`),

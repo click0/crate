@@ -46,6 +46,7 @@
 #include "mounts_pure.h"      // 1.1.63: tmpfs
 #include "passwd_pure.h"      // 1.1.64: run/user account lookup
 #include "status_fd.h"        // 1.1.65: --status-fd lifecycle stream
+#include "dir_lock.h"         // 1.1.69: the jail directory is locked against `crate clean`
 #include "privacy_pure.h"     // 1.1.67: privacy/hostid, privacy/hostname
 #include "status_pure.h"
 
@@ -444,8 +445,16 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   // For warm-base we let ZFS create + mount the directory by setting
   // mountpoint inheritance on the clone. For the cold path we mkdir
   // up front so tar can extract into it.
+  //
+  // 1.1.69: the directory is flock(2)ed for the whole run (DirLock) —
+  // `crate clean` removed every jail-* directory that was not a running
+  // jail's root, and between this mkdir and jail_set the directory is
+  // exactly that: a tree being extracted, with no jail yet. The guard
+  // is declared before the RunAtEnds so it outlives the rmdirHier.
+  DirLock::Guard jailDirLock;
   if (!warmBase) {
     Util::Fs::mkdir(jailPath, S_IRUSR|S_IWUSR|S_IXUSR);
+    jailDirLock.acquire(jailPath);
   }
 
   // Warm-base prep: validate inputs, snapshot the warm template, clone
@@ -472,7 +481,15 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
     LOG("warm-base: snapshot " << warmSnapName)
     ZfsOps::snapshot(warmSnapName);
     LOG("warm-base: clone -> " << warmCloneName << " (auto-mounts at " << jailPath << ")")
-    ZfsOps::clone(warmSnapName, warmCloneName);
+    try {
+      ZfsOps::clone(warmSnapName, warmCloneName);
+    } catch (...) {
+      try { ZfsOps::destroy(warmSnapName); } catch (...) {}   // 1.1.69: no orphan @warm-run-* on failure
+      throw;
+    }
+    // the clone auto-mounted at jailPath: lock it like the cold path does
+    try { jailDirLock.acquire(jailPath); }
+    catch (const std::exception &ex) { WARN("warm-base: " << ex.what() << " — `crate clean` cannot tell this run is in progress") }
 
     // Teardown: zfs destroy the clone (auto-unmounts) and then the
     // marker snapshot. Best-effort — we never want a teardown failure
@@ -719,7 +736,12 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
     auto cloneName = STR(dstDataset << "/base-" << Util::randomHex(4));
 
     ZfsOps::snapshot(snapName);
-    ZfsOps::clone(snapName, cloneName);
+    try {
+      ZfsOps::clone(snapName, cloneName);
+    } catch (...) {
+      try { ZfsOps::destroy(snapName); } catch (...) {}   // 1.1.69: no orphan @base-clone-* on failure
+      throw;
+    }
 
     auto cloneMountpoint = ZfsOps::getMountpoint(cloneName);
 
@@ -765,7 +787,12 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
       auto snapName = STR(baseDataset << "@cow-" << Util::randomHex(4));
       auto cloneName = STR(baseDataset << "/cow-" << Util::randomHex(4));
       ZfsOps::snapshot(snapName);
-      ZfsOps::clone(snapName, cloneName);
+      try {
+        ZfsOps::clone(snapName, cloneName);
+      } catch (...) {
+        try { ZfsOps::destroy(snapName); } catch (...) {}   // 1.1.69: no orphan @cow-* on failure
+        throw;
+      }
       auto cloneMountpoint = ZfsOps::getMountpoint(cloneName);
       LOG("COW clone created: " << cloneName << " at " << cloneMountpoint)
       if (spec.cowOptions->mode == "ephemeral") {
@@ -1103,16 +1130,21 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
 
   // 0.8.21: register the {jail-name -> .crate path} pair so the
   // daemon's control-plane PostStart can find the spec on a later
-  // `start <name>` request. Skipped for warm-base runs (no .crate
-  // file path to register). Best-effort: a registry write failure
-  // logs but doesn't abort the jail start.
-  if (!warmBase && !args.runCrateFile.empty()) {
+  // `start <name>` request. 1.1.69: a warm-base run registers its
+  // dataset instead ("<name> warm-base=<dataset>"), so `crate restart`
+  // can replay `--warm-base <dataset> --name <name>` — it used to say
+  // "no .crate file found" for such a jail. Best-effort: a registry
+  // write failure logs but doesn't abort the jail start.
+  if (warmBase || !args.runCrateFile.empty()) {
     try {
-      auto absPath = std::filesystem::absolute(args.runCrateFile).string();
-      SpecRegistry::upsert(nameComponent, absPath);
+      SpecRegistryPure::Entry e;
+      e.name = nameComponent;
+      if (warmBase) e.warmBase = args.runWarmBase;
+      else          e.cratePath = std::filesystem::absolute(args.runCrateFile).string();
+      SpecRegistry::upsertEntry(e);
     } catch (const std::exception &ex) {
-      WARN("spec-registry: failed to register " << nameComponent
-           << " -> " << args.runCrateFile << ": " << ex.what())
+      WARN("spec-registry: failed to register " << nameComponent << " -> "
+           << (warmBase ? args.runWarmBase : args.runCrateFile) << ": " << ex.what())
     }
   }
 

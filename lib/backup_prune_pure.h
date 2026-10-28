@@ -20,9 +20,11 @@
 //     buckets are seen.
 //   - The kept set is the UNION across bucket types. Same file kept
 //     by multiple types still counts as one.
-//   - Incrementals are kept iff their base full is kept. Otherwise
-//     they're orphans (operator-controllable: keep with warning, or
-//     delete via --delete-orphans).
+//   - Incrementals are kept iff their base is kept — the base full,
+//     or (1.1.69) a kept incremental: `--auto-incremental` chains each
+//     stream on the previous one. Otherwise they're orphans
+//     (operator-controllable: keep with warning, or delete via
+//     --delete-orphans).
 //
 // All file I/O lives in lib/backup_prune.cpp.
 //
@@ -93,7 +95,7 @@ long monthBucket(long epoch);
 struct PruneDecision {
   std::vector<std::string> keep;     // basenames to retain
   std::vector<std::string> remove;   // basenames to delete
-  std::vector<std::string> orphans;  // incrementals whose base would be removed
+  std::vector<std::string> orphans;  // incrementals whose base (full or incremental) is not kept
 };
 
 // Decide what to keep / remove. `policy` is the parsed retention

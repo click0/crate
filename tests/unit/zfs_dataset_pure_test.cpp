@@ -5,6 +5,7 @@
 #include <atf-c++.hpp>
 
 #include <string>
+#include <vector>
 
 using ZfsDatasetPure::pickLatestBackupSuffix;
 using ZfsDatasetPure::validateDatasetName;
@@ -163,6 +164,58 @@ ATF_TEST_CASE_BODY(per_user_dataset_passes_validate) {
   ATF_REQUIRE_EQ(ZfsDatasetPure::validateDatasetName(ds), std::string());
 }
 
+
+// --- 1.1.69: pinned to one dataset / one prefix, and the common base ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(pinned_suffix_ignores_descendants_and_other_families);
+ATF_TEST_CASE_BODY(pinned_suffix_ignores_descendants_and_other_families) {
+  std::string in =
+    "tank/jails/web@backup-2026-01-01T00:00:00Z\n"
+    "tank/jails/web/data@backup-2026-03-01T00:00:00Z\n"   // a child's snapshot: not ours
+    "tank/jails/web@repl-2026-04-01T00:00:00Z\n"          // another family
+    "tank/jails/webb@backup-2026-05-01T00:00:00Z\n"       // another dataset with our name as prefix
+    "tank/jails/web@backup-2026-02-01T00:00:00Z\r\n";
+  ATF_REQUIRE_EQ(ZfsDatasetPure::pickLatestSuffix(in, "tank/jails/web", "backup-"),
+                 std::string("backup-2026-02-01T00:00:00Z"));
+  ATF_REQUIRE_EQ(ZfsDatasetPure::pickLatestSuffix(in, "tank/jails/web", "repl-"),
+                 std::string("repl-2026-04-01T00:00:00Z"));
+  ATF_REQUIRE_EQ(ZfsDatasetPure::pickLatestSuffix(in, "tank/jails/web/data", "backup-"),
+                 std::string("backup-2026-03-01T00:00:00Z"));
+  ATF_REQUIRE_EQ(ZfsDatasetPure::pickLatestSuffix(in, "tank/jails/nope", "backup-"), std::string());
+  ATF_REQUIRE_EQ(ZfsDatasetPure::pickLatestSuffix(in, "", "backup-"), std::string());
+  auto all = ZfsDatasetPure::snapshotSuffixes(in, "tank/jails/web", "backup-");
+  ATF_REQUIRE_EQ(all.size(), 2u);
+  ATF_REQUIRE_EQ(all[0], std::string("backup-2026-01-01T00:00:00Z"));
+  // the old unpinned helper still answers the way its callers expect
+  ATF_REQUIRE_EQ(pickLatestBackupSuffix(in), std::string("backup-2026-05-01T00:00:00Z"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(common_suffix_is_newest_present_on_both_sides);
+ATF_TEST_CASE_BODY(common_suffix_is_newest_present_on_both_sides) {
+  std::string local =
+    "tank/jails/web@backup-2026-01-01T00:00:00Z\n"   // old replicate, on both sides
+    "tank/jails/web@backup-2026-02-01T00:00:00Z\n"   // `crate backup` only: NOT on the remote
+    "tank/jails/web@repl-2026-01-15T00:00:00Z\n"     // on both sides
+    "tank/jails/web@repl-2026-03-01T00:00:00Z\n";    // local only (failed send)
+  std::string remote =
+    "backup/web@backup-2026-01-01T00:00:00Z\n"
+    "backup/web@repl-2026-01-15T00:00:00Z\n"
+    "backup/web@repl-2026-02-15T00:00:00Z\n";        // remote only (pruned locally)
+  std::vector<std::string> prefixes{"repl-", "backup-"};
+  // repl- 01-15 is newer than backup- 01-01 → by timestamp, not by prefix order
+  ATF_REQUIRE_EQ(ZfsDatasetPure::pickLatestCommonSuffix(local, "tank/jails/web", remote, "backup/web", prefixes),
+                 std::string("repl-2026-01-15T00:00:00Z"));
+  // backup- newest on the local side wins when it is on both sides too
+  remote += "backup/web@backup-2026-02-01T00:00:00Z\n";
+  ATF_REQUIRE_EQ(ZfsDatasetPure::pickLatestCommonSuffix(local, "tank/jails/web", remote, "backup/web", prefixes),
+                 std::string("backup-2026-02-01T00:00:00Z"));
+  // nothing in common / remote missing → ""
+  ATF_REQUIRE_EQ(ZfsDatasetPure::pickLatestCommonSuffix(local, "tank/jails/web", "", "backup/web", prefixes),
+                 std::string());
+  ATF_REQUIRE_EQ(ZfsDatasetPure::pickLatestCommonSuffix(local, "tank/jails/web", remote, "other/ds", prefixes),
+                 std::string());
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, empty_input_returns_empty);
   ATF_ADD_TEST_CASE(tcs, no_backup_snapshots_returns_empty);
@@ -178,4 +231,6 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, per_user_dataset_typical);
   ATF_ADD_TEST_CASE(tcs, per_user_dataset_isolation);
   ATF_ADD_TEST_CASE(tcs, per_user_dataset_passes_validate);
+  ATF_ADD_TEST_CASE(tcs, pinned_suffix_ignores_descendants_and_other_families);
+  ATF_ADD_TEST_CASE(tcs, common_suffix_is_newest_present_on_both_sides);
 }

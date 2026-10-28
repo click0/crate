@@ -6,6 +6,93 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.69] — 2026-10-28
+
+**TODO §7 MED, all six items: backup/replicate chains that survive a
+failure, a prune that understands chains, a working `update
+--pkg-only`, `restart` of a `--warm-base` container, `clean` that
+cannot delete a container being born, and an honest `crate top`.**
+
+- **Backup / replicate chain** (`lib/replicate.cpp`, `lib/zfs_dataset*`,
+  `lib/backup_pure`, `lib/warm.cpp`, `lib/run.cpp`). `crate backup` and
+  `crate replicate` shared the `backup-*` snapshot family and each
+  `--auto-incremental` took the newest local one: a file backup between
+  two replications became the base of the next `zfs send -i` and the
+  remote answered "incremental source does not match"; a replicate
+  snapshot could become the base of a file backup although no
+  `.zstream` holds it (an unrestorable `inc-from-X`). Replicate now
+  names its snapshots `repl-<utc-time>` and, with `--auto-incremental`,
+  bases the send on the newest snapshot present on **both** sides
+  (`zfs list -H -t snapshot -o name -d 1` locally and over the same ssh
+  hop; `ZfsDatasetPure::pickLatestCommonSuffix` orders `backup-`/`repl-`
+  by timestamp); nothing in common sends a full stream and says so.
+  The base lookup uses `-d 1` and is pinned to `<dataset>@<prefix>` —
+  it used `-r` with an unpinned regex, so a child dataset's snapshot
+  (`…/web/data@backup-…`) could be chosen for `…/web`. A failed
+  replicate destroys its snapshot (as 1.1.48 made `crate backup` do);
+  `crate template warm` and the run-time `base_container`, `cow` and
+  `--warm-base` clones destroy their snapshot when `zfs clone` fails
+  instead of leaving `@warm-…` / `@base-clone-…` / `@cow-…` behind.
+- **`crate backup-prune` and chained incrementals**
+  (`lib/backup_prune_pure.cpp`). `--auto-incremental` bases each run
+  on the previous stream (F ← inc1 ← inc2), but the prune accepted only
+  a kept FULL as a base, so inc2 was always an "orphan" — and
+  `--delete-orphans` deleted it while F and inc1 were kept. An
+  incremental is now kept when its base is kept, full or incremental
+  (oldest-first transitive walk); a chain dies with its full and a
+  missing link orphans what was built on it.
+- **`crate update --pkg-only` could not work on any crate that
+  installs packages** (`lib/create.cpp`, `lib/update.cpp`, `lib/spec`):
+  `crate create` ran `pkg delete -f pkg`, emptied `/var/db/pkg` and
+  trimmed `/usr/sbin/pkg`, so the in-jail `pkg upgrade` of 0.8.41 ended
+  in ENOENT. New **`pkg/keep-pkg`** (default `true`): pkg(8), its
+  database and the `/usr/sbin/pkg` stub stay in the image when the spec
+  installs packages; `false` gives the old smaller image. `mergeSpecs`
+  lets either side's `false` win. `crate update` now checks the jail
+  for `/usr/local/sbin/pkg` and `/var/db/pkg/local.sqlite` first and
+  names what is missing and why (built with `keep-pkg: false`, or
+  before 1.1.69).
+- **`crate restart` of a `--warm-base` container** (`lib/spec_registry*`,
+  `lib/lifecycle.cpp`, `lib/run.cpp`). Such a run has no `.crate` file,
+  so restart said "no .crate file found". The spec registry gained a
+  second line form, `<name> warm-base=<dataset>` (the field cannot be
+  confused with a path, which must start with `/`), written by `crate
+  run --warm-base … --name <name>`; `crate restart` replays
+  `--warm-base <dataset> --name <name>` from it. `SpecRegistry::lookup`
+  returns "" for such an entry, so crated's control-socket start/restart
+  still treat a warm-base container as unknown (404) — left in TODO.
+- **`crate clean` versus a `crate run` in progress** (`lib/dir_lock.{h,cpp}`,
+  `lib/run.cpp`, `lib/create.cpp`, `lib/clean.cpp`). Between `mkdir
+  jail-<name>-<hex>` and `jail_set` the directory is a tree being
+  extracted with no jail for it, and `clean` removed every `jail-*`
+  directory that was not a running jail's root. `crate run` now
+  flock(2)s the directory (close-on-exec; held through teardown) and
+  `crate create` its `chroot-create-*` directory; `clean` tries
+  `LOCK_EX|LOCK_NB`, reports a held one as "in use … — skipped", and
+  also sweeps `chroot-create-*` directories a killed create left
+  (never swept before).
+- **`crate top`** (`lib/top_pure`, `lib/top.cpp`). The DISK column showed
+  RCTL `writebps` — the current write **rate** — as if it were usage
+  ("DISK 352.5 MB"); it is now `WRITE/s` and rendered as `12.5 MB/s`
+  (footer `WRITE <rate>`). CPU% comes from RCTL `pcpu` when the kernel
+  reports it; the `cputime` fallback is whole seconds and quantised to
+  0/100/200 % at 1 Hz — its baseline is now held for 5 s. README en/uk.
+- crate.5 (`clean`, `restart`, `top`, `backup`, `backup-prune`,
+  `replicate`, `update`, new `pkg/keep-pkg`), runbook §4l.
+
+Tests: `backup_prune_pure_test` (+1: a four-stream chain kept whole in
+any listing order, a missing link orphans its tail, a chain dies with
+its full), `zfs_dataset_pure_test` (+2: pinned suffixes against
+descendants / other families / a dataset with our name as prefix, the
+common base by timestamp across prefixes, remote missing), `backup_pure_test`
+(+1: the `repl-` prefix), `spec_registry_pure_test` (+2: warm-base
+round trip, validation of the dataset and of "one or the other"),
+`top_pure_test` (+1: `pcpu`, rates, no DISK; three cases adapted). kyua
+on Linux; everything that touches zfs(8), flock on a jail directory,
+pkg inside a jail and a remote over ssh is runbook §4l.
+
+---
+
 ## [1.1.68] — 2026-10-28
 
 **TODO §17 (the last open item): `crate stack up` builds each member

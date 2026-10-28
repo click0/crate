@@ -147,6 +147,39 @@ ATF_TEST_CASE_BODY(validateName_matches_jail_name_rule) {
   ATF_REQUIRE(!validateName("a/b").empty());
 }
 
+
+// --- 1.1.69: warm-base entries ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(warm_base_entry_round_trip);
+ATF_TEST_CASE_BODY(warm_base_entry_round_trip) {
+  Entry in;
+  in.name = "web";
+  in.warmBase = "tank/templates/web-warm";
+  auto line = formatLine(in);
+  ATF_REQUIRE_EQ(line, std::string("web warm-base=tank/templates/web-warm"));
+  Entry out;
+  ATF_REQUIRE_EQ(parseLine(line, out), std::string());
+  ATF_REQUIRE_EQ(out.name, std::string("web"));
+  ATF_REQUIRE_EQ(out.warmBase, std::string("tank/templates/web-warm"));
+  ATF_REQUIRE(out.cratePath.empty());
+  // a plain path entry still parses as before, with no warm base
+  ATF_REQUIRE_EQ(parseLine("web /srv/web.crate", out), std::string());
+  ATF_REQUIRE(out.warmBase.empty());
+  ATF_REQUIRE_EQ(out.cratePath, std::string("/srv/web.crate"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(warm_base_entry_validation);
+ATF_TEST_CASE_BODY(warm_base_entry_validation) {
+  Entry out;
+  ATF_REQUIRE(!parseLine("web warm-base=", out).empty());                 // empty dataset
+  ATF_REQUIRE(!parseLine("web warm-base=/tank/x", out).empty());          // leading slash
+  ATF_REQUIRE(!parseLine("web warm-base=tank/../x", out).empty());        // traversal
+  ATF_REQUIRE(!parseLine("web warm-base=tank/x y", out).empty());         // space
+  ATF_REQUIRE(!parseLine("web warm-base=tank/x;rm", out).empty());        // forbidden char
+  Entry both; both.name = "web"; both.cratePath = "/srv/web.crate"; both.warmBase = "tank/x";
+  ATF_REQUIRE(!SpecRegistryPure::validateEntry(both).empty());            // one or the other
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, name_typical_accepted);
   ATF_ADD_TEST_CASE(tcs, name_rejects_garbage);
@@ -159,4 +192,6 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, line_rejects_garbage);
   ATF_ADD_TEST_CASE(tcs, findIndex_works);
   ATF_ADD_TEST_CASE(tcs, validateName_matches_jail_name_rule);
+  ATF_ADD_TEST_CASE(tcs, warm_base_entry_round_trip);
+  ATF_ADD_TEST_CASE(tcs, warm_base_entry_validation);
 }

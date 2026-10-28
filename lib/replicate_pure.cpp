@@ -191,6 +191,10 @@ std::string buildRemoteRecvCommand(const std::string &destDataset) {
   return std::string("zfs recv ") + destDataset;
 }
 
+std::string buildRemoteListSnapshotsCommand(const std::string &destDataset) {
+  return std::string("zfs list -H -t snapshot -o name -d 1 ") + destDataset;
+}
+
 std::vector<std::vector<std::string>>
 buildReplicationPipeline(const ReplicateRequest &r) {
   std::vector<std::vector<std::string>> stages;

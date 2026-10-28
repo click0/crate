@@ -11,13 +11,20 @@
 
 namespace BackupPure {
 
-std::string snapshotSuffix(long unixEpoch) {
+const char *const kBackupPrefix = "backup-";
+const char *const kReplPrefix   = "repl-";
+
+std::string snapshotSuffixWithPrefix(const std::string &prefix, long unixEpoch) {
   time_t t = (time_t)unixEpoch;
   std::tm tm{};
   ::gmtime_r(&t, &tm);
   char buf[40];
-  std::strftime(buf, sizeof(buf), "backup-%Y-%m-%dT%H:%M:%SZ", &tm);
-  return std::string(buf);
+  std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
+  return prefix + std::string(buf);
+}
+
+std::string snapshotSuffix(long unixEpoch) {
+  return snapshotSuffixWithPrefix(kBackupPrefix, unixEpoch);
 }
 
 std::string fullSnapshotName(const std::string &dataset,

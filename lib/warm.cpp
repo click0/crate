@@ -51,9 +51,17 @@ bool templateWarmCommand(const Args &args) {
   std::cerr << rang::fg::cyan
             << "template warm: cloning into " << args.warmOutputDataset
             << rang::style::reset << std::endl;
-  Util::execCommand(
-    WarmPure::buildCloneArgv(sourceDataset, suffix, args.warmOutputDataset),
-    "zfs clone");
+  // 1.1.69: a failed clone (target exists, parent missing, quota) left
+  // the @warm-<ts> snapshot behind on the source jail's dataset.
+  try {
+    Util::execCommand(
+      WarmPure::buildCloneArgv(sourceDataset, suffix, args.warmOutputDataset),
+      "zfs clone");
+  } catch (...) {
+    try { Util::execCommand({"/sbin/zfs", "destroy", sourceDataset + "@" + suffix}, "zfs destroy snapshot"); }
+    catch (...) {}
+    throw;
+  }
 
   // Optional promotion — only when the operator asks for it.
   // Default keeps the clone graph intact so retention pruning of
