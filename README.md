@@ -672,6 +672,8 @@ crate run --status-fd 3 -f nginx.crate 3>nginx.status.jsonl
 
 A run that fails before the command ran ends with `failed` (with the error text) and `teardown_done`. Values are flat strings, integers and booleans; `ip` appears when the address is known. `crate stack up` and `crated` start containers over such a pipe and read it until `jail_created` instead of polling `jls` for the jail to appear, so a member that fails to start says why.
 
+What a stack adds to a `spec:` member — its `template`, the pool address, the `/etc/hosts` and `resolv.conf` scripts, the named `volumes` — is composed into the member's spec file before the build, so it is what the archived `+CRATE.SPEC` holds and what the member's `crate run` executes (until 1.1.68 the member ran its bare spec). A template given by name is found like `crate create --template` finds it. `${KEY}` placeholders stay in the archive; `crate run --var KEY=VALUE` substitutes them when it reads the spec.
+
 `run/timeout: 15m` (firejail `--timeout`; seconds, or `s`/`m`/`h`) starts the command under `timeout(1)`: SIGTERM at the deadline, SIGKILL ten seconds later, exit code 124, `"timed_out": true` in the `exited` event, and the usual teardown.
 
 ## Templates

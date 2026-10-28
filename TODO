@@ -821,13 +821,26 @@ Landlock, --restrict-namespaces.
   profile list|show|path`, a `--rebuild` flag, `.local` under
   /usr/local/etc for site-wide tweaks.
 
-* (bug, MED value / SMALL size) `crate stack up` builds members from
-  a Spec-level merge (template, injected hosts/DNS scripts, named
-  volumes as dirs/share) but createCrate copies `e.specFile` into
-  +CRATE.SPEC verbatim, so none of that reaches the detached `crate
-  run -f` (found while fixing the same gap for `crate create
-  --template` in 1.1.59). Either serialise the final Spec to YAML or
-  do the injections at the YAML level the way lib/profile.cpp does.
+* DONE 1.1.68 — `crate stack up` composes the member spec at the YAML
+  level (lib/stack_spec on top of Profile::mergeYaml) and builds from
+  that file, so the template, the pool address, the hosts/DNS scripts
+  and the named volumes are what +CRATE.SPEC holds and what the
+  detached `crate run -f` executes. Decisions taken: YAML-level rather
+  than serialising the Spec — there is no Spec→YAML emitter and one
+  would have to track every field forever; `${VAR}` placeholders stay
+  in the archive and `crate run` now substitutes its --var values when
+  it parses +CRATE.SPEC (it never did; the stack passes every member's
+  vars that way), so a `from_file` secret is not written into the
+  .crate; a scripts section in scalar/list form is rewritten to the
+  map form under the parser's own names ("" / script#N) instead of
+  being replaced; `template:` is resolved like `--template` (name in
+  the template dirs, path relative to the stack file). Found on the
+  way: the pool address never reached a member, so a stack with
+  `ip_range` had /etc/hosts and network_policy rules naming addresses
+  no jail held. Leftovers: `collectContainerIPs` still reads the
+  static IP through the Spec-level mergeSpecs (read-only, same
+  result); the composed file could be kept next to `<name>.crate` for
+  inspection (`--keep-specs`); runbook §4k is the first real run.
 
 * DONE 1.1.60 — `crate profile-from-trace [-o spec] -- <cmd>`
   (lib/trace_pure, lib/trace). Decisions taken: the program runs on

@@ -6,6 +6,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.68] — 2026-10-28
+
+**TODO §17 (the last open item): `crate stack up` builds each member
+from the spec it actually composed — the template, the pool address,
+the hosts/DNS scripts and the named volumes reach the running jail.**
+
+- **`stack up` members ran their bare spec.** `lib/stack.cpp` merged
+  the template into the parsed Spec, assigned the pool address, added
+  the `__crate_stack_hosts` / `__crate_stack_dns` scripts and turned
+  `volumes:` into shares — on the Spec object — and then called
+  createCrate, which copies the spec FILE it is given into
+  `+CRATE.SPEC` verbatim. The detached `crate run -f` reads that file,
+  so none of it took effect: no template settings, no static address
+  from `ip_range` (the member fell back to NAT/DHCP while
+  `/etc/hosts` of the others and the network_policy rules named the
+  pool address), no stack DNS, no volumes. Found in 1.1.59 while
+  fixing the same gap for `crate create --template`. The composition
+  now happens at the YAML level (`StackSpec::compose`, on top of the
+  1.1.59 `Profile::mergeYaml`): the template under the spec, then
+  `options/net/ip` + `gateway` (when the spec has a net option without
+  an address; with a top-level `network: auto` the mode is spelled out
+  so the result does not depend on key order), the two scripts under
+  `scripts/run:before-start-services` (a section written as a scalar
+  or a list is rewritten to the map form under the names the parser
+  gives it, so the member's own lines still run), and the volumes as
+  `dirs/share` entries (a share the spec already has is not added
+  twice). The result is written to a private `mkdtemp` directory
+  (removed when `stack up` ends; `-p` prints the path) and is the file
+  createCrate archives.
+- **`crate run --var` now reaches the spec.** `crate create` keeps the
+  `${KEY}` placeholders in `+CRATE.SPEC` (the substituted values are
+  used for the build), and `crate run` parsed the archived spec without
+  its `--var` values, so a placeholder in a run-time field (a script,
+  a share path) stayed literal — including every `vars:` a stack passes
+  to its members (`from_file` secrets among them). `lib/run.cpp` parses
+  `+CRATE.SPEC` with the run's vars; the archive still holds the
+  placeholders, so a secret is not stored in the `.crate`.
+- **`containers/<name>/template` is resolved like `--template`.** It
+  was opened as given (relative to the current directory) although
+  crate.5 shows a template NAME there. A bare name is searched in
+  `~/.config/crate/templates/`, `/usr/local/share/crate/templates/`,
+  then next to the stack file; a path (a slash or `.yml`/`.yaml`) is
+  relative to the stack file, then as given. A miss names the places
+  searched. (`StackPure::templateCandidates`.)
+- Pure pieces moved out of the `up` loop so they are unit-tested:
+  `StackPure::hostsCommand` / `dnsCommand` (the 1.1.25 sink-guards
+  stay next to the shell fragment), `poolCidr`. New `lib/stack_spec.
+  {h,cpp}` (yaml-cpp). crate.5 STACK FILES (template lookup, what the
+  composed spec holds, vars at run time), README en/uk, runbook §4k.
+
+Tests: `stack_test` (+4 cases: the hosts command text and its guard,
+the DNS command, the pool CIDR prefix rule, template candidates for a
+name / relative / `.yml` / absolute / no-home / empty). The YAML
+composition was exercised on Linux against `examples/webapp.yml`,
+`examples/postgres.yml` + `templates/privacy.yml` and the list / scalar
+/ list-of-lists script shapes with a scratch harness (yaml-cpp is not
+linked into the unit tests); the end-to-end run is runbook §4k.
+
+---
+
 ## [1.1.67] — 2026-10-26
 
 **TODO §17.10: `privacy/hostid`, `privacy/hostname` — the jail's own

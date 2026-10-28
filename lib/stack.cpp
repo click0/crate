@@ -12,6 +12,7 @@
 #include "privops_client.h"
 #include "runtime_paths_pure.h"
 #include "stack_pure.h"
+#include "stack_spec.h"  // 1.1.68: the member spec is composed at the YAML level
 #include "status_fd.h"   // 1.1.65: detached `crate run --status-fd`
 
 #include <rang.hpp>
@@ -36,6 +37,8 @@
 #include <signal.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <cstdlib>   // 1.1.68: mkdtemp for the composed member specs
+#include <string.h>
 
 #define ERR(msg...) ERR2("stack", msg)
 
@@ -67,7 +70,8 @@ struct StackEntry {
   std::string name;             // container name
   std::string crateFile;        // path to .crate file
   std::string specFile;         // path to spec YAML (for create)
-  std::string templateName;     // optional template
+  std::string templateName;     // optional template (a name or a path, see resolveTemplate)
+  std::string stackDir;         // directory of the stack file (template lookup)
   std::vector<std::string> depends;  // names of dependencies
   std::map<std::string, std::string> vars;  // per-container variable overrides
   std::vector<VolumeMountEntry> volumeMounts;  // named volume mounts
@@ -560,6 +564,23 @@ static RunAtEnd applyNetworkPolicies(
 // ipFromCidr moved to lib/stack_pure.cpp
 static inline std::string ipFromCidr(const std::string &cidr) { return StackPure::ipFromCidr(cidr); }
 
+// 1.1.68: `containers/<name>/template` used to be opened as given, i.e.
+// relative to the current directory, although crate.5 shows a template
+// NAME there (`template: web-base`). Resolve it the way `crate create
+// --template` does (StackPure::templateCandidates): a path is relative
+// to the stack file like `spec:`, a name is searched in the template
+// directories.
+static std::string resolveTemplate(const StackEntry &e) {
+  const auto candidates = StackPure::templateCandidates(e.templateName, e.stackDir,
+                                                        Util::Fs::getUserHomeDir());
+  for (auto &c : candidates)
+    if (Util::Fs::fileExists(c)) return c;
+  std::ostringstream searched;
+  for (size_t i = 0; i < candidates.size(); i++) searched << (i ? ", " : "") << candidates[i];
+  ERR("containers/" << e.name << ": template '" << e.templateName << "' not found (searched "
+      << searched.str() << ")")
+}
+
 // Collect container name -> IP mappings by parsing each spec's network config.
 // Returns a map of container name to IP address string.
 static std::map<std::string, std::string> collectContainerIPs(const std::vector<StackEntry> &entries) {
@@ -570,7 +591,7 @@ static std::map<std::string, std::string> collectContainerIPs(const std::vector<
     try {
       auto spec = parseSpecWithVars(e.specFile, e.vars);
       if (!e.templateName.empty()) {
-        auto tpl = parseSpec(e.templateName);
+        auto tpl = parseSpec(resolveTemplate(e));
         spec = mergeSpecs(tpl, spec);
       }
       auto *netOpt = spec.optionNet();
@@ -670,6 +691,7 @@ static ParsedStack parseStackFile(const std::string &fname, const std::map<std::
       entry.specFile = resolvePath(c.second["spec"].as<std::string>());
     if (c.second["template"])
       entry.templateName = c.second["template"].as<std::string>();
+    entry.stackDir = stackDir.string();
 
     if (entry.crateFile.empty() && entry.specFile.empty())
       ERR("containers/" << entry.name << " must have either 'crate' or 'spec' field")
@@ -948,6 +970,24 @@ bool stackCommand(const Args &args) {
       std::cout << "  DNS service: running on bridge gateway" << std::endl;
     std::cout << std::endl;
 
+    // 1.1.68: the composed member specs (template + stack injections) are
+    // written to a private directory and handed to createCrate as the
+    // spec FILE, because that file — not the parsed Spec — is what
+    // becomes +CRATE.SPEC and what the detached `crate run -f` reads.
+    struct SpecDir {
+      std::string path;
+      ~SpecDir() { if (!path.empty()) { try { Util::Fs::rmdirHier(path); } catch (...) {} } }
+      const std::string &get() {
+        if (path.empty()) {
+          char tmpl[] = "/tmp/crate-stack-XXXXXX";
+          if (::mkdtemp(tmpl) == nullptr)
+            ERR("mkdtemp for the stack's member specs: " << strerror(errno))
+          path = tmpl;
+        }
+        return path;
+      }
+    } specDir;
+
     for (auto &e : sorted) {
       std::cout << rang::fg::cyan << "  [stack] " << rang::style::reset
                 << "Starting: " << e.name << std::endl;
@@ -965,84 +1005,86 @@ bool stackCommand(const Args &args) {
           return false;
         }
       } else if (!e.specFile.empty()) {
-        // Create + run flow
-        auto spec = parseSpecWithVars(e.specFile, e.vars);
-        if (!e.templateName.empty()) {
-          auto templateSpec = parseSpec(e.templateName);
-          spec = mergeSpecs(templateSpec, spec);
-        }
+        // Create + run flow. 1.1.68: everything the stack adds is composed
+        // at the YAML level (StackSpec::compose) and written to a file;
+        // until now it was applied to the parsed Spec only, and createCrate
+        // copied e.specFile into +CRATE.SPEC verbatim, so the template, the
+        // pool address, the hosts/DNS scripts and the named volumes never
+        // reached the detached `crate run -f` — the member ran its bare
+        // spec. `${VAR}` stays as text in the file: the run gets the vars
+        // with --var and substitutes them itself.
+        StackSpec::Injections inj;
 
         // Auto-assign IP from pool if container has no static IP configured
         auto poolIt = containerIPs.find(e.name);
         if (poolIt != containerIPs.end()) {
-          auto *netOpt = spec.optionNetWr();
-          if (netOpt && netOpt->staticIp.empty()) {
-            // Find the subnet prefix length from the first matching network
-            std::string prefix = "/24"; // default
-            for (auto &net : networks) {
-              if (!net.subnet.empty()) {
-                prefix = "/" + net.subnet.substr(net.subnet.find('/') + 1);
-                break;
-              }
-            }
-            netOpt->staticIp = poolIt->second + prefix;
-            if (netOpt->gateway.empty()) {
-              for (auto &net : networks) {
-                if (!net.gateway.empty()) {
-                  netOpt->gateway = net.gateway;
-                  break;
-                }
-              }
-            }
-          }
+          std::vector<std::string> subnets;
+          for (auto &net : networks) subnets.push_back(net.subnet);
+          inj.ipCidr = StackPure::poolCidr(poolIt->second, subnets);
+          for (auto &net : networks)
+            if (!net.gateway.empty()) { inj.gateway = net.gateway; break; }
         }
 
-        // Inject /etc/hosts entries for inter-container DNS (§26)
+        // Inject /etc/hosts entries for inter-container DNS (§26). 1.1.25:
+        // sink-guard — every name/IP is re-validated at the point it enters
+        // a `sh -c` string (StackPure::hostsCommand).
         if (!hostsEntries.empty()) {
-          // Build a shell command that appends all container mappings to /etc/hosts.
-          // 1.1.25: sink-guard — every name/IP is re-validated right here,
-          // at the point it enters a `sh -c` string, so nothing that could
-          // close the single quote reaches the shell no matter where the
-          // value originated (stack file, member spec, IP-pool allocator).
-          std::ostringstream hostsCmd;
-          hostsCmd << "printf '\\n# crate stack containers\\n";
-          for (auto &kv : containerIPs) {
-            if (auto err = StackPure::validateStackName(kv.first); !err.empty())
-              ERR("stack hosts: container '" << kv.first << "': " << err)
-            if (auto err = StackPure::validateStackIp(kv.second); !err.empty())
-              ERR("stack hosts: container '" << kv.first << "' address: " << err)
-            hostsCmd << kv.second << " " << kv.first << "\\n";
-          }
-          hostsCmd << "' >> /etc/hosts";
-          spec.scripts["run:before-start-services"]["__crate_stack_hosts"] = hostsCmd.str();
+          std::string err;
+          inj.hostsCmd = StackPure::hostsCommand(containerIPs, err);
+          if (!err.empty()) ERR(err)
         }
 
         // Inject DNS resolver pointing to stack DNS service
         for (auto &net : networks) {
           if (net.dns && !net.gateway.empty()) {
-            // 1.1.25: sink-guard (gateway was validated at parse time too).
-            if (auto err = StackPure::validateStackIp(net.gateway); !err.empty())
-              ERR("stack dns: network '" << net.name << "' gateway: " << err)
-            std::ostringstream dnsCmd;
-            dnsCmd << "printf 'nameserver " << net.gateway << "\\n' > /etc/resolv.conf";
-            spec.scripts["run:before-start-services"]["__crate_stack_dns"] = dnsCmd.str();
+            std::string err;
+            inj.dnsCmd = StackPure::dnsCommand(net.gateway, err);
+            if (!err.empty()) ERR("network '" << net.name << "': " << err)
             break;
           }
         }
 
-        // Inject named volume mounts as dirsShare entries (§26)
+        // Inject named volume mounts as dirs/share entries (§26)
         for (auto &vm : e.volumeMounts) {
           auto it = volumes.find(vm.volumeName);
           if (it != volumes.end())
-            spec.dirsShare.push_back({vm.containerPath, it->second.hostPath, vm.readOnly});   // 1.1.63: :ro reaches the mount
+            inj.shares.push_back({vm.containerPath, it->second.hostPath, vm.readOnly});   // 1.1.63: :ro reaches the mount
         }
 
+        YAML::Node specNode, tplNode;
+        try {
+          specNode = YAML::LoadFile(e.specFile);
+        } catch (const YAML::Exception &ex) {
+          ERR("containers/" << e.name << ": cannot parse " << e.specFile << ": " << ex.what())
+        }
+        std::string templatePath;
+        if (!e.templateName.empty()) {
+          templatePath = resolveTemplate(e);
+          try {
+            tplNode = YAML::LoadFile(templatePath);
+          } catch (const YAML::Exception &ex) {
+            ERR("containers/" << e.name << ": cannot parse template " << templatePath << ": " << ex.what())
+          }
+        }
+        const auto memberSpec = specDir.get() + "/" + e.name + ".yml";
+        {
+          std::ostringstream header;
+          header << "# generated by crate stack up from " << e.specFile;
+          if (!templatePath.empty()) header << " + template " << templatePath;
+          header << "\n# do not edit: change the stack or spec file and run again";
+          StackSpec::writeSpec(StackSpec::compose(specNode, tplNode, inj), memberSpec, header.str());
+        }
+        if (args.logProgress)
+          std::cerr << rang::fg::gray << Util::tmSecMs() << ": [stack] " << e.name
+                    << ": composed spec at " << memberSpec << rang::style::reset << std::endl;
+
+        auto spec = parseSpecWithVars(memberSpec, e.vars);
         spec.validate();
 
         Args createArgs;
         createArgs.cmd = CmdCreate;
-        createArgs.createSpec = e.specFile;
-        createArgs.createTemplate = e.templateName;
+        createArgs.createSpec = memberSpec;
+        createArgs.createTemplate = templatePath;
         createArgs.logProgress = args.logProgress;
         createArgs.vars = e.vars;
 

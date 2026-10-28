@@ -16,7 +16,7 @@
 .\"    without specific prior written permission.
 .\"
 .\"
-.Dd October 20, 2026
+.Dd October 28, 2026
 .Dt CRATE 5
 .Os
 .Sh NAME
@@ -1332,6 +1332,18 @@ The name follows the jail-name rule
 .Pq 1\(en128 characters from Ql [A-Za-z0-9._-] .
 .It Sy containers/<name>/depends
 Start-order dependencies inside the stack.
+.It Sy containers/<name>/template
+A template merged under the spec
+.Pq the spec's keys win, lists are appended, options by name .
+A bare name is looked up as for
+.Cm create Fl -template :
+.Pa ~/.config/crate/templates/<name>.yml ,
+.Pa /usr/local/share/crate/templates/<name>.yml ,
+then
+.Pa <name>.yml
+next to the stack file; a path
+.Pq containing a slash or ending in Pa .yml
+is relative to the stack file.
 .It Sy containers/<name>/vars
 Variables substituted as
 .Li ${KEY}
@@ -1341,6 +1353,17 @@ reads the value from a host file
 .Pq trailing newline stripped .
 .Fl -var Ar KEY=VALUE
 on the command line overrides.
+The values are used for the build and passed to the member's
+.Cm crate run
+with
+.Fl -var ,
+which substitutes them again when it reads the archived spec; the
+archive itself keeps the
+.Li ${KEY}
+placeholders, so a
+.Sy from_file
+secret is not stored in the
+.Pa .crate .
 .It Sy containers/<name>/volumes
 .Li name:/path[:ro]
 mounts of the stack-level
@@ -1385,6 +1408,32 @@ Rule numbers are taken from a free block above the live rules and
 removed by
 .Cm stack down .
 .El
+.Pp
+For a
+.Sy spec
+member,
+.Cm stack up
+composes the final spec file \(em the template, the pool address
+.Pq Sy options/net/ip and Sy gateway , when the spec names a net option without an address ,
+the
+.Li __crate_stack_hosts
+and
+.Li __crate_stack_dns
+scripts under
+.Sy scripts/run:before-start-services
+and the
+.Sy volumes
+as
+.Sy dirs/share
+entries \(em and builds the
+.Pa <name>.crate
+from that file, so it is what the archived
+.Pa +CRATE.SPEC
+holds and what the member's
+.Cm crate run
+executes.
+.Fl -log-progress
+prints where the composed file was written.
 .Pp
 .Cm stack exec Ar stack.yml name Fl - Ar cmd
 runs a command in the jail whose name is exactly

@@ -306,8 +306,84 @@ ATF_TEST_CASE_BODY(stack_name_limit_matches_jail_name_limit) {
 	ATF_REQUIRE(!StackPure::validateStackName(std::string(129, 'a')).empty());
 }
 
+// ---- 1.1.68: what `stack up` injects into a member spec ----
+
+ATF_TEST_CASE_WITHOUT_HEAD(hosts_command_text_and_guard);
+ATF_TEST_CASE_BODY(hosts_command_text_and_guard) {
+	std::string err;
+	ATF_REQUIRE_EQ(StackPure::hostsCommand({}, err), "");
+	ATF_REQUIRE(err.empty());
+	auto cmd = StackPure::hostsCommand({{"webapp", "10.99.0.101"}, {"postgres", "10.99.0.100"}}, err);
+	ATF_REQUIRE(err.empty());
+	// sorted by name (std::map), one printf, appended to /etc/hosts
+	ATF_REQUIRE_EQ(cmd, "printf '\\n# crate stack containers\\n10.99.0.100 postgres\\n10.99.0.101 webapp\\n' >> /etc/hosts");
+	// the sink-guard: a name or address that could close the quote is refused
+	ATF_REQUIRE_EQ(StackPure::hostsCommand({{"a'b", "10.0.0.1"}}, err), "");
+	ATF_REQUIRE(err.find("a'b") != std::string::npos);
+	ATF_REQUIRE_EQ(StackPure::hostsCommand({{"ok", "10.0.0.1; rm -rf /"}}, err), "");
+	ATF_REQUIRE(err.find("address") != std::string::npos);
+	// a CIDR is still a valid value for the guard (validateStackIp allows /prefix)
+	ATF_REQUIRE(!StackPure::hostsCommand({{"ok", "10.0.0.1/24"}}, err).empty());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(dns_command_text_and_guard);
+ATF_TEST_CASE_BODY(dns_command_text_and_guard) {
+	std::string err;
+	ATF_REQUIRE_EQ(StackPure::dnsCommand("10.99.0.1", err), "printf 'nameserver 10.99.0.1\\n' > /etc/resolv.conf");
+	ATF_REQUIRE(err.empty());
+	ATF_REQUIRE_EQ(StackPure::dnsCommand("10.99.0.1'; reboot; '", err), "");
+	ATF_REQUIRE(!err.empty());
+	ATF_REQUIRE_EQ(StackPure::dnsCommand("", err), "");
+	ATF_REQUIRE(!err.empty());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(pool_cidr_prefix_from_first_subnet);
+ATF_TEST_CASE_BODY(pool_cidr_prefix_from_first_subnet) {
+	ATF_REQUIRE_EQ(StackPure::poolCidr("10.99.0.100", {"10.99.0.0/24"}), "10.99.0.100/24");
+	ATF_REQUIRE_EQ(StackPure::poolCidr("10.99.0.100", {"", "10.99.0.0/16", "10.98.0.0/24"}), "10.99.0.100/16");
+	ATF_REQUIRE_EQ(StackPure::poolCidr("10.99.0.100", {}), "10.99.0.100/24");          // the historical default
+	ATF_REQUIRE_EQ(StackPure::poolCidr("10.99.0.100", {"nonsense"}), "10.99.0.100/24");  // no '/': skipped
+	ATF_REQUIRE_EQ(StackPure::poolCidr("10.99.0.100", {"10.0.0.0/"}), "10.99.0.100/24");  // empty prefix: skipped
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(template_candidates_name_and_path);
+ATF_TEST_CASE_BODY(template_candidates_name_and_path) {
+	// a bare name: the two template directories, then next to the stack file
+	auto c = StackPure::templateCandidates("web-base", "/srv/stacks", "/home/alice");
+	ATF_REQUIRE_EQ(c.size(), 3u);
+	ATF_REQUIRE_EQ(c[0], "/home/alice/.config/crate/templates/web-base.yml");
+	ATF_REQUIRE_EQ(c[1], "/usr/local/share/crate/templates/web-base.yml");
+	ATF_REQUIRE_EQ(c[2], "/srv/stacks/web-base.yml");
+	// no home: the user directory is skipped
+	c = StackPure::templateCandidates("web-base", "/srv/stacks/", "");
+	ATF_REQUIRE_EQ(c.size(), 2u);
+	ATF_REQUIRE_EQ(c[1], "/srv/stacks/web-base.yml");
+	// a relative path: relative to the stack file first, then as given (the pre-1.1.68 behaviour)
+	c = StackPure::templateCandidates("templates/privacy.yml", "/srv/stacks", "/home/alice");
+	ATF_REQUIRE_EQ(c.size(), 2u);
+	ATF_REQUIRE_EQ(c[0], "/srv/stacks/templates/privacy.yml");
+	ATF_REQUIRE_EQ(c[1], "templates/privacy.yml");
+	// a ".yml" name without a slash is a path too
+	c = StackPure::templateCandidates("base.yaml", "/srv/stacks", "/home/alice");
+	ATF_REQUIRE_EQ(c.size(), 2u);
+	ATF_REQUIRE_EQ(c[0], "/srv/stacks/base.yaml");
+	// absolute: taken as is
+	c = StackPure::templateCandidates("/etc/crate/t.yml", "/srv/stacks", "/home/alice");
+	ATF_REQUIRE_EQ(c.size(), 1u);
+	ATF_REQUIRE_EQ(c[0], "/etc/crate/t.yml");
+	// empty stack dir (stack file in the cwd): the path alone, once
+	c = StackPure::templateCandidates("t.yml", "", "/home/alice");
+	ATF_REQUIRE_EQ(c.size(), 1u);
+	ATF_REQUIRE_EQ(c[0], "t.yml");
+	ATF_REQUIRE(StackPure::templateCandidates("", "/srv", "/home/alice").empty());
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
+	ATF_ADD_TEST_CASE(tcs, hosts_command_text_and_guard);
+	ATF_ADD_TEST_CASE(tcs, dns_command_text_and_guard);
+	ATF_ADD_TEST_CASE(tcs, pool_cidr_prefix_from_first_subnet);
+	ATF_ADD_TEST_CASE(tcs, template_candidates_name_and_path);
 	ATF_ADD_TEST_CASE(tcs, ipFromCidr_with_prefix);
 	ATF_ADD_TEST_CASE(tcs, ipFromCidr_without_prefix);
 	ATF_ADD_TEST_CASE(tcs, ipFromCidr_empty);

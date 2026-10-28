@@ -69,6 +69,30 @@ std::vector<unsigned> policyRulesForBridge(const std::string &ipfwListOutput,
                                            const std::string &bridge,
                                            unsigned lo = 30000, unsigned hi = 39999);
 
+// 1.1.68: the pieces `stack up` injects into a member's spec, built here
+// so the text is unit-tested and the sink-guards (validateStackName /
+// validateStackIp, 1.1.25) sit next to the shell fragment they protect.
+//
+// hostsCommand(): the `run:before-start-services` script that appends
+// every container's "<ip> <name>" line to the jail's /etc/hosts. Returns
+// "" and sets `err` when a name or address would not be inert inside the
+// single-quoted printf. An empty map gives "" with no error.
+std::string hostsCommand(const std::map<std::string, std::string> &nameToIp, std::string &err);
+// dnsCommand(): the script that points /etc/resolv.conf at the stack's
+// resolver on the bridge gateway. "" + err for a bad address.
+std::string dnsCommand(const std::string &gateway, std::string &err);
+// poolCidr(): the pool address a member gets, with the prefix length of
+// the first network that has a subnet ("/24" when none has).
+std::string poolCidr(const std::string &ip, const std::vector<std::string> &subnets);
+// templateCandidates(): where `containers/<name>/template: T` is looked
+// for, first hit wins. A path (contains '/' or ends in ".yml"/".yaml") is
+// taken relative to the stack file's directory, then as given; a bare
+// name is a template name as for `crate create --template`:
+// <home>/.config/crate/templates/T.yml, /usr/local/share/crate/templates/
+// T.yml, then <stackDir>/T.yml. Duplicates removed, order kept.
+std::vector<std::string> templateCandidates(const std::string &name, const std::string &stackDir,
+                                            const std::string &home);
+
 // Lightweight stack-entry view used by the tests.
 struct StackEntry {
   std::string name;

@@ -195,4 +195,78 @@ std::vector<unsigned> policyRulesForBridge(const std::string &ipfwListOutput,
   return out;
 }
 
+// ---- 1.1.68: what `stack up` injects into a member spec ----
+
+std::string hostsCommand(const std::map<std::string, std::string> &nameToIp, std::string &err) {
+  err.clear();
+  if (nameToIp.empty()) return "";
+  // Every name/IP is re-validated right here, at the point it enters a
+  // `sh -c` string, so nothing that could close the single quote reaches
+  // the shell no matter where the value originated (stack file, member
+  // spec, IP-pool allocator).
+  std::ostringstream cmd;
+  cmd << "printf '\\n# crate stack containers\\n";
+  for (auto &kv : nameToIp) {
+    if (auto e = validateStackName(kv.first); !e.empty()) {
+      err = "stack hosts: container '" + kv.first + "': " + e;
+      return "";
+    }
+    if (auto e = validateStackIp(kv.second); !e.empty()) {
+      err = "stack hosts: container '" + kv.first + "' address: " + e;
+      return "";
+    }
+    cmd << kv.second << " " << kv.first << "\\n";
+  }
+  cmd << "' >> /etc/hosts";
+  return cmd.str();
+}
+
+std::string dnsCommand(const std::string &gateway, std::string &err) {
+  err.clear();
+  if (auto e = validateStackIp(gateway); !e.empty()) {
+    err = "stack dns: gateway: " + e;
+    return "";
+  }
+  return "printf 'nameserver " + gateway + "\\n' > /etc/resolv.conf";
+}
+
+std::string poolCidr(const std::string &ip, const std::vector<std::string> &subnets) {
+  std::string prefix = "/24";
+  for (auto &s : subnets) {
+    auto slash = s.find('/');
+    if (s.empty() || slash == std::string::npos || slash + 1 >= s.size()) continue;
+    prefix = s.substr(slash);
+    break;
+  }
+  return ip + prefix;
+}
+
+std::vector<std::string> templateCandidates(const std::string &name, const std::string &stackDir,
+                                            const std::string &home) {
+  std::vector<std::string> out;
+  auto add = [&out](const std::string &p) {
+    if (p.empty()) return;
+    if (std::find(out.begin(), out.end(), p) == out.end()) out.push_back(p);
+  };
+  auto under = [](const std::string &dir, const std::string &rel) {
+    if (dir.empty()) return rel;
+    return dir.back() == '/' ? dir + rel : dir + "/" + rel;
+  };
+  auto endsWith = [&name](const char *suffix) {
+    std::string s(suffix);
+    return name.size() >= s.size() && name.compare(name.size() - s.size(), s.size(), s) == 0;
+  };
+  if (name.empty()) return out;
+  const bool pathLike = name.find('/') != std::string::npos || endsWith(".yml") || endsWith(".yaml");
+  if (pathLike) {
+    if (name[0] == '/') add(name);
+    else { add(under(stackDir, name)); add(name); }
+    return out;
+  }
+  if (!home.empty()) add(under(home, ".config/crate/templates/" + name + ".yml"));
+  add("/usr/local/share/crate/templates/" + name + ".yml");
+  add(under(stackDir, name + ".yml"));
+  return out;
+}
+
 }
