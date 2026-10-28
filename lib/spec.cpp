@@ -460,6 +460,13 @@ static Spec parseSpecFromNode(YAML::Node top) {
           listOrScalarOnly(b.second, spec.pkgAdd, "pkg/add");
         } else if (isKey(b, "nuke")) {
           listOrScalarOnly(b.second, spec.pkgNuke, "pkg/nuke");
+        } else if (isKey(b, "keep-pkg")) {   // 1.1.69
+          if (!b.second.IsScalar())
+            ERR("pkg/keep-pkg must be a boolean")
+          auto v = AsString(b.second);
+          if (v == "true" || v == "yes" || v == "on")        spec.pkgKeepPkg = true;
+          else if (v == "false" || v == "no" || v == "off")  spec.pkgKeepPkg = false;
+          else ERR("pkg/keep-pkg must be a boolean, got '" << v << "'")
         } else {
           ERR("unknown element pkg/" << b.first << " in spec")
         }
@@ -1556,6 +1563,7 @@ Spec mergeSpecs(const Spec &base, const Spec &overlay) {
   // 1.1.58: host-ro is sticky (a template cannot be made fat again by an
   // overlay); an overlay's host-dirs list replaces the base's.
   result.baseHostRo = base.baseHostRo || overlay.baseHostRo;
+  result.pkgKeepPkg = base.pkgKeepPkg && overlay.pkgKeepPkg;   // 1.1.69: either side opting out wins
   if (!overlay.baseHostDirs.empty()) result.baseHostDirs = overlay.baseHostDirs;
   for (auto &v : overlay.pkgInstall) result.pkgInstall.push_back(v);
   for (auto &v : overlay.pkgLocalOverride) result.pkgLocalOverride.push_back(v);

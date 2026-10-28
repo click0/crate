@@ -75,7 +75,11 @@ Show detailed information about a running container.
 .It Cm console Ar target Op Fl u Ar user
 Open an interactive shell in a running container.
 .It Cm clean Op Fl n
-Clean up orphaned resources.
+Clean up orphaned resources: jail and
+.Pa chroot-create-*
+directories without a jail
+.Pq one a running Cm crate run or Cm crate create still holds is skipped ,
+interface records, firewall rules, leases, registry entries, pf anchors.
 Use
 .Fl n
 for dry-run.
@@ -113,10 +117,17 @@ Stop a running container
 .It Cm restart Ar target
 Stop and start again from the recorded
 .Pa .crate
-file and variables.
+file and variables; a container started with
+.Fl -warm-base
+is replayed from the recorded template dataset and name.
 .It Cm top
-Live resource monitor across all running containers
-.Pq the DISK column is the write rate, Sy writebps , not usage .
+Live resource monitor across all running containers:
+CPU% from RCTL
+.Sy pcpu
+.Pq the Sy cputime delta over 5 s when the kernel reports none ,
+memory, the write rate
+.Pq Sy WRITE/s , RCTL Sy writebps
+and the process count.
 .It Cm inter-dns
 Rebuild the global
 .Pa .crate
@@ -133,16 +144,26 @@ Move a container between hosts through the
 API.
 .It Cm backup Ar target Fl -output-dir Ar dir
 ZFS send stream of the jail dataset
-.Pq incremental with Fl -incremental-from .
+.Pq incremental with Fl -since , or Fl -auto-incremental from the newest Li backup- Ns * snapshot of that dataset .
+A failed send leaves no snapshot behind.
 .It Cm backup-prune Ar dir Fl -keep Ar spec
 Delete old
 .Pa .zstream
-files by retention bucket.
+files by retention bucket; an incremental is kept while its base
+.Pq a kept full, or a kept incremental it was chained on
+is kept.
 .It Cm restore Ar stream Fl -to Ar dataset
 Replay a backup stream into a fresh dataset.
 .It Cm replicate Ar target Fl -to Ar host Fl -dest-dataset Ar dataset
-Stream a ZFS snapshot to a remote host over
+Stream a ZFS snapshot
+.Pq named Li repl- Ns Ar utc-time
+to a remote host over
 .Xr ssh 1 .
+With
+.Fl -auto-incremental
+the base is the newest snapshot present on both sides
+.Pq the remote is listed over the same ssh hop ;
+nothing in common sends a full stream.
 .It Cm template warm Ar target Fl -output Ar dataset
 Capture a jail's on-disk state as a warm template.
 .It Cm retune Ar target Fl -rctl Ar key=value ...
@@ -164,6 +185,10 @@ In-place
 .Xr pkg 8
 upgrade inside a running jail
 .Pq Fl n dry-run, Fl y auto-yes .
+Needs an image that kept
+.Xr pkg 8
+and its database
+.Pq Sy pkg/keep-pkg , the default since 1.1.69 .
 .It Cm profile-from-trace Oo Fl o Ar spec Oc Fl - Ar command Op Ar args ...
 Run the command once on the host, unsandboxed, under
 .Xr truss 1
@@ -354,6 +379,19 @@ Map of package name to local
 file path.
 .It Sy pkg/nuke
 Packages to forcefully remove.
+.It Sy pkg/keep-pkg
+Keep
+.Xr pkg 8
+and its database
+.Pq Pa /var/db/pkg
+in the image so
+.Cm update Fl -pkg-only
+can upgrade the packages later.
+Default
+.Cm true
+.Pq since 1.1.69; earlier images had both removed .
+.Cm false
+gives the smaller image that cannot be upgraded in place.
 .El
 .Ss Runtime
 .Bl -tag -width "command"

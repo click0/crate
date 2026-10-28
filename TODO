@@ -359,52 +359,52 @@ The bhyve/VM track is in TODO2.
   element to jexec; split into words, extra args appended verbatim.
   Still root-only (jexec) until the exec verb from §1 exists.
 
-* (MED) Auto-incremental backup/replicate chain is corrupt after any
-  failure or mixed use: backup.cpp:68 takes the snapshot BEFORE
-  `zfs send`; on send failure the @backup-<ts> snapshot persists and
-  pickLatestBackupSuffix (zfs_dataset.cpp:27-39) later selects it as
-  the incremental base although no stream holds it → unrestorable
-  .inc-from-X file / remote "incremental source does not match".
-  `crate backup` and `crate replicate` share the backup- namespace,
-  so a local backup silently becomes the base of the next remote
-  increment. BackupPure::buildDestroySnapshotArgv (backup_pure.cpp
-  :130) has no caller — nothing ever destroys backup snapshots. `zfs
-  list -r` (zfs_dataset.cpp:31) includes descendants and the regex
-  (zfs_dataset_pure.cpp:18) does not pin the dataset. warm.cpp:48-56
-  likewise leaves the snapshot behind if `zfs clone` fails.
-
-* (MED) backup-prune mis-classifies chained incrementals as orphans
-  and `--delete-orphans` deletes them: backup_prune_pure.cpp:262-286
-  builds keptSuffixes only from kept FULLS, but --auto-incremental
-  bases each run on the latest backup-* snapshot, i.e. the previous
-  incremental; inc2 (inc-from-<inc1>) is always "orphan" even when F
-  and inc1 are kept. tests/unit/backup_prune_pure_test.cpp:295-343
-  only covers incrementals based on a full.
-
-* (MED) `crate update --pkg-only` cannot work on crates built with
-  `pkg:`: create.cpp:188 runs `pkg delete -f pkg`, :347-350 removes
-  /var/db/pkg, and rmdirHierExcept(/usr/sbin) drops /usr/sbin/pkg;
-  update.cpp:72 then jexec's /usr/sbin/pkg upgrade → ENOENT (or, after
-  a bootstrap, an empty package DB). CHANGELOG 0.8.41 presents this as
-  the supported upgrade path. Either keep pkg + its DB when the spec
-  installs packages, or make update bootstrap pkg and re-register.
-
-* (MED) `crate restart` cannot restore the original run's --name /
-  --warm-base (not recorded anywhere; --var is forwarded since 1.1.48).
-  Record the run's options in the spec registry entry (or a sidecar)
-  at `crate run` and replay them.
-
-* (MED) `crate clean` races an in-progress `crate run`:
-  clean.cpp:50-78 rmdirHier's every jail-* directory not in
-  JailQuery::getAllJails(); run.cpp:317 creates and populates
-  jail-<name>-<hex> BEFORE jail_set, so a concurrent clean deletes a
-  container mid-extraction (plausible — timing). chroot-create-* dirs
-  (create.cpp:441) are never swept.
-
-* (MED) `crate top` DISK column is write bandwidth, not usage:
-  top_pure.cpp:148 maps `writebps` to diskBytes, rendered as "DISK
-  352.5 MB" (README.md:274-278). cputime from rctl is whole seconds,
-  so at 1 Hz cpuPercent (top_pure.cpp:64-69) quantises to 0/100/200%.
+  [FIXED in 1.1.69] the six MED items of this section (one release,
+  runbook §4l):
+  - backup/replicate chain: `crate replicate` snapshots are their own
+    family (`repl-<ts>`) and --auto-incremental bases a replicate on
+    the newest snapshot present on BOTH sides (the remote's `zfs list
+    -d 1` over the same ssh hop; nothing in common → full stream with
+    a warning), so a file backup between two replications is never the
+    base of a `zfs send -i` the remote cannot apply, and a file backup
+    never bases on a replicate snapshot no .zstream holds. The base
+    lookup is `-d 1` and pinned to "<dataset>@<prefix>" (a child's
+    snapshot or another family cannot be picked). A failed replicate
+    destroys its snapshot (what 1.1.48 did for backup); `template warm`
+    and the run-time base_container / cow / warm-base clones destroy
+    their snapshot when `zfs clone` fails. Decision: no automatic
+    destruction of OLD backup-*/repl-* snapshots after a successful
+    run — the newest one is the next incremental base and `--since`
+    may name any of them; source-side pruning stays operator-driven.
+  - backup-prune: an incremental is kept when its base is kept — a
+    kept full or a kept incremental (oldest-first transitive walk);
+    the chain F ← inc1 ← inc2 ← inc3 of --auto-incremental is kept
+    whole and dies with its full.
+  - update --pkg-only: `crate create` keeps pkg(8) and /var/db/pkg
+    when the spec installs packages (`pkg/keep-pkg`, default true;
+    false gives the old smaller, non-upgradable image; mergeSpecs:
+    either side's false wins); `crate update` checks for
+    /usr/local/sbin/pkg and /var/db/pkg/local.sqlite in the jail and
+    says what is missing and why instead of jexec's ENOENT. Decision:
+    keep rather than re-bootstrap — the package DB cannot be rebuilt
+    from +CRATE.PKGS, and the in-jail pkg is what the privops exec
+    path can run.
+  - restart --warm-base: the spec registry gained a second entry form
+    "<name> warm-base=<dataset>" written by `crate run --warm-base
+    --name`; `crate restart` replays --warm-base/--name from it.
+    `--name` only exists with --warm-base (a -f run's name comes from
+    the file), so nothing else needed recording. SpecRegistry::lookup
+    returns "" for such an entry — crated's control-socket start/
+    restart still cannot start a warm-base container (404), leftover.
+  - clean vs run: `crate run` flock(2)s the jail directory (DirLock,
+    O_CLOEXEC, held through teardown) and `crate create` its
+    chroot-create-* directory; `crate clean` tries LOCK_EX|LOCK_NB and
+    skips a held one ("in use … — skipped"), and sweeps dead
+    chroot-create-* directories (never swept before).
+  - top: the column is WRITE/s (RCTL writebps is a rate), CPU% comes
+    from RCTL `pcpu` when present (racct's smoothed percentage); the
+    cputime-delta fallback holds its baseline for 5 s instead of
+    quantising to 0/100/200 % at 1 Hz. README en/uk tables updated.
 
 * (LOW) lifecycle.cpp:272 logsTarget unvalidated →
   `crate logs ../../x` reads /var/log/x/console.log (unprivileged

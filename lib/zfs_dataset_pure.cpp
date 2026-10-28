@@ -29,6 +29,54 @@ std::string pickLatestBackupSuffix(const std::string &zfsListOutput) {
   return out;
 }
 
+std::vector<std::string> snapshotSuffixes(const std::string &zfsListOutput,
+                                          const std::string &dataset,
+                                          const std::string &prefix) {
+  std::vector<std::string> out;
+  if (dataset.empty()) return out;
+  const std::string head = dataset + "@" + prefix;
+  std::istringstream is(zfsListOutput);
+  std::string line;
+  while (std::getline(is, line)) {
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
+      line.pop_back();
+    if (line.empty() || line[0] == '#') continue;
+    if (line.compare(0, head.size(), head) != 0) continue;
+    auto suffix = line.substr(dataset.size() + 1);
+    if (suffix.size() <= prefix.size()) continue;   // a bare "@backup-" is not a snapshot of ours
+    if (suffix.find('/') != std::string::npos || suffix.find('@') != std::string::npos) continue;
+    out.push_back(suffix);
+  }
+  return out;
+}
+
+std::string pickLatestSuffix(const std::string &zfsListOutput,
+                             const std::string &dataset,
+                             const std::string &prefix) {
+  std::string out;
+  for (auto &s : snapshotSuffixes(zfsListOutput, dataset, prefix))
+    if (s > out) out = s;
+  return out;
+}
+
+std::string pickLatestCommonSuffix(const std::string &localOut, const std::string &localDataset,
+                                   const std::string &remoteOut, const std::string &remoteDataset,
+                                   const std::vector<std::string> &prefixes) {
+  std::string best, bestBody;
+  for (auto &prefix : prefixes) {
+    if (prefix.empty()) continue;
+    auto remote = snapshotSuffixes(remoteOut, remoteDataset, prefix);
+    for (auto &s : snapshotSuffixes(localOut, localDataset, prefix)) {
+      bool onRemote = false;
+      for (auto &r : remote) if (r == s) { onRemote = true; break; }
+      if (!onRemote) continue;
+      auto body = s.substr(prefix.size());
+      if (body > bestBody) { bestBody = body; best = s; }
+    }
+  }
+  return best;
+}
+
 namespace {
 
 std::string uidStr(uint32_t uid) {

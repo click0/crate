@@ -34,8 +34,16 @@ namespace SpecRegistryPure {
 
 struct Entry {
   std::string name;       // jail name (alphanumeric + _-, 1..63)
-  std::string cratePath;  // absolute path on the host filesystem
+  std::string cratePath;  // absolute path on the host filesystem ("" for a warm-base run)
+  // 1.1.69: a `crate run --warm-base <dataset> --name <name>` has no
+  // .crate file; the dataset is recorded instead so `crate restart`
+  // can replay the run. Line form: "<name> warm-base=<dataset>" — the
+  // field cannot be mistaken for a path, which must start with '/'.
+  std::string warmBase;
 };
+
+// 1.1.69: the marker that starts a warm-base entry's second field.
+extern const char *const kWarmBaseTag;   // "warm-base="
 
 // --- Validators (return "" on success) ---
 
@@ -54,7 +62,8 @@ std::string validateName(const std::string &n);
 // will let `crate run` reject unsuitable inputs at exec time.
 std::string validatePath(const std::string &p);
 
-// One-shot entry validator.
+// One-shot entry validator: exactly one of cratePath (a valid absolute
+// path) or warmBase (a valid ZFS dataset name) must be set.
 std::string validateEntry(const Entry &e);
 
 // --- File format ---

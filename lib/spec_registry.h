@@ -32,10 +32,20 @@ std::vector<SpecRegistryPure::Entry> readAll();
 // SpecRegistryPure before touching the file.
 void upsert(const std::string &name, const std::string &cratePath);
 
+// 1.1.69: insert or replace a whole entry — the warm-base form
+// (`crate run --warm-base <dataset> --name <name>`) has no crate path.
+void upsertEntry(const SpecRegistryPure::Entry &e);
+
 // Atomically remove `name`. No-op if absent.
 void remove(const std::string &name);
 
-// Look up a name. Returns empty string if not found.
+// Look up a name. Returns the .crate path, or an empty string if not
+// found — or if the entry is a warm-base run (no file to hand to
+// `crate run -f`; crated's start/restart treat that as unknown).
 std::string lookup(const std::string &name);
+
+// 1.1.69: the whole entry (crate path or warm-base dataset). False
+// when the name is not registered.
+bool lookupEntry(const std::string &name, SpecRegistryPure::Entry &out);
 
 } // namespace SpecRegistry

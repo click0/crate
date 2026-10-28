@@ -17,15 +17,24 @@
 namespace TopPure {
 
 // One row in the top table. CPU is a percentage in [0, 100*ncpu]
-// (so multi-core jails can exceed 100%). memBytes/diskBytes are raw
+// (so multi-core jails can exceed 100%). memBytes/writeBps are raw
 // counters from RCTL; the renderer humanises them.
+//
+// 1.1.69: the column that was labelled DISK showed RCTL `writebps` —
+// the jail's current WRITE BANDWIDTH in bytes per second, not disk
+// usage (README showed "DISK 352.5 MB" for 352 MB/s of writes). It is
+// now WRITE/s and rendered as a rate. CPU comes from RCTL `pcpu` when
+// the kernel reports it (racct's own smoothed percentage); the
+// `cputime` delta is the fallback (whole seconds, so lib/top.cpp holds
+// the baseline for several seconds instead of quantising to 0/100%).
 struct Row {
   std::string name;
   int jid = 0;
   std::string ip;
   double cpuPct = 0.0;
+  bool hasPcpu = false;   // cpuPct came from RCTL pcpu (applyRctlOutput)
   uint64_t memBytes = 0;
-  uint64_t diskBytes = 0; // RCTL writebps (cumulative bytes since jail start)
+  uint64_t writeBps = 0;  // RCTL writebps: bytes written per second (a rate)
   uint64_t pcount = 0;    // process count from RCTL maxproc usage
 };
 
@@ -37,9 +46,12 @@ struct ColWidths {
   int ip = 15;
   int cpu = 7;
   int mem = 10;
-  int disk = 10;
+  int write = 11;   // "340.0 MB/s"
   int proc = 5;
 };
+
+// "12.5 MB/s" — humanBytes plus the per-second marker.
+std::string humanRate(uint64_t bytesPerSecond);
 
 // Format an integer count like "1234" / "12.3K" / "1.5M" / "2.1G".
 // Output never exceeds 6 chars so a single column slot fits easily.
@@ -74,9 +86,10 @@ std::string formatFooter(const std::vector<Row> &rows);
 std::string formatFrame(const std::vector<Row> &rows, const ColWidths &cw);
 
 // Parse the `key=value` lines emitted by `rctl -u jail:<jid>` into
-// a Row's CPU/memory/disk/proc fields. The name/jid/ip/cpuPct
-// fields are left untouched (callers fill those in from JailQuery).
-// Unknown keys are ignored. Always succeeds (best-effort).
+// a Row's memory/write-rate/proc fields and, when a `pcpu` line is
+// present, cpuPct (+ hasPcpu). The name/jid/ip fields are left
+// untouched (callers fill those in from JailQuery). Unknown keys are
+// ignored. Always succeeds (best-effort).
 void applyRctlOutput(const std::string &rctlOutput, Row &row);
 
 // Truncate a string to width: returns the prefix when shorter, or

@@ -259,7 +259,8 @@ PruneDecision decidePrune(const std::vector<StreamFile> &files,
   addAll(bucketKeep(files, fullsByEpochDesc, policy.weekly,  weekBucket));
   addAll(bucketKeep(files, fullsByEpochDesc, policy.monthly, monthBucket));
 
-  // Build suffix -> kept-full set so we can decide incrementals.
+  // Build suffix -> kept set so we can decide incrementals. Seeded with
+  // the kept fulls; every kept incremental joins it in turn.
   std::set<std::string> keptSuffixes;
   for (auto i : kept) keptSuffixes.insert(files[i].suffix);
 
@@ -271,12 +272,26 @@ PruneDecision decidePrune(const std::vector<StreamFile> &files,
       d.remove.push_back(files[i].filename);
   }
 
-  // Walk incrementals: kept iff their base full is kept; otherwise
-  // orphan. With --delete-orphans, orphans go to remove instead.
+  // Walk incrementals oldest first: kept iff their base is kept — a
+  // kept FULL or a kept INCREMENTAL. 1.1.69: `crate backup
+  // --auto-incremental` bases each run on the latest backup-* snapshot,
+  // i.e. on the previous incremental, so a chain is F ← inc1 ← inc2;
+  // the old rule accepted fulls as bases only and called inc2 an orphan
+  // (and --delete-orphans deleted it) although F and inc1 were kept.
+  // Oldest-first makes the transitive walk one pass: a base always has
+  // an earlier timestamp than the stream built on it. Otherwise orphan;
+  // with --delete-orphans, orphans go to remove instead.
+  std::sort(incrementals.begin(), incrementals.end(),
+            [&](size_t a, size_t b) {
+              if (files[a].unixEpoch != files[b].unixEpoch)
+                return files[a].unixEpoch < files[b].unixEpoch;
+              return files[a].filename < files[b].filename;
+            });
   for (size_t i : incrementals) {
     const auto &f = files[i];
     if (keptSuffixes.find(f.incFromSuffix) != keptSuffixes.end()) {
       d.keep.push_back(f.filename);
+      keptSuffixes.insert(f.suffix);
     } else {
       if (deleteOrphans)
         d.remove.push_back(f.filename);

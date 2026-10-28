@@ -12,6 +12,7 @@
 #include "pathnames.h"
 #include "pfctl_ops.h"
 #include "spec_registry.h"
+#include "dir_lock.h"   // 1.1.69: skip directories a run/create holds
 #include "util.h"
 #include "err.h"
 
@@ -71,7 +72,10 @@ bool cleanCrates(const Args &args) {
       while ((ent = ::readdir(dir)) != nullptr) {
         std::string name = ent->d_name;
         if (name == "." || name == "..") continue;
-        if (name.find("jail-") != 0) continue;
+        // 1.1.69: `crate create` works in chroot-create-<name>-<hex>
+        // under the same root; a create killed half-way left it
+        // forever (nothing swept it).
+        if (name.find("jail-") != 0 && name.find("chroot-create-") != 0) continue;
         auto fullPath = jailDir + "/" + name;
         struct stat sb;
         if (::stat(fullPath.c_str(), &sb) != 0 || !S_ISDIR(sb.st_mode))
@@ -79,6 +83,13 @@ bool cleanCrates(const Args &args) {
         // Check if this directory is a running jail root
         if (runningPaths.count(fullPath) > 0)
           continue;
+        // 1.1.69: a `crate run` between mkdir and jail_set (extracting,
+        // mounting) or a `crate create` in progress holds a flock on the
+        // directory. It is not an orphan — it is a container being born.
+        if (DirLock::isLocked(fullPath)) {
+          std::cout << "  in use (a crate run/create holds it): " << fullPath << " — skipped" << std::endl;
+          continue;
+        }
         // Orphaned directory
         if (dryRun) {
           std::cout << "  [dry-run] would remove: " << fullPath << std::endl;

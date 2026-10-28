@@ -97,6 +97,12 @@ std::vector<std::string> buildSshArgv(const SshSpec &ssh,
 // shell. Caller must ensure destDataset is validated.
 std::string buildRemoteRecvCommand(const std::string &destDataset);
 
+// 1.1.69: the remote command that lists the destination's own
+// snapshots, one "<dest>@<suffix>" per line (the same `zfs list -H -t
+// snapshot -o name -d 1` the local side runs), so an incremental is
+// based only on a snapshot both sides hold. Caller validated dest.
+std::string buildRemoteListSnapshotsCommand(const std::string &destDataset);
+
 // Build the full pipeline:
 //   stage 0: zfs send [-i prev] curr
 //   stage 1: ssh [opts] user@host  "zfs recv dest"

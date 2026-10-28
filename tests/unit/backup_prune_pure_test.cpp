@@ -319,6 +319,49 @@ ATF_TEST_CASE_BODY(prune_incremental_orphaned_when_base_dropped) {
     "j-backup-2026-01-02T00:00:00Z.inc-from-backup-2026-01-01T00:00:00Z.zstream"));
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(prune_chained_incrementals_follow_their_base);
+ATF_TEST_CASE_BODY(prune_chained_incrementals_follow_their_base) {
+  // 1.1.69: --auto-incremental bases each run on the PREVIOUS stream
+  // (F <- inc1 <- inc2 <- inc3), so a kept chain is kept whole.
+  std::vector<StreamFile> files = {
+    mkFile("j-backup-2026-01-01T00:00:00Z.zstream"),
+    mkFile("j-backup-2026-01-02T00:00:00Z.inc-from-backup-2026-01-01T00:00:00Z.zstream"),
+    mkFile("j-backup-2026-01-03T00:00:00Z.inc-from-backup-2026-01-02T00:00:00Z.zstream"),
+    mkFile("j-backup-2026-01-04T00:00:00Z.inc-from-backup-2026-01-03T00:00:00Z.zstream"),
+  };
+  RetentionPolicy p; p.daily = 5;
+  auto d = decidePrune(files, p, /*deleteOrphans=*/true);
+  ATF_REQUIRE_EQ(d.keep.size(), 4u);
+  ATF_REQUIRE_EQ(d.remove.size(), 0u);
+  ATF_REQUIRE_EQ(d.orphans.size(), 0u);
+
+  // Listing order must not matter (the directory walk is unordered).
+  std::vector<StreamFile> shuffled = {files[3], files[1], files[0], files[2]};
+  d = decidePrune(shuffled, p, true);
+  ATF_REQUIRE_EQ(d.keep.size(), 4u);
+  ATF_REQUIRE_EQ(d.remove.size(), 0u);
+
+  // A broken link in the middle orphans the rest of the chain: inc2's
+  // base file is missing from the directory, so inc2 and inc3 are
+  // orphans while F and inc1 stay.
+  std::vector<StreamFile> gap = {files[0], files[1], files[3]};
+  d = decidePrune(gap, p, false);
+  ATF_REQUIRE_EQ(d.keep.size(), 2u);
+  ATF_REQUIRE(contains(d.orphans, files[3].filename));
+  ATF_REQUIRE_EQ(d.remove.size(), 0u);
+
+  // The chain dies with its full: a newer full takes the daily slot,
+  // F is removed and every stream chained on F is an orphan.
+  std::vector<StreamFile> replaced = files;
+  replaced.push_back(mkFile("j-backup-2026-02-01T00:00:00Z.zstream"));
+  RetentionPolicy one; one.daily = 1;
+  d = decidePrune(replaced, one, false);
+  ATF_REQUIRE_EQ(d.keep.size(), 1u);
+  ATF_REQUIRE(contains(d.keep, "j-backup-2026-02-01T00:00:00Z.zstream"));
+  ATF_REQUIRE(contains(d.remove, files[0].filename));
+  ATF_REQUIRE_EQ(d.orphans.size(), 3u);
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(prune_orphans_deleted_with_flag);
 ATF_TEST_CASE_BODY(prune_orphans_deleted_with_flag) {
   std::vector<StreamFile> files = {
@@ -421,6 +464,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, prune_empty_policy_keeps_nothing);
   ATF_ADD_TEST_CASE(tcs, prune_incremental_kept_with_base);
   ATF_ADD_TEST_CASE(tcs, prune_incremental_orphaned_when_base_dropped);
+  ATF_ADD_TEST_CASE(tcs, prune_chained_incrementals_follow_their_base);
   ATF_ADD_TEST_CASE(tcs, prune_orphans_deleted_with_flag);
   ATF_ADD_TEST_CASE(tcs, prune_lists_disjoint);
   ATF_ADD_TEST_CASE(tcs, explain_keeps_assigns_reasons);

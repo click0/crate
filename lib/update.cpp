@@ -58,6 +58,20 @@ bool updateCommand(const Args &args) {
   if (!jail)
     ERR("jail '" << args.updateTarget << "' not found or not running")
 
+  // 1.1.69: say WHY instead of jexec's ENOENT. Until 1.1.69 `crate
+  // create` deleted the pkg package and /var/db/pkg from every image
+  // that installed packages, so this command could not work on them;
+  // images built with `pkg/keep-pkg: false` are the same by choice.
+  const bool havePkg = Util::Fs::fileExists(jail->path + "/usr/local/sbin/pkg")
+                    || Util::Fs::fileExists(jail->path + "/usr/local/sbin/pkg-static");
+  const bool haveDb  = Util::Fs::fileExists(jail->path + "/var/db/pkg/local.sqlite");
+  if (!havePkg || !haveDb)
+    ERR("jail '" << jail->name << "' has no "
+        << (!havePkg && !haveDb ? "pkg(8) and no package database" : !havePkg ? "pkg(8)" : "package database (/var/db/pkg)")
+        << " — the crate was built with pkg/keep-pkg: false, or before 1.1.69 when `crate create` "
+           "removed both from every image. Rebuild it (pkg/keep-pkg defaults to true since 1.1.69) "
+           "to make `crate update --pkg-only` possible")
+
   std::cerr << rang::fg::cyan
             << "update: pkg upgrade in jail '" << jail->name
             << "' (jid " << jail->jid << ")"

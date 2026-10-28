@@ -274,17 +274,19 @@ required driver prefix and a required unit number — typos like
 ### Live resource monitor (`crate top`)
 
 `crate top` polls all crate-managed jails once per second and renders
-a table with per-container CPU%, memory, disk write throughput, and
-process count. Press `q` (or Ctrl-C) to quit. CPU% can exceed 100%
-on multi-core jails — the build-ci row in the example below is using
-about three cores' worth of CPU:
+a table with per-container CPU%, memory, write rate (`WRITE/s`, RCTL
+`writebps` — bytes written per second, not disk usage), and process
+count. Press `q` (or Ctrl-C) to quit. CPU% is RCTL `pcpu` (the
+kernel's own smoothed figure) and can exceed 100% on multi-core jails
+— the build-ci row in the example below is using about three cores'
+worth of CPU:
 
 ```
-NAME               JID              IP    CPU%        MEM       DISK  PROC
-postgres            12      10.0.0.20    14.2    420.0 MB    12.5 MB    23
-nginx-edge          15      10.0.0.21     3.1     48.0 MB     0 B        7
-build-ci            18      10.0.0.22   210.5      1.2 GB    340.0 MB   42
-3 jails  CPU 227.8%  MEM 1.7 GB  DISK 352.5 MB  PROC 72
+NAME               JID              IP    CPU%        MEM     WRITE/s  PROC
+postgres            12      10.0.0.20    14.2    420.0 MB   12.5 MB/s    23
+nginx-edge          15      10.0.0.21     3.1     48.0 MB      0 B/s     7
+build-ci            18      10.0.0.22   210.5      1.2 GB  340.0 MB/s    42
+3 jails  CPU 227.8%  MEM 1.7 GB  WRITE 352.5 MB/s  PROC 72
 ```
 
 When stdout is not a terminal (`crate top | grep`, `watch crate top`),

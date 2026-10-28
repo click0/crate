@@ -61,6 +61,10 @@ std::string humanBytes(uint64_t bytes) {
   return fmtDouble(v, 1) + " " + suff[s];
 }
 
+std::string humanRate(uint64_t bytesPerSecond) {
+  return humanBytes(bytesPerSecond) + "/s";
+}
+
 double cpuPercent(uint64_t prevCpuTime, uint64_t currCpuTime, double dtSeconds) {
   if (dtSeconds <= 0.0) return 0.0;
   if (currCpuTime < prevCpuTime) return 0.0; // jail restarted, etc.
@@ -86,7 +90,7 @@ std::string formatHeader(const ColWidths &cw) {
   leftAligned(os, "IP", cw.ip);                 os << " ";
   rightAligned(os, "CPU%", cw.cpu);             os << " ";
   rightAligned(os, "MEM", cw.mem);              os << " ";
-  rightAligned(os, "DISK", cw.disk);            os << " ";
+  rightAligned(os, "WRITE/s", cw.write);        os << " ";
   rightAligned(os, "PROC", cw.proc);
   return rstrip(os.str());
 }
@@ -98,17 +102,17 @@ std::string formatRow(const Row &row, const ColWidths &cw) {
   leftAligned(os, truncateForColumn(row.ip, cw.ip), cw.ip);       os << " ";
   rightAligned(os, fmtDouble(row.cpuPct, 1), cw.cpu);             os << " ";
   rightAligned(os, humanBytes(row.memBytes), cw.mem);             os << " ";
-  rightAligned(os, humanBytes(row.diskBytes), cw.disk);           os << " ";
+  rightAligned(os, humanRate(row.writeBps), cw.write);            os << " ";
   rightAligned(os, humanCount(row.pcount), cw.proc);
   return rstrip(os.str());
 }
 
 std::string formatFooter(const std::vector<Row> &rows) {
-  uint64_t totMem = 0, totDisk = 0, totProc = 0;
+  uint64_t totMem = 0, totWrite = 0, totProc = 0;
   double totCpu = 0;
   for (auto &r : rows) {
     totMem += r.memBytes;
-    totDisk += r.diskBytes;
+    totWrite += r.writeBps;
     totProc += r.pcount;
     totCpu += r.cpuPct;
   }
@@ -116,7 +120,7 @@ std::string formatFooter(const std::vector<Row> &rows) {
   os << rows.size() << " jails  "
      << "CPU " << fmtDouble(totCpu, 1) << "%  "
      << "MEM " << humanBytes(totMem) << "  "
-     << "DISK " << humanBytes(totDisk) << "  "
+     << "WRITE " << humanRate(totWrite) << "  "
      << "PROC " << humanCount(totProc);
   return os.str();
 }
@@ -145,8 +149,9 @@ void applyRctlOutput(const std::string &rctlOutput, Row &row) {
     uint64_t n = 0;
     try { n = std::stoull(val); } catch (...) { continue; }
     if (key == "memoryuse")     row.memBytes = n;
-    else if (key == "writebps") row.diskBytes = n;
+    else if (key == "writebps") row.writeBps = n;
     else if (key == "maxproc")  row.pcount = n;
+    else if (key == "pcpu")     { row.cpuPct = (double)n; row.hasPcpu = true; }   // 1.1.69
   }
 }
 

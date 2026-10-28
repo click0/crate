@@ -13,6 +13,7 @@
 //
 
 #include <string>
+#include <vector>
 
 namespace ZfsDataset {
 
@@ -25,10 +26,17 @@ namespace ZfsDataset {
 std::string datasetForJail(const std::string &name,
                            const std::string &errContext);
 
-// Run `zfs list -H -t snapshot -o name -r <dataset>` and return
-// the lex-greatest backup-* suffix on the dataset. Returns "" if
-// no backup snapshot exists or zfs list fails (caller treats that
-// as "no prior", same as pre-0.8.25 behaviour).
+// Run `zfs list -H -t snapshot -o name -d 1 <dataset>` and return
+// the lex-greatest backup-* suffix of THAT dataset (1.1.69: not of
+// its descendants, not of the repl-* family). Returns "" if no
+// backup snapshot exists or zfs list fails (caller treats that as
+// "no prior", same as pre-0.8.25 behaviour).
 std::string findLatestBackupSuffix(const std::string &dataset);
+
+// 1.1.69: the raw `zfs list -H -t snapshot -o name -d 1 <dataset>`
+// output ("" on failure) and the argv that produces it — `replicate`
+// runs the same command on the remote over ssh.
+std::string listSnapshots(const std::string &dataset);
+std::vector<std::string> listSnapshotsArgv(const std::string &dataset);
 
 } // namespace ZfsDataset

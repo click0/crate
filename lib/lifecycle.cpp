@@ -507,7 +507,24 @@ bool restartCrate(const Args &args) {
   // crated's privops socket is detected, so this also fixes the
   // multi-tenant case where bob's `crate restart web` previously
   // picked up alice's `.crate` path from the shared file.
-  std::string crateFile = SpecRegistry::lookup(jailName);
+  SpecRegistryPure::Entry reg;
+  const bool registered = SpecRegistry::lookupEntry(jailName, reg);
+  std::string crateFile = registered ? reg.cratePath : "";
+
+  // 1.1.69: a warm-base run has no .crate file; the registry holds the
+  // dataset (and the jail name IS the --name), so replay exactly that.
+  if (registered && !reg.warmBase.empty()) {
+    std::cout << "Restarting container " << jailName << " from warm template "
+              << reg.warmBase << "..." << std::endl;
+    Args runArgs;
+    runArgs.cmd = CmdRun;
+    runArgs.runWarmBase = reg.warmBase;
+    runArgs.runName = jailName;
+    runArgs.logProgress = args.logProgress;
+    runArgs.vars = args.vars;
+    int returnCode = 0;
+    return runCrate(runArgs, 0, nullptr, returnCode);
+  }
 
   // Legacy fallback for jails started before 0.8.21 (no registry
   // entry) or single-tenant deployments that placed the spec under
@@ -536,8 +553,8 @@ bool restartCrate(const Args &args) {
   runArgs.runCrateFile = crateFile;
   runArgs.logProgress = args.logProgress;
   runArgs.vars = args.vars;   // 1.1.48: --var given to `crate restart` reaches the run
-  // NOTE: the original run's --name / --warm-base are not recorded
-  // anywhere and cannot be restored here (TODO §7).
+  // (--warm-base / --name runs are replayed from the registry above, 1.1.69;
+  // a -f run's jail name is derived from the file, so nothing else to record.)
 
   int returnCode = 0;
   return runCrate(runArgs, 0, nullptr, returnCode);

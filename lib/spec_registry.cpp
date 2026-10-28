@@ -114,8 +114,8 @@ void writeAllAtomic(int /*lockedFd*/,
                   0640);
   if (fd < 0) ERR("open tmp " << tmp << ": " << std::strerror(errno))
   std::string out;
-  out += "# crate spec registry — managed by `crate run -f`\n";
-  out += "# format: <jail-name> <abs-crate-path>\n";
+  out += "# crate spec registry — managed by `crate run -f` / `crate run --warm-base`\n";
+  out += "# format: <jail-name> <abs-crate-path>  |  <jail-name> warm-base=<dataset>\n";
   for (const auto &e : entries) {
     out += SpecRegistryPure::formatLine(e);
     out += '\n';
@@ -158,8 +158,7 @@ std::vector<SpecRegistryPure::Entry> readAll() {
   return parseAll(buf);
 }
 
-void upsert(const std::string &name, const std::string &cratePath) {
-  SpecRegistryPure::Entry candidate{name, cratePath};
+void upsertEntry(const SpecRegistryPure::Entry &candidate) {
   if (auto err = SpecRegistryPure::validateEntry(candidate); !err.empty())
     ERR(err)
 
@@ -171,14 +170,22 @@ void upsert(const std::string &name, const std::string &cratePath) {
   auto buf = readAllFd(fd);
   auto entries = parseAll(buf);
 
-  int idx = SpecRegistryPure::findIndex(entries, name);
+  int idx = SpecRegistryPure::findIndex(entries, candidate.name);
   if (idx >= 0) {
-    if (entries[idx].cratePath == cratePath) return;   // idempotent no-op
-    entries[idx].cratePath = cratePath;
+    if (entries[idx].cratePath == candidate.cratePath && entries[idx].warmBase == candidate.warmBase)
+      return;   // idempotent no-op
+    entries[idx] = candidate;
   } else {
     entries.push_back(candidate);
   }
   writeAllAtomic(fd, entries);
+}
+
+void upsert(const std::string &name, const std::string &cratePath) {
+  SpecRegistryPure::Entry candidate;
+  candidate.name = name;
+  candidate.cratePath = cratePath;
+  upsertEntry(candidate);
 }
 
 void remove(const std::string &name) {
@@ -201,8 +208,14 @@ void remove(const std::string &name) {
 
 std::string lookup(const std::string &name) {
   for (const auto &e : readAll())
-    if (e.name == name) return e.cratePath;
+    if (e.name == name) return e.cratePath;   // "" for a warm-base entry
   return "";
+}
+
+bool lookupEntry(const std::string &name, SpecRegistryPure::Entry &out) {
+  for (const auto &e : readAll())
+    if (e.name == name) { out = e; return true; }
+  return false;
 }
 
 } // namespace SpecRegistry

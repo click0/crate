@@ -817,6 +817,87 @@ locations and a miss names them.
 
 ---
 
+## 4l. 1.1.69 — TODO §7 MED: backup chains, prune, update --pkg-only, restart --warm-base, clean vs run, top
+
+```sh
+# --- backup / replicate chains (needs a jail on ZFS and a remote with ssh + zfs) ---
+J=web; DS=$(zfs list -H -o name $(jls -j $(jls -N | awk '/^web_pid/{print $1}') path))
+crate backup $J --output-dir /backup                      # full
+crate backup $J --output-dir /backup --auto-incremental   # inc-from-<full>
+crate backup $J --output-dir /backup --auto-incremental   # inc-from-<inc1>  (chained)
+zfs list -t snapshot -o name -d 1 $DS | grep @backup-     # exactly the three backup-* snapshots
+# a child dataset's snapshot must NOT become a base
+zfs create $DS/data; zfs snapshot $DS/data@backup-2099-01-01T00:00:00Z
+crate backup $J --output-dir /backup --auto-incremental   # inc-from-<inc2>, not from the 2099 one
+zfs destroy $DS/data@backup-2099-01-01T00:00:00Z; zfs destroy $DS/data
+# a failed send leaves no snapshot: fill the target to ENOSPC, or point --output-dir at a read-only fs
+crate backup $J --output-dir /backup-ro --auto-incremental; zfs list -t snapshot -d 1 $DS | grep -c @backup-   # unchanged
+
+# replicate: its own repl-* family, base = newest snapshot on BOTH sides
+crate replicate $J --to root@backuphost --dest-dataset tank/backup/web                     # full, repl-<ts>
+crate backup $J --output-dir /backup --auto-incremental                                   # a file backup in between
+crate replicate $J --to root@backuphost --dest-dataset tank/backup/web --auto-incremental # incremental FROM THE repl- snapshot
+#   expect: "incremental", the remote accepts it (was: "incremental source does not match")
+ssh root@backuphost zfs destroy -r tank/backup/web
+crate replicate $J --to root@backuphost --dest-dataset tank/backup/web --auto-incremental
+#   expect: the yellow "no snapshot is present on both sides — sending a full stream" and a full send
+# a failed replicate leaves no local snapshot
+crate replicate $J --to root@nohost --dest-dataset tank/x; zfs list -t snapshot -d 1 $DS | grep -c @repl-    # unchanged
+
+# template warm: a failed clone leaves no snapshot
+crate template warm $J --output tank/templates/exists-already   # (create that dataset first) → fails
+zfs list -t snapshot -d 1 $DS | grep -c @warm-                   # unchanged
+
+# --- backup-prune: a chain follows its base ---
+ls /backup                      # F, inc-from-F, inc-from-inc1, inc-from-inc2
+crate backup-prune /backup --keep daily=7 --delete-orphans -n
+#   expect: all four kept, nothing "orphan" (was: inc2 and inc3 listed as orphans and deleted)
+rm /backup/*inc-from-<inc1>*; crate backup-prune /backup --keep daily=7 -n
+#   expect: F + inc1 kept, inc3 reported as orphan
+
+# --- update --pkg-only on a pkg: crate ---
+crate create -s examples/nginx.yml -o /tmp/nginx.crate
+tar -tf /tmp/nginx.crate | grep -c 'usr/local/sbin/pkg$\|var/db/pkg/local.sqlite'   # 2 (kept by default)
+crate run -f /tmp/nginx.crate &  sleep 5
+crate update nginx --pkg-only -n            # pkg upgrade -n runs inside the jail (was: ENOENT /usr/sbin/pkg)
+printf 'pkg: {install: nginx, keep-pkg: false}\nrun: {service: nginx}\n' > /tmp/n2.yml
+crate create -s /tmp/n2.yml -o /tmp/n2.crate; tar -tf /tmp/n2.crate | grep -c 'var/db/pkg/local.sqlite'   # 0
+crate run -f /tmp/n2.crate & sleep 5; crate update n2 --pkg-only -n
+#   expect: "jail 'n2_pid…' has no pkg(8) and no package database — the crate was built with pkg/keep-pkg: false …"
+
+# --- restart of a --warm-base run ---
+crate template warm nginx --output tank/templates/nginx-warm
+crate run --warm-base tank/templates/nginx-warm --name nginxw &  sleep 5
+grep nginxw /var/run/crate/spec-registry.txt         # "nginxw warm-base=tank/templates/nginx-warm"
+crate restart nginxw
+#   expect: "Restarting container nginxw from warm template tank/templates/nginx-warm...", the jail is back
+#   (was: "Container stopped but cannot restart: no .crate file found")
+
+# --- clean vs a run in progress ---
+crate run -f /tmp/big.crate &                 # something that extracts for > 10 s
+sleep 2; crate clean
+#   expect: "in use (a crate run/create holds it): /var/run/crate/jail-big-xxxx — skipped"; the run completes normally
+crate create -s examples/firefox.yml -o /tmp/ff.crate &  sleep 20; crate clean -n
+#   expect: the chroot-create-ff-xxxx directory is skipped as in use; after a `kill -9` of the create it IS swept
+truss -f crate run -f /tmp/sh.crate -- -c 'ls -l /dev/fd' 2>&1 | grep -c 'flock'   # the lock is taken; the jail sees fds 0-2 only
+
+# --- top ---
+crate top | head -3
+#   expect: header "... MEM     WRITE/s  PROC", rates like "12.5 MB/s", CPU% moving every second (pcpu),
+#   footer "WRITE <rate>" (was: "DISK <bytes>")
+```
+
+Pass criteria: the backup base is always a snapshot of the SAME dataset
+that a stream file holds; replicate's base is on both sides or the send
+is full; no snapshot survives a failed send/clone; a prune keeps a whole
+kept chain and orphans only what lost its base; `update --pkg-only`
+works on a default-built crate and explains itself on a keep-pkg: false
+one; a warm-base container restarts; `crate clean` never touches a
+directory a live run/create holds and sweeps dead chroot-create-*
+ones; `crate top` shows rates and a smooth CPU%.
+
+---
+
 ## 5. Reporting back
 
 ```sh

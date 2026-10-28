@@ -1,7 +1,8 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "spec_registry_pure.h"
-#include "name_limits.h"   // 1.1.46
+#include "name_limits.h"       // 1.1.46
+#include "zfs_dataset_pure.h"  // 1.1.69: warm-base dataset validation
 
 #include <cctype>
 #include <string>
@@ -70,8 +71,17 @@ std::string validatePath(const std::string &p) {
   return "";
 }
 
+const char *const kWarmBaseTag = "warm-base=";
+
 std::string validateEntry(const Entry &e) {
   if (auto err = validateName(e.name);     !err.empty()) return err;
+  if (!e.warmBase.empty()) {
+    if (!e.cratePath.empty()) return "entry has both a crate path and a warm-base dataset";
+    if (auto err = ZfsDatasetPure::validateDatasetName(e.warmBase); !err.empty())
+      return "warm-base: " + err;
+    if (e.warmBase.find(' ') != std::string::npos) return "warm-base dataset contains a space";
+    return "";
+  }
   if (auto err = validatePath(e.cratePath); !err.empty()) return err;
   return "";
 }
@@ -86,8 +96,13 @@ std::string parseLine(const std::string &line, Entry &out) {
   if (sp + 1 < line.size() && line[sp + 1] == ' ')
     return "duplicate separator (use exactly one space between name and path)";
   Entry e;
-  e.name      = line.substr(0, sp);
-  e.cratePath = line.substr(sp + 1);
+  e.name = line.substr(0, sp);
+  const auto rest = line.substr(sp + 1);
+  const std::string tag(kWarmBaseTag);
+  if (rest.compare(0, tag.size(), tag) == 0)
+    e.warmBase = rest.substr(tag.size());   // 1.1.69
+  else
+    e.cratePath = rest;
   if (auto err = validateEntry(e); !err.empty())
     return err;
   out = e;
@@ -95,6 +110,7 @@ std::string parseLine(const std::string &line, Entry &out) {
 }
 
 std::string formatLine(const Entry &e) {
+  if (!e.warmBase.empty()) return e.name + " " + kWarmBaseTag + e.warmBase;
   return e.name + " " + e.cratePath;
 }
 

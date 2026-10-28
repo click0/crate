@@ -31,6 +31,33 @@ namespace ZfsDatasetPure {
 // and lines that don't match the @backup-* shape (skipped silently).
 std::string pickLatestBackupSuffix(const std::string &zfsListOutput);
 
+// 1.1.69: the same walk pinned to ONE dataset and ONE prefix: only
+// lines "<dataset>@<prefix>..." count, so a descendant's snapshot
+// (tank/jails/web/data@backup-…) or another family (repl-…) cannot
+// become the incremental base of this dataset's stream. `prefix` is
+// e.g. "backup-" or "repl-"; returns the whole suffix ("backup-…") or "".
+std::string pickLatestSuffix(const std::string &zfsListOutput,
+                             const std::string &dataset,
+                             const std::string &prefix);
+
+// 1.1.69: the newest snapshot both sides hold — the only safe base of an
+// incremental `zfs send -i` to a remote. `localOut` / `remoteOut` are
+// `zfs list -H -t snapshot -o name -d 1` of the local and the remote
+// dataset; a suffix counts when its prefix is one of `prefixes` and it
+// appears in BOTH listings. "Newest" compares the text after the prefix
+// (the UTC timestamp, lex-monotone), so a backup-… and a repl-… snapshot
+// are ordered by time, not by prefix. Returns "" when nothing is common.
+std::string pickLatestCommonSuffix(const std::string &localOut, const std::string &localDataset,
+                                   const std::string &remoteOut, const std::string &remoteDataset,
+                                   const std::vector<std::string> &prefixes);
+
+// 1.1.69: every "<dataset>@<prefix>…" suffix in a listing, in listing
+// order (what the two functions above consume; exposed for tests and
+// for `replicate` to report what it saw).
+std::vector<std::string> snapshotSuffixes(const std::string &zfsListOutput,
+                                          const std::string &dataset,
+                                          const std::string &prefix);
+
 // Validate a ZFS dataset name. Used by callers that build snapshot
 // names from operator input. Allowed alphabet: [A-Za-z0-9_./:-];
 // no leading slash, no `..` segments, length 1..255.

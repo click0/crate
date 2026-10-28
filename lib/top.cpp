@@ -37,11 +37,17 @@ std::atomic<bool> g_stop{false};
 
 void onSignal(int) { g_stop.store(true); }
 
-// One previous CPU sample per JID for percentage calculation.
+// One previous CPU sample per JID for the `cputime`-delta fallback
+// (used when RCTL reports no `pcpu`). 1.1.69: `cputime` is whole
+// seconds, so a delta over the 1 s poll quantised CPU% to 0/100/200;
+// the baseline is now held for kCpuWindowSec and the last value shown
+// in between.
 struct PrevSample {
   uint64_t cputime = 0;
   std::chrono::steady_clock::time_point ts;
+  double lastPct = 0.0;
 };
+constexpr double kCpuWindowSec = 5.0;
 
 uint64_t parseRctlNumber(const std::string &rctlOutput, const std::string &key) {
   // RCTL emits "key=value\n" lines. Linear scan is fine — output is small.
@@ -166,13 +172,23 @@ bool topCrate(const Args &/*args*/) {
         }
         TopPure::applyRctlOutput(rctlOut, r);
 
-        uint64_t cputime = parseRctlNumber(rctlOut, "cputime");
-        auto it = prev.find(j.jid);
-        if (it != prev.end()) {
-          double dt = std::chrono::duration<double>(now - it->second.ts).count();
-          r.cpuPct = TopPure::cpuPercent(it->second.cputime, cputime, dt);
+        if (!r.hasPcpu) {
+          // racct did not report pcpu (older kernel / rctl output shape):
+          // fall back to the cputime delta over a window of kCpuWindowSec.
+          uint64_t cputime = parseRctlNumber(rctlOut, "cputime");
+          auto it = prev.find(j.jid);
+          if (it == prev.end()) {
+            prev[j.jid] = {cputime, now, 0.0};
+          } else {
+            double dt = std::chrono::duration<double>(now - it->second.ts).count();
+            if (dt >= kCpuWindowSec || cputime < it->second.cputime) {
+              r.cpuPct = TopPure::cpuPercent(it->second.cputime, cputime, dt);
+              prev[j.jid] = {cputime, now, r.cpuPct};
+            } else {
+              r.cpuPct = it->second.lastPct;
+            }
+          }
         }
-        prev[j.jid] = {cputime, now};
 
         rows.push_back(r);
       }
