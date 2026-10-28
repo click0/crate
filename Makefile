@@ -55,7 +55,7 @@ LIB_SRCS = lib/spec.cpp lib/spec_pure.cpp lib/json_pure.cpp lib/netaddr_pure.cpp
            lib/backup_prune_pure.cpp lib/backup_prune.cpp \
            lib/replicate_pure.cpp lib/replicate.cpp \
            lib/inspect_pure.cpp lib/inspect.cpp \
-           lib/stack.cpp lib/stack_pure.cpp \
+           lib/stack.cpp lib/stack_pure.cpp lib/stack_spec.cpp \
            lib/jail_query.cpp lib/zfs_ops.cpp lib/ifconfig_ops.cpp \
            lib/pfctl_ops.cpp lib/mac_ops.cpp lib/ipfw_ops.cpp \
            lib/capsicum_ops.cpp lib/netgraph_ops.cpp lib/nv_protocol.cpp \

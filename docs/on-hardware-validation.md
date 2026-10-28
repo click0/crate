@@ -743,6 +743,80 @@ hostid row from WARN to PASS.
 
 ---
 
+## 4k. 1.1.68 — `stack up` composes the member spec; `crate run --var`
+
+```sh
+# a two-member stack with a template, a pool, DNS, a secret and a volume
+mkdir -p /tmp/stk/certs; echo s3cret > /tmp/stk/pw
+cat > /tmp/stk/db.yml <<'EOF'
+options: {net: {outbound: dns}}
+run: {command: /bin/sh -c 'cat /etc/hosts; cat /etc/resolv.conf; echo "pw=${DB_PASSWORD}"; sleep 120'}
+scripts:
+  run:before-start-services:
+    - "echo member-script-ran > /tmp/marker"
+EOF
+cat > /tmp/stk/web.yml <<'EOF'
+options: [net]
+run: {command: /bin/sh -c 'ls /etc/letsencrypt; sleep 120'}
+EOF
+cat > /tmp/stk/stack.yml <<'EOF'
+containers:
+  db:
+    spec: db.yml
+    template: privacy                      # a NAME: found in the template dirs
+    vars: { DB_PASSWORD: { from_file: /tmp/stk/pw } }
+  web:
+    spec: web.yml
+    depends: [db]
+    volumes: [certs:/etc/letsencrypt:ro]
+volumes: { certs: /tmp/stk/certs }
+networks:
+  backend: { bridge: bridge77, subnet: 10.77.0.0/24, gateway: 10.77.0.1, ip_range: 10.77.0.100-10.77.0.110, dns: true }
+EOF
+cp /usr/local/share/crate/templates/privacy.yml /tmp/stk/   # or rely on the installed one
+cd /tmp/stk && crate stack up stack.yml -p
+#   expect: "[stack] db: composed spec at /tmp/crate-stack-XXXXXX/db.yml" (removed when stack up ends),
+#   both members Started
+
+# what the archive holds is the composed spec
+tar -xOf db.crate +CRATE.SPEC
+#   expect: privacy: {hostid: random, hostname: random} (the template), options/net/ip: 10.77.0.100/24,
+#   gateway: 10.77.0.1, scripts/run:before-start-services with "": [member line], __crate_stack_hosts,
+#   __crate_stack_dns — and the LITERAL text pw=${DB_PASSWORD} (the secret is not in the archive)
+tar -xOf web.crate +CRATE.SPEC | grep -A2 'dirs:'
+#   expect: share: - [/etc/letsencrypt, /tmp/stk/certs, ro]
+grep -c s3cret db.crate web.crate                     # 0 0 (xz-compressed; also: tar -xOf db.crate +CRATE.SPEC | grep -c s3cret → 0)
+
+# the run saw all of it
+J=$(jls -N | awk '/^db_pid/{print $1}'); crate logs $J | head -20
+#   expect: /etc/hosts has "10.77.0.100 db" and "10.77.0.101 web", resolv.conf "nameserver 10.77.0.1",
+#   "pw=s3cret" (the --var reached the run), kern.hostuuid inside != the host's
+jexec $J cat /tmp/marker                              # member-script-ran (the spec's own script still runs)
+crate stack exec stack.yml web -- ls /etc/letsencrypt # the volume is mounted, read-only
+crate stack down stack.yml
+
+# template resolution
+sed -i '' 's/template: privacy/template: nope/' stack.yml; crate stack up stack.yml
+#   expect: "containers/db: template 'nope' not found (searched ~/.config/crate/templates/nope.yml,
+#   /usr/local/share/crate/templates/nope.yml, /tmp/stk/nope.yml)", nothing started
+sed -i '' 's/template: nope/template: privacy.yml/' stack.yml; crate stack up stack.yml -p   # the copy next to the stack file
+
+# crate run --var on its own
+printf 'run: {command: /bin/sh -c "echo hello=${WHO}"}\n' > /tmp/v.yml
+crate create -s /tmp/v.yml -o /tmp/v.crate --var WHO=build
+crate run -f /tmp/v.crate --var WHO=runtime             # hello=runtime (was: hello=${WHO})
+crate run -f /tmp/v.crate                              # hello=${WHO} — an unset var stays literal, as before
+```
+
+Pass criteria: the composed spec, not the bare one, is in every member's
+`+CRATE.SPEC`; the template, address, scripts and volume take effect in
+the running jail; the member's own `run:before-start-services` lines
+still run; no secret value in any `.crate`; `--var` on `crate run`
+substitutes at run time; a template name is resolved through the three
+locations and a miss names them.
+
+---
+
 ## 5. Reporting back
 
 ```sh

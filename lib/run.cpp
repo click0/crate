@@ -553,8 +553,13 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
           << " — was it produced by `crate template warm` of a `crate run` jail?")
   }
 
-  // parse +CRATE.SPEC
-  auto spec = parseSpec(J("/+CRATE.SPEC")).preprocess();
+  // parse +CRATE.SPEC. 1.1.68: with the run's --var values — `crate create`
+  // copies the spec file into the archive with its `${VAR}` placeholders
+  // intact (the substituted values are used for the build only), and
+  // `crate stack up` passes every member's vars to this run, so a
+  // placeholder in a run-time field (scripts, env, a share path) was
+  // left as literal text until now.
+  auto spec = parseSpecWithVars(J("/+CRATE.SPEC"), args.vars).preprocess();
 
   // 1.1.58: thin jail (base/mode: host-ro). The archive holds the
   // writable layer only; mount the host's userland read-only now, before
