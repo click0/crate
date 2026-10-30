@@ -6,7 +6,10 @@ Confidence is "confirmed" (full code path read) unless marked
 "plausible" (depends on an OS/library fact not verifiable in-repo).
 Items from the previous TODO that are still open are carried over in
 section 10; everything previously marked [FIXED] is gone from here and
-lives in CHANGELOG.md.
+lives in CHANGELOG.md. Cleaned again 2026-10-30 at 1.1.69: the [FIXED in
+1.1.34 … 1.1.69] entries that had piled up since were removed (each is in
+its CHANGELOG.md section), and what they still left open is listed below
+as its own item.
 
 Priority legend: HIGH = wrong or dangerous behaviour reachable in a
 normal deployment; MED = incorrect result, data/resource leak or a
@@ -17,93 +20,16 @@ The bhyve/VM track is in TODO2.
 
 === 1. Blocker: the rootless (1.0.0) model is not actually reachable ===
 
-  [FIXED in 1.1.34] cli/main.cpp refused to start unless euid==0 AND
-  uid!=0 (setuid only). Gate removed, HOME from passwd, runtime-dir
-  check made non-root tolerant, lite-CI smoke step added.
-
-  [FIXED in 1.1.39] per-user runtime root created AND chowned to the
-  operator by crated (every privops connection + new `ensure_user_root`
-  verb); rootless jail directories under /var/run/crate/<uid>/
-  (RuntimePathsPure::isCrateJailPath for jail_query/console/info/clean);
-  network teardown + bridge/auto ipfw through privops
-  (RunNet::teardownIface / ipfwExec); healthcheck via JailExec; top via
-  query_jail_rctl; console argv split; per-user network_pool split
-  (network_pool_user_bits); clear refusals for NAT mode and
-  auto_create_bridge under rootless.
-
-  [FIXED in 1.1.40] the exec blocker. New privops verb `exec_in_jail`
-  (option A): crate(1) sends argv/user/TERM plus its stdin/stdout/
-  stderr as nvlist descriptors; crated pdfork()s, dup2s, closefrom,
-  jail_attach(jid), switches to the jail-side user, builds a minimal
-  env and execve()s; the process descriptor comes back in the reply
-  and JailExec waits on it with kqueue EVFILT_PROCDESC (no daemon
-  thread pinned; the command dies with `crate run`). Authz is STRICT:
-  the jid must be registered to the caller — no bootstrap concession
-  (DenyUnownedJid). JailExec::execInJail/execInJailGetOutput take the
-  privops branch whenever euid != 0 and a socket is detected, so
-  `crate run`, `crate console`, `crate update --pkg-only`, `crate
-  info`, healthchecks and the per-jail network setup all go through
-  it unchanged. libnv transport only (HTTP answers 400).
-
-  [FIXED in 1.1.41] Ctrl-C/SIGTERM under rootless: the in-jail
-  command is crated's child, so a terminal signal never reached it and
-  `crate run` sat in its kqueue wait forever. The SIGINT/SIGTERM
-  handler now forwards the signal through the process descriptors
-  being waited on (JailExec::forwardSignalToPrivopsChildren → pdkill),
-  and the wait becomes bounded (5 s grace, then "killed by SIGTERM")
-  so teardown runs even if the command ignores the signal. Also
-  fixed: host-side static-mac (`set_iface_mac`), NAT instance delete
-  (`delete_ipfw_nat`), auto_create_bridge (`create_bridge`, cloner
-  names bridge<N> only), `crate info` RCTL limits (query_jail_rctl
-  `limits: true` → rctl -h), crate(1) audit fallback to
-  /var/run/crate/<uid>/crate-audit.log with a one-time warning instead
-  of a silent drop, `crate doctor` without root (per-user root checked
-  instead of the root-owned tree; crated.conf unreadable = expected),
-  and — security — crated's per-user audit.log open (root, inside a
-  directory the operator owns since 1.1.39) now O_NOFOLLOW + fstat
-  (plain file, one link, owner root or the operator) and chowned to
-  the operator so the "operator-readable copy" is readable.
-
-  [FIXED in 1.1.42] GUI compositor + wayvnc start through
-  JailExec::spawnInJail (root: fork+jail_attach; rootless: exec_in_jail
-  with a process descriptor; signalSpawned/waitSpawned hide the
-  difference) — the last raw `jexec` in crate(1). Daemon-started
-  containers (control-socket / HTTP `start`+`restart`) are now recorded
-  in the jid→owner registry: crated watches for the jail whose kernel
-  name ends in `_pid<crate run pid>` (RunPure::jailXnameHasPid) and
-  records the control-socket peer uid (0 = admin for the bearer-token
-  HTTP path). The operator who started a container can exec/console
-  into it; other tenants lose the bootstrap Allow on it.
-
 * (HIGH) exec_in_jail follow-ups:
     - no on-hardware run yet: the whole rootless `crate run` path
       (ensure_user_root → create_jail → mounts → exec_in_jail …) has
       never been exercised end to end; docs/on-hardware-validation.md
       §4.1 is the first thing to run.
-    [FIXED in 1.1.56] per-process limits: the child applies the JAIL's
-      login.conf (login_getpwclass + setusercontext LOGIN_SETRESOURCES
-      | SETPRIORITY | SETUMASK) after jail_attach; the cpuset was
-      already the jail's (jail_attach moves the process into it).
-    [FIXED in 1.1.56] no getpwnam()/initgroups() in the pdfork child:
-      the parent reads <jailPath>/etc/master.passwd (or passwd) and
-      /etc/group through O_RESOLVE_BENEATH (PasswdPure, unit-tested)
-      and hands the child uid/gid/groups/class/home/shell. A user that
-      maps to uid 0 is refused (403 user_is_root).
+    - NAT mode under rootless (acquire_fw_lease / release_fw_lease,
+      1.1.57) and rootless bridge mode on a host with forwarding=0 are
+      not validated on hardware either (on-hardware-validation §4).
 
 * (HIGH) remaining direct privileged calls under rootless:
-    [FIXED in 1.1.57] host-side v6 epair address: set_iface_inet_addr
-      gained `inet6` (RunNet::setInet6AddrPrivopsOrLocal).
-    [FIXED in 1.1.57] NAT mode under rootless: acquire_fw_lease /
-      release_fw_lease (jid-gated) replace Ctx::FwSlots/FwUsers and
-      the forwarding sysctls — crated keeps one lease per jid
-      (lib/fw_lease_registry, /var/db/crate/fw_leases.tsv), hands out
-      the ipfw slot, flips net.inet(6).ip(6).forwarding on the first
-      user and restores it after the last (release, destroy_jail or a
-      reconcile that finds the jail dead); the client creates the
-      shared outbound NAT rule when fwd4_users == 1 and removes it
-      when release reports 0. Also fixes rootless bridge mode on a
-      host with forwarding=0 (run.cpp set the sysctl directly for any
-      `net:`). Not validated on hardware (on-hardware-validation §4).
     - Util::ensureKernelModuleIsLoaded (ipfw_nat, if_bridge, ng_*)
       now checks kldfind first and, unprivileged, tells the operator
       which module to load instead of failing in kldload — loading
@@ -116,9 +42,6 @@ The bhyve/VM track is in TODO2.
       into jails) — stack is root-only today. 1.1.56: `stack up`/`down`
       refuse up front as non-root with the reason instead of failing
       half-way with containers already started.
-    [FIXED in 1.1.56] PfLock: per-user lock file under
-      /var/run/crate/<uid>/ when unprivileged; a failed lock is
-      reported once instead of silently running unserialised.
     - `logs` is overridable from ~/.config/crate/crate.yml, so a user
       still chooses where their own audit trail goes (the daemon's
       audit.log is the record that counts for privops).
@@ -128,14 +51,6 @@ The bhyve/VM track is in TODO2.
       daemon if that is wanted.
 
 === 2. crated privops / HTTP — security ===
-
-  [FIXED in 1.1.35] the four HIGH items: create_jail `parameters`
-  whitelist (PrivOpsPure::validateJailParameters); path-scoped verbs
-  confined to the caller's prefix when path_master_prefix is set
-  (Decision::DenyUnownedPath); realpath() canonicalisation of every
-  path argument in privops_handlers.cpp + lstat/O_EXCL mount targets
-  in run_gui.cpp; ws-console on checkBearerAuthFull. Also
-  routes.cpp jsonError() escaping.
 
 * (MED, residual of the 1.1.35 canonicalisation) the realpath() check
   and the nmount()/jail -c/devfs call are two steps; a symlink swapped
@@ -148,28 +63,6 @@ The bhyve/VM track is in TODO2.
   its own operator's `crate run`), but the only remaining gap in the
   path chain.
 
-  [FIXED in 1.1.36] viewer token on GET /api/v1/containers, /gui,
-  /host; pool gate on GET /exports/:filename
-  (TransferPure::artifactContainerName); pf anchor verbs name-scoped
-  (Decision::DenyForeignAnchor); attach_zfs/detach_zfs gate the jid;
-  jid→owner registry reconciled against live jails at startup and on
-  every lookup hit; destroy_jail forgets by pre-resolved jid.
-
-  [FIXED in 1.1.43] interface-named verbs gated: iface→owner registry
-  (lib/iface_owner_registry{,_pure}.*, /var/db/crate/iface_owners.tsv)
-  fed by create_epair / teardown_iface, reconciled against the host's
-  `a` halves; checkOwnedIface on configure_iface's ifname,
-  teardown_iface, bridge_*_member's member, reclaim's iface,
-  set_iface_up/disable_iface_offload/set_iface_inet_addr/set_iface_mac.
-  Non-epair names → DenyHostIface for per-user callers; unknown epair →
-  bootstrap Allow. Also: validateConfigureIface rejected the move-only
-  request run_net.cpp sends for EVERY rootless move (400) — fixed;
-  nvlist header peeked before nvlist_recv (1 MiB / 3 descriptors);
-  HTTP DELETE /containers/:name goes through stopCrate (no more
-  kill -9 + jail -r leaking mounts/epairs/anchors) and reports
-  was_running; crated.conf role values validated, top-level vs
-  rootless.* override warned.
-
 * (by design, documented) a pool-scoped ADMIN token can POST
   /imports/:name + /containers/:name/start for a name in its pool and
   have crated run that .crate as root (the spec may declare host
@@ -177,15 +70,6 @@ The bhyve/VM track is in TODO2.
   host-wide, not pool-confined; only viewer/pool-scoped tokens carry
   isolation. Making this real needs the spawned `crate run` to drop to
   the token's mapped uid — part of the rootless §1 work, not a gate.
-
-  [FIXED in 1.1.37] pf rules over a pipe (`pfctl -f -`,
-  Util::execCommandWithInput); SO_RCVTIMEO/SO_SNDTIMEO + 64-connection
-  cap on privops/control-socket listeners, handshake timeout + session
-  cap on ws-console; WsPure::kMaxFramePayload 1 MiB;
-  listen.max_body_mb / listen.http_workers for httplib;
-  accept4(SOCK_CLOEXEC) + FD_CLOEXEC on the httplib listener;
-  control-socket restart = bounded stop + detached spawnCrateRun;
-  configure_iface shape check before moveToVnet.
 
 * (MED) Synchronous HTTP handlers remain synchronous — by choice in
   1.1.37 (the worker pool now absorbs them): routes.cpp stop (≤ 11 s),
@@ -199,8 +83,6 @@ The bhyve/VM track is in TODO2.
 
 * (LOW) Registry write happens after `jail -c` returns (:663-671);
   until then the new jid/path are unowned (bootstrap Allow).
-  [FIXED in 1.1.53] crated.8 DELETE /containers/:name documents the
-  1.1.43 behaviour (stop + was_running; dataset kept).
 * (LOW) privops_socket_mode gets no tightness warning unlike
   listen.unix_mode.
 * (LOW) handlers at privops_handlers.cpp :171,560,577 return raw
@@ -209,33 +91,11 @@ The bhyve/VM track is in TODO2.
 
 === 3. Networking runtime ===
 
-  [FIXED in 1.1.38] bridge/auto pf anchor flushed at teardown; `crate
-  clean` sweeps stale crate/* anchors and orphaned v4/v6 pool leases;
-  rdr host-port collision warning; `firewall:` policy applied in bridge
-  mode (static/pool IP); static-mac hashed from the jail name; ipfw ids
-  interleaved (40000+2*jid / 40001+2*jid, jid <= 9999, throttle jid <=
-  4999); net.inet6.ip6.forwarding restored. Still open: v4 forwarding is
-  restored only when allowOutbound() (run_net.cpp:498, inbound-only
-  jails leave it at 1).
-
-  [FIXED in 1.1.39] two users on one host allocated the same
-  network_pool IP: per-uid sub-block via PerUserNetPure::composeIpv4
-  (network_pool_user_bits, default 8; v6: network_pool6_user_bits 16),
-  addresses keep the pool prefix/gateway.
-
-  [FIXED in 1.1.44] MAC portacl rules merged into the host-wide list on
-  start and removed on stop (MacPure::merge/removePortaclRules,
-  MacOps::add/removePortaclRules, RunAtEnd); `crate stats` parses the
-  netstat --libxo JSON (LifecyclePure::parseNetstatIfaceBytesJson);
-  IPv6 epair pairs one /126 each with two-hextet overflow
-  (RunPure::epairIp6); options/net ip / gateway / ip6 / extra[]
-  interface validated at spec parse (SpecPure::validateStaticIp4/6,
-  validateGateway4; PrivOpsPure::validateIfaceName); run_net.cpp
-  prefix-length guards (v4 ≤ 32, v6 numeric ≤ 128); epair unit parsed
-  defensively (RunPure::epairUnit) instead of substr(); net.cpp
-  netmask vector size check; ugidfw add argv split per word;
-  healthcheck interval 0 rejected.
-
+* (MED, left open by 1.1.38) IPv4 forwarding is restored only when
+  allowOutbound(): run.cpp enables net.inet.ip.forwarding for every jail
+  with `net:` when it was 0 (root path), run_net.cpp restores it only in
+  the outbound teardown, so inbound-only jails leave it at 1. Rootless
+  goes through release_fw_lease (1.1.57). Checked at 1.1.69.
 * (LOW) ipfw_ops.cpp:85 treats EINVAL from IP_FW_XGET as "native API
   available" — EINVAL can also mean an unsupported opcode on an older
   kernel; needs a FreeBSD check before changing.
@@ -246,23 +106,6 @@ The bhyve/VM track is in TODO2.
   that is the documented meaning of zero retries; left as is.
 
 === 4. crate stack ===
-
-  [FIXED in 1.1.45] pool IPs no longer allocated/advertised for
-  prebuilt `crate:` entries (their spec owns their network; a WARN
-  says they are outside stack DNS/hosts); network_policy rule block
-  picked from the live `ipfw list` (StackPure::freePolicySlot) instead
-  of a per-process counter, cleanup RunAtEnd armed before the first
-  addRule, otherStackSubnets = the stack's other networks,
-  net.link.bridge.ipfw=1 set when a policy is applied, `stack down`
-  deletes the bridge's policy rules (policyRulesForBridge); `stack
-  exec`/`status` match jails exactly (jailNameMatchesContainer — the
-  substring match ran `stack exec db` in jail "mydb_pid…"); mergeSpecs
-  carries diskQuota, securelevel, childrenMax, cpuset, cronJobs,
-  depends and an explicit services/auto_start: false
-  (servicesAutoStartExplicit); subnet validated as CIDR at parse;
-  unbound exit status decoded with WIFEXITED/WIFSIGNALED; `stack down`
-  actually stops the containers (stopCrate per matching jail);
-  validateStackName cap = NameLimits::kJailName.
 
 * (MED) allocateIpPool is in-process only — not persisted, not
   reconciled with network_lease; two `stack up` runs of different
@@ -276,29 +119,6 @@ The bhyve/VM track is in TODO2.
   stack); validate rule.proto at parse.
 
 === 5. Spec parsing, config, registries ===
-
-  [FIXED in 1.1.46] options map form rejects unknown option names;
-  security/securelevel and enforce_statfs accept the documented -1
-  (SpecPure::parseIntInRange); spec-registry name rule = jail name
-  rule (128 chars, '.' allowed); spec registry + network_lease(6) lock
-  a stable `<path>.lock` file instead of the renamed-over inode;
-  crate.yml applied all-or-nothing per file with unknown keys
-  reported; crate.yml securelevel / children_max wired as defaults
-  for specs at -1 (both now default to unset, so behaviour is
-  unchanged until configured); fileExists/dirExists use S_ISREG/
-  S_ISDIR; ports validated 1..65535 and ranges non-reversed
-  (parsePort/parsePortRange) for net inbound, firewall allow-tcp/udp,
-  mac_portacl/allow_ports, gui/vnc_port; restart/delay 0 rejected;
-  `restart: always` no longer loops after Ctrl-C / crate stop (exit
-  128+SIGINT/SIGTERM breaks the loop) and an unknown policy in an old
-  .crate is reported and treated as "no"; vlan parsed as a bounded
-  spec value (1..4094) instead of as<int>() → "internal error";
-  files/ rejects unknown sub-keys and a non-list share; `x11: maybe`
-  rejected; cron schedule/command single-line with 5 fields or
-  @keyword; audit file write loops to completion; $HOME alone is
-  substituted and $HOMER is not; validate_pure recommends
-  gui/mode=headless (x11/mode has no headless) and drops the dead
-  gui/mode == "shared" branch.
 
 * (LOW) firewall/allow-tcp|udp with a map value and mac_portacl
   non-map / allow_ports non-sequence are still silently ignored
@@ -314,17 +134,6 @@ The bhyve/VM track is in TODO2.
 
 === 6. crate doctor ===
 
-  [FIXED in 1.1.47] command paths come from pathnames.h (CRATE_PATH_*):
-  /usr/bin/jls, /sbin/jail and /sbin/rctl were hand-typed wrong, so
-  every FreeBSD host got a required-command FAIL (exit 2) and the RCTL
-  presence check was always skipped. racct probed via
-  kern.racct.enable (it is a kernel option — `kldstat -n racct` warned
-  on every host); ipfw/pf replaced by one checkFirewall() (pf via
-  /dev/pf, ipfw via net.inet.ip.fw.enable, firewall_backend decides
-  FAIL vs note — a pf-only host no longer warns about ipfw); audit.log
-  and the logs directory honour crate.yml `logs`; the rotation
-  threshold is 50 MB as the section says.
-
 * (LOW) doctor's auto-fw anchor probe (checkAutoFwRules) does not know
   the running jail's `_pid<N>` xname and probes `crate/<name>_pid?`
   literally — make it list `pfctl -a crate -s Anchors` and match the
@@ -334,81 +143,11 @@ The bhyve/VM track is in TODO2.
 
 === 7. Lifecycle, storage, GUI, monitoring, DNS, VPN ===
 
-  [FIXED in 1.1.48] zfs_rollback(fs, snap) / zfs_show_diffs(fs, …,
-  snap1, snap2) called with the right handles (snapshot restore
-  SIGSEGV'd under HAVE_LIBZFS; diff showed snap2→live); `crate export`
-  tars with --one-file-system (shared host dirs, GUI sockets, devfs
-  stayed out of the archive — a data leak into a shareable .crate);
-  `crate inter-dns` emits crate jails (the `_pid<N>` kernel suffix is
-  stripped before the hostname rule; first ip4 of a comma-joined
-  list); backup destroys its @backup-<ts> snapshot and the partial
-  file when `zfs send` fails (no more unrestorable incremental
-  chains from a failed run); ZfsOps::send/recv report fork failure
-  and check waitpid; /tmp scratch files (vncpw, xorg conf, clipboard
-  script) via mkstemp 0600; x11vnc and the embedded VNC server bind to
-  loopback by default (gui.vnc_bind to widen, warning when public);
-  migrate passes the bearer token with `-H @<0600 mkstemp file>` and a
-  mkdtemp work dir; `crate stop` returns false (red message) when the
-  jail survived destroy_jail, so `crate restart` no longer starts a
-  second instance; `crate restart` forwards --var; `crate logs TARGET`
-  validated as a jail name; `crate list`/`info` strip control chars
-  from kernel-controlled names/hostnames; execInJail root path exits
-  124 on a failed user switch instead of running as root.
-
-  [FIXED in 1.1.39] `crate console`: "login -f <user>" was one argv
-  element to jexec; split into words, extra args appended verbatim.
-  Still root-only (jexec) until the exec verb from §1 exists.
-
-  [FIXED in 1.1.69] the six MED items of this section (one release,
-  runbook §4l):
-  - backup/replicate chain: `crate replicate` snapshots are their own
-    family (`repl-<ts>`) and --auto-incremental bases a replicate on
-    the newest snapshot present on BOTH sides (the remote's `zfs list
-    -d 1` over the same ssh hop; nothing in common → full stream with
-    a warning), so a file backup between two replications is never the
-    base of a `zfs send -i` the remote cannot apply, and a file backup
-    never bases on a replicate snapshot no .zstream holds. The base
-    lookup is `-d 1` and pinned to "<dataset>@<prefix>" (a child's
-    snapshot or another family cannot be picked). A failed replicate
-    destroys its snapshot (what 1.1.48 did for backup); `template warm`
-    and the run-time base_container / cow / warm-base clones destroy
-    their snapshot when `zfs clone` fails. Decision: no automatic
-    destruction of OLD backup-*/repl-* snapshots after a successful
-    run — the newest one is the next incremental base and `--since`
-    may name any of them; source-side pruning stays operator-driven.
-  - backup-prune: an incremental is kept when its base is kept — a
-    kept full or a kept incremental (oldest-first transitive walk);
-    the chain F ← inc1 ← inc2 ← inc3 of --auto-incremental is kept
-    whole and dies with its full.
-  - update --pkg-only: `crate create` keeps pkg(8) and /var/db/pkg
-    when the spec installs packages (`pkg/keep-pkg`, default true;
-    false gives the old smaller, non-upgradable image; mergeSpecs:
-    either side's false wins); `crate update` checks for
-    /usr/local/sbin/pkg and /var/db/pkg/local.sqlite in the jail and
-    says what is missing and why instead of jexec's ENOENT. Decision:
-    keep rather than re-bootstrap — the package DB cannot be rebuilt
-    from +CRATE.PKGS, and the in-jail pkg is what the privops exec
-    path can run.
-  - restart --warm-base: the spec registry gained a second entry form
-    "<name> warm-base=<dataset>" written by `crate run --warm-base
-    --name`; `crate restart` replays --warm-base/--name from it.
-    `--name` only exists with --warm-base (a -f run's name comes from
-    the file), so nothing else needed recording. SpecRegistry::lookup
-    returns "" for such an entry — crated's control-socket start/
-    restart still cannot start a warm-base container (404), leftover.
-  - clean vs run: `crate run` flock(2)s the jail directory (DirLock,
-    O_CLOEXEC, held through teardown) and `crate create` its
-    chroot-create-* directory; `crate clean` tries LOCK_EX|LOCK_NB and
-    skips a held one ("in use … — skipped"), and sweeps dead
-    chroot-create-* directories (never swept before).
-  - top: the column is WRITE/s (RCTL writebps is a rate), CPU% comes
-    from RCTL `pcpu` when present (racct's smoothed percentage); the
-    cputime-delta fallback holds its baseline for 5 s instead of
-    quantising to 0/100/200 % at 1 Hz. README en/uk tables updated.
-
-* (LOW) lifecycle.cpp:272 logsTarget unvalidated →
-  `crate logs ../../x` reads /var/log/x/console.log (unprivileged
-  read; minor); JSON at :180-189 emits jail->name / rctl values
+* (MED, left open by 1.1.69) crated's control-socket start/restart
+  cannot start a --warm-base container (404): SpecRegistry::lookup
+  returns "" for the `<name> warm-base=<dataset>` entry form.
+* (LOW) lifecycle.cpp: (the `crate logs ../../x` traversal is fixed
+  since 1.1.48, WarmPure::validateJailName) JSON at :180-189 emits jail->name / rctl values
   unescaped (non-crate jails can have arbitrary names). Follow mode
   never notices rotation/truncation.
 * (LOW) throttle.cpp:98-141 `--clear --show` clears, then errors
@@ -451,52 +190,16 @@ The bhyve/VM track is in TODO2.
   `vnc: true` with backend drm silently ignored; wayvnc's 127.0.0.1 is
   the jail's loopback in a vnet jail so the advertised port (:1157) is
   unreachable from the host.
-* (LOW) gui.cpp:171-172,326-330 comments claim the command "runs as
-  root / registry is root-only" — stale post-1.0.0.
 * (LOW) inspect.cpp:170 started_at always 0; :57-68 ip6/mac never
   populated; inspect_pure.cpp:154-159 mount parsing breaks on paths
   containing " on " or " (".
-* (LOW) list_pure.cpp:67-76, info.cpp:103 print kernel host.hostname
-  raw to the terminal; allow.set_hostname is spec-controllable
-  (run_jail.cpp:134) → a jail can inject escape sequences into the
-  operator's `crate list`. JSON paths are escaped.
 * (LOW) capsicum_ops.cpp enterCapabilityMode / initCapDns /
   resolveDns / limitFdRights have no callers (only
   initCapSyslog/logSyslog via audit.cpp); initCapDns leaks g_capdns
   on repeat calls; unused WARN macro. drm_session.cpp:18,53,63 single
   global g_deviceId — a second openDevice orphans the first.
-* (LOW) migrate.cpp:155-156 workdir /tmp/crate-migrate-<pid> is
-  predictable (mkdir throws on EEXIST → DoS only).
 
 === 8. crate-hub ===
-
-  [FIXED in 1.1.49] container data path: the poller normalises
-  crated's {"status","data":<jls object>} envelope to the bare jail
-  array (AggregatorPure::extractContainerArray), so aggregate /
-  datacenters / scheduling count real containers and the dashboard
-  renders them (app.js accepts an embedded array); daemonised hub
-  forks BEFORE starting threads (the poller never ran in -f-less
-  mode, and join() hit a thread that did not exist); dashboard
-  action buttons read the host from the Host column (cells[2], not
-  the Datacenter column); hub binds 127.0.0.1 by default (-b/--bind,
-  listen_host; listen_port read; long options), /admin/prune
-  loopback-only, SECURITY section in crate-hub.8; node polling
-  verifies the server certificate (tls:, ca_cert:,
-  CPPHTTPLIB_OPENSSL_SUPPORT defined); JSON output escaped with
-  JsonPure::quote and Prometheus labels escaped; status writes under
-  the mutex, failed polls not recorded as fresh and flagged stale:;
-  IPv6 node hosts ([::1]:9800, ::1) via splitHostPort; /api/v1/nodes
-  carries datacenter; -p validated; /var/db/crate-hub created;
-  listen() failure exits non-zero; a node without host is skipped,
-  not fatal; documented `port:` key honoured.
-
-  [FIXED in 1.1.52] `make crate-hub` / `make install-hub` (httplib +
-  yaml-cpp + sqlite3 + OpenSSL), linked by lite CI on every push and
-  shipped in the release tarball; the 1.1.49 TLS branch did not
-  compile (SSLClient is not a Client) and is fixed; first end-to-end
-  run against a mock crated on Linux (all endpoints answer). Store
-  open failure reported before daemonising; `db_path:` config key;
-  `-V/--version`.
 
 * (LOW) hub/store.cpp shares one sqlite3 handle between the poller
   thread and the HTTP threads with no mutex and no busy_timeout; it
@@ -521,21 +224,6 @@ The bhyve/VM track is in TODO2.
 
 === 9. crate-snmpd ===
 
-  [FIXED in 1.1.50] no more 100 % CPU spin after the master closes the
-  socket: dispatchOnce drops the connection on EOF/error and main()
-  reconnects with 1→30 s backoff and re-registers; sessionId taken
-  from the Open Response header (RFC 2741 §7.1.1) instead of our own
-  transaction id; decodeOctetString rejects lengths that do not fit
-  (the (n+3) wrap read ~4 GB past the buffer); OID / OctetString /
-  SearchRange decoders honour the little-endian flag;
-  payload_length capped (MibPure::kMaxPayloadLen, 1 MiB) in both the
-  dispatcher and readResponse; full-length read/write helpers, write
-  return checked, SIGPIPE ignored; Response PDUs from the master are
-  not answered with a Response; only the root subtree is registered
-  (the two overlapping children were duplicateRegistration);
-  g_version 1.1.50 and port/Makefile PORTVERSION 1.1.50 (both said
-  0.8.48); `-i 0` rejected.
-
 * (MED) CRATE-MIB table and traps are not implemented but documented
   as the product: mib.cpp answers noSuchInstance for every non-scalar
   OID; resolveGetNext walks only 4 scalars; sendTrap only logs.
@@ -546,67 +234,20 @@ The bhyve/VM track is in TODO2.
   populated. Either implement the table + Notify PDUs or trim the MIB
   and README to the four scalars.
 
-  [FIXED in 1.1.52] one version source: VERSION → generated
-  lib/version.h (CRATE_VERSION) used by cli/args.cpp, snmpd/mib.cpp
-  and hub/main.cpp; `make check-version` checks port/Makefile
-  PORTVERSION and the CHANGELOG section; release.yml runs it.
-
 === 10. Carried over from the previous TODO ===
 
-  [FIXED in 1.1.51] run.cpp exception-path teardown order: the
-  network / lease / firewall RunAtEnd handlers are declared before
-  destroyJail so the reverse-declaration unwind matches the happy
-  path (jail → mounts → net → leases → fw-slot). Validate on a real
-  FreeBSD host (docs/on-hardware-validation.md).
-
-  [FIXED in 1.1.51] RunAtEnd handlers armed immediately after each
-  acquisition: releaseLease(6)AtEnd right after allocateFor,
-  destroyBridgeEpairAtEnd right after createBridgeEpair, new
-  destroyAutoBridgeAtEnd for an auto-created bridge whose setUp /
-  epair step fails. run_net.cpp createBridgeEpair / the extras loop
-  still leak one epairN pair when the *second* half of a single
-  attempt fails — LOW, FreeBSD-only to verify.
-
-  [FIXED in 1.1.46] network_lease / network_lease6 / spec_registry
-  lock a stable `<path>.lock` file instead of the renamed-over inode.
-
-  [FIXED in 1.1.36] jid→owner registry forget-by-name: destroy_jail
-  now resolves name→jid before the handler runs and forgets by jid;
-  stale rows are reconciled against live jails.
-
-  [FIXED in 1.1.51] `stack up` spawns each `crate run` detached
-  (spawnCrateRunDetached, like daemon/routes.cpp) and waits for the
-  jail to appear (waitForStackJail, 120 s) instead of running
-  in-process; ip_range bounds checked with inet_pton, reversed range
-  rejected.
-
-  [FIXED in 1.1.37] fd hygiene part 2: accept4(SOCK_CLOEXEC) on the
-  three hand-rolled listeners, FD_CLOEXEC on the httplib listening
-  sockets via set_socket_options.
-
-  [FIXED in 1.1.51] cron entries grouped by user, one crontab per
-  user (a `user:` on a later entry was ignored); crate.5 updated.
-
-  [FIXED in 1.1.37] connection-fd recv/send timeouts and a per-listener
-  concurrency cap on the privops and control-socket planes.
-
-  [FIXED in 1.1.51] privops_wire_pure escape() delegates to
-  JsonPure::escape; decoder handles \uXXXX (UTF-8, malformed kept as
-  text); round-trip test.
-
-  [FIXED in 1.1.51, LOW batch] execPipelineImpl fork() failure kills
-  and reaps children 0..i-1; jail_query.cpp root paths retry waitpid
-  on EINTR with an initialised status; run.cpp hcThread joined via
-  HcGuard (an execInJail throw no longer std::terminate()s past the
-  RunAtEnds); stack.cpp inet_pton results checked.
+* (LOW, left open by 1.1.51) validate the run.cpp exception-path
+  teardown order (network / lease / firewall RunAtEnd declared before
+  destroyJail) on a real FreeBSD host (docs/on-hardware-validation.md).
+* (LOW, left open by 1.1.51) run_net.cpp createBridgeEpair / the extras
+  loop still leak one epairN pair when the *second* half of a single
+  attempt fails — FreeBSD-only to verify.
 
 * (LOW batch, still open) daemon/routes.cpp:1014 import tmp file
   <name>.crate.tmp.<pid> is constant across threads (two concurrent
   imports of one name interleave; no fsync before rename); capture
   loops treat read()==-1 as EOF (EINTR); ws_console.cpp select() with
   fds >= FD_SETSIZE.
-
-  [FIXED in 1.1.52] hub/ha_pure isValidName uses NameLimits::kJailName.
 
 * (security, HIGH-if-reachable, latent) libvirt VM track
   (lib/vm_spec.cpp:97-184 generateDomainXml embeds name / disk /
@@ -618,32 +259,6 @@ The bhyve/VM track is in TODO2.
   XML-escape / validate every field BEFORE wiring it up.
 
 === 11. Build, CI, packaging ===
-
-  [FIXED in 1.1.34 / 1.1.52] freebsd-build-lite.yml smoke-runs the
-  built crate(1) as the unprivileged runner user and as root:
-  `--version` (compared with VERSION), `--help`, `validate
-  examples/nginx.yml`, `validate` on a missing file must fail.
-
-  [FIXED in 1.1.52] release tarball: sbin/crate-hub, man8 crated.8.gz
-  + crate-hub.8.gz, the hub web dir; no `|| true` on the copies;
-  `crate --version` and `crate-hub --version` checked against the tag;
-  the notes job checks the tag against VERSION and runs
-  `make check-version`.
-
-  [FIXED in 1.1.52] Makefile: `crate-hub` / `all-hub` / `install-hub`
-  targets (binary + web dir + man page); install-snmpd creates sbin;
-  install-daemon does not seed etc/crated.conf under DESTDIR.
-
-  [FIXED in 1.1.52] VERSION file → generated lib/version.h; `make
-  check-version` (port PORTVERSION, CHANGELOG section, no hard-coded
-  "crate X.Y.Z" left in cli/args.cpp).
-
-  [FIXED in 1.1.52] paths-ignore covers crated.8 / crate-hub.8 in both
-  Linux and lite workflows; lite "System info" has set -ex; full
-  workflow builds crated + crate-snmpd + crate-hub; sqlite3 in every
-  FreeBSD dependency list; port lists rang (BUILD_DEPENDS),
-  cpp-httplib (DAEMON/HUB) and sqlite3 (HUB); plist drops the stale
-  `@mode 04755` on bin/crate.
 
 * (MED) port/Makefile `do-test` runs `make test`, which needs kyua and
   the ATF libraries (devel/atf) — add them as TEST_DEPENDS or drop the
@@ -659,24 +274,6 @@ The bhyve/VM track is in TODO2.
 
 === 12. Documentation debt ===
 
-  [FIXED in 1.1.53] crate.5: all 31 commands; entries for healthcheck,
-  restart/restart_policy, depends, base_container, zfs/datasets,
-  limits/disk_quota, top-level x11:, gui compositor/backend/vnc_bind/
-  vnc_native, options wireguard/ipsec; new STACK FILES section (the
-  1.1.25 name/IP rules, 1.1.45 exact-name exec, 1.1.51 spawn/wait).
-  firewall-in-bridge-mode (1.1.38), deterministic MAC (1.1.38), VNC
-  exposure (1.1.48) and export share caveat (1.1.48) were already
-  updated in those releases.
-
-  [FIXED in 1.1.53] crate-snmpd.8 written and installed (Makefile,
-  plist, release tarball); crated.8 DELETE semantics; README command
-  list and snmpd paragraph; trust-model EN/UK gate range 1.1.12 →
-  1.1.43 and the §2a admin-start note; gui.cpp "runs as root" comments.
-  crate-hub.8 was rewritten in 1.1.49 (.Dd bumped 1.1.52);
-  examples/matrix/README.md `stack down` is correct since 1.1.45;
-  run.cpp "flushed at teardown" (destroyPfAnchor exists) and
-  clean.cpp:212 (pipes still not swept, see 7.) are accurate.
-
 * crated.8 AUTHENTICATION still says read endpoints are open to "any
   viewer or admin token holder" — true since 1.1.36, but the CAVEATS
   wording that unix-socket peers are all admin should point at the
@@ -688,25 +285,6 @@ The bhyve/VM track is in TODO2.
   "validate on a real FreeBSD host" note in sections 3, 4, 10.
 
 === 13. Test gaps (unit, pure modules) ===
-
-  [COVERED, audited 1.1.54] privops_pure create_jail `parameters`
-  tokens (1.1.35); authz Mount/Unmount/devfs unregistered targets,
-  AttachZfs jid, anchor and iface ownership (1.1.35-1.1.43); jid
-  registry reconciliation (1.1.36); backup_prune chains; import
-  `foo..bar`; retune parseHumanSize; lifecycle humanBytes 1023/1024/
-  UINT64_MAX; hub real envelope (1.1.49); snmpd length overflow,
-  little-endian, header/session decoding (1.1.50); inter-dns `_pid`
-  and comma-joined ip4.addr (1.1.48); spec enforce_statfs / vlan /
-  securelevel / duplicate keys / port ranges via SpecPure (1.1.46).
-
-  [FIXED in 1.1.54] throttle_pure jid bound; util_pure fileExists/
-  dirExists on a socket; auth_pure pin of the ws-console admin gate.
-
-  [FIXED in 1.1.56] iface_owner_registry_pure_test (1.1.43) and
-  mac_pure_test (1.1.44) were in the Makefile but not in
-  tests/unit/Kyuafile — built by every CI run, executed by none.
-  Registered; `make check-kyuafile` (a prerequisite of test/test-unit)
-  fails when a UNIT_TESTS entry is missing from the Kyuafile.
 
 * (MED) the tests link only the *_pure objects, so everything that
   lives in lib/spec.cpp (yaml-cpp) is untested at the parser level:
@@ -754,11 +332,6 @@ The bhyve/VM track is in TODO2.
   parent snapshots. Blocked on operator input: canonical layer
   sources, goal (disk vs cold-start vs hub bandwidth), interaction
   with the ZFS-send backup/replicate path and per-user ZFS prefixes.
-
-  [FIXED in 1.1.55] the bind→chmod race on crated.sock: bind under
-  umask 0077, chown/chmod, then accept (bind_to_port /
-  listen_after_bind); the perms fixup now also runs for the default
-  config (it used to be skipped when no listen.unix_* key was set).
 
 * (security) True getpeereid(2)-based unix-socket auth for the main
   HTTP API in crated. docs/getpeereid-main-api-refactor.md argues for
