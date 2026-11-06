@@ -1972,10 +1972,26 @@ void setIfaceOwnerRegistry(::IfaceOwnerRegistry *registry) {
   g_ifaceOwnerRegistry = registry;
 }
 
+// 1.1.70: the spawned `crate run` is crated's child for as long as its
+// jail lives. Nothing waited for it once the watch below ended — not
+// for a failed start (1.1.65 dropped the old poll's waitpid) and never
+// for a successful one — so every start/restart left a zombie behind.
+// The watch thread now blocks here until the supervisor exits. A pid
+// that was already reaped (Wait::ChildGone) gives ECHILD: done.
+static void reapCrateRun(long crateRunPid) {
+  int st = 0;
+  while (::waitpid((pid_t)crateRunPid, &st, 0) == -1 && errno == EINTR) {}
+}
+
 void registerSpawnedJailOwner(long crateRunPid, uint32_t ownerUid,
                               const std::string &container, int statusFd) {
-  if (!g_jidOwnerRegistry || crateRunPid <= 0) {
+  if (crateRunPid <= 0) {
     if (statusFd >= 0) ::close(statusFd);
+    return;
+  }
+  if (!g_jidOwnerRegistry) {
+    if (statusFd >= 0) ::close(statusFd);
+    std::thread([crateRunPid]() { reapCrateRun(crateRunPid); }).detach();   // 1.1.70
     return;
   }
   // A cold `crate run` extracts the image before jail_setv; give it
@@ -1995,10 +2011,11 @@ void registerSpawnedJailOwner(long crateRunPid, uint32_t ownerUid,
         std::cerr << "crated: container '" << container << "' started as pid "
                   << crateRunPid << " -> jail " << ev.get("name") << " (jid " << jid
                   << ") recorded for uid " << ownerUid << std::endl;
-        return;
+      } else {
+        std::cerr << "crated: container '" << container << "' (pid " << crateRunPid
+                  << "): " << StatusFd::describe(w, ev) << "; owner not recorded" << std::endl;
       }
-      std::cerr << "crated: container '" << container << "' (pid " << crateRunPid
-                << "): " << StatusFd::describe(w, ev) << "; owner not recorded" << std::endl;
+      reapCrateRun(crateRunPid);   // 1.1.70
     }).detach();
     return;
   }
@@ -2013,6 +2030,7 @@ void registerSpawnedJailOwner(long crateRunPid, uint32_t ownerUid,
           std::cerr << "crated: container '" << container << "' started as pid "
                     << crateRunPid << " -> jail " << j.name << " (jid " << j.jid
                     << ") recorded for uid " << ownerUid << std::endl;
+          reapCrateRun(crateRunPid);   // 1.1.70
           return;
         }
       } catch (const std::exception &e) {
@@ -2031,6 +2049,7 @@ void registerSpawnedJailOwner(long crateRunPid, uint32_t ownerUid,
     }
     std::cerr << "crated: container '" << container << "' (pid " << crateRunPid
               << "): no jail after " << kMaxProbes << " s; owner not recorded" << std::endl;
+    reapCrateRun(crateRunPid);   // 1.1.70
   }).detach();
 }
 

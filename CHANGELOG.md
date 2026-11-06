@@ -6,6 +6,70 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.70] — 2026-11-06
+
+**Regressions of 1.1.65–1.1.69 and a teardown crash: a plain `crate
+run` no longer dies with SIGSEGV after its jail is removed, warm-base
+runs stop leaking ZFS clones, `crate clean` keeps warm-base registry
+entries, a stack with NAT members starts again, and crated reaps the
+`crate run` processes it spawns.**
+
+- **`crate run` crashed at the end of every successful run without
+  x11/gui** (`lib/util.cpp`). `RunAtEnd::doNow()` dereferenced the
+  handle unconditionally, and the success path calls it on handles that
+  are armed only in some configurations: `killXephyrAtEnd` without
+  x11/gui, `destroyJailDir` for a `--warm-base` run,
+  `destroyAutoBridgeAtEnd` when the bridge already existed, the
+  fw-slot / fw-lease pair of root and rootless NAT runs. The process
+  died right after the jail was removed, before the unmounts, the
+  network teardown and the jail directory removal (and before
+  `teardown_done` on a `--status-fd` stream). An unarmed handle is now
+  a no-op.
+- **Every `--warm-base` run since 1.1.69 left its ZFS clone and the
+  `@warm-run` snapshot behind** (`lib/run.cpp`). The 1.1.69 DirLock
+  holds a descriptor on the clone's root directory, so the unmount
+  inside `zfs destroy` got EBUSY, and the failure was swallowed. The
+  lock is released first; a failed destroy is now a warning.
+- **`crate clean` deleted every warm-base registry entry**
+  (`lib/clean.cpp`). The orphan sweep stat()ed the entry's `.crate`
+  path, which a `<name> warm-base=<dataset>` entry (1.1.69) does not
+  have. A warm-base entry is now kept while `zfs list` finds its
+  dataset. New `SpecRegistryPure::targetOf` for the messages.
+- **`crate stack up` stopped on any NAT member of a stack with a pool**
+  (`lib/stack.cpp`, `lib/stack_pure`, `lib/stack_spec`). 1.1.68 made the
+  pool address actually reach the member, but handed one to every
+  member with a net option; `Spec::validate` refuses a static `ip` in NAT
+  mode, so the stack failed at the first such member (before 1.1.68 the
+  address was silently lost and advertised in hosts/DNS for a jail that
+  never held it). A pool address now goes only to a member in bridge
+  mode (or `auto`) on that network's bridge that sets no `options/net/ip`
+  of its own (`StackPure::poolEligible`); every member left without an
+  address gets a warning and stays out of the stack's hosts/DNS. The
+  prefix and gateway come from the network the address was drawn from
+  (it was the first network with a subnet / a gateway). The members'
+  networks are read from one template-merged YAML base per member,
+  loaded before anything starts (`StackSpec::netInfo`, vars
+  substituted), which also replaces the Spec-level `mergeSpecs` that
+  `collectContainerIPs` used for static addresses.
+- **crated left a zombie for every `crate run` it spawned**
+  (`daemon/privops_handlers.cpp`). Since 1.1.65 the start watch read
+  the status stream and ended without `waitpid` — for a failed start
+  (the old jls poll used to reap it) and, as before, for a successful
+  one. The watch thread now waits for the supervisor to exit.
+- crate.5 (STACK FILES: who draws from `ip_range`), README en/uk, runbook
+  §4m; TODO §4 gains the open design question of putting NAT /
+  bridge-less members on the stack bridge.
+
+Tests: `stack_test` (+1: pool eligibility for NAT, bridge, auto, another
+bridge, own `ip`, passthrough/netgraph), `spec_registry_pure_test` (+1:
+`targetOf`). `RunAtEnd` lives in `lib/util.cpp`, which the Linux tests do
+not link; the crash was reproduced on a copy of the class and the fix is
+runbook §4m. `StackSpec::netInfo` was exercised with a scratch harness
+on `examples/postgres.yml`, `examples/matrix-synapse.yml` and synthetic
+bridge / auto / dhcp / vars specs.
+
+---
+
 ## [1.1.69] — 2026-10-28
 
 **TODO §7 MED, all six items: backup/replicate chains that survive a

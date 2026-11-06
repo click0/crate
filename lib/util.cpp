@@ -82,7 +82,15 @@ void RunAtEnd::reset(const std::function<void()> &newFnAction) {
 }
 
 void RunAtEnd::doNow() {
-  get()->doNow();
+  // 1.1.70: a handle that was never armed is a no-op. The success path of
+  // `crate run` calls doNow() on handles that are armed only in some
+  // configurations (killXephyrAtEnd without x11/gui, destroyJailDir for a
+  // --warm-base run, destroyAutoBridgeAtEnd for an existing bridge, the
+  // fw-slot / fw-lease pair, ...): get() was null and every such run died
+  // with SIGSEGV right after the jail was removed, skipping the unmounts,
+  // the network teardown and the jail directory removal.
+  if (auto *p = get())
+    p->doNow();
 }
 
 

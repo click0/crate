@@ -2,6 +2,7 @@
 
 #include "stack_spec.h"
 #include "profile.h"   // Profile::mergeYaml — the same merge a profile's .local gets
+#include "spec_pure.h" // 1.1.70: substituteVars for netInfo
 #include "err.h"
 
 #include <unistd.h>
@@ -56,6 +57,39 @@ bool hasStaticIp(const YAML::Node &spec) {
 static bool hasGateway(const YAML::Node &spec) {
   const auto net = netDetails(spec);
   return net.IsDefined() && net.IsMap() && net["gateway"].IsDefined() && !net["gateway"].IsNull();
+}
+
+NetInfo netInfo(const YAML::Node &specIn, const std::map<std::string, std::string> &vars) {
+  NetInfo out;
+  if (!specIn.IsDefined() || !specIn.IsMap()) return out;
+  YAML::Node spec = specIn;
+  if (!vars.empty()) {
+    YAML::Emitter em;
+    em << specIn;
+    try {
+      spec = YAML::Load(SpecPure::substituteVars(em.c_str() ? em.c_str() : "", vars));
+    } catch (const YAML::Exception &e) {
+      ERR("the member spec does not parse after variable substitution: " << e.what())
+    }
+  }
+  out.hasNet = hasNetOption(spec);
+  if (!out.hasNet) return out;
+  auto scalarAt = [](const YAML::Node &n, const char *key) -> std::string {
+    if (!n.IsDefined() || !n.IsMap()) return "";
+    const auto v = n[key];
+    return v.IsDefined() && v.IsScalar() ? v.as<std::string>() : std::string();
+  };
+  const auto net = netDetails(spec);
+  out.mode = scalarAt(net, "mode");
+  if (out.mode.empty()) {
+    const auto top = spec["network"];
+    out.mode = (top.IsDefined() && top.IsScalar() && top.as<std::string>() == "auto") ? "auto" : "nat";
+  }
+  out.bridge = scalarAt(net, "bridge");
+  const auto ip = scalarAt(net, "ip");
+  out.ipSet = !ip.empty();
+  if (out.ipSet && ip != "dhcp" && ip != "none") out.staticIp = ip;
+  return out;
 }
 
 // The parser accepts a scripts section as a scalar, a list of lines, a

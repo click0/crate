@@ -117,6 +117,13 @@ The bhyve/VM track is in TODO2.
 * (LOW) network_policy: a rule whose `proto` is omitted produces an
   ipfw syntax error at addRule (now cleaned up, but still fails the
   stack); validate rule.proto at parse.
+* (LOW, left open by 1.1.70) a stack never puts a member ON its bridge:
+  only a spec that already says `options/net: {mode: bridge, bridge:
+  <stack bridge>}` gets a pool address (StackPure::poolEligible); a
+  NAT member or a `network: auto` one without `bridge:` is warned about
+  and left out of the stack's hosts/DNS. Injecting mode + bridge for
+  such members (a `containers/<name>/network: <net>` key?) is a design
+  decision, not a fix.
 
 === 5. Spec parsing, config, registries ===
 
@@ -410,10 +417,9 @@ Landlock, --restrict-namespaces.
   the template dirs, path relative to the stack file). Found on the
   way: the pool address never reached a member, so a stack with
   `ip_range` had /etc/hosts and network_policy rules naming addresses
-  no jail held. Leftovers: `collectContainerIPs` still reads the
-  static IP through the Spec-level mergeSpecs (read-only, same
-  result); the composed file could be kept next to `<name>.crate` for
-  inspection (`--keep-specs`); runbook §4k is the first real run.
+  no jail held. Leftovers: the composed file could be kept next to
+  `<name>.crate` for inspection (`--keep-specs`); runbook §4k is the
+  first real run.
 
 * DONE 1.1.60 — `crate profile-from-trace [-o spec] -- <cmd>`
   (lib/trace_pure, lib/trace). Decisions taken: the program runs on

@@ -66,6 +66,10 @@ std::string validatePath(const std::string &p);
 // path) or warmBase (a valid ZFS dataset name) must be set.
 std::string validateEntry(const Entry &e);
 
+// 1.1.70: what the entry points at, for messages: the .crate path, or
+// "warm-base=<dataset>" (the same text as the line's second field).
+std::string targetOf(const Entry &e);
+
 // --- File format ---
 
 // Parse one registry line "<name> <path>". Returns "" on success.

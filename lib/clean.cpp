@@ -316,15 +316,33 @@ bool cleanCrates(const Args &args) {
     try {
       auto entries = SpecRegistry::readAll();
       for (const auto &e : entries) {
-        struct stat sb;
-        if (::stat(e.cratePath.c_str(), &sb) == 0) continue;  // file still there
+        // 1.1.70: a warm-base entry (1.1.69) has no file — its target is
+        // the template dataset. stat("") failed for every such entry, so
+        // each `crate clean` deleted them all and `crate restart` of a
+        // --warm-base container lost its record.
+        bool present = false;
+        if (!e.warmBase.empty()) {
+          try {
+            Util::execCommandGetOutput({CRATE_PATH_ZFS, "list", "-H", "-o", "name", e.warmBase},
+                                       "check the warm-base dataset of a registry entry");
+            present = true;
+          } catch (...) {
+            present = false;   // `zfs list` fails for a dataset that no longer exists
+          }
+        } else {
+          struct stat sb;
+          present = ::stat(e.cratePath.c_str(), &sb) == 0;
+        }
+        if (present) continue;
+        const auto target = SpecRegistryPure::targetOf(e);
+        const char *gone = e.warmBase.empty() ? "file" : "dataset";
         if (dryRun) {
           std::cout << "  [dry-run] would remove registry entry: "
-                    << e.name << " -> " << e.cratePath
-                    << " (file no longer exists)" << std::endl;
+                    << e.name << " -> " << target
+                    << " (" << gone << " no longer exists)" << std::endl;
         } else {
           std::cout << "  removing registry entry: "
-                    << e.name << " -> " << e.cratePath << std::endl;
+                    << e.name << " -> " << target << " (" << gone << " no longer exists)" << std::endl;
           try {
             SpecRegistry::remove(e.name);
             cleaned++;
