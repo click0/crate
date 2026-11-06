@@ -1035,8 +1035,19 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
       unsigned rs = DevicesPure::rulesetNumberFor((long)::getpid());
       try {
         if (!sock.empty()) {
-          auto resp = PrivOpsClient::sendRequest(sock,
-              PrivOpsClient::buildApplyDevfsRules(devMount, rs, rules));
+          // 1.1.70: crated refuses a number another live jail uses (two
+          // pids 50000 apart, a leftover set) — step to the next one.
+          PrivOpsClient::Response resp;
+          for (unsigned attempt = 0; attempt < 32; attempt++) {
+            resp = PrivOpsClient::sendRequest(sock,
+                PrivOpsClient::buildApplyDevfsRules(devMount, rs, rules));
+            if (resp.transportError.empty() && resp.status == 403 &&
+                resp.body.find("devfs ruleset") != std::string::npos) {
+              rs = DevicesPure::nextRulesetNumber(rs);
+              continue;
+            }
+            break;
+          }
           if (!resp.transportError.empty())
             ERR("privops apply_devfs_rules transport error: " << resp.transportError)
           if (resp.status >= 400)
@@ -1085,6 +1096,30 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
     jailEnv = jailEnv + var + '=' + val;
   };
   setJailEnv("CRATE", "yes");
+
+  // 1.1.63: one `tmpfs:` entry. Inside the user's home the tmpfs belongs
+  // to the user (0700), else to root with the sticky 01777 of a shared
+  // /tmp. Root: nmount(2); rootless: the mount_tmpfs privops verb,
+  // path-gated by the target.
+  auto mountSpecTmpfs = [&](const Spec::Tmpfs &t, const std::string &p) {
+    Util::safePath(J(p), jailPath, "tmpfs mount point");
+    std::filesystem::create_directories(J(p));
+    auto *m = new Mount("tmpfs", J(p), "", MNT_IGNORE);
+    const bool underHome = !homeDir.empty() && MountsPure::isUnder(p, homeDir);
+    for (auto &kv : MountsPure::tmpfsParams(t.size, underHome, (unsigned)myuid, (unsigned)mygid))
+      m->addParam(kv.first, kv.second);
+    mount(m);
+    LOG("tmpfs: " << p << (t.size.empty() ? "" : " (size " + t.size + ")") << (underHome ? " owned by the user" : ""))
+  };
+  // 1.1.70: a tmpfs at or above the directories the X11 setup below
+  // mounts the host's sockets into (/tmp/.X11-unix, /tmp/wayland) goes
+  // first. Mounted after the shares like the others, `tmpfs: [/tmp]` of
+  // the firefox / chromium profiles landed on top of the X11 socket.
+  for (auto &t : spec.tmpfs) {
+    const auto p = Util::pathSubstituteVarsInPath(t.path);
+    if (MountsPure::tmpfsMountedBeforeGui(p))
+      mountSpecTmpfs(t, p);
+  }
 
   // turn options on — X11 with mode support (§11)
   RunAtEnd killXephyrAtEnd = RunGui::setupX11(spec, jailPath, jailXname, mounts, setJailEnv, args.logProgress);
@@ -1246,8 +1281,15 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
 
   runScript("run:after-create-jail");
   LOG("jail " << jailXname << " has been created, jid=" << jid)
+  // 1.1.70: the name the kernel actually has. The privops path creates
+  // the jail as jailXname; the root path (jail_setv without "name")
+  // leaves it to the kernel, which names it by its jid — the event used
+  // to report jailXname there, a name no jail had.
+  std::string kernelName = jailXname;
+  if (auto created = JailQuery::getJailByJid(jid); created && !created->name.empty())
+    kernelName = created->name;
   status.emit(StatusPure::kJailCreated, {StatusPure::num("jid", jid),
-                                         StatusPure::str("name", jailXname),
+                                         StatusPure::str("name", kernelName),
                                          StatusPure::str("path", jailPath)});
 
   // 1.1.5: securelevel + children.max are applied at jail creation
@@ -2262,19 +2304,11 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
 
   // 1.1.63: tmpfs mounts (`tmpfs:`), after the shares so a tmpfs listed
   // above a share is what the spec asked for (crate validate warns).
-  // Inside the user's home the tmpfs belongs to the user (0700), else
-  // to root with the sticky 01777 of a shared /tmp. Root: nmount(2);
-  // rootless: the mount_tmpfs privops verb, path-gated by the target.
+  // (1.1.70: the ones over the GUI socket dirs went in before setupX11.)
   for (auto &t : spec.tmpfs) {
     const auto p = Util::pathSubstituteVarsInPath(t.path);
-    Util::safePath(J(p), jailPath, "tmpfs mount point");
-    std::filesystem::create_directories(J(p));
-    auto *m = new Mount("tmpfs", J(p), "", MNT_IGNORE);
-    const bool underHome = !homeDir.empty() && MountsPure::isUnder(p, homeDir);
-    for (auto &kv : MountsPure::tmpfsParams(t.size, underHome, (unsigned)myuid, (unsigned)mygid))
-      m->addParam(kv.first, kv.second);
-    mount(m);
-    LOG("tmpfs: " << p << (t.size.empty() ? "" : " (size " + t.size + ")") << (underHome ? " owned by the user" : ""))
+    if (!MountsPure::tmpfsMountedBeforeGui(p))
+      mountSpecTmpfs(t, p);
   }
   status.emit(StatusPure::kMountsReady);
 

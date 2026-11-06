@@ -99,6 +99,8 @@ Crate containers contain everything needed to run the containerized software —
 | `crate gui list\|focus\|attach\|url\|tile\|screenshot\|resize` | GUI session manager |
 | `crate top` | Live, htop-style resource monitor across all running containers (1 Hz; `q` to quit) |
 
+`TARGET` is the jail name `crate list` shows (`firefox_pid4242`), the jail id, or the container name the jail was started under (`firefox`: the `.crate` file name or `--name`). Since 1.1.70 every command, the control socket and the HTTP API accept all three; a container name more than one running jail carries is refused. `crate restart` and the daemons' restart look up what to start by container name before stopping anything, so a container with nothing recorded keeps running.
+
 ## Quick Start
 
 ```sh
@@ -651,7 +653,7 @@ etc:
     keep: [localtime, hosts, ssl]             # host /etc entries copied into the jail's /etc at create
 ```
 
-A file share is a hard link or a copy and cannot be read-only — share its directory with `:ro`. tmpfs mounts come after the shares (a tmpfs above a share hides it; `crate validate` warns) and are refused on `/`, `/dev`, `/proc`, `/etc`, `/bin`, `/sbin`, `/lib`, `/libexec`, `/usr`, `/usr/local` and `/var/run`. The jail's `/etc` is the pristine one from base.txz — `etc/keep` is the way to carry the host's timezone, hosts file or certificate directory along (firejail's `--private-etc`, inverted); `resolv.conf` is written by `crate run` when the spec has networking. Stack volumes with `:ro` now reach the mount as read-only too. Under rootless the tmpfs goes through the new `mount_tmpfs` privops verb, path-gated like `mount_nullfs`.
+A file share is a hard link or a copy and cannot be read-only — share its directory with `:ro`. tmpfs mounts come after the shares (a tmpfs above a share hides it; `crate validate` warns) — except one at or above the GUI socket directories (`/tmp`), which since 1.1.70 goes in before the X11 setup and the shares, so `tmpfs: [/tmp]` in the firefox and chromium profiles no longer hides the X11 socket — and are refused on `/`, `/dev`, `/proc`, `/etc`, `/bin`, `/sbin`, `/lib`, `/libexec`, `/usr`, `/usr/local` and `/var/run`. The jail's `/etc` is the pristine one from base.txz — `etc/keep` is the way to carry the host's timezone, hosts file or certificate directory along (firejail's `--private-etc`, inverted); `resolv.conf` is written by `crate run` when the spec has networking. Stack volumes with `:ro` now reach the mount as read-only too. Under rootless the tmpfs goes through the new `mount_tmpfs` privops verb, path-gated like `mount_nullfs`.
 
 ## Lifecycle stream and `run/timeout`
 
@@ -672,7 +674,7 @@ crate run --status-fd 3 -f nginx.crate 3>nginx.status.jsonl
 {"event":"teardown_done","ts":1761303605}
 ```
 
-A run that fails before the command ran ends with `failed` (with the error text) and `teardown_done`. Values are flat strings, integers and booleans; `ip` appears when the address is known. `crate stack up` and `crated` start containers over such a pipe and read it until `jail_created` instead of polling `jls` for the jail to appear, so a member that fails to start says why.
+A run that fails before the command ran ends with `failed` (with the error text) and `teardown_done`; a stream carries exactly one of `exited` and `failed` (1.1.70: an error after the command exited goes to stderr only). Values are flat strings, integers and booleans; `ip` appears when the address is known. `crate stack up` and `crated` start containers over such a pipe and read it until `jail_created` instead of polling `jls` for the jail to appear, so a member that fails to start says why.
 
 What a stack adds to a `spec:` member — its `template`, the pool address, the `/etc/hosts` and `resolv.conf` scripts, the named `volumes` — is composed into the member's spec file before the build, so it is what the archived `+CRATE.SPEC` holds and what the member's `crate run` executes (until 1.1.68 the member ran its bare spec). A template given by name is found like `crate create --template` finds it. `${KEY}` placeholders stay in the archive; `crate run --var KEY=VALUE` substitutes them when it reads the spec. A pool address (`ip_range`) goes only to a member in bridge mode on that network's bridge that sets no `ip` of its own; a NAT member cannot hold one, and `stack up` warns about every member left without an address (1.1.70).
 

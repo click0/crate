@@ -1,10 +1,12 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "run_pure.h"
+#include "runtime_paths_pure.h"   // 1.1.70: containerNameOfJail
 #include "util.h"   // Util::shellQuote, Util::toUInt, Util::filePathToBareName
 #include "name_limits.h"
 #include "warm_pure.h"
 
+#include <cctype>
 #include <cstdlib>
 #include <sstream>
 #include <string>
@@ -66,6 +68,32 @@ bool jailXnameHasPid(const std::string &jailName, long pid) {
   const std::string suffix = jailXnamePidSuffix(pid);
   if (jailName.size() <= suffix.size()) return false;   // needs a non-empty <name>
   return jailName.compare(jailName.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+std::string containerNameOf(const std::string &jailName) {
+  static const std::string kTag = "_pid";
+  const size_t at = jailName.rfind(kTag);
+  if (at == std::string::npos || at == 0) return jailName;
+  const size_t digits = at + kTag.size();
+  if (digits >= jailName.size()) return jailName;
+  for (size_t i = digits; i < jailName.size(); i++)
+    if (jailName[i] < '0' || jailName[i] > '9') return jailName;
+  return jailName.substr(0, at);
+}
+
+std::string containerNameOfJail(const std::string &jailName, const std::string &jailPath) {
+  const std::string byName = containerNameOf(jailName);
+  if (byName != jailName) return byName;
+  // "jail-<name>-<hex>": `crate run` appends Util::randomHex(4), 8 hex digits
+  const std::string dir = RuntimePathsPure::crateJailDirName(jailPath);
+  const size_t kHex = 8;
+  if (dir.size() > 5 + 1 + kHex && dir[dir.size() - kHex - 1] == '-') {
+    bool hex = true;
+    for (size_t i = dir.size() - kHex; i < dir.size(); i++)
+      if (!std::isxdigit((unsigned char)dir[i])) { hex = false; break; }
+    if (hex) return dir.substr(5, dir.size() - 5 - kHex - 1);
+  }
+  return jailName;
 }
 
 bool epairUnit(const std::string &ifname, unsigned &unitOut) {

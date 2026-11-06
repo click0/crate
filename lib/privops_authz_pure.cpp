@@ -89,6 +89,20 @@ Decision checkOwnedIface(const std::string &ifname, const PerUserEnvPure::Env &e
   return o.uid == env.uid ? Decision::Allow : Decision::DenyForeignIface;
 }
 
+// 1.1.70: apply_devfs_rules deletes the named set and refills it. Before
+// this check a tenant could name ruleset 4 (devfsrules_jail, which every
+// jail(8)-made jail includes) or another tenant's private set and unhide
+// whatever it liked there. Only a private-range number that no live jail
+// of someone else uses is allowed.
+Decision checkOwnedDevfsRuleset(unsigned ruleset, const PerUserEnvPure::Env &env,
+                                const OwnerLookup &lookup) {
+  if (!isPrivateDevfsRuleset(ruleset)) return Decision::DenyForeignDevfsRuleset;
+  if (!lookup.byDevfsRuleset) return Decision::Allow;
+  Owner o = lookup.byDevfsRuleset(ruleset);
+  if (!o.known) return Decision::Allow;
+  return o.uid == env.uid ? Decision::Allow : Decision::DenyForeignDevfsRuleset;
+}
+
 Decision checkOwnedName(const std::string &name,
                         const PerUserEnvPure::Env &env,
                         const OwnerLookup &lookup) {
@@ -260,10 +274,27 @@ Decision authorize(PrivOpsPure::Verb v,
     // in the registry).
     case V::UnmountNullfs:
     case V::ApplyDevfsRuleset:
-    case V::AddDevfsUnhideRule:
-    case V::ApplyDevfsRules:   // 1.1.62
     case V::MountTmpfs:        // 1.1.63 (by "target", like unmount_nullfs)
       return checkOwnedPath(req.path, env, lookup);
+
+    // 1.1.62 verb, 1.1.70 gate: the mount_path as above AND the ruleset
+    // being rewritten (see checkOwnedDevfsRuleset).
+    case V::ApplyDevfsRules: {
+      Decision d = checkOwnedPath(req.path, env, lookup);
+      if (d != Decision::Allow) return d;
+      return checkOwnedDevfsRuleset(req.devfsRuleset, env, lookup);
+    }
+
+    // 1.1.70: `devfs -m <mount> rule add …` writes into whatever ruleset
+    // the mount currently uses — after apply_devfs_ruleset 4 that is the
+    // host's shared devfsrules_jail. crate(1) has filled a private set
+    // with apply_devfs_rules since 1.1.62; a per-user caller no longer
+    // gets this verb.
+    case V::AddDevfsUnhideRule: {
+      Decision d = checkOwnedPath(req.path, env, lookup);
+      if (d != Decision::Allow) return d;
+      return Decision::DenyDevfsSharedRuleset;
+    }
 
     // 1.1.17: mount_nullfs gates BOTH ends — the target (must be inside
     // an owned jail, like 1.1.14) AND the source (must not reach into
@@ -350,8 +381,17 @@ const char *decisionReason(Decision d) {
       return "interface is an epair half created by a different operator";
     case Decision::DenyHostIface:
       return "interface is not an epair half; host interfaces cannot be named by a per-user caller";
+    case Decision::DenyForeignDevfsRuleset:
+      return "devfs ruleset is outside the private range 10000..59999 or in use by another jail";
+    case Decision::DenyDevfsSharedRuleset:
+      return "add_devfs_unhide_rule edits the devfs ruleset the mount uses, which other jails may share; "
+             "use apply_devfs_rules with a private ruleset";
   }
   return "deny";
+}
+
+bool isPrivateDevfsRuleset(unsigned ruleset) {
+  return ruleset >= kPrivateDevfsRulesetMin && ruleset <= kPrivateDevfsRulesetMax;
 }
 
 } // namespace PrivOpsAuthzPure

@@ -137,6 +137,10 @@ void runJailSession(int wsFd, int jid) {
   }
   std::string slaveNameCopy(slaveName);
 
+  // 1.1.70: built before fork() — the child of a threaded daemon must not
+  // allocate.
+  const std::string jidStr = std::to_string(jid);
+
   pid_t pid = ::fork();
   if (pid < 0) {
     ::close(master);
@@ -154,10 +158,13 @@ void runJailSession(int wsFd, int jid) {
     ::dup2(slave, 1);
     ::dup2(slave, 2);
     if (slave > 2) ::close(slave);
+    // 1.1.70: the shell gets the pty and nothing else of crated's — the
+    // other request threads' sockets and files, a library's descriptors.
+    ::closefrom(STDERR_FILENO + 1);
 
     // Use jexec(8) — same path as crate console — so we don't need
     // to link the daemon against libjail's jail_attach() here.
-    ::execl(CRATE_PATH_JEXEC, "jexec", std::to_string(jid).c_str(),
+    ::execl(CRATE_PATH_JEXEC, "jexec", jidStr.c_str(),
             "/bin/sh", "-i", (char*)nullptr);
     ::_exit(127);
   }

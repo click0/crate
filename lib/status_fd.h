@@ -36,11 +36,16 @@ public:
   // Write one line. A consumer that went away (EPIPE) silently
   // disables the writer; SIGPIPE is blocked around the write so a
   // closed pipe never kills the jail's supervisor. Thread-safe.
+  // 1.1.70: at most ONE terminal event (exited / failed) per stream. A
+  // run whose post-exec phase (run:after-execute, stopping services,
+  // rc.shutdown) threw used to write `exited` and then `failed`; a later
+  // terminal event is now dropped — the error still reaches stderr.
   void emit(const std::string &event, const std::vector<StatusPure::Field> &fields = {});
 
 private:
   int fd_;
   std::mutex mu_;
+  bool terminalSent_ = false;   // 1.1.70
 };
 
 // A detached `crate run` child with the read end of its status pipe.
@@ -50,12 +55,13 @@ struct Spawned {
   int statusFd = -1;
 };
 
-// fork + setsid + stdio to /dev/null + execv(CRATE_PATH_CRATE, "crate",
-// "run", <runArgs...>, "--status-fd", "3"), with the pipe's write end as
-// fd 3 in the child. The parent gets the read end (close-on-exec).
+// fork + setsid + stdio to /dev/null + execv(CRATE_PATH_CRATE,
+// StatusPure::crateRunArgv(runArgs, logProgress)), with the pipe's write
+// end as fd 3 in the child. The parent gets the read end (close-on-exec).
 // `runArgs` is everything after `run` (e.g. {"-f", file}); the caller
-// closes statusFd (waitForJail does).
-Spawned spawnCrateRun(const std::vector<std::string> &runArgs);
+// closes statusFd (waitForJail does). 1.1.70: `logProgress` puts the
+// global --log-progress before `run`, where the parser takes it.
+Spawned spawnCrateRun(const std::vector<std::string> &runArgs, bool logProgress = false);
 
 enum class Wait {
   JailCreated,   // `out` is the jail_created event (jid, name, path)

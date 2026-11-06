@@ -8,11 +8,107 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [1.1.70] — 2026-11-06
 
-**Regressions of 1.1.65–1.1.69 and a teardown crash: a plain `crate
-run` no longer dies with SIGSEGV after its jail is removed, warm-base
-runs stop leaking ZFS clones, `crate clean` keeps warm-base registry
-entries, a stack with NAT members starts again, and crated reaps the
-`crate run` processes it spawns.**
+**The bug hunt's HIGH findings and the regressions of 1.1.65–1.1.69:
+no host descriptor reaches a jail any more, a tenant can no longer
+rewrite a shared or foreign devfs ruleset, `backup-prune` stops deleting
+other jails' backups, the HTTP export packs only the container,
+`restart` / `stop` / `start` find a container by the name it was started
+under, the firefox and chromium profiles open a window again — and a
+plain `crate run` no longer dies with SIGSEGV after its jail is removed,
+warm-base runs stop leaking ZFS clones, `crate clean` keeps warm-base
+registry entries, a stack with NAT members starts again, `crate -p stack
+up` starts its members, and crated reaps the `crate run` processes it
+spawns.**
+
+- **Host descriptors leaked into every jail** (`lib/ifconfig_ops.cpp`,
+  `lib/util.cpp`, `lib/jail_query.cpp`, `daemon/ws_console.cpp`,
+  `lib/status_fd.cpp`). The cached ioctl socket of `IfconfigOps` — a
+  UDP socket in the host's network stack, alive for the whole life of
+  crated and `crate run` — had no close-on-exec, and the exec helpers
+  passed every descriptor on: jexec'ed `/etc/rc`, ifconfig, ws-console
+  shells and `jail_attach`ed commands inherited it, so a tenant process
+  could send from the host stack past the jail's firewall (libifconfig's
+  own sockets, other request threads' files, the same). The socket gets
+  `SOCK_CLOEXEC`; the children of `Util::execCommand*`, `execPipeline`,
+  `JailExec::execInJail*` / `spawnInJail` and the ws-console shell close
+  everything above stderr before exec, and the supervisor crated starts
+  keeps only stdio and its status pipe. The ws-console and status-pipe
+  children no longer allocate between fork and exec.
+- **A tenant could rewrite any devfs ruleset** (`lib/privops_authz_pure`,
+  `daemon/privops_handlers.cpp`, `lib/run.cpp`, `lib/devices_pure`).
+  `apply_devfs_rules` runs `devfs rule -s N delset` and refills N; the
+  gate checked only the mount path, so a per-user caller could name
+  ruleset 4 (devfsrules_jail, which every jail(8)-made jail uses) or
+  another tenant's private set and unhide whatever it liked there.
+  Now N must lie in the private range 10000..59999 and must not be in
+  use by a live jail of another operator: crated records which caller —
+  root included — filled which set for which mount (a claim lasts while
+  that devfs is mounted; after that the number is free again), and a set
+  it never recorded counts as taken while it holds rules (a root run
+  without the socket, an operator's jail.conf, a set from before a
+  daemon restart) — `DenyForeignDevfsRuleset`. `crate run` steps to the next
+  number when crated refuses one (`DevicesPure::nextRulesetNumber`).
+  `add_devfs_unhide_rule`, which writes into whatever set the mount uses
+  (after `apply_devfs_ruleset 4`: the shared one), is refused to
+  per-user callers (`DenyDevfsSharedRuleset`); crate(1) has not sent it
+  since 1.1.62.
+- **`backup-prune` without `--jail` deleted other jails' backups**
+  (`lib/backup_prune_pure`). The retention buckets spanned the whole
+  directory, so `daily=1` kept the newest stream of one jail and removed
+  every other jail's fulls; an incremental of jail B whose base suffix
+  matched a kept full of jail A counted as based. The policy now applies
+  to each jail on its own (`explainKeeps` too). Streams of jails with
+  65..128-character names (`crate backup` accepts `NameLimits::kJailName`)
+  were never pruned: the parser stopped at 64.
+- **The HTTP export carried host files** (`daemon/routes.cpp`).
+  `POST /api/v1/containers/:name/export` ran `tar` without
+  `--one-file-system` (the CLI export has had it since 1.1.48), so the
+  archive held everything nullfs-mounted into the jail — shares, the
+  X11 socket directory, a read-only base — plus devfs and tmpfs. Paths
+  from `pathnames.h` now.
+- **`crate restart` never worked; the daemons' start / restart missed
+  running containers** (`lib/jail_query`, `lib/run_pure`,
+  `lib/lifecycle.cpp`, `daemon/control_socket.cpp`, `daemon/routes.cpp`).
+  The kernel jail name carries the pid of the run that made it
+  (`web_pid4242`) — or, on the root path, is the jid — while the spec
+  registry, `/var/run/crate/<name>.crate` and the control socket's start
+  speak container names (`web`). `crate restart web_pid4242` stopped the
+  container and then found nothing to start; the control socket's start
+  of `web` spawned a second instance next to the running one and its
+  restart answered 404; the HTTP restart killed the container and then
+  404'd. `JailQuery::findContainer` resolves a target as kernel name,
+  jid or container name (`RunPure::containerNameOf` /
+  `containerNameOfJail`, which reads the name off the jail directory for
+  a root-path jail; a name more than one running jail carries is refused,
+  409 on the sockets), and the HTTP routes check the pool of the jail a
+  jid or container name resolved to as well. Restart in all three places
+  looks up what to start by container name BEFORE stopping — the CLI
+  used to stop first and give up after — and the HTTP restart goes
+  through `stopCrate` like DELETE; the HTTP start also consults the root
+  spec registry. Every CLI target (`info`, `console`, `export`, `stats`,
+  `logs`, `stop`, `inspect`, `audit`, `throttle`, `retune`, `update`,
+  `template warm`) takes the three forms.
+- **`tmpfs: [/tmp]` hid the X11 socket of the firefox and chromium
+  profiles** (`lib/run.cpp`, `lib/mounts_pure`, `lib/validate_pure.cpp`).
+  The 1.1.63 tmpfs mounts came after the shares, long after the X11
+  setup had nullfs-mounted the host's `/tmp/.X11-unix` (and the Wayland /
+  PulseAudio sockets under `/tmp/wayland`) into the jail, and landed on
+  top of them. A tmpfs at or above those directories
+  (`MountsPure::tmpfsMountedBeforeGui`) is now mounted before the X11
+  setup; `crate validate` no longer says it hides the shares under it.
+- **`crate -p stack up` started no member** (`lib/stack.cpp`,
+  `lib/status_fd`, `lib/status_pure`). 1.1.65 passed `--log-progress`
+  after `run`, where the parser refuses the global option, so every
+  member's run exited at once. `StatusPure::crateRunArgv` puts it first.
+- **A `--status-fd` stream could carry two terminal events**
+  (`lib/status_fd`). A run whose post-exec phase (`run:after-execute`,
+  stopping services, rc.shutdown) threw wrote `exited` and then
+  `failed`; the writer now lets only the first terminal event through.
+- **`jail_created` named a jail that did not exist on the root path**
+  (`lib/run.cpp`). The event carried the composed `<name>_pid<N>`, but
+  the root path creates the jail without a name and the kernel calls it
+  by its jid; crated recorded that wrong name as the owner. The event
+  now reports the kernel's name.
 
 - **`crate run` crashed at the end of every successful run without
   x11/gui** (`lib/util.cpp`). `RunAtEnd::doNow()` dereferenced the
@@ -56,17 +152,29 @@ entries, a stack with NAT members starts again, and crated reaps the
   the status stream and ended without `waitpid` — for a failed start
   (the old jls poll used to reap it) and, as before, for a successful
   one. The watch thread now waits for the supervisor to exit.
-- crate.5 (STACK FILES: who draws from `ip_range`), README en/uk, runbook
-  §4m; TODO §4 gains the open design question of putting NAT /
-  bridge-less members on the stack bridge.
+- crate.5 (STACK FILES: who draws from `ip_range`; what a `target` is;
+  restart, backup-prune, the lifecycle stream's single terminal event,
+  the early tmpfs), docs/trust-model en/uk (the devfs ruleset gate),
+  README en/uk, runbook §4m; TODO §4 gains the open design question of
+  putting NAT / bridge-less members on the stack bridge, and the items
+  this release left open.
 
 Tests: `stack_test` (+1: pool eligibility for NAT, bridge, auto, another
 bridge, own `ip`, passthrough/netgraph), `spec_registry_pure_test` (+1:
-`targetOf`). `RunAtEnd` lives in `lib/util.cpp`, which the Linux tests do
-not link; the crash was reproduced on a copy of the class and the fix is
-runbook §4m. `StackSpec::netInfo` was exercised with a scratch harness
-on `examples/postgres.yml`, `examples/matrix-synapse.yml` and synthetic
-bridge / auto / dhcp / vars specs.
+`targetOf`), `privops_authz_pure_test` (+3: the private range, the
+ruleset's owner, `add_devfs_unhide_rule` refused; the path tests carry a
+private ruleset), `backup_prune_pure_test` (+3: buckets per jail, an
+incremental's base from the same jail, 100-character jail names),
+`run_pure_test` (+2: `containerNameOf`, `containerNameOfJail`),
+`mounts_pure_test` (+1: `tmpfsMountedBeforeGui`), `status_pure_test`
+(+1: `crateRunArgv`), `devices_pure_test` (`nextRulesetNumber`),
+`validate_pure_test` (no "hides it" for a `/tmp` tmpfs). `RunAtEnd`,
+the exec helpers, `findContainer` and the daemons' handlers live in
+files the Linux tests do not link; the crash was reproduced on a copy of
+the class, the rest is runbook §4m. `StackSpec::netInfo` was exercised
+with a scratch harness on `examples/postgres.yml`,
+`examples/matrix-synapse.yml` and synthetic bridge / auto / dhcp / vars
+specs.
 
 ---
 

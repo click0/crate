@@ -28,13 +28,8 @@
 static bool resolveContainer(const std::string &target, int &outJid, std::string &outPath) {
 
   // Try direct lookup by name first
-  auto jail = JailQuery::getJailByName(target);
-  if (!jail) {
-    try {
-      int jid = std::stoi(target);
-      jail = JailQuery::getJailByJid(jid);
-    } catch (...) {}
-  }
+  // 1.1.70: kernel name, jid or container name (findContainer)
+  auto jail = JailQuery::findContainer(target);
 
   if (jail && RuntimePathsPure::isCrateJailPath(jail->path)) {
     outJid = jail->jid;

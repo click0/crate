@@ -32,13 +32,8 @@ static gid_t mygid = ::getgid();
 // Resolve a running container by name or JID (uses libjail API).
 static bool resolveContainer(const std::string &target, int &jid, std::string &path, std::string &hostname) {
   // Try direct lookup
-  auto jail = JailQuery::getJailByName(target);
-  if (!jail) {
-    try {
-      int id = std::stoi(target);
-      jail = JailQuery::getJailByJid(id);
-    } catch (...) {}
-  }
+  // 1.1.70: kernel name, jid or container name (findContainer)
+  auto jail = JailQuery::findContainer(target);
   if (jail) {
     jid = jail->jid;
     path = jail->path;

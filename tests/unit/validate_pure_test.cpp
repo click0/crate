@@ -566,6 +566,12 @@ ATF_TEST_CASE_BODY(mounts_1163_warnings)
 	t.dirsShare.push_back({"/home/alice/.cache/x", "/host/x"});
 	t.tmpfs.push_back({"/home/alice/.cache", ""});
 	ATF_REQUIRE(hasMatch(gatherWarnings(t), "hides it"));
+	// 1.1.70: a /tmp tmpfs is mounted before the GUI setup and the
+	// shares, so a share under /tmp stays visible — no warning
+	auto t2 = mkSpec();
+	t2.dirsShare.push_back({"/tmp/exchange", "/host/x"});
+	t2.tmpfs.push_back({"/tmp", ""});
+	ATF_REQUIRE(!hasMatch(gatherWarnings(t2), "hides it"));
 
 	auto u = mkSpec();
 	u.etcKeep.push_back("localtime");

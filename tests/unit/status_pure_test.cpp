@@ -168,7 +168,20 @@ ATF_TEST_CASE_BODY(run_timeout) {
   ATF_REQUIRE(!RunPure::runTimedOut(0, 124));   // no timeout: 124 is the program's own code
 }
 
+// 1.1.70: --log-progress is a global option; `crate -p stack up` put
+// it after `run` and every member's run refused it.
+ATF_TEST_CASE_WITHOUT_HEAD(crate_run_argv_global_options_first);
+ATF_TEST_CASE_BODY(crate_run_argv_global_options_first) {
+  using V = std::vector<std::string>;
+  ATF_REQUIRE(StatusPure::crateRunArgv({"-f", "/x/web.crate"}, false)
+              == (V{"crate", "run", "-f", "/x/web.crate", "--status-fd", "3"}));
+  ATF_REQUIRE(StatusPure::crateRunArgv({"--var", "A=1", "-f", "/x/web.crate"}, true)
+              == (V{"crate", "--log-progress", "run", "--var", "A=1", "-f", "/x/web.crate",
+                    "--status-fd", "3"}));
+}
+
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, crate_run_argv_global_options_first);   // 1.1.70
   ATF_ADD_TEST_CASE(tcs, render_line);
   ATF_ADD_TEST_CASE(tcs, parse_line_roundtrip);
   ATF_ADD_TEST_CASE(tcs, parse_line_rejects);

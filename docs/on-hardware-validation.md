@@ -949,6 +949,70 @@ bridge+dhcp members starts, with a pool address only on the bridge
 member and a warning for the others; crated leaves no zombie behind a
 failed or finished `crate run`.
 
+The HIGH findings of the same bug hunt, folded into 1.1.70:
+
+```sh
+# 1. only stdio reaches the jail: no host socket, no crated descriptor
+printf 'run: {command: /bin/sleep 300}\n' > /tmp/s.yml && crate create -s /tmp/s.yml -o /tmp/s.crate
+crate run -f /tmp/s.crate & sleep 5
+jid=$(jls -h jid path | awk '/jail-s-/ {print $1}')
+procstat -f $(pgrep -j $jid sleep) | awk '$3 ~ /^[0-9]+$/ && $3 > 2' | wc -l   # 0 (before: a UDP socket of the host stack)
+# the same for a jail crated started (crate-ctl start …) and for a ws-console shell
+kill %1
+
+# 2. devfs: tenants fill only private rulesets; the shared ones stay as they were
+devfs rule -s 4 show > /tmp/rs4.before
+# as a per-user tenant (rootless, path_master_prefix set):
+crate run -p -f /tmp/e.crate 2>&1 | grep 'private devfs ruleset'   # a number in 10000..59999
+devfs rule -s 4 show | diff - /tmp/rs4.before && echo "ruleset 4 untouched"
+# a libnv apply_devfs_rules with ruleset=4, or add_devfs_unhide_rule, from a tenant -> 403
+# (unit-tested in privops_authz_pure_test; crated's log shows the deny reason)
+
+# 3. backup-prune counts each jail on its own
+mkdir -p /tmp/bk && cd /tmp/bk
+for j in web db; do for d in 01 02 03; do touch "$j-backup-2026-01-${d}T00:00:00Z.zstream"; done; done
+crate backup-prune /tmp/bk --keep daily=1 --dry-run
+#   expect: keep 2 (web-…-03, db-…-03), remove 4 — before 1.1.70 one jail's newest was the only survivor
+
+# 4. HTTP export packs only the jail's own filesystem
+#    (a run with dirs/share of /usr/local/share/doc, then:)
+curl -s -X POST -H "Authorization: Bearer $TOKEN" http://localhost:9800/api/v1/containers/<name>/export
+tar tJf /var/run/crate/<name>-*.crate | grep -c usr/local/share/doc      # 0
+
+# 5. targets by container name; restart decides before it stops
+crate run -f nginx.crate & sleep 10; crate list                           # nginx_pid<N> (privops) or <jid> (root)
+crate restart nginx                                                       # stops and starts again (new jail)
+crate restart nginx_pid<N>                                                # the same by kernel name
+crate stop nginx                                                          # stops it
+crate run -f /tmp/unregistered-copy.crate &                               # a .crate whose registry entry you then delete
+crate restart unregistered-copy                                           # "cannot restart … it keeps running"; still in jls
+crate-ctl start nginx; crate-ctl start nginx                              # the second answers 409, one jail only
+curl -s -X POST -H "Authorization: Bearer $TOKEN" http://localhost:9800/api/v1/containers/nginx/restart   # restarted:true
+
+# 6. the browser profiles open a window again
+crate run firefox                                                         # a window (before: "cannot open display")
+mount | grep jail-firefox | grep -n 'tmpfs\|X11-unix'                     # the /tmp tmpfs is listed BEFORE the X11 nullfs
+
+# 7. `crate -p stack up` starts the members (each run refused --log-progress after `run`)
+crate -p stack up /tmp/stk2/stack.yml; crate stack down /tmp/stk2/stack.yml
+
+# 8. one terminal event: a failing run:after-execute script after the command exited
+#    (scripts: {run:after-execute: "exit 1"} in the spec)
+crate run --status-fd 3 -f /tmp/ae.crate 3>/tmp/ae.jsonl; grep -c '"event":"\(exited\|failed\)"' /tmp/ae.jsonl   # 1
+
+# 9. jail_created names the jail the kernel has (root path, no crated: its jid)
+crate run --status-fd 3 -f /tmp/e.crate 3>/tmp/e.jsonl; grep jail_created /tmp/e.jsonl   # "name" = the jid jls showed
+```
+
+Pass criteria: a jailed process holds nothing above fd 2; ruleset 4 is
+unchanged after tenant runs; `backup-prune` keeps the newest stream of
+every jail; the HTTP export holds no shared host files; restart / stop /
+start find a container by its container name, restart refuses before
+stopping when nothing is recorded, and a running container is not
+started twice; firefox and chromium open a window; `crate -p stack up`
+starts every member; one terminal event per stream; `jail_created`
+carries the kernel's jail name.
+
 ---
 
 ## 5. Reporting back

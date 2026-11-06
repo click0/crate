@@ -70,6 +70,15 @@ Manage ZFS snapshots:
 .Cm create , list , restore , delete , diff .
 .It Cm list Op Fl j
 List running containers in table or JSON format.
+A
+.Ar target
+below is the jail name
+.Cm list
+shows
+.Pq Li web_pid4242 ,
+the jail id, or (1.1.70) the container name the jail was started under
+.Pq Li web : the Pa .crate No file name, or Fl -name ;
+a container name that more than one running jail carries is refused.
 .It Cm info Ar target
 Show detailed information about a running container.
 .It Cm console Ar target Op Fl u Ar user
@@ -120,6 +129,8 @@ Stop and start again from the recorded
 file and variables; a container started with
 .Fl -warm-base
 is replayed from the recorded template dataset and name.
+What to start is looked up by container name before anything is stopped
+(1.1.70): a container with nothing recorded keeps running.
 .It Cm top
 Live resource monitor across all running containers:
 CPU% from RCTL
@@ -149,8 +160,9 @@ A failed send leaves no snapshot behind.
 .It Cm backup-prune Ar dir Fl -keep Ar spec
 Delete old
 .Pa .zstream
-files by retention bucket; an incremental is kept while its base
-.Pq a kept full, or a kept incremental it was chained on
+files by retention bucket, counted for each jail on its own (1.1.70);
+an incremental is kept while its base
+.Pq a kept full, or a kept incremental it was chained on, of the same jail
 is kept.
 .It Cm restore Ar stream Fl -to Ar dataset
 Replay a backup stream into a fresh dataset.
@@ -479,6 +491,13 @@ A run that fails before the command ran ends with
 .Li {"event":"failed","error":"..."}
 followed by
 .Li teardown_done .
+A stream carries exactly one of
+.Li exited
+and
+.Li failed
+(1.1.70): an error after the command exited
+.Pq Li run:after-execute , stopping services
+goes to stderr only.
 Values are strings, integers or booleans, never nested;
 .Li ip
 is present when the address is known (static or pool; not DHCP),
@@ -536,7 +555,11 @@ Paths are absolute or start with
 inside the home directory the mount belongs to the jail user (mode
 0700), elsewhere to root with the sticky 01777 of a shared
 .Pa /tmp .
-Mounted after the shares;
+Mounted after the shares, except a tmpfs at or above the directories the
+X11 setup mounts the host's sockets into
+.Pq Pa /tmp , /tmp/.X11-unix , /tmp/wayland :
+that one goes in first, so the X11 socket and the shares stay visible on
+top of it (1.1.70).
 .Pa / , /dev , /proc , /etc , /bin , /sbin , /lib , /libexec , /usr , /usr/local
 and
 .Pa /var/run

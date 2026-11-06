@@ -23,6 +23,8 @@
 #include "../lib/status_fd.h"          // 1.1.65: registerSpawnedJailOwner over the status pipe
 
 #include <iostream>
+#include <map>                         // 1.1.70: devfs ruleset claims
+#include <mutex>
 #include <thread>                      // 1.1.42: registerSpawnedJailOwner
 #include <sys/wait.h>
 
@@ -1073,6 +1075,73 @@ PerUserEnvPure::Config g_perUserAuthzCfg;
 // setIfaceOwnerRegistry). nullptr = interface-named verbs stay host-wide.
 ::IfaceOwnerRegistry *g_ifaceOwnerRegistry = nullptr;
 
+// 1.1.70: devfs ruleset -> the caller whose jail /dev it was filled for.
+// Every apply_devfs_rules over the libnv socket records one — root's
+// too, which the per-user gate does not judge — so while crated runs, a
+// set nobody here claimed was not filled through it: devfsRulesetOwner
+// judges such a set by its contents (sets from before a daemon restart,
+// a root run without the socket, an operator's jail.conf). In memory
+// only; devfs rulesets themselves vanish on reboot.
+struct DevfsRulesetClaim {
+  uint32_t    uid = 0;
+  std::string mountPath;
+};
+std::mutex                              g_devfsClaimsMu;
+std::map<unsigned, DevfsRulesetClaim>   g_devfsClaims;
+
+// The claim holds while its devfs is still mounted where it was.
+bool devfsMountLive(const std::string &path) {
+  struct statfs sf;
+  if (::statfs(path.c_str(), &sf) != 0) return false;
+  return std::strcmp(sf.f_fstypename, "devfs") == 0 && path == sf.f_mntonname;
+}
+
+// An unclaimed set is free only while it holds no rules: a non-empty one
+// belongs to a root run, an operator's jail.conf or a jail from before a
+// daemon restart. A probe that fails counts as "in use" (fail closed).
+bool devfsRulesetEmpty(unsigned ruleset) {
+  try {
+    auto out = Util::execCommandGetOutput(
+        {CRATE_PATH_DEVFS, "rule", "-s", std::to_string(ruleset), "show"},
+        "privops devfs ruleset probe");
+    return out.find_first_not_of(" \t\r\n") == std::string::npos;
+  } catch (...) {
+    return false;
+  }
+}
+
+// OwnerLookup::byDevfsRuleset (see PrivOpsAuthzPure::checkOwnedDevfsRuleset).
+PrivOpsAuthzPure::Owner devfsRulesetOwner(unsigned ruleset) {
+  {
+    std::lock_guard<std::mutex> g(g_devfsClaimsMu);
+    auto it = g_devfsClaims.find(ruleset);
+    if (it != g_devfsClaims.end()) {
+      if (devfsMountLive(it->second.mountPath)) return {true, it->second.uid};
+      // That jail is gone, and anyone who refilled the number since did
+      // it through here and would hold the claim: its leftovers are free
+      // (the caller's handler deletes the set before filling it).
+      g_devfsClaims.erase(it);
+      return {};
+    }
+  }
+  if (devfsRulesetEmpty(ruleset)) return {};
+  return {true, 0};
+}
+
+// Taken right after the gate allowed the call, under one lock, so two
+// tenants racing for the same free number cannot both get it. `force`:
+// a caller the gate does not judge (root) — recorded, never refused.
+bool claimDevfsRuleset(unsigned ruleset, uint32_t uid, const std::string &mountPath,
+                       bool force = false) {
+  std::lock_guard<std::mutex> g(g_devfsClaimsMu);
+  auto it = g_devfsClaims.find(ruleset);
+  if (!force && it != g_devfsClaims.end() && it->second.uid != uid &&
+      devfsMountLive(it->second.mountPath))
+    return false;
+  g_devfsClaims[ruleset] = DevfsRulesetClaim{uid, mountPath};
+  return true;
+}
+
 // Update the jid->owner registry after a successful create_jail /
 // destroy_jail dispatch (libnv path only — uid==0 on HTTP means we
 // don't know which operator to credit, so the registry stays untouched).
@@ -1516,6 +1585,19 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
   Verb v = PrivOpsNvPure::extractVerb(m);
   if (procDescOut) *procDescOut = -1;
 
+  // 1.1.70: apply_devfs_rules names the ruleset it deletes and refills.
+  unsigned devfsRuleset = 0;
+  std::string devfsMount;
+  if (v == Verb::ApplyDevfsRules) {
+    auto rs = m.find("ruleset");
+    auto mp = m.find("mount_path");
+    if (rs != m.end()) {
+      try { devfsRuleset = static_cast<unsigned>(std::stoul(rs->second)); }
+      catch (...) { devfsRuleset = 0; }   // -> outside the private range, denied
+    }
+    if (mp != m.end()) devfsMount = mp->second;
+  }
+
   // 1.1.12 + 1.1.13: authorize-before-dispatch. The libnv transport
   // carries a real peer uid (getpeereid); when rootless per-user is on,
   // every verb that has a robust ownership signal in the request is
@@ -1594,6 +1676,7 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
     }
     // reclaim_iface_from_vnet carries both a jail name and an ifname.
     if (v == Verb::ReclaimIfaceFromVnet) req.ifname = field("ifname");
+    req.devfsRuleset = devfsRuleset;   // 1.1.70
     PrivOpsAuthzPure::OwnerLookup lookup = g_jidOwnerRegistry
         ? g_jidOwnerRegistry->makeLookup()
         : PrivOpsAuthzPure::nullLookup();
@@ -1601,12 +1684,20 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       auto *ir = g_ifaceOwnerRegistry;
       lookup.byIface = [ir](const std::string &ifname) { return ir->lookup(ifname); };
     }
+    lookup.byDevfsRuleset = devfsRulesetOwner;   // 1.1.70
     PrivOpsAuthzPure::Decision dec =
         PrivOpsAuthzPure::authorize(v, req, env, lookup);
+    if (dec == PrivOpsAuthzPure::Decision::Allow && v == Verb::ApplyDevfsRules &&
+        !claimDevfsRuleset(devfsRuleset, operatorUid, devfsMount))
+      dec = PrivOpsAuthzPure::Decision::DenyForeignDevfsRuleset;   // lost a race
     if (dec != PrivOpsAuthzPure::Decision::Allow) {
       return {403, PrivOpsWirePure::formatHandlerError(
                        "forbidden", PrivOpsAuthzPure::decisionReason(dec))};
     }
+  } else if (v == Verb::ApplyDevfsRules) {
+    // 1.1.70: not gated (root, or no per-user split) — still recorded, so
+    // a tenant cannot take over the set while this jail lives.
+    claimDevfsRuleset(devfsRuleset, operatorUid, devfsMount, /*force=*/true);
   }
 
   // 1.1.36: destroy_jail forgets the registry entry by JID, resolved

@@ -112,6 +112,11 @@ unsigned rulesetNumberFor(long pid) {
   return 10000u + (unsigned)(pid % 50000);
 }
 
+unsigned nextRulesetNumber(unsigned ruleset) {
+  if (ruleset < 10000u || ruleset >= 59999u) return 10000u;
+  return ruleset + 1;
+}
+
 std::vector<std::string> warnings(const Devices &d) {
   std::vector<std::string> w;
   if (d.all)

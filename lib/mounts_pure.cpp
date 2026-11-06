@@ -95,6 +95,12 @@ bool isUnder(const std::string &path, const std::string &dir) {
   return path == dir || (path.size() > dir.size() && path.compare(0, dir.size(), dir) == 0 && path[dir.size()] == '/');
 }
 
+bool tmpfsMountedBeforeGui(const std::string &tmpfsPath) {
+  for (const char *dir : {"/tmp/.X11-unix", "/tmp/wayland"})
+    if (isUnder(dir, tmpfsPath)) return true;
+  return false;
+}
+
 std::vector<std::pair<std::string, std::string>>
 tmpfsParams(const std::string &size, bool underHome, unsigned uid, unsigned gid) {
   std::vector<std::pair<std::string, std::string>> p;

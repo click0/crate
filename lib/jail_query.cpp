@@ -7,6 +7,7 @@
 #include "privops_client.h"   // 1.1.40: exec_in_jail under rootless
 #include "privops_wire_pure.h" // 1.1.42: pid from the exec_in_jail reply
 #include "runtime_paths_pure.h"
+#include "run_pure.h"           // 1.1.70: containerNameOf (findContainer)
 #include "locs.h"
 #include "pathnames.h"
 #include "util.h"
@@ -259,6 +260,33 @@ std::string getJailParam(int jid, const std::string &paramName) {
   return ps.getString(1);
 }
 
+std::optional<JailInfo> findContainer(const std::string &target, unsigned *matches) {
+  if (matches) *matches = 0;
+  if (target.empty()) return std::nullopt;
+  if (auto j = getJailByName(target)) {
+    if (matches) *matches = 1;
+    return j;
+  }
+  if (target.size() <= 9 &&
+      target.find_first_not_of("0123456789") == std::string::npos) {
+    if (auto j = getJailByJid(std::stoi(target))) {
+      if (matches) *matches = 1;
+      return j;
+    }
+  }
+  std::optional<JailInfo> found;
+  unsigned n = 0;
+  for (auto &j : getAllJails(/*crateOnly=*/true)) {
+    if (j.dying || j.name == target) continue;
+    if (RunPure::containerNameOfJail(j.name, j.path) != target) continue;
+    n++;
+    found = j;
+  }
+  if (matches) *matches = n;
+  if (n == 1) return found;
+  return std::nullopt;
+}
+
 // 0.8.32: getJidByName(name) deleted — see jail_query.h for rationale.
 
 }
@@ -416,7 +444,9 @@ int execInJail(int jid, const std::vector<std::string> &argv,
     ERR("fork failed: " << strerror(errno))
 
   if (pid == 0) {
-    // Child: attach to jail, then exec
+    // Child: attach to jail, then exec.
+    // 1.1.70: only stdio crosses into the jail (see Util::execCommand).
+    ::closefrom(STDERR_FILENO + 1);
     if (::jail_attach(jid) == -1)
       ::_exit(126); // signal fallback needed
 
@@ -509,6 +539,7 @@ std::string execInJailGetOutput(int jid, const std::vector<std::string> &argv,
     ::close(pipefd[0]);
     ::dup2(pipefd[1], STDOUT_FILENO);
     ::close(pipefd[1]);
+    ::closefrom(STDERR_FILENO + 1);   // 1.1.70: only stdio crosses into the jail
 
     if (::jail_attach(jid) == -1)
       ::_exit(126);
@@ -599,6 +630,7 @@ Spawned spawnInJail(int jid, const std::vector<std::string> &argv,
   if (pid == -1) ERR(what << ": fork failed: " << strerror(errno))
   if (pid == 0) {
     ::dup2(devnull, STDIN_FILENO);     // stdout/stderr stay with the caller (logs)
+    ::closefrom(STDERR_FILENO + 1);    // 1.1.70: only stdio crosses into the jail
     if (::jail_attach(jid) == -1) ::_exit(126);
     if (!user.empty() && user != "root") {
       struct passwd *pw = ::getpwnam(user.c_str());

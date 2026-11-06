@@ -12,7 +12,9 @@
 // which ones to keep under a Proxmox-style retention policy and
 // which to delete.
 //
-// Bucketing rule (matches Proxmox vzdump-prune semantics):
+// Bucketing rule (matches Proxmox vzdump-prune semantics), applied to
+// each jail's streams on their own (1.1.70 — the buckets used to span
+// every jail in the directory):
 //   - For each retention bucket type with N>0 (hourly|daily|weekly|
 //     monthly), walk full streams newest -> oldest. The newest
 //     full stream that lands in a fresh bucket key is kept; later

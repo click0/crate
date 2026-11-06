@@ -115,7 +115,21 @@ ATF_TEST_CASE_BODY(under_and_params) {
   ATF_REQUIRE(!validateOctalMode("rwx").empty());
 }
 
+// 1.1.70: which tmpfs entries go in before the X11 setup
+ATF_TEST_CASE_WITHOUT_HEAD(tmpfs_before_gui);
+ATF_TEST_CASE_BODY(tmpfs_before_gui) {
+  using MountsPure::tmpfsMountedBeforeGui;
+  ATF_REQUIRE(tmpfsMountedBeforeGui("/tmp"));              // the profiles' case
+  ATF_REQUIRE(tmpfsMountedBeforeGui("/tmp/.X11-unix"));
+  ATF_REQUIRE(tmpfsMountedBeforeGui("/tmp/wayland"));
+  ATF_REQUIRE(!tmpfsMountedBeforeGui("/tmp/cache"));       // beside them, not above
+  ATF_REQUIRE(!tmpfsMountedBeforeGui("/tmpx"));
+  ATF_REQUIRE(!tmpfsMountedBeforeGui("/home/alice/.cache"));
+  ATF_REQUIRE(!tmpfsMountedBeforeGui("/var/tmp"));
+}
+
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, tmpfs_before_gui);   // 1.1.70
   ATF_ADD_TEST_CASE(tcs, ro_suffix_and_flag);
   ATF_ADD_TEST_CASE(tcs, tmpfs_size_and_path);
   ATF_ADD_TEST_CASE(tcs, etc_keep_names);
