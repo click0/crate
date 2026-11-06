@@ -63,7 +63,11 @@ bool available() {
 static int getIoctlSocket() {
   static int s = -1;
   if (s < 0) {
-    s = ::socket(AF_INET, SOCK_DGRAM, 0);
+    // 1.1.70: SOCK_CLOEXEC. This socket lives in the host's network stack
+    // for the whole life of crated / `crate run`; without the flag every
+    // jexec'ed or jail_attach'ed child inherited it, and a tenant process
+    // could send UDP from the host stack past the jail's firewall.
+    s = ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
     if (s >= 0) {
       static struct Cleanup {
         ~Cleanup() { if (s >= 0) { ::close(s); s = -1; } }

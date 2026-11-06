@@ -31,14 +31,8 @@ static bool resolveContainer(const std::string &target, int &outJid, std::string
                              std::string &outHostname, std::string &outIp) {
 
   // Try direct lookup by name first
-  auto jail = JailQuery::getJailByName(target);
-  if (!jail) {
-    // Try lookup by JID
-    try {
-      int jid = std::stoi(target);
-      jail = JailQuery::getJailByJid(jid);
-    } catch (...) {}
-  }
+  // 1.1.70: kernel name, jid or container name (findContainer)
+  auto jail = JailQuery::findContainer(target);
 
   // If direct lookup succeeded and it's a crate jail, use it
   if (jail && RuntimePathsPure::isCrateJailPath(jail->path)) {

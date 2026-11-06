@@ -119,7 +119,15 @@ differs by transport:
   gates the **path-scoped verbs** — `mount_nullfs` / `unmount_nullfs`
   (by `target`) and `apply_devfs_ruleset` / `add_devfs_unhide_rule` / `apply_devfs_rules` / `mount_tmpfs` (by
   `mount_path`). A path that lies inside another operator's registered
-  jail is denied `403` (`DenyForeignPath`). 1.1.15 closes the last
+  jail is denied `403` (`DenyForeignPath`). 1.1.70 adds the ruleset
+  itself: `apply_devfs_rules` deletes and refills the set it names, so a
+  per-user caller may name only a private one (10000..59999) that no live
+  jail of another operator — or of root — uses
+  (`DenyForeignDevfsRuleset`; before, ruleset 4 or a neighbour's set was
+  fair game), and `add_devfs_unhide_rule`, which writes into whatever set
+  the mount uses, is refused to per-user callers altogether
+  (`DenyDevfsSharedRuleset`; crate(1) has not sent it since 1.1.62).
+  1.1.15 closes the last
   narrow item: `create_jail`'s brand-new `path` argument is matched
   against the caller's per-user `pathPrefix` (composed from
   `path_master_prefix:` in crated.conf); a foreign target is denied

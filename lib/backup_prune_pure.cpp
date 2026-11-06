@@ -1,11 +1,13 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "backup_prune_pure.h"
+#include "name_limits.h"   // 1.1.70
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <map>
 #include <set>
 #include <sstream>
 #include <unordered_map>
@@ -147,10 +149,12 @@ bool parseStreamFilename(const std::string &basename,
   std::string jail = stem.substr(0, bp);
   std::string suffix = stem.substr(bp + 1);  // strip the leading '-' so suffix == "backup-..."
 
-  // Jail name validation: alnum + . _ -, length 1..64. Same alphabet
-  // as BackupPure::validateJailName but inlined here so we don't make
-  // parsing depend on the validator's error-message text.
-  if (jail.empty() || jail.size() > 64) {
+  // Jail name validation: alnum + . _ -, length 1..NameLimits::kJailName.
+  // Same alphabet as BackupPure::validateJailName but inlined here so we
+  // don't make parsing depend on the validator's error-message text.
+  // 1.1.70: the bound was a literal 64 while `crate backup` accepts
+  // kJailName (128), so streams of a 65..128-char jail were never pruned.
+  if (jail.empty() || jail.size() > NameLimits::kJailName) {
     errOut = "jail name out of length bounds";
     return false;
   }
@@ -224,9 +228,12 @@ std::set<size_t> bucketKeep(const std::vector<StreamFile> &files,
 
 } // anon
 
-PruneDecision decidePrune(const std::vector<StreamFile> &files,
-                          const BackupPure::RetentionPolicy &policy,
-                          bool deleteOrphans) {
+namespace {
+
+// The retention walk for ONE jail's streams (see decidePrune).
+PruneDecision decidePruneOneJail(const std::vector<StreamFile> &files,
+                                 const BackupPure::RetentionPolicy &policy,
+                                 bool deleteOrphans) {
   PruneDecision d;
 
   // Partition: indices of fulls with valid epoch, sorted desc by epoch.
@@ -307,7 +314,28 @@ PruneDecision decidePrune(const std::vector<StreamFile> &files,
   for (size_t i : badEpoch) {
     d.orphans.push_back(files[i].filename);
   }
+  return d;
+}
 
+} // anon
+
+// 1.1.70: the policy applies to each jail on its own. The buckets used
+// to be filled across every jail in the directory, so without --jail
+// the newest stream of whichever jail took "daily=1" and every other
+// jail's fulls were deleted; and an incremental of jail B whose base
+// suffix matched a kept full of jail A counted as based.
+PruneDecision decidePrune(const std::vector<StreamFile> &files,
+                          const BackupPure::RetentionPolicy &policy,
+                          bool deleteOrphans) {
+  std::map<std::string, std::vector<StreamFile>> byJail;
+  for (const auto &f : files) byJail[f.jailName].push_back(f);
+  PruneDecision d;
+  for (const auto &kv : byJail) {
+    PruneDecision one = decidePruneOneJail(kv.second, policy, deleteOrphans);
+    d.keep.insert(d.keep.end(), one.keep.begin(), one.keep.end());
+    d.remove.insert(d.remove.end(), one.remove.begin(), one.remove.end());
+    d.orphans.insert(d.orphans.end(), one.orphans.begin(), one.orphans.end());
+  }
   std::sort(d.keep.begin(), d.keep.end());
   std::sort(d.remove.begin(), d.remove.end());
   std::sort(d.orphans.begin(), d.orphans.end());
@@ -337,20 +365,20 @@ std::vector<KeepReason> explainKeeps(const std::vector<StreamFile> &files,
 
   for (const auto &b : buckets) {
     if (b.n == 0) continue;
-    std::set<long> seen;
-    unsigned counter = 0;
+    // 1.1.70: per jail, like decidePrune
+    std::map<std::string, std::set<long>> seen;
     for (size_t idx : fullsByEpochDesc) {
+      auto &js = seen[files[idx].jailName];
+      if (js.size() >= b.n) continue;
       long key = b.fn(files[idx].unixEpoch);
-      if (seen.find(key) != seen.end()) continue;
-      seen.insert(key);
-      counter++;
+      if (js.find(key) != js.end()) continue;
+      js.insert(key);
       KeepReason kr;
       kr.fileIndex = idx;
       std::ostringstream o;
-      o << b.name << ":" << counter;
+      o << b.name << ":" << js.size();
       kr.reason = o.str();
       out.push_back(kr);
-      if (seen.size() >= b.n) break;
     }
   }
   return out;

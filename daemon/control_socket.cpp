@@ -43,6 +43,7 @@
 #include "../lib/commands.h"
 #include "../lib/jail_query.h"
 #include "../lib/pool_pure.h"
+#include "../lib/run_pure.h"      // 1.1.70: containerNameOf
 #include "../lib/spec_registry.h"
 #include "../lib/util.h"
 #include "../lib/pathnames.h"
@@ -70,6 +71,7 @@ extern "C" int getpeereid(int s, uid_t *euid, gid_t *egid);
 #include <iostream>
 #include <map>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -174,13 +176,27 @@ void handleList(std::string &resBody, int &status,
   resBody = ControlSocketPure::renderContainersJson(out);
 }
 
-void handleGet(std::string &resBody, int &status, const std::string &name) {
-  auto j = JailQuery::getJailByName(name);
+// 1.1.70: the jail a route names — its kernel name ("web_pid4242", what
+// GET /containers lists), its jid, or the container name it was started
+// under ("web", what start and the spec registry use). On a miss
+// status/resBody are filled (404; 409 when the container name matches
+// more than one running jail) and nullopt is returned.
+std::optional<JailQuery::JailInfo> findNamed(const std::string &name,
+                                             std::string &resBody, int &status) {
+  unsigned matches = 0;
+  auto j = JailQuery::findContainer(name, &matches);
   if (!j) {
-    status  = 404;
-    resBody = ControlSocketPure::renderErrorJson("container not found");
-    return;
+    status  = matches > 1 ? 409 : 404;
+    resBody = ControlSocketPure::renderErrorJson(
+      matches > 1 ? "more than one running jail is named '" + name + "'; use its jail name or jid"
+                  : std::string("container not found"));
   }
+  return j;
+}
+
+void handleGet(std::string &resBody, int &status, const std::string &name) {
+  auto j = findNamed(name, resBody, status);
+  if (!j) return;
   std::ostringstream o;
   o << "{\"name\":\""    << j->name     << "\","
     << "\"jid\":"        << j->jid      << ","
@@ -193,12 +209,8 @@ void handleGet(std::string &resBody, int &status, const std::string &name) {
 }
 
 void handleStats(std::string &resBody, int &status, const std::string &name) {
-  auto j = JailQuery::getJailByName(name);
-  if (!j) {
-    status  = 404;
-    resBody = ControlSocketPure::renderErrorJson("container not found");
-    return;
-  }
+  auto j = findNamed(name, resBody, status);
+  if (!j) return;
   std::map<std::string, std::string> usage;
   try {
     auto raw = Util::execCommandGetOutput(
@@ -253,15 +265,20 @@ void handleStart(std::string &resBody, int &status, const std::string &name,
   // If the jail is already running, reply 409 Conflict so the
   // operator gets a clear "no-op" rather than a 200 that creates
   // false confidence.
-  if (auto j = JailQuery::getJailByName(name); j) {
+  // 1.1.70: by container name too — the running jail is "web_pid4242",
+  // so the old exact lookup of "web" missed it and a second instance was
+  // spawned next to the first.
+  unsigned running = 0;
+  if (JailQuery::findContainer(name, &running) || running > 0) {
     status  = 409;
     resBody = ControlSocketPure::renderErrorJson("container is already running");
     return;
   }
+  const std::string containerName = RunPure::containerNameOf(name);
 
   std::string cratePath;
   try {
-    cratePath = SpecRegistry::lookup(name);
+    cratePath = SpecRegistry::lookup(containerName);
   } catch (const std::exception &e) {
     status  = 500;
     resBody = ControlSocketPure::renderErrorJson(
@@ -271,7 +288,7 @@ void handleStart(std::string &resBody, int &status, const std::string &name,
   if (cratePath.empty()) {
     status  = 404;
     resBody = ControlSocketPure::renderErrorJson(
-      "no spec registered for '" + name +
+      "no spec registered for '" + containerName +
       "' — start it once via `crate run -f <file>` so the registry "
       "can record the path");
     return;
@@ -296,7 +313,7 @@ void handleStart(std::string &resBody, int &status, const std::string &name,
       std::string("fork failed: ") + std::strerror(errno));
     return;
   }
-  Crated::registerSpawnedJailOwner(pid, peerUid > 0 ? (uint32_t)peerUid : 0u, name, spawned.statusFd);
+  Crated::registerSpawnedJailOwner(pid, peerUid > 0 ? (uint32_t)peerUid : 0u, containerName, spawned.statusFd);
   // Parent: don't wait — the child runs the jail's foreground
   // supervisor for as long as the jail is up, which can be hours.
   // We reply 202 immediately and let the operator poll
@@ -307,15 +324,11 @@ void handleStart(std::string &resBody, int &status, const std::string &name,
 }
 
 void handleStop(std::string &resBody, int &status, const std::string &name) {
-  auto j = JailQuery::getJailByName(name);
-  if (!j) {
-    status  = 404;
-    resBody = ControlSocketPure::renderErrorJson("container not found");
-    return;
-  }
+  auto j = findNamed(name, resBody, status);
+  if (!j) return;
   Args args;
   args.cmd = CmdStop;
-  args.stopTarget = name;
+  args.stopTarget = j->name;   // 1.1.70: the resolved kernel name
   try {
     if (stopCrate(args)) {
       status  = 200;
@@ -340,17 +353,16 @@ void handleStop(std::string &resBody, int &status, const std::string &name) {
 // Replies 202 like `start`; poll GET /v1/control/containers/<name>.
 void handleRestart(std::string &resBody, int &status, const std::string &name,
                    long peerUid) {
-  auto j = JailQuery::getJailByName(name);
-  if (!j) {
-    status  = 404;
-    resBody = ControlSocketPure::renderErrorJson("container not found");
-    return;
-  }
+  auto j = findNamed(name, resBody, status);
+  if (!j) return;
+  // 1.1.70: the registry is keyed by the container name; the kernel name
+  // carries the pid ("web_pid4242"), and looking THAT up always 404'd.
+  const std::string containerName = RunPure::containerNameOfJail(j->name, j->path);
   // Resolve the spec path BEFORE stopping, so a missing registry entry
   // leaves the container running instead of stopped-and-unrestartable.
   std::string cratePath;
   try {
-    cratePath = SpecRegistry::lookup(name);
+    cratePath = SpecRegistry::lookup(containerName);
   } catch (const std::exception &e) {
     status  = 500;
     resBody = ControlSocketPure::renderErrorJson(
@@ -362,7 +374,7 @@ void handleRestart(std::string &resBody, int &status, const std::string &name,
     status  = cratePath.empty() ? 404 : 410;
     resBody = ControlSocketPure::renderErrorJson(
       cratePath.empty()
-        ? "no spec registered for '" + name + "' — cannot restart"
+        ? "no spec registered for '" + containerName + "' — cannot restart"
         : "registered .crate path no longer exists: " + cratePath);
     return;
   }
@@ -370,7 +382,7 @@ void handleRestart(std::string &resBody, int &status, const std::string &name,
   // sequence `crate stop` runs; bounded by stopTimeout (+1 s).
   Args stopArgs;
   stopArgs.cmd = CmdStop;
-  stopArgs.stopTarget = name;
+  stopArgs.stopTarget = j->name;   // 1.1.70: the resolved kernel name
   stopArgs.stopTimeout = 10;
   try {
     if (!stopCrate(stopArgs)) {
@@ -392,20 +404,16 @@ void handleRestart(std::string &resBody, int &status, const std::string &name,
       std::string("stopped, but fork for restart failed: ") + std::strerror(errno));
     return;
   }
-  Crated::registerSpawnedJailOwner(pid, peerUid > 0 ? (uint32_t)peerUid : 0u, name, spawned.statusFd);
+  Crated::registerSpawnedJailOwner(pid, peerUid > 0 ? (uint32_t)peerUid : 0u, containerName, spawned.statusFd);
   status  = 202;
-  resBody = R"({"status":"restarting","container":")" + name +
+  resBody = R"({"status":"restarting","container":")" + containerName +
             R"(","crate_path":")" + cratePath + R"("})";
 }
 
 void handlePatch(std::string &resBody, int &status,
                  const std::string &name, const std::string &body) {
-  auto j = JailQuery::getJailByName(name);
-  if (!j) {
-    status  = 404;
-    resBody = ControlSocketPure::renderErrorJson("container not found");
-    return;
-  }
+  auto j = findNamed(name, resBody, status);
+  if (!j) return;
   ControlSocketPure::ResourcesPatch patch;
   if (auto e = ControlSocketPure::parseResourcesPatch(body, patch); !e.empty()) {
     status  = 400;
@@ -558,6 +566,22 @@ void handleConnection(int connFd,
     writeAll(connFd, r);
     ::close(connFd);
     return;
+  }
+
+  // 1.1.70: a route may name a container by its container name or jid
+  // (findNamed); the pool gate above judged the name as given, so the
+  // jail it resolves to must be visible on this socket under its own
+  // kernel name too.
+  if (route.action != ControlSocketPure::Action::ListContainers &&
+      route.action != ControlSocketPure::Action::PostStart) {
+    if (auto j = JailQuery::findContainer(route.container);
+        j && j->name != route.container &&
+        !ControlSocketPure::poolVisibleOnSocket(PoolPure::inferPool(j->name, poolSeparator), spec.pools)) {
+      writeAll(connFd, ControlSocketPure::buildHttpResponse(
+          403, ControlSocketPure::renderErrorJson("container is outside the pools served by this socket")));
+      ::close(connFd);
+      return;
+    }
   }
 
   // Dispatch.

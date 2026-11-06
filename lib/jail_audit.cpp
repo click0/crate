@@ -28,12 +28,7 @@
 namespace {
 
 std::optional<JailQuery::JailInfo> resolve(const std::string &t) {
-  auto j = JailQuery::getJailByName(t);
-  if (j) return j;
-  try {
-    int id = std::stoi(t);
-    return JailQuery::getJailByJid(id);
-  } catch (...) { return std::nullopt; }
+  return JailQuery::findContainer(t);   // 1.1.70: kernel name, jid or container name
 }
 
 } // anon

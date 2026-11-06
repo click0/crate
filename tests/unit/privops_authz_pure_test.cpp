@@ -208,7 +208,11 @@ OwnerLookup fixedOwner(unsigned ownedJid, const std::string &ownedName,
 
 Request reqJid(unsigned j) { Request r; r.jid = j; return r; }
 Request reqName(std::string n) { Request r; r.jailName = std::move(n); return r; }
-Request reqPath(std::string p) { Request r; r.path = std::move(p); return r; }
+// 1.1.70: devfsRuleset is set to a private number so apply_devfs_rules
+// is judged on its path here; the ruleset gate has its own tests.
+Request reqPath(std::string p) {
+  Request r; r.path = std::move(p); r.devfsRuleset = 12345; return r;
+}
 
 } // namespace
 
@@ -318,8 +322,10 @@ ATF_TEST_CASE_WITHOUT_HEAD(authorize_path_own_target_allowed);
 ATF_TEST_CASE_BODY(authorize_path_own_target_allowed) {
   auto e = env1000();
   auto l = fixedOwner(77, "web", 1000, "/jails/web");
+  // (add_devfs_unhide_rule: refused on an owned path too since 1.1.70,
+  // see devfs_unhide_rule_refused_for_tenants)
   for (Verb v : {Verb::MountNullfs, Verb::UnmountNullfs,
-                 Verb::ApplyDevfsRuleset, Verb::AddDevfsUnhideRule,
+                 Verb::ApplyDevfsRuleset,
                  Verb::ApplyDevfsRules, Verb::MountTmpfs}) {   // 1.1.62, 1.1.63
     ATF_REQUIRE(PrivOpsAuthzPure::authorize(v, reqPath("/jails/web/dev"), e, l)
                 == Decision::Allow);
@@ -386,7 +392,7 @@ ATF_TEST_CASE_BODY(authorize_path_unknown_target_confined_to_caller_prefix) {
     "/zpool/somewhere/dev",
   };
   for (Verb v : {Verb::MountNullfs, Verb::UnmountNullfs,
-                 Verb::ApplyDevfsRuleset, Verb::AddDevfsUnhideRule,
+                 Verb::ApplyDevfsRuleset,
                  Verb::ApplyDevfsRules, Verb::MountTmpfs}) {   // 1.1.62, 1.1.63
     for (const char *p : outside)
       if (PrivOpsAuthzPure::authorize(v, reqPath(p), e, l) != Decision::DenyUnownedPath)
@@ -730,6 +736,85 @@ ATF_TEST_CASE_BODY(configure_and_reclaim_gate_both_ends) {
   ATF_REQUIRE(!std::string(decisionReason(Decision::DenyHostIface)).empty());
 }
 
+// --- 1.1.70: devfs rulesets ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(devfs_rules_only_private_range);
+ATF_TEST_CASE_BODY(devfs_rules_only_private_range) {
+  // The hole: a tenant named ruleset 4 (devfsrules_jail, included by
+  // every jail(8)-made jail) or any operator-picked number, and crated
+  // ran `devfs rule -s N delset` + its own "path * unhide" there.
+  auto e = env1000();
+  auto l = fixedOwner(77, "web", 1000, "/jails/web");
+  for (unsigned rs : {0u, 1u, 2u, 3u, 4u, 5u, 100u, 9999u, 60000u, 65535u}) {
+    Request r = reqPath("/jails/web/dev");
+    r.devfsRuleset = rs;
+    if (PrivOpsAuthzPure::authorize(Verb::ApplyDevfsRules, r, e, l)
+        != Decision::DenyForeignDevfsRuleset)
+      ATF_FAIL("ruleset " + std::to_string(rs) + " was allowed");
+  }
+  for (unsigned rs : {10000u, 12345u, 59999u}) {
+    Request r = reqPath("/jails/web/dev");
+    r.devfsRuleset = rs;
+    ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::ApplyDevfsRules, r, e, l) == Decision::Allow);
+  }
+  ATF_REQUIRE(PrivOpsAuthzPure::isPrivateDevfsRuleset(10000));
+  ATF_REQUIRE(!PrivOpsAuthzPure::isPrivateDevfsRuleset(9999));
+  ATF_REQUIRE(!PrivOpsAuthzPure::isPrivateDevfsRuleset(60000));
+  // the path gate still comes first
+  Request foreign = reqPath("/jails/other/dev");
+  auto lf = fixedOwner(78, "other", 1001, "/jails/other");
+  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::ApplyDevfsRules, foreign, e, lf)
+              == Decision::DenyForeignPath);
+  // the reason names the ruleset: crate(1) retries the next number on it
+  ATF_REQUIRE(std::string(decisionReason(Decision::DenyForeignDevfsRuleset)).find("devfs ruleset")
+              != std::string::npos);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(devfs_rules_owner_of_the_ruleset);
+ATF_TEST_CASE_BODY(devfs_rules_owner_of_the_ruleset) {
+  auto e = env1000();
+  auto l = fixedOwner(77, "web", 1000, "/jails/web");
+  // 12001: tenant 1001's live jail; 12002: in use but handed out to no
+  // tenant (a root run, a leftover from before a daemon restart);
+  // 12003: the caller's own; anything else free.
+  l.byDevfsRuleset = [](unsigned rs) -> Owner {
+    Owner o;
+    if (rs == 12001) { o.known = true; o.uid = 1001; }
+    if (rs == 12002) { o.known = true; o.uid = 0; }
+    if (rs == 12003) { o.known = true; o.uid = 1000; }
+    return o;
+  };
+  auto at = [&](unsigned rs) {
+    Request r = reqPath("/jails/web/dev");
+    r.devfsRuleset = rs;
+    return PrivOpsAuthzPure::authorize(Verb::ApplyDevfsRules, r, e, l);
+  };
+  ATF_REQUIRE(at(12001) == Decision::DenyForeignDevfsRuleset);
+  ATF_REQUIRE(at(12002) == Decision::DenyForeignDevfsRuleset);
+  ATF_REQUIRE(at(12003) == Decision::Allow);
+  ATF_REQUIRE(at(12004) == Decision::Allow);
+  // apply_devfs_ruleset (applying an existing set to one's own mount)
+  // only reads the set: not gated on the number
+  Request r = reqPath("/jails/web/dev");
+  r.devfsRuleset = 4;
+  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::ApplyDevfsRuleset, r, e, l) == Decision::Allow);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(devfs_unhide_rule_refused_for_tenants);
+ATF_TEST_CASE_BODY(devfs_unhide_rule_refused_for_tenants) {
+  // `devfs -m <own mount> rule add path * unhide` lands in whatever set
+  // the mount uses — after apply_devfs_ruleset 4, the host's shared one.
+  auto e = env1000();
+  auto l = fixedOwner(77, "web", 1000, "/jails/web");
+  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::AddDevfsUnhideRule, reqPath("/jails/web/dev"), e, l)
+              == Decision::DenyDevfsSharedRuleset);
+  auto lf = fixedOwner(77, "web", 1001, "/jails/web");
+  ATF_REQUIRE(PrivOpsAuthzPure::authorize(Verb::AddDevfsUnhideRule, reqPath("/jails/web/dev"), e, lf)
+              == Decision::DenyForeignPath);
+  ATF_REQUIRE(std::string(decisionReason(Decision::DenyDevfsSharedRuleset)).find("apply_devfs_rules")
+              != std::string::npos);
+}
+
 // --- decisionReason ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(decision_reason_non_empty);
@@ -745,6 +830,9 @@ ATF_TEST_CASE_BODY(decision_reason_non_empty) {
 }
 
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, devfs_rules_only_private_range);          // 1.1.70
+  ATF_ADD_TEST_CASE(tcs, devfs_rules_owner_of_the_ruleset);        // 1.1.70
+  ATF_ADD_TEST_CASE(tcs, devfs_unhide_rule_refused_for_tenants);   // 1.1.70
   ATF_ADD_TEST_CASE(tcs, owned_trailing_slash_prefix);
   ATF_ADD_TEST_CASE(tcs, dataset_owned_prefix_and_descendants);
   ATF_ADD_TEST_CASE(tcs, dataset_owned_rejects_foreign_and_substring);

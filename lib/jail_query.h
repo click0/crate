@@ -31,6 +31,15 @@ std::optional<JailInfo> getJailByName(const std::string &name);
 // Lookup a specific jail by JID (returns nullopt if not found).
 std::optional<JailInfo> getJailByJid(int jid);
 
+// 1.1.70: what an operator calls a container: the kernel jail name
+// (`crate list`: "web_pid4242"), a jid, or the container name `crate run`
+// was given ("web" — RunPure::containerNameOfJail: from the kernel name,
+// or from the jail directory for a root-path jail the kernel names by
+// its jid; dying jails are not considered for it). nullopt when nothing matches, or
+// when the container name matches more than one running jail —
+// *matches (optional) then says how many did.
+std::optional<JailInfo> findContainer(const std::string &target, unsigned *matches = nullptr);
+
 // Get a single string parameter from a jail identified by JID.
 // Returns empty string on failure.
 std::string getJailParam(int jid, const std::string &paramName);

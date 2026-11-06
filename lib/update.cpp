@@ -48,13 +48,7 @@ bool updateCommand(const Args &args) {
         "base-system update is tracked separately; only pkg "
         "upgrade is implemented in 0.8.41.")
 
-  auto jail = JailQuery::getJailByName(args.updateTarget);
-  if (!jail) {
-    try {
-      int jid = std::stoi(args.updateTarget);
-      jail = JailQuery::getJailByJid(jid);
-    } catch (...) {}
-  }
+  auto jail = JailQuery::findContainer(args.updateTarget);   // 1.1.70
   if (!jail)
     ERR("jail '" << args.updateTarget << "' not found or not running")
 

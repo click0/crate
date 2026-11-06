@@ -106,6 +106,15 @@ static std::vector<char*> toExecArgv(const std::vector<std::string> &argv) {
   return cargv;
 }
 
+// 1.1.70: called in every child below right before execv. These helpers
+// run jexec(8) for /etc/rc, ifconfig and the like, so whatever descriptor
+// the parent holds without close-on-exec (a library's socket, a file a
+// thread opened concurrently) used to reach long-lived processes inside
+// the jail. Nothing passes descriptors above stderr through these helpers.
+static inline void closeInheritedFds() {
+  ::closefrom(STDERR_FILENO + 1);
+}
+
 void execCommand(const std::vector<std::string> &argv, const std::string &what) {
   if (argv.empty())
     ERR2("exec command", "empty argv for: " << what)
@@ -115,6 +124,7 @@ void execCommand(const std::vector<std::string> &argv, const std::string &what) 
     ERR2("exec command", "fork failed for '" << what << "': " << strerror(errno))
   if (pid == 0) {
     // child
+    closeInheritedFds();
     ::execv(cargv[0], cargv.data());
     ::_exit(127); // exec failed
   }
@@ -148,6 +158,7 @@ void execCommandWithInput(const std::vector<std::string> &argv, const std::strin
     // child: read end becomes stdin; CLOEXEC closes the originals on exec
     if (::dup2(pfd[0], STDIN_FILENO) < 0)
       ::_exit(126);
+    closeInheritedFds();
     ::execv(cargv[0], cargv.data());
     ::_exit(127);
   }
@@ -211,6 +222,7 @@ void execCommandLogged(const std::vector<std::string> &argv, const std::string &
     if (::dup2(fd, STDOUT_FILENO) < 0 || ::dup2(fd, STDERR_FILENO) < 0)
       ::_exit(126);
     ::close(fd);
+    closeInheritedFds();
     ::execv(cargv[0], cargv.data());
     ::_exit(127);
   }
@@ -235,6 +247,7 @@ int execCommandGetStatus(const std::vector<std::string> &argv, const std::string
     ERR2("exec command", "fork failed for '" << what << "': " << strerror(errno))
   if (pid == 0) {
     // child
+    closeInheritedFds();
     ::execv(cargv[0], cargv.data());
     ::_exit(127); // exec failed
   }
@@ -270,6 +283,7 @@ std::string execCommandGetOutput(const std::vector<std::string> &argv, const std
     ::close(pipeRead.release());
     ::dup2(pipeWrite.get(), STDOUT_FILENO);
     ::close(pipeWrite.release());
+    closeInheritedFds();
     ::execv(cargv[0], cargv.data());
     ::_exit(127);
   }
@@ -374,6 +388,7 @@ static std::string execPipelineImpl(const std::vector<std::vector<std::string>> 
       for (auto fd : pipefds) ::close(fd);
       if (capturePipe[0] >= 0) ::close(capturePipe[0]);
       if (capturePipe[1] >= 0) ::close(capturePipe[1]);
+      closeInheritedFds();
       ::execv(cargv[0], cargv.data());
       ::_exit(127);
     }

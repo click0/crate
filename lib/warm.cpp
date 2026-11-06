@@ -33,7 +33,7 @@ bool templateWarmCommand(const Args &args) {
       !e.empty())
     ERR("--output: " << e)
 
-  auto jail = JailQuery::getJailByName(args.warmTarget);
+  auto jail = JailQuery::findContainer(args.warmTarget);   // 1.1.70
   if (!jail) ERR("jail '" << args.warmTarget << "' not found or not running")
   if (!Util::Fs::isOnZfs(jail->path))
     ERR("jail '" << args.warmTarget << "' is not on ZFS — warm templates require ZFS")

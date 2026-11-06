@@ -84,6 +84,11 @@ std::vector<std::string> buildRules(const Devices &d, int customRuleset, bool wi
 // long gone (the applier deletes the set before filling it).
 unsigned rulesetNumberFor(long pid);
 
+// 1.1.70: the next private number after `ruleset`, wrapping 59999 ->
+// 10000 — what `crate run` tries when crated refuses a number another
+// live jail holds (PrivOpsAuthzPure::kPrivateDevfsRuleset{Min,Max}).
+unsigned nextRulesetNumber(unsigned ruleset);
+
 // `crate validate` notes for classes that are a real privilege grant.
 std::vector<std::string> warnings(const Devices &d);
 

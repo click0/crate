@@ -442,6 +442,58 @@ ATF_TEST_CASE_BODY(prune_more_buckets_than_files) {
   ATF_REQUIRE_EQ(d.remove.size(), 0u);
 }
 
+// 1.1.70: retention is per jail. The buckets used to span the whole
+// directory: without --jail, daily=1 kept the newest stream of ONE jail
+// and deleted every other jail's fulls.
+ATF_TEST_CASE_WITHOUT_HEAD(prune_buckets_are_per_jail);
+ATF_TEST_CASE_BODY(prune_buckets_are_per_jail) {
+  std::vector<StreamFile> files = {
+    mkFile("web-backup-2026-01-05T00:00:00Z.zstream"),
+    mkFile("web-backup-2026-01-04T00:00:00Z.zstream"),
+    mkFile("db-backup-2026-01-03T00:00:00Z.zstream"),
+    mkFile("db-backup-2026-01-02T00:00:00Z.zstream"),
+    mkFile("mail-backup-2025-12-01T00:00:00Z.zstream"),
+  };
+  RetentionPolicy p; p.daily = 1;
+  auto d = decidePrune(files, p, false);
+  ATF_REQUIRE(contains(d.keep, "web-backup-2026-01-05T00:00:00Z.zstream"));
+  ATF_REQUIRE(contains(d.keep, "db-backup-2026-01-03T00:00:00Z.zstream"));
+  ATF_REQUIRE(contains(d.keep, "mail-backup-2025-12-01T00:00:00Z.zstream"));
+  ATF_REQUIRE(contains(d.remove, "web-backup-2026-01-04T00:00:00Z.zstream"));
+  ATF_REQUIRE(contains(d.remove, "db-backup-2026-01-02T00:00:00Z.zstream"));
+  ATF_REQUIRE_EQ(d.keep.size(), 3u);
+  ATF_REQUIRE_EQ(d.remove.size(), 2u);
+  // the reasons count per jail too
+  auto ex = explainKeeps(files, p);
+  ATF_REQUIRE_EQ(ex.size(), 3u);
+  for (const auto &kr : ex) ATF_REQUIRE_EQ(kr.reason, std::string("daily:1"));
+}
+
+// 1.1.70: an incremental is based only on its OWN jail's stream — the
+// suffix alone ("backup-<ts>") is the same string in every jail.
+ATF_TEST_CASE_WITHOUT_HEAD(prune_incremental_base_is_same_jail);
+ATF_TEST_CASE_BODY(prune_incremental_base_is_same_jail) {
+  std::vector<StreamFile> files = {
+    mkFile("web-backup-2026-01-05T00:00:00Z.zstream"),
+    mkFile("db-backup-2026-01-06T00:00:00Z.inc-from-backup-2026-01-05T00:00:00Z.zstream"),
+  };
+  RetentionPolicy p; p.daily = 7;
+  auto d = decidePrune(files, p, false);
+  ATF_REQUIRE(contains(d.keep, "web-backup-2026-01-05T00:00:00Z.zstream"));
+  ATF_REQUIRE(contains(d.orphans, "db-backup-2026-01-06T00:00:00Z.inc-from-backup-2026-01-05T00:00:00Z.zstream"));
+}
+
+// 1.1.70: `crate backup` takes jail names up to NameLimits::kJailName
+// (128); the parser stopped at 64 and such streams were never pruned.
+ATF_TEST_CASE_WITHOUT_HEAD(filename_long_jail_name);
+ATF_TEST_CASE_BODY(filename_long_jail_name) {
+  StreamFile sf; std::string err;
+  const std::string j100(100, 'a');
+  ATF_REQUIRE(parseStreamFilename(j100 + "-backup-2026-01-01T00:00:00Z.zstream", sf, err));
+  ATF_REQUIRE_EQ(sf.jailName, j100);
+  ATF_REQUIRE(!parseStreamFilename(std::string(129, 'a') + "-backup-2026-01-01T00:00:00Z.zstream", sf, err));
+}
+
 // ----------------------------------------------------------------------
 // Test entrypoint
 // ----------------------------------------------------------------------
@@ -470,4 +522,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, explain_keeps_assigns_reasons);
   ATF_ADD_TEST_CASE(tcs, prune_handles_empty_input);
   ATF_ADD_TEST_CASE(tcs, prune_more_buckets_than_files);
+  ATF_ADD_TEST_CASE(tcs, prune_buckets_are_per_jail);          // 1.1.70
+  ATF_ADD_TEST_CASE(tcs, prune_incremental_base_is_same_jail); // 1.1.70
+  ATF_ADD_TEST_CASE(tcs, filename_long_jail_name);             // 1.1.70
 }

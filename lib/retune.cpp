@@ -51,11 +51,7 @@ bool retuneCommand(const Args &args) {
   }
 
   // Resolve jail.
-  auto jail = JailQuery::getJailByName(args.retuneTarget);
-  if (!jail) {
-    try { jail = JailQuery::getJailByJid(std::stoi(args.retuneTarget)); }
-    catch (...) {}
-  }
+  auto jail = JailQuery::findContainer(args.retuneTarget);   // 1.1.70
   if (!jail) ERR("jail '" << args.retuneTarget << "' not found or not running")
 
   // 0.9.15: detect privops socket. If present (CRATE_PRIVOPS_SOCKET

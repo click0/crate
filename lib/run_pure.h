@@ -49,6 +49,22 @@ std::string validateCrateFileJailName(const std::string &crateFile);
 std::string jailXnamePidSuffix(long pid);
 bool jailXnameHasPid(const std::string &jailName, long pid);
 
+// 1.1.70: the container name a kernel jail name was composed from —
+// "web_pid4242" -> "web". The spec registry, /var/run/crate/<name>.crate
+// and the control socket's start all speak container names, while the
+// kernel (and `crate list`) carry the pid suffix; `crate restart` and
+// the daemons' restart looked the kernel name up in the registry and
+// never found it. A name without a well-formed "_pid<digits>" tail is
+// returned unchanged.
+std::string containerNameOf(const std::string &jailName);
+
+// 1.1.70: the container name of a RUNNING jail. The privops path names
+// the jail "<name>_pid<N>" (containerNameOf); the root path creates it
+// without a name, so the kernel calls it by its jid ("12") — there the
+// jail directory "<root>/jail-<name>-<8 hex>" still carries the name.
+// Falls back to `jailName` when neither tells.
+std::string containerNameOfJail(const std::string &jailName, const std::string &jailPath);
+
 // 1.1.44: unit number of an epair half ("epair12a" -> 12). False when
 // the name is not "epair<N>a|b" — the privops create_epair reply is
 // data from another process and used to be substr()'d blindly.

@@ -9,6 +9,7 @@
 #include "pathnames.h"
 #include "privops_client.h"
 #include "run_jail.h"
+#include "run_pure.h"       // 1.1.70: containerNameOf
 #include "spec_registry.h"
 #include "util.h"
 #include "warm_pure.h"   // 1.1.48: validateJailName for `crate logs`
@@ -52,15 +53,8 @@ static unsigned long long safeStoull(const std::string &s) {
 using LifecyclePure::humanBytes;
 
 bool statsCrate(const Args &args) {
-  // Resolve target to JID
-  auto jail = JailQuery::getJailByName(args.statsTarget);
-  if (!jail) {
-    // Try as JID
-    try {
-      int jid = std::stoi(args.statsTarget);
-      jail = JailQuery::getJailByJid(jid);
-    } catch (...) {}
-  }
+  // Resolve target: kernel name, jid or container name (1.1.70)
+  auto jail = JailQuery::findContainer(args.statsTarget);
   if (!jail) {
     std::cerr << rang::fg::red << "container '" << args.statsTarget
               << "' not found" << rang::style::reset << std::endl;
@@ -296,7 +290,7 @@ bool logsCrate(const Args &args) {
     logFile = stdoutLog;
   else {
     // Try to read from the jail path
-    auto jail = JailQuery::getJailByName(args.logsTarget);
+    auto jail = JailQuery::findContainer(args.logsTarget);   // 1.1.70
     if (jail && !jail->path.empty()) {
       auto jailLog = jail->path + "/var/log/messages";
       if (Util::Fs::fileExists(jailLog))
@@ -360,17 +354,18 @@ bool logsCrate(const Args &args) {
 // --- crate stop TARGET ---
 
 bool stopCrate(const Args &args) {
-  // Find the running jail
-  auto jail = JailQuery::getJailByName(args.stopTarget);
+  // Find the running jail: kernel name, jid, or (1.1.70) the container
+  // name it was started under.
+  unsigned matches = 0;
+  auto jail = JailQuery::findContainer(args.stopTarget, &matches);
   if (!jail) {
-    try {
-      int jid = std::stoi(args.stopTarget);
-      jail = JailQuery::getJailByJid(jid);
-    } catch (...) {}
-  }
-  if (!jail) {
-    std::cerr << rang::fg::red << "container '" << args.stopTarget
-              << "' not found or not running" << rang::style::reset << std::endl;
+    if (matches > 1)
+      std::cerr << rang::fg::red << "'" << args.stopTarget << "' names " << matches
+                << " running jails; give the jail name from `crate list` or its jid"
+                << rang::style::reset << std::endl;
+    else
+      std::cerr << rang::fg::red << "container '" << args.stopTarget
+                << "' not found or not running" << rang::style::reset << std::endl;
     return false;
   }
 
@@ -477,30 +472,29 @@ bool stopCrate(const Args &args) {
 // --- crate restart TARGET ---
 
 bool restartCrate(const Args &args) {
-  // Find the running container's crate file before stopping
-  auto jail = JailQuery::getJailByName(args.restartTarget);
+  // Find the running container's crate file before stopping.
+  // 1.1.70: by kernel name, jid or container name (findContainer).
+  unsigned matches = 0;
+  auto jail = JailQuery::findContainer(args.restartTarget, &matches);
   if (!jail) {
-    try {
-      int jid = std::stoi(args.restartTarget);
-      jail = JailQuery::getJailByJid(jid);
-    } catch (...) {}
-  }
-  if (!jail) {
-    std::cerr << rang::fg::red << "container '" << args.restartTarget
-              << "' not found or not running" << rang::style::reset << std::endl;
+    if (matches > 1)
+      std::cerr << rang::fg::red << "'" << args.restartTarget << "' names " << matches
+                << " running jails; give the jail name from `crate list` or its jid"
+                << rang::style::reset << std::endl;
+    else
+      std::cerr << rang::fg::red << "container '" << args.restartTarget
+                << "' not found or not running" << rang::style::reset << std::endl;
     return false;
   }
 
   // Remember the jail path for restart
   auto jailPath = jail->path;
   auto jailName = jail->name;
-
-  // Stop the container
-  Args stopArgs;
-  stopArgs.stopTarget = args.restartTarget;
-  stopArgs.stopTimeout = args.restartTimeout;
-  if (!stopCrate(stopArgs))
-    return false;
+  // 1.1.70: the registry, /var/run/crate/<name>.crate and --name speak
+  // the container name; the kernel name carries the pid of the run that
+  // made it ("web_pid4242"). Looking the kernel name up found nothing,
+  // so `crate restart` stopped the container and then gave up.
+  const std::string containerName = RunPure::containerNameOfJail(jailName, jailPath);
 
   // 1.0.2: prefer the spec-registry mapping (populated by `crate run -f`
   // since 0.8.21) over a filesystem walk. The registry is per-user when
@@ -508,44 +502,56 @@ bool restartCrate(const Args &args) {
   // multi-tenant case where bob's `crate restart web` previously
   // picked up alice's `.crate` path from the shared file.
   SpecRegistryPure::Entry reg;
-  const bool registered = SpecRegistry::lookupEntry(jailName, reg);
+  const bool registered = SpecRegistry::lookupEntry(containerName, reg);
   std::string crateFile = registered ? reg.cratePath : "";
-
   // 1.1.69: a warm-base run has no .crate file; the registry holds the
-  // dataset (and the jail name IS the --name), so replay exactly that.
-  if (registered && !reg.warmBase.empty()) {
-    std::cout << "Restarting container " << jailName << " from warm template "
-              << reg.warmBase << "..." << std::endl;
-    Args runArgs;
-    runArgs.cmd = CmdRun;
-    runArgs.runWarmBase = reg.warmBase;
-    runArgs.runName = jailName;
-    runArgs.logProgress = args.logProgress;
-    runArgs.vars = args.vars;
-    int returnCode = 0;
-    return runCrate(runArgs, 0, nullptr, returnCode);
-  }
+  // dataset (and the container name IS the --name), so replay exactly that.
+  const bool warm = registered && !reg.warmBase.empty();
 
   // Legacy fallback for jails started before 0.8.21 (no registry
   // entry) or single-tenant deployments that placed the spec under
   // the conventional /var/run/crate/<name>.crate path.
-  if (crateFile.empty() || !Util::Fs::fileExists(crateFile)) {
-    crateFile = STR("/var/run/crate/" << jailName << ".crate");
+  if (!warm && (crateFile.empty() || !Util::Fs::fileExists(crateFile))) {
+    crateFile = STR("/var/run/crate/" << containerName << ".crate");
     if (!Util::Fs::fileExists(crateFile)) {
       auto bareName = Util::filePathToBareName(jailPath);
       crateFile = STR("/var/run/crate/" << bareName << ".crate");
     }
   }
 
-  if (!Util::Fs::fileExists(crateFile)) {
-    std::cerr << rang::fg::yellow << "Container stopped but cannot restart: "
-              << "no .crate file found for '" << jailName << "'"
-              << rang::style::reset << std::endl;
-    std::cerr << "To restart, run: crate run -f <crate-file>" << std::endl;
+  // 1.1.70: decided BEFORE the stop — a container nobody can start again
+  // is left running instead of stopped (the daemons' restart does the same).
+  if (!warm && !Util::Fs::fileExists(crateFile)) {
+    std::cerr << rang::fg::yellow << "cannot restart '" << jailName
+              << "': no .crate file is registered for '" << containerName
+              << "'; it keeps running" << rang::style::reset << std::endl;
+    std::cerr << "To restart it by hand: crate stop " << jailName
+              << " && crate run -f <crate-file>" << std::endl;
     return false;
   }
 
-  std::cout << "Restarting container " << jailName << "..." << std::endl;
+  // Stop the container — by its kernel name, the one thing that cannot
+  // be ambiguous here.
+  Args stopArgs;
+  stopArgs.stopTarget = jailName;
+  stopArgs.stopTimeout = args.restartTimeout;
+  if (!stopCrate(stopArgs))
+    return false;
+
+  if (warm) {
+    std::cout << "Restarting container " << containerName << " from warm template "
+              << reg.warmBase << "..." << std::endl;
+    Args runArgs;
+    runArgs.cmd = CmdRun;
+    runArgs.runWarmBase = reg.warmBase;
+    runArgs.runName = containerName;
+    runArgs.logProgress = args.logProgress;
+    runArgs.vars = args.vars;
+    int returnCode = 0;
+    return runCrate(runArgs, 0, nullptr, returnCode);
+  }
+
+  std::cout << "Restarting container " << containerName << "..." << std::endl;
 
   // Run the container again
   Args runArgs;

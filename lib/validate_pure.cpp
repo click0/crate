@@ -158,7 +158,10 @@ std::vector<std::string> gatherWarnings(const Spec &spec) {
       w.push_back("dirs/share: '" + s.host + "' is shared read-write as a whole; consider ':ro' or a subdirectory");
   for (const auto &t : spec.tmpfs)
     for (const auto &s : spec.dirsShare)
-      if (MountsPure::isUnder(s.jail, t.path) && s.jail != t.path)
+      // 1.1.70: a tmpfs over the GUI socket dirs (/tmp) is mounted early,
+      // before the shares, so it hides none of them
+      if (MountsPure::isUnder(s.jail, t.path) && s.jail != t.path &&
+          !MountsPure::tmpfsMountedBeforeGui(t.path))
         w.push_back("tmpfs at '" + t.path + "' is mounted after the share at '" + s.jail + "' and hides it");
   if (!spec.etcKeep.empty() && !spec.baseHostRo)
     w.push_back("etc/keep copies host /etc entries at create time; the jail's /etc is a full copy from base.txz here, so only the named entries are replaced");

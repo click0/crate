@@ -120,6 +120,13 @@ ATF_TEST_CASE_BODY(ruleset_number_and_warnings) {
     unsigned n = rulesetNumberFor(p);
     ATF_REQUIRE(n >= 10000u && n <= 59999u);   // never the stock 1..5, always a valid ruleset id
   }
+  // 1.1.70: the retry step crate(1) takes on a refused number stays in
+  // the private range crated accepts (PrivOpsAuthzPure::isPrivateDevfsRuleset)
+  ATF_REQUIRE_EQ(nextRulesetNumber(10000u), 10001u);
+  ATF_REQUIRE_EQ(nextRulesetNumber(59998u), 59999u);
+  ATF_REQUIRE_EQ(nextRulesetNumber(59999u), 10000u);
+  ATF_REQUIRE_EQ(nextRulesetNumber(4u), 10000u);
+  ATF_REQUIRE_EQ(nextRulesetNumber(65535u), 10000u);
 
   Devices d;
   ATF_REQUIRE(warnings(d).empty());

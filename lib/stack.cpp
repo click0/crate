@@ -92,11 +92,11 @@ static StatusFd::Spawned spawnCrateRunDetached(const std::string &crateFile,
                                                const std::map<std::string, std::string> &vars,
                                                bool logProgress) {
   std::vector<std::string> argv;
-  if (logProgress) argv.push_back("--log-progress");
   for (auto &kv : vars) { argv.push_back("--var"); argv.push_back(kv.first + "=" + kv.second); }
   argv.push_back("-f");
   argv.push_back(crateFile);
-  return StatusFd::spawnCrateRun(argv);
+  // 1.1.70: --log-progress is global — it has to precede `run`
+  return StatusFd::spawnCrateRun(argv, logProgress);
 }
 
 // Wait up to `timeoutSec` for the jail of the container started as `s`

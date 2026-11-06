@@ -87,7 +87,20 @@ enum class Decision {
   DenyHostIface,         // 1.1.43: interface is not an epair half (host NIC,
                          // bridge, vlan…) — host state a per-user caller may
                          // not move, tear down or reconfigure by name
+  DenyForeignDevfsRuleset, // 1.1.70: apply_devfs_rules names a ruleset outside
+                           // the private range, or one a live jail of another
+                           // operator (or of root) uses
+  DenyDevfsSharedRuleset,  // 1.1.70: add_devfs_unhide_rule edits whatever set
+                           // the mount uses — possibly a shared one (4, …)
 };
+
+// 1.1.70: the private devfs ruleset numbers crate(1) hands out
+// (DevicesPure::rulesetNumberFor: 10000 + pid % 50000). A per-user caller
+// may fill only a ruleset in this range; the stock sets (1..5) and the
+// numbers an operator picks by hand for other jails stay out of reach.
+constexpr unsigned kPrivateDevfsRulesetMin = 10000;
+constexpr unsigned kPrivateDevfsRulesetMax = 59999;
+bool isPrivateDevfsRuleset(unsigned ruleset);
 
 // Result of looking a target up in the daemon's jid->owner registry.
 struct Owner {
@@ -110,6 +123,11 @@ struct OwnerLookup {
   // "no iface registry wired" and the interface-named verbs keep their
   // pre-1.1.43 host-wide behaviour.
   std::function<Owner(const std::string &ifname)> byIface;
+  // 1.1.70: private devfs ruleset -> the operator whose live jail uses
+  // it. {known=true, uid=0} stands for "in use, but not handed out to a
+  // per-user caller" (a root run, a set from before a daemon restart).
+  // Null: only the range check applies.
+  std::function<Owner(unsigned ruleset)>          byDevfsRuleset;
 };
 
 // Convenience: a lookup where every probe reports "unknown". Useful
@@ -145,6 +163,8 @@ struct Request {
   // "ifname"; bridge_add_member / bridge_del_member use "member" (the
   // bridge itself is shared host state and is not gated).
   std::string ifname;
+  // 1.1.70: apply_devfs_rules' "ruleset" (0 = not carried).
+  unsigned    devfsRuleset = 0;
 };
 
 // 1.1.43: true when `name` is an epair half ("epair<N>a"/"epair<N>b").

@@ -109,4 +109,11 @@ private:
 // which crate itself writes to). Returns "" when valid, else the reason.
 std::string parseStatusFd(const std::string &text, int &fdOut);
 
+// 1.1.70: argv of the detached `crate run` StatusFd::spawnCrateRun
+// execs: "crate" [--log-progress] "run" <runArgs...> "--status-fd" "3".
+// --log-progress is a global option and only parsed BEFORE the command:
+// `crate -p stack up` put it after `run`, every member's run refused
+// the option, and no member started.
+std::vector<std::string> crateRunArgv(const std::vector<std::string> &runArgs, bool logProgress);
+
 }

@@ -152,6 +152,45 @@ ATF_TEST_CASE_BODY(jail_xname_pid_suffix) {
 	ATF_REQUIRE(!RunPure::jailXnameHasPid("", 4242));
 }
 
+// --- 1.1.70: container name of a kernel jail name ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(container_name_of_jail_name);
+ATF_TEST_CASE_BODY(container_name_of_jail_name) {
+	ATF_REQUIRE_EQ(RunPure::containerNameOf("web_pid4242"), std::string("web"));
+	ATF_REQUIRE_EQ(RunPure::containerNameOf("my.app-2_pid1"), std::string("my.app-2"));
+	// only the LAST well-formed suffix goes
+	ATF_REQUIRE_EQ(RunPure::containerNameOf("a_pid1_pid2"), std::string("a_pid1"));
+	// no suffix, a malformed one, or nothing in front of it -> unchanged
+	ATF_REQUIRE_EQ(RunPure::containerNameOf("web"), std::string("web"));
+	ATF_REQUIRE_EQ(RunPure::containerNameOf("web_pid"), std::string("web_pid"));
+	ATF_REQUIRE_EQ(RunPure::containerNameOf("web_pid42x"), std::string("web_pid42x"));
+	ATF_REQUIRE_EQ(RunPure::containerNameOf("web_pid4242_x"), std::string("web_pid4242_x"));
+	ATF_REQUIRE_EQ(RunPure::containerNameOf("_pid4242"), std::string("_pid4242"));
+	ATF_REQUIRE_EQ(RunPure::containerNameOf(""), std::string(""));
+	// the inverse of the suffix crate run appends
+	for (const char *n : {"web", "my.app-2", "x"})
+		ATF_REQUIRE_EQ(RunPure::containerNameOf(std::string(n) + RunPure::jailXnamePidSuffix(77)),
+		               std::string(n));
+}
+
+// 1.1.70: a root-path jail is named by the kernel after its jid; its
+// directory still says which container it is.
+ATF_TEST_CASE_WITHOUT_HEAD(container_name_of_running_jail);
+ATF_TEST_CASE_BODY(container_name_of_running_jail) {
+	using RunPure::containerNameOfJail;
+	// privops path: the kernel name decides
+	ATF_REQUIRE_EQ(containerNameOfJail("web_pid4242", "/var/run/crate/jail-web-0a1b2c3d"), std::string("web"));
+	// root path: jid as the name, the directory names the container
+	ATF_REQUIRE_EQ(containerNameOfJail("12", "/var/run/crate/jail-web-0a1b2c3d"), std::string("web"));
+	ATF_REQUIRE_EQ(containerNameOfJail("12", "/var/run/crate/1001/jail-my.app-2-deadbeef"), std::string("my.app-2"));
+	ATF_REQUIRE_EQ(containerNameOfJail("13", "/var/run/crate/jail-a-b-c-00ff00ff"), std::string("a-b-c"));
+	// nothing to go by: the kernel name as it is
+	ATF_REQUIRE_EQ(containerNameOfJail("12", "/usr/jails/www"), std::string("12"));
+	ATF_REQUIRE_EQ(containerNameOfJail("12", "/var/run/crate/jail-web-xyz"), std::string("12"));
+	ATF_REQUIRE_EQ(containerNameOfJail("12", "/var/run/crate/jail--0a1b2c3d"), std::string("12"));
+	ATF_REQUIRE_EQ(containerNameOfJail("12", ""), std::string("12"));
+}
+
 // --- 1.1.44: epair unit parsing + IPv6 pair addresses ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(epair_unit_and_ip6);
@@ -232,6 +271,8 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, crate_file_jail_name_valid);
 	ATF_ADD_TEST_CASE(tcs, crate_file_jail_name_rejected);
 	ATF_ADD_TEST_CASE(tcs, jail_xname_pid_suffix);
+	ATF_ADD_TEST_CASE(tcs, container_name_of_jail_name);   // 1.1.70
+	ATF_ADD_TEST_CASE(tcs, container_name_of_running_jail); // 1.1.70
 	ATF_ADD_TEST_CASE(tcs, epair_unit_and_ip6);
 	ATF_ADD_TEST_CASE(tcs, run_user_effective);
 }

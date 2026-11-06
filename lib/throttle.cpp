@@ -90,11 +90,7 @@ bool throttleCommand(const Args &args) {
     ERR("the 'throttle' command requires a jail name (positional arg)")
 
   // Resolve jail.
-  auto jail = JailQuery::getJailByName(args.throttleTarget);
-  if (!jail) {
-    try { jail = JailQuery::getJailByJid(std::stoi(args.throttleTarget)); }
-    catch (...) {}
-  }
+  auto jail = JailQuery::findContainer(args.throttleTarget);   // 1.1.70
   if (!jail) ERR("jail '" << args.throttleTarget << "' not found or not running")
 
   // --clear strips all throttle for the jail.

@@ -117,7 +117,15 @@ privileged operations to crated(8)»*).
   `mount_nullfs` / `unmount_nullfs` (за `target`) та
   `apply_devfs_ruleset` / `add_devfs_unhide_rule` / `apply_devfs_rules` (за `mount_path`), `mount_tmpfs` (за `target`).
   Шлях, що лежить у jail, який в реєстрі належить іншому оператору,
-  відбивається `403` (`DenyForeignPath`). 1.1.15 закриває останній
+  відбивається `403` (`DenyForeignPath`). 1.1.70 додає сам ruleset:
+  `apply_devfs_rules` видаляє і наново заповнює названий набір, тож
+  пер-user викликач може назвати лише приватний (10000..59999), яким не
+  користується живий jail іншого оператора чи root
+  (`DenyForeignDevfsRuleset`; раніше можна було переписати ruleset 4 або
+  набір сусіда), а `add_devfs_unhide_rule`, що пише в той набір, який
+  використовує mount, пер-user викликачам заборонено повністю
+  (`DenyDevfsSharedRuleset`; crate(1) не надсилає його з 1.1.62).
+  1.1.15 закриває останній
   вузький залишок: новенький `path`-аргумент `create_jail` зіставляється
   з пер-user `pathPrefix` викликача (виводиться з `path_master_prefix:`
   у crated.conf); чужа ціль → `403` (`DenyForeignCreatePath`). 1.1.17

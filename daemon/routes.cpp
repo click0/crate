@@ -22,6 +22,8 @@
 #include "json_pure.h"
 #include "locs.h"
 #include "pathnames.h"
+#include "run_pure.h"       // 1.1.70: containerNameOf
+#include "spec_registry.h"  // 1.1.70: start / restart by container name
 #include "util.h"
 #include "zfs_ops.h"
 
@@ -41,6 +43,7 @@
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <sstream>
 
 namespace Crated {
@@ -122,6 +125,46 @@ static void jsonError(httplib::Response &res, int code, const std::string &msg) 
   // tool stderr — escape it so the body stays valid JSON.
   res.set_content("{\"status\":\"error\",\"error\":" + JsonPure::quote(msg) + "}",
                   "application/json");
+}
+
+// 1.1.70: the running jail a route's :name means — its kernel name
+// ("web_pid4242", what GET /containers lists), its jid, or the container
+// name it was started under ("web", what start and the spec registry
+// use). The route's pool gate judged `name` as given; a jail found by
+// jid or by container name has to pass it under its own kernel name as
+// well. On failure the response is written (404; 409 when a container
+// name matches more than one running jail; 403) and nullopt returned.
+static std::optional<JailQuery::JailInfo> findRouteJail(const httplib::Request &req,
+                                                        const Config &config,
+                                                        const std::string &role,
+                                                        const std::string &name,
+                                                        httplib::Response &res) {
+  unsigned matches = 0;
+  auto jail = JailQuery::findContainer(name, &matches);
+  if (!jail) {
+    if (matches > 1)
+      jsonError(res, 409, "more than one running jail is named '" + name + "'; use its jail name or jid");
+    else
+      jsonError(res, 404, "container not found");
+    return std::nullopt;
+  }
+  if (jail->name != name && !isAuthorizedForContainer(req, config, role, jail->name)) {
+    jsonError(res, 403, "unauthorized");
+    return std::nullopt;
+  }
+  return jail;
+}
+
+// 1.1.70: the .crate a stopped container starts from: the root spec
+// registry (crate run -f records it there), else the conventional
+// /var/run/crate/<container>.crate. "" when neither exists.
+static std::string specPathForContainer(const std::string &containerName) {
+  try {
+    auto p = SpecRegistry::lookup(containerName);
+    if (!p.empty() && Util::Fs::fileExists(p)) return p;
+  } catch (...) {}
+  auto conventional = "/var/run/crate/" + containerName + ".crate";
+  return Util::Fs::fileExists(conventional) ? conventional : std::string();
 }
 
 // --- GET /api/v1/containers ---
@@ -209,17 +252,8 @@ static void handleContainerStats(const httplib::Request &req, httplib::Response 
     return;
   }
 
-  auto jail = JailQuery::getJailByName(name);
-  if (!jail) {
-    try {
-      int jid = std::stoi(name);
-      jail = JailQuery::getJailByJid(jid);
-    } catch (...) {}
-  }
-  if (!jail) {
-    jsonError(res, 404, "container not found");
-    return;
-  }
+  auto jail = findRouteJail(req, config, "viewer", name, res);   // 1.1.70
+  if (!jail) return;
 
   try {
     auto jidStr = std::to_string(jail->jid);
@@ -258,17 +292,8 @@ static void handleContainerStop(const httplib::Request &req, httplib::Response &
     return;
   }
 
-  auto jail = JailQuery::getJailByName(name);
-  if (!jail) {
-    try {
-      int jid = std::stoi(name);
-      jail = JailQuery::getJailByJid(jid);
-    } catch (...) {}
-  }
-  if (!jail) {
-    jsonError(res, 404, "container not found");
-    return;
-  }
+  auto jail = findRouteJail(req, config, "admin", name, res);   // 1.1.70
+  if (!jail) return;
 
   try {
     Util::execCommand({CRATE_PATH_JEXEC, std::to_string(jail->jid),
@@ -313,17 +338,20 @@ static void handleContainerStart(const httplib::Request &req, httplib::Response 
   }
 
 
-  // Check if already running
-  auto jail = JailQuery::getJailByName(name);
-  if (jail) {
+  // Check if already running. 1.1.70: by container name too — the
+  // running jail is "web_pid4242", so the exact lookup of "web" missed it
+  // and a second instance was started.
+  unsigned running = 0;
+  if (JailQuery::findContainer(name, &running) || running > 0) {
     jsonError(res, 409, "container already running");
     return;
   }
 
-  // Look for saved .crate file
-  auto crateFile = "/var/run/crate/" + name + ".crate";
-  if (!Util::Fs::fileExists(crateFile)) {
-    jsonError(res, 404, "no saved .crate file for '" + name + "'");
+  // Look for saved .crate file (1.1.70: the registry first, by container name)
+  const std::string containerName = RunPure::containerNameOf(name);
+  auto crateFile = specPathForContainer(containerName);
+  if (crateFile.empty()) {
+    jsonError(res, 404, "no saved .crate file for '" + containerName + "'");
     return;
   }
 
@@ -336,12 +364,12 @@ static void handleContainerStart(const httplib::Request &req, httplib::Response 
   // 1.1.42: bearer-token path has no operator uid — the jail is
   // recorded as admin-owned (uid 0), so tenants' jid-scoped privops
   // verbs no longer get the bootstrap Allow on it.
-  Crated::registerSpawnedJailOwner(pid, 0, name, spawned.statusFd);
+  Crated::registerSpawnedJailOwner(pid, 0, containerName, spawned.statusFd);
   // The child is the jail's foreground supervisor and outlives this
   // request: "started" now means "spawned". Poll
   // GET /api/v1/containers/:name for the running state.
   jsonOk(res, "{\"started\":true,\"async\":true,\"pid\":" + std::to_string(pid)
-              + ",\"name\":\"" + name + "\"}");
+              + ",\"name\":" + JsonPure::quote(containerName) + "}");
 }
 
 // --- F2: DELETE /api/v1/containers/:name ---
@@ -360,12 +388,22 @@ static void handleContainerDestroy(const httplib::Request &req, httplib::Respons
   // skipped the supervisor's teardown and leaked mounts, epairs and pf
   // anchors. stopCrate signals the jail, waits, force-destroys on
   // timeout — and `crate run`'s RunAtEnd chain cleans up behind it.
-  auto jail = JailQuery::getJailByName(name);
+  // 1.1.70: by kernel name, jid or container name; ambiguous -> 409.
+  unsigned matches = 0;
+  auto jail = JailQuery::findContainer(name, &matches);
+  if (!jail && matches > 1) {
+    jsonError(res, 409, "more than one running jail is named '" + name + "'; use its jail name or jid");
+    return;
+  }
+  if (jail && jail->name != name && !isAuthorizedForContainer(req, config, "admin", jail->name)) {
+    jsonError(res, 403, "unauthorized");
+    return;
+  }
   bool wasRunning = (bool)jail;
   if (jail) {
     Args args;
     args.cmd = CmdStop;
-    args.stopTarget = name;
+    args.stopTarget = jail->name;
     try {
       if (!stopCrate(args)) {
         jsonError(res, 500, "stop returned failure");
@@ -397,17 +435,8 @@ static void handleContainerLogs(const httplib::Request &req, httplib::Response &
     return;
   }
 
-  auto jail = JailQuery::getJailByName(name);
-  if (!jail) {
-    try {
-      int jid = std::stoi(name);
-      jail = JailQuery::getJailByJid(jid);
-    } catch (...) {}
-  }
-  if (!jail) {
-    jsonError(res, 404, "container not found");
-    return;
-  }
+  auto jail = findRouteJail(req, config, "viewer", name, res);   // 1.1.70
+  if (!jail) return;
 
   // Determine log file path (convention: /var/log/crate/<name>/console.log)
   auto logPath = "/var/log/crate/" + jail->name + "/console.log";
@@ -626,51 +655,59 @@ static void handleContainerRestart(const httplib::Request &req, httplib::Respons
     return;
   }
 
-  auto jail = JailQuery::getJailByName(name);
-
-  // Stop phase: send SIGTERM, wait up to 10s, fall back to SIGKILL.
-  if (jail) {
-    try {
-      Util::execCommand({CRATE_PATH_JEXEC, std::to_string(jail->jid),
-                         "/bin/kill", "-TERM", "-1"},
-        "send SIGTERM to jail processes");
-    } catch (...) {}
-    bool gone = false;
-    for (int i = 0; i < 10; i++) {
-      auto check = JailQuery::getJailByJid(jail->jid);
-      if (!check) { gone = true; break; }
-      ::sleep(1);
-    }
-    if (!gone) {
-      try {
-        Util::execCommand({CRATE_PATH_JEXEC, std::to_string(jail->jid),
-                           "/bin/kill", "-KILL", "-1"},
-          "force kill jail processes");
-        ::sleep(1);
-        auto still = JailQuery::getJailByJid(jail->jid);
-        if (still) {
-          Util::execCommand({CRATE_PATH_JAIL, "-r", std::to_string(jail->jid)},
-            "force remove jail");
-        }
-      } catch (...) {}
-    }
-  }
-
-  // Start phase: must have a saved .crate file.
-  auto crateFile = "/var/run/crate/" + name + ".crate";
-  if (!Util::Fs::fileExists(crateFile)) {
-    jsonError(res, 404, "no saved .crate file for '" + name + "'; container stopped but cannot restart");
+  // 1.1.70: the jail by kernel name, jid or container name; the .crate it
+  // restarts from by CONTAINER name, resolved before anything is stopped.
+  // The old route looked for /var/run/crate/<name>.crate with the name as
+  // given — for the kernel name ("web_pid4242", what GET /containers
+  // lists) there is no such file, so it killed the container and then
+  // answered 404 "cannot restart".
+  unsigned matches = 0;
+  auto jail = JailQuery::findContainer(name, &matches);
+  if (!jail && matches > 1) {
+    jsonError(res, 409, "more than one running jail is named '" + name + "'; use its jail name or jid");
     return;
   }
+  if (jail && jail->name != name && !isAuthorizedForContainer(req, config, "admin", jail->name)) {
+    jsonError(res, 403, "unauthorized");
+    return;
+  }
+  const std::string containerName = jail ? RunPure::containerNameOfJail(jail->name, jail->path)
+                                         : RunPure::containerNameOf(name);
+  auto crateFile = specPathForContainer(containerName);
+  if (crateFile.empty()) {
+    jsonError(res, 404, "no saved .crate file for '" + containerName + "'; "
+                        + (jail ? "the container keeps running" : "nothing to restart"));
+    return;
+  }
+
+  // Stop phase: crate's own stop path (signal, bounded wait, destroy),
+  // like DELETE and the control socket — `crate run`'s teardown runs
+  // behind it.
+  if (jail) {
+    Args stopArgs;
+    stopArgs.cmd = CmdStop;
+    stopArgs.stopTarget = jail->name;
+    stopArgs.stopTimeout = 10;
+    try {
+      if (!stopCrate(stopArgs)) {
+        jsonError(res, 500, "stop phase returned failure");
+        return;
+      }
+    } catch (const std::exception &e) {
+      jsonError(res, 500, std::string("stop phase failed: ") + e.what());
+      return;
+    }
+  }
+
   auto spawned = spawnCrateRun(crateFile);
   pid_t pid = spawned.pid;
   if (pid < 0) {
     jsonError(res, 500, "failed to start container after stop: fork failed");
     return;
   }
-  Crated::registerSpawnedJailOwner(pid, 0, name, spawned.statusFd);   // 1.1.42: admin-owned
+  Crated::registerSpawnedJailOwner(pid, 0, containerName, spawned.statusFd);   // 1.1.42: admin-owned
   jsonOk(res, "{\"restarted\":true,\"async\":true,\"pid\":" + std::to_string(pid)
-              + ",\"name\":\"" + name + "\"}");
+              + ",\"name\":" + JsonPure::quote(containerName) + "}");
 }
 
 // --- Snapshot helpers ---
@@ -813,14 +850,8 @@ static void handleStatsStream(const httplib::Request &req, httplib::Response &re
     jsonError(res, 403, "unauthorized");
     return;
   }
-  auto jail = JailQuery::getJailByName(name);
-  if (!jail) {
-    try { jail = JailQuery::getJailByJid(std::stoi(name)); } catch (...) {}
-  }
-  if (!jail) {
-    jsonError(res, 404, "container not found");
-    return;
-  }
+  auto jail = findRouteJail(req, config, "viewer", name, res);   // 1.1.70
+  if (!jail) return;
 
   res.set_header("Cache-Control", "no-cache");
   res.set_header("X-Accel-Buffering", "no");
@@ -912,14 +943,8 @@ static void handleContainerExport(const httplib::Request &req, httplib::Response
     jsonError(res, 403, "unauthorized");
     return;
   }
-  auto jail = JailQuery::getJailByName(name);
-  if (!jail) {
-    try { jail = JailQuery::getJailByJid(std::stoi(name)); } catch (...) {}
-  }
-  if (!jail) {
-    jsonError(res, 404, "container not found");
-    return;
-  }
+  auto jail = findRouteJail(req, config, "admin", name, res);   // 1.1.70
+  if (!jail) return;
 
   // Build a deterministic-ish filename: <name>-<unixtime>.crate
   auto filename = jail->name + "-" + std::to_string(::time(nullptr)) + ".crate";
@@ -932,10 +957,15 @@ static void handleContainerExport(const httplib::Request &req, httplib::Response
   auto outPath = ARTIFACT_DIR + "/" + filename;
 
   try {
-    // Pipeline: tar cf - -C <path> . | xz --extreme > <outPath>
+    // Pipeline: tar cf - --one-file-system -C <path> . | xz --extreme > <outPath>
+    // 1.1.70: --one-file-system. A running jail has the host's
+    // directories nullfs-mounted into it (shares, the X11 socket dir, a
+    // read-only host base) plus devfs and tmpfs; tar walked into all
+    // of them, so an admin-pool export carried host files that were
+    // never the container's. Only the jail's own filesystem is packed now.
     std::vector<std::vector<std::string>> pipeline = {
-      {"/usr/bin/tar", "cf", "-", "-C", jail->path, "."},
-      {"/usr/bin/xz", "--extreme"},
+      {CRATE_PATH_TAR, "cf", "-", "--one-file-system", "-C", jail->path, "."},
+      {CRATE_PATH_XZ, "--extreme"},
     };
     Util::execPipeline(pipeline, "export container filesystem", "", outPath);
 

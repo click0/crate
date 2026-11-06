@@ -240,4 +240,14 @@ std::string parseStatusFd(const std::string &text, int &fdOut) {
   return "";
 }
 
+std::vector<std::string> crateRunArgv(const std::vector<std::string> &runArgs, bool logProgress) {
+  std::vector<std::string> argv = {"crate"};
+  if (logProgress) argv.push_back("--log-progress");
+  argv.push_back("run");
+  argv.insert(argv.end(), runArgs.begin(), runArgs.end());
+  argv.push_back("--status-fd");
+  argv.push_back("3");
+  return argv;
+}
+
 }

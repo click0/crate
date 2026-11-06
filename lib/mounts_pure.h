@@ -57,6 +57,15 @@ std::string validateEtcKeepName(const std::string &name);
 // on dir).
 bool isUnder(const std::string &path, const std::string &dir);
 
+// 1.1.70: true for a tmpfs at or above one of the jail directories
+// `crate run` mounts the host's GUI sockets into while it sets up X11
+// (/tmp/.X11-unix, /tmp/wayland). Such a tmpfs is mounted before that
+// GUI setup; mounted after it, as every tmpfs was, `tmpfs: [/tmp]` in
+// the firefox and chromium profiles covered the X11 socket and the
+// browser could not open a display. Other tmpfs entries keep their
+// place after the shares.
+bool tmpfsMountedBeforeGui(const std::string &tmpfsPath);
+
 // nmount(2) parameters for one tmpfs mount: {"size", ...}, {"uid", ...},
 // {"gid", ...}, {"mode", ...}. Inside the user's home the mount belongs
 // to the user with mode 0700; elsewhere root owns it with the sticky

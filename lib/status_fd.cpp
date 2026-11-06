@@ -32,6 +32,10 @@ std::string Writer::open() {
 void Writer::emit(const std::string &event, const std::vector<StatusPure::Field> &fields) {
   std::lock_guard<std::mutex> lk(mu_);
   if (fd_ < 0) return;
+  if (StatusPure::isTerminalEvent(event)) {   // 1.1.70: one terminal event
+    if (terminalSent_) return;
+    terminalSent_ = true;
+  }
   const std::string line = StatusPure::renderLine(event, (long long)::time(nullptr), fields);
 
   // Block SIGPIPE for this thread around the write (same pattern as
@@ -63,14 +67,16 @@ void Writer::emit(const std::string &event, const std::vector<StatusPure::Field>
   if (failed) fd_ = -1;   // EPIPE, EBADF, ...: nobody is listening any more
 }
 
-Spawned spawnCrateRun(const std::vector<std::string> &runArgs) {
+Spawned spawnCrateRun(const std::vector<std::string> &runArgs, bool logProgress) {
   Spawned s;
   int pfd[2];
   if (::pipe2(pfd, O_CLOEXEC) == -1) return s;
-  std::vector<std::string> argv = {"crate", "run"};
-  argv.insert(argv.end(), runArgs.begin(), runArgs.end());
-  argv.push_back("--status-fd");
-  argv.push_back("3");
+  const std::vector<std::string> argv = StatusPure::crateRunArgv(runArgs, logProgress);
+  // 1.1.70: built before fork() — crated is threaded, and the child must
+  // not allocate between fork and exec.
+  std::vector<char*> cargv;
+  for (auto &a : argv) cargv.push_back(const_cast<char*>(a.c_str()));
+  cargv.push_back(nullptr);
   pid_t pid = ::fork();
   if (pid < 0) {
     ::close(pfd[0]);
@@ -90,9 +96,9 @@ Spawned spawnCrateRun(const std::vector<std::string> &runArgs) {
       int fl = ::fcntl(3, F_GETFD);
       if (fl >= 0) ::fcntl(3, F_SETFD, fl & ~FD_CLOEXEC);
     }
-    std::vector<char*> cargv;
-    for (auto &a : argv) cargv.push_back(const_cast<char*>(a.c_str()));
-    cargv.push_back(nullptr);
+    // 1.1.70: the supervisor gets stdio and the status pipe, nothing else
+    // of crated's (its sockets would reach the jail's processes).
+    ::closefrom(4);
     ::execv(CRATE_PATH_CRATE, cargv.data());
     ::_exit(127);
   }

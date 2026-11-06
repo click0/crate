@@ -81,6 +81,22 @@ The bhyve/VM track is in TODO2.
   wait/KILL child, but that changes the documented `stopped:true`
   contract. Decide API shape first, then do both ends.
 
+* (LOW, left open by 1.1.70) the devfs ruleset claims
+  (privops_handlers.cpp g_devfsClaims) live in crated's memory: after a
+  daemon restart every set left from before counts as taken while it
+  holds rules (nobody deletes a set at teardown — tenants have no verb
+  for it, the root path does not), until reboot. crate run steps to the
+  next number, 32 times at most.
+* (LOW, left open by 1.1.70) root-path runs take 10000 + pid % 50000
+  too, unchecked: two live root runs whose pids differ by 50000 share a
+  set, and the second one's `delset` empties the first one's (kern.pid_max
+  is 99999). A per-run number handed out by crated, or a check that the
+  set is empty, would close it.
+* (LOW, left open by 1.1.70) libifconfig's own sockets (ifconfig_open)
+  have no close-on-exec. The exec paths into jails close everything
+  above stderr now, but host-side children — Xephyr / x11vnc /
+  websockify (run_gui.cpp), socat (run_services.cpp) — still inherit
+  them.
 * (LOW) Registry write happens after `jail -c` returns (:663-671);
   until then the new jid/path are unowned (bootstrap Allow).
 * (LOW) privops_socket_mode gets no tightness warning unlike
@@ -153,6 +169,16 @@ The bhyve/VM track is in TODO2.
 * (MED, left open by 1.1.69) crated's control-socket start/restart
   cannot start a --warm-base container (404): SpecRegistry::lookup
   returns "" for the `<name> warm-base=<dataset>` entry form.
+* (LOW, left open by 1.1.70) the HTTP snapshot routes (routes.cpp
+  datasetForJail) and the ws-console upgrade (ws_console.cpp) still
+  look the jail up by kernel name only; every other target goes through
+  JailQuery::findContainer (kernel name, jid or container name).
+* (plausible, left open by 1.1.70) a `--name` with a '.' (allowed by
+  WarmPure::validateJailName) becomes `name=<a.b>_pid<N>` in the
+  privops create_jail, and jail(8) reads a dotted name as parent.child.
+  Check on hardware whether `crate run --warm-base … --name a.b` under
+  crated fails at create_jail; if so, refuse '.' in --name or map it
+  for the kernel name (file-derived names stop at the first '.').
 * (LOW) lifecycle.cpp: (the `crate logs ../../x` traversal is fixed
   since 1.1.48, WarmPure::validateJailName) JSON at :180-189 emits jail->name / rctl values
   unescaped (non-crate jails can have arbitrary names). Follow mode
