@@ -19,10 +19,27 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <map>
 #include <string>
 #include <vector>
 
 namespace StackSpec {
+
+// 1.1.70: a member's primary network as the spec parser will see it —
+// read from the template-merged YAML with the member's vars substituted
+// (`ip: ${DB_IP}` is an address, `mode: ${MODE}` a mode). `stack up`
+// decides from this, before anything starts, which members are on a
+// stack bridge (StackPure::poolEligible) and which have a static address
+// of their own; until 1.1.69 that came from a Spec-level mergeSpecs that
+// could disagree with the YAML-level merge the member is built from.
+struct NetInfo {
+  bool hasNet = false;     // a net option (net, tor, or top-level network:)
+  std::string mode;        // options/net/mode; "auto" for `network: auto`; "nat" when unset; "" without hasNet
+  std::string bridge;      // options/net/bridge
+  std::string staticIp;    // options/net/ip when it is an address (not dhcp/none)
+  bool ipSet = false;      // options/net/ip present at all (an address, dhcp or none)
+};
+NetInfo netInfo(const YAML::Node &spec, const std::map<std::string, std::string> &vars);
 
 struct Share {
   std::string containerPath;

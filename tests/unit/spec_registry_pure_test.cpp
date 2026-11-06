@@ -180,6 +180,18 @@ ATF_TEST_CASE_BODY(warm_base_entry_validation) {
   ATF_REQUIRE(!SpecRegistryPure::validateEntry(both).empty());            // one or the other
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(target_of_entry);
+ATF_TEST_CASE_BODY(target_of_entry) {
+  // 1.1.70: what `crate clean` checks and prints. A warm-base entry's
+  // target is its dataset — not an (empty) path to stat.
+  Entry w; w.name = "web"; w.warmBase = "tank/templates/web-warm";
+  ATF_REQUIRE_EQ(SpecRegistryPure::targetOf(w), std::string("warm-base=tank/templates/web-warm"));
+  Entry f; f.name = "web"; f.cratePath = "/srv/web.crate";
+  ATF_REQUIRE_EQ(SpecRegistryPure::targetOf(f), std::string("/srv/web.crate"));
+  ATF_REQUIRE_EQ(formatLine(w), std::string("web ") + SpecRegistryPure::targetOf(w));
+  ATF_REQUIRE_EQ(formatLine(f), std::string("web /srv/web.crate"));
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, name_typical_accepted);
   ATF_ADD_TEST_CASE(tcs, name_rejects_garbage);
@@ -194,4 +206,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, validateName_matches_jail_name_rule);
   ATF_ADD_TEST_CASE(tcs, warm_base_entry_round_trip);
   ATF_ADD_TEST_CASE(tcs, warm_base_entry_validation);
+  ATF_ADD_TEST_CASE(tcs, target_of_entry);
 }

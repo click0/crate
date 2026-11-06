@@ -1419,7 +1419,14 @@ is an IPv4 CIDR and
 a bare address assigned to the bridge;
 .Sy ip_range
 .Pq Ar first-last
-is the pool containers without a static address draw from;
+is the pool that members on this network's bridge draw from: a member
+in bridge mode
+.Pq Li options/net: {mode: bridge, bridge: <this bridge>} , or Li mode: auto with that bridge
+that sets no
+.Sy options/net/ip
+of its own.
+Any other member gets no pool address, a warning says so, and it is
+not in the stack's hosts/DNS unless its own spec sets a static address;
 .Sy dns: true
 starts a stack-local resolver that answers the container names.
 Names follow the jail-name rule.
@@ -1452,7 +1459,7 @@ For a
 member,
 .Cm stack up
 composes the final spec file \(em the template, the pool address
-.Pq Sy options/net/ip and Sy gateway , when the spec names a net option without an address ,
+.Pq Sy options/net/ip and the network's Sy gateway , for a member that draws from a pool ,
 the
 .Li __crate_stack_hosts
 and

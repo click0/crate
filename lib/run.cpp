@@ -494,11 +494,20 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
     // Teardown: zfs destroy the clone (auto-unmounts) and then the
     // marker snapshot. Best-effort — we never want a teardown failure
     // to mask the real error from the run.
-    destroyWarmClone.reset([warmCloneName, warmSnapName, &args]() {
+    //
+    // 1.1.70: drop the DirLock first. Its descriptor is open on the
+    // clone's root directory, so the unmount inside `zfs destroy` got
+    // EBUSY and every warm-base run since 1.1.69 left its clone (and
+    // the @warm-run snapshot, which a clone pins) behind. A failure is
+    // now reported instead of swallowed.
+    destroyWarmClone.reset([warmCloneName, warmSnapName, &jailDirLock, &args]() {
+      jailDirLock.release();
       LOG("warm-base: destroy clone " << warmCloneName)
-      try { ZfsOps::destroy(warmCloneName); } catch (...) {}
+      try { ZfsOps::destroy(warmCloneName); }
+      catch (const std::exception &e) { WARN("warm-base: could not destroy the clone " << warmCloneName << ": " << e.what()) }
       LOG("warm-base: destroy snapshot " << warmSnapName)
-      try { ZfsOps::destroy(warmSnapName); } catch (...) {}
+      try { ZfsOps::destroy(warmSnapName); }
+      catch (const std::exception &e) { WARN("warm-base: could not destroy the snapshot " << warmSnapName << ": " << e.what()) }
     });
   }
 

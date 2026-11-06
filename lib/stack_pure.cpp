@@ -241,6 +241,13 @@ std::string poolCidr(const std::string &ip, const std::vector<std::string> &subn
   return ip + prefix;
 }
 
+bool poolEligible(const std::string &mode, const std::string &memberBridge,
+                  const std::string &networkBridge, bool ownIp) {
+  if (ownIp) return false;
+  if (mode != "bridge" && mode != "auto") return false;
+  return !memberBridge.empty() && memberBridge == networkBridge;
+}
+
 std::vector<std::string> templateCandidates(const std::string &name, const std::string &stackDir,
                                             const std::string &home) {
   std::vector<std::string> out;

@@ -13,6 +13,7 @@
 #include "runtime_paths_pure.h"
 #include "stack_pure.h"
 #include "stack_spec.h"  // 1.1.68: the member spec is composed at the YAML level
+#include "profile.h"     // 1.1.70: Profile::mergeYaml for the member bases
 #include "status_fd.h"   // 1.1.65: detached `crate run --status-fd`
 
 #include <rang.hpp>
@@ -29,6 +30,7 @@
 #include <iomanip>
 #include <sstream>
 #include <filesystem>
+#include <functional>
 
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -163,10 +165,15 @@ static inline std::string ipToString(uint32_t ip) { return StackPure::ipToString
 
 // Allocate IPs from subnet for containers that don't have static IPs
 // Reserve .1 for gateway/bridge, allocate .2, .3, ... sequentially
+// `eligible(name)` (1.1.70): whether a spec member may hold an address of
+// this network — StackPure::poolEligible on its mode and bridge. Members
+// that may not are skipped here; the caller warns about the ones left
+// without any address.
 static std::map<std::string, std::string> allocateIpPool(
     const StackNetwork &network,
     const std::vector<StackEntry> &entries,
-    const std::map<std::string, std::string> &existingIps) {
+    const std::map<std::string, std::string> &existingIps,
+    const std::function<bool(const std::string &)> &eligible) {
 
   std::map<std::string, std::string> result = existingIps;
 
@@ -237,6 +244,8 @@ static std::map<std::string, std::string> allocateIpPool(
            "unless its own spec sets a static ip")
       continue;
     }
+    if (!eligible(e.name))
+      continue;   // 1.1.70: not on this network's bridge in bridge mode
 
     while (nextIp <= poolEnd && usedIps.count(nextIp))
       nextIp++;
@@ -581,26 +590,63 @@ static std::string resolveTemplate(const StackEntry &e) {
       << searched.str() << ")")
 }
 
-// Collect container name -> IP mappings by parsing each spec's network config.
-// Returns a map of container name to IP address string.
-static std::map<std::string, std::string> collectContainerIPs(const std::vector<StackEntry> &entries) {
-  std::map<std::string, std::string> nameToIp;
+// 1.1.70: a `spec:` member as `stack up` builds it — its spec merged over
+// its template at the YAML level (Profile::mergeYaml, `${VAR}` intact),
+// and the network the parser will read from that (StackSpec::netInfo,
+// vars substituted). Loaded once, before anything starts: the static
+// addresses, who may draw from a pool and the composed spec all come
+// from this one merge. (The Spec-level mergeSpecs used for the static
+// addresses until 1.1.69 could disagree with the YAML-level merge the
+// member is built from.)
+struct MemberBase {
+  YAML::Node node;
+  std::string templatePath;
+  StackSpec::NetInfo net;
+};
+
+// `strict` (stack up): a spec or template that does not load is an error
+// before anything starts. Not strict (stack status): such a member is
+// left out of the listing.
+static std::map<std::string, MemberBase> loadMemberBases(const std::vector<StackEntry> &entries,
+                                                         bool strict) {
+  std::map<std::string, MemberBase> out;
   for (auto &e : entries) {
-    if (e.specFile.empty())
-      continue;
+    if (e.specFile.empty()) continue;
     try {
-      auto spec = parseSpecWithVars(e.specFile, e.vars);
-      if (!e.templateName.empty()) {
-        auto tpl = parseSpec(resolveTemplate(e));
-        spec = mergeSpecs(tpl, spec);
+      MemberBase b;
+      YAML::Node specNode, tplNode;
+      try {
+        specNode = YAML::LoadFile(e.specFile);
+      } catch (const YAML::Exception &ex) {
+        ERR("containers/" << e.name << ": cannot parse " << e.specFile << ": " << ex.what())
       }
-      auto *netOpt = spec.optionNet();
-      if (netOpt && !netOpt->staticIp.empty())
-        nameToIp[e.name] = ipFromCidr(netOpt->staticIp);
+      if (!e.templateName.empty()) {
+        b.templatePath = resolveTemplate(e);
+        try {
+          tplNode = YAML::LoadFile(b.templatePath);
+        } catch (const YAML::Exception &ex) {
+          ERR("containers/" << e.name << ": cannot parse template " << b.templatePath << ": " << ex.what())
+        }
+      }
+      if (!specNode.IsDefined() || !specNode.IsMap())
+        ERR("containers/" << e.name << ": " << e.specFile << " is not a YAML map")
+      b.node = (tplNode.IsDefined() && !tplNode.IsNull()) ? Profile::mergeYaml(tplNode, specNode)
+                                                          : YAML::Clone(specNode);
+      b.net = StackSpec::netInfo(b.node, e.vars);
+      out.emplace(e.name, std::move(b));
     } catch (...) {
-      // Skip containers whose specs can't be parsed at this stage
+      if (strict) throw;
     }
   }
+  return out;
+}
+
+// name -> address (no prefix) of every member whose own spec sets one
+static std::map<std::string, std::string> staticMemberIPs(const std::map<std::string, MemberBase> &bases) {
+  std::map<std::string, std::string> nameToIp;
+  for (auto &kv : bases)
+    if (!kv.second.net.staticIp.empty())
+      nameToIp[kv.first] = ipFromCidr(kv.second.net.staticIp);
   return nameToIp;
 }
 
@@ -853,8 +899,8 @@ bool stackCommand(const Args &args) {
                   << std::endl;
     }
 
-    // Show container IPs
-    auto containerIPs = collectContainerIPs(sorted);
+    // Show container IPs (the static ones; pool addresses exist only during `up`)
+    auto containerIPs = staticMemberIPs(loadMemberBases(sorted, /*strict=*/false));
     if (!containerIPs.empty()) {
       std::cout << "  DNS mappings:" << std::endl;
       for (auto &kv : containerIPs)
@@ -880,8 +926,15 @@ bool stackCommand(const Args &args) {
   if (args.stackSubcmd == "up") {
     auto sorted = topoSort(entries);
 
+    // 1.1.70: every spec member's template-merged YAML and network, once,
+    // up front — a spec that does not load stops the stack before a bridge
+    // or a container exists.
+    const auto bases = loadMemberBases(sorted, /*strict=*/true);
+
     // Collect container name -> IP mappings for /etc/hosts injection
-    auto containerIPs = collectContainerIPs(sorted);
+    auto containerIPs = staticMemberIPs(bases);
+    // pool-assigned member -> the network it drew from (prefix, gateway)
+    std::map<std::string, const StackNetwork *> poolNetworkOf;
 
     // Parse networks section and create bridges if needed
     std::vector<StackNetwork> networks;
@@ -916,10 +969,35 @@ bool stackCommand(const Args &args) {
           }
 
           // IP Pool allocation: assign IPs to containers that don't have static ones
-          if (!net.subnet.empty())
-            containerIPs = allocateIpPool(net, sorted, containerIPs);
+          // 1.1.70: only to members in bridge mode on this network's bridge.
+          if (!net.subnet.empty()) {
+            auto before = containerIPs;
+            containerIPs = allocateIpPool(net, sorted, containerIPs, [&](const std::string &name) {
+              auto it = bases.find(name);
+              return it != bases.end()
+                  && StackPure::poolEligible(it->second.net.mode, it->second.net.bridge, net.bridge,
+                                             it->second.net.ipSet);
+            });
+            for (auto &kv : containerIPs)
+              if (!before.count(kv.first)) poolNetworkOf[kv.first] = &net;
+          }
         }
       }
+    }
+
+    // 1.1.70: a member that got no address is not in the stack's hosts/DNS.
+    // Say so — until 1.1.68 such a member was handed a pool address anyway
+    // (advertised, held by nobody), and 1.1.68 injected it into a NAT
+    // member, which Spec::validate refuses.
+    {
+      bool anyPool = false;
+      for (auto &net : networks) if (!net.subnet.empty()) anyPool = true;
+      if (anyPool)
+        for (auto &kv : bases)
+          if (!containerIPs.count(kv.first))
+            WARN("stack: container '" << kv.first << "' gets no pool address — only a member in bridge mode "
+                 "on a stack network's bridge (options/net: {mode: bridge, bridge: <that bridge>}) can hold one; "
+                 "it is not in the stack's DNS/hosts unless its own spec sets a static ip")
     }
 
     auto hostsEntries = buildHostsEntries(containerIPs);
@@ -1014,15 +1092,14 @@ bool stackCommand(const Args &args) {
         // spec. `${VAR}` stays as text in the file: the run gets the vars
         // with --var and substitutes them itself.
         StackSpec::Injections inj;
+        const auto &base = bases.at(e.name);
 
-        // Auto-assign IP from pool if container has no static IP configured
-        auto poolIt = containerIPs.find(e.name);
-        if (poolIt != containerIPs.end()) {
-          std::vector<std::string> subnets;
-          for (auto &net : networks) subnets.push_back(net.subnet);
-          inj.ipCidr = StackPure::poolCidr(poolIt->second, subnets);
-          for (auto &net : networks)
-            if (!net.gateway.empty()) { inj.gateway = net.gateway; break; }
+        // Auto-assign IP from pool if container has no static IP configured.
+        // 1.1.70: prefix and gateway of the network the address came from
+        // (it used to be the first network with a subnet / a gateway).
+        if (auto pn = poolNetworkOf.find(e.name); pn != poolNetworkOf.end()) {
+          inj.ipCidr = StackPure::poolCidr(containerIPs.at(e.name), {pn->second->subnet});
+          inj.gateway = pn->second->gateway;
         }
 
         // Inject /etc/hosts entries for inter-container DNS (§26). 1.1.25:
@@ -1051,28 +1128,15 @@ bool stackCommand(const Args &args) {
             inj.shares.push_back({vm.containerPath, it->second.hostPath, vm.readOnly});   // 1.1.63: :ro reaches the mount
         }
 
-        YAML::Node specNode, tplNode;
-        try {
-          specNode = YAML::LoadFile(e.specFile);
-        } catch (const YAML::Exception &ex) {
-          ERR("containers/" << e.name << ": cannot parse " << e.specFile << ": " << ex.what())
-        }
-        std::string templatePath;
-        if (!e.templateName.empty()) {
-          templatePath = resolveTemplate(e);
-          try {
-            tplNode = YAML::LoadFile(templatePath);
-          } catch (const YAML::Exception &ex) {
-            ERR("containers/" << e.name << ": cannot parse template " << templatePath << ": " << ex.what())
-          }
-        }
+        const auto &templatePath = base.templatePath;
         const auto memberSpec = specDir.get() + "/" + e.name + ".yml";
         {
           std::ostringstream header;
           header << "# generated by crate stack up from " << e.specFile;
           if (!templatePath.empty()) header << " + template " << templatePath;
           header << "\n# do not edit: change the stack or spec file and run again";
-          StackSpec::writeSpec(StackSpec::compose(specNode, tplNode, inj), memberSpec, header.str());
+          // the template is already merged into base.node (loadMemberBases)
+          StackSpec::writeSpec(StackSpec::compose(base.node, YAML::Node(), inj), memberSpec, header.str());
         }
         if (args.logProgress)
           std::cerr << rang::fg::gray << Util::tmSecMs() << ": [stack] " << e.name

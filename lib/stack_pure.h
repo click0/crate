@@ -84,6 +84,21 @@ std::string dnsCommand(const std::string &gateway, std::string &err);
 // poolCidr(): the pool address a member gets, with the prefix length of
 // the first network that has a subnet ("/24" when none has).
 std::string poolCidr(const std::string &ip, const std::vector<std::string> &subnets);
+
+// 1.1.70: may a member draw an address from the pool of a stack network
+// whose bridge is `networkBridge`? Only when it will actually sit on that
+// bridge and leaves its addressing to the stack: options/net mode
+// `bridge` (or `auto`, which becomes bridge mode), options/net/bridge ==
+// the network's bridge, and no options/net/ip of its own (`ownIp`: a
+// static address, `dhcp` or `none` — the member chose, and the pool
+// address would be advertised in hosts/DNS while the jail used another).
+// `mode` is the spec's options/net/mode as written ("nat" when a net
+// option has none, "" without a net option). A NAT member cannot hold a
+// static address (Spec::validate refuses it — 1.1.68 injected one anyway
+// and `stack up` stopped there), and a member on another bridge or in
+// passthrough/netgraph mode would get an address of a subnet it is not on.
+bool poolEligible(const std::string &mode, const std::string &memberBridge,
+                  const std::string &networkBridge, bool ownIp);
 // templateCandidates(): where `containers/<name>/template: T` is looked
 // for, first hit wins. A path (contains '/' or ends in ".yml"/".yaml") is
 // taken relative to the stack file's directory, then as given; a bare

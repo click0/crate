@@ -898,6 +898,59 @@ ones; `crate top` shows rates and a smooth CPU%.
 
 ---
 
+## 4m. 1.1.70 — regressions of 1.1.65–1.1.69 and the teardown crash
+
+```sh
+# the success-path teardown of a plain (no x11/gui) run — it died with SIGSEGV before 1.1.70
+printf 'run: {command: /bin/echo hello}\n' > /tmp/e.yml && crate create -s /tmp/e.yml -o /tmp/e.crate
+crate run -f /tmp/e.crate; echo "exit=$?"
+#   expect: "hello", exit=0, no "Segmentation fault", no core file
+ls /var/run/crate | grep -c '^jail-e-'            # 0: the jail directory was removed
+mount | grep -c /var/run/crate/jail-e-             # 0: nothing left mounted
+# the same for a NAT run (fw slot / lease handles) and a bridge run on an existing bridge
+crate run -f fetch.crate -- -o /dev/null https://www.freebsd.org/; echo "exit=$?"   # exit=0, no crash
+
+# --warm-base: the clone and its snapshot are gone after the run (1.1.69 leaked both)
+crate run --warm-base tank/templates/nginx-warm --name nginxw -- /bin/echo ok
+zfs list -H -o name -r $(zfs list -H -o name $(dirname /var/run/crate/x)) | grep -c 'warm-run\|nginxw'   # 0
+zfs list -H -t snapshot -o name tank/templates/nginx-warm | grep -c '@warm-run-'                       # 0
+
+# crate clean keeps a warm-base registry entry whose dataset exists, drops one whose dataset is gone
+grep nginxw /var/run/crate/spec-registry.txt                  # nginxw warm-base=tank/templates/nginx-warm
+crate clean -n | grep nginxw                                  # nothing: the dataset exists
+zfs rename tank/templates/nginx-warm tank/templates/nginx-warm.old
+crate clean -n | grep nginxw                                  # "would remove registry entry: nginxw -> warm-base=… (dataset no longer exists)"
+zfs rename tank/templates/nginx-warm.old tank/templates/nginx-warm
+
+# stack pool addresses: NAT members are not given one any more (1.1.68 stopped `stack up` on them)
+cat > /tmp/stk2/stack.yml <<'EOF'
+containers:
+  nat:    { spec: nat.yml }      # options: {net: {outbound: dns}}
+  br:     { spec: br.yml }       # options: {net: {mode: bridge, bridge: bridge78}}
+  brdhcp: { spec: brdhcp.yml }   # options: {net: {mode: bridge, bridge: bridge78, ip: dhcp}}
+networks:
+  n: { bridge: bridge78, subnet: 10.78.0.0/24, gateway: 10.78.0.1, ip_range: 10.78.0.100-10.78.0.110 }
+EOF
+crate stack up /tmp/stk2/stack.yml -p
+#   expect: all three Started; WARNs "container 'nat' gets no pool address" and the same for 'brdhcp';
+#   "DNS mappings: br=10.78.0.100"; br's +CRATE.SPEC has ip: 10.78.0.100/24, gateway: 10.78.0.1
+crate stack down /tmp/stk2/stack.yml
+
+# crated: no zombies after starts and failed starts
+crate-ctl start broken; crate-ctl start nginx; sleep 15
+ps -o pid,stat,comm -p $(pgrep -d, -P $(cat /var/run/crate/crated.pid)) | grep -c ' Z'   # 0
+crate-ctl stop nginx; sleep 5; ps -axo stat,comm | grep -c '^Z.*crate'                     # 0: reaped when it exited
+```
+
+Pass criteria: no SIGSEGV on any success path and a complete teardown;
+no warm-run clone or snapshot left; warm-base registry entries survive
+`crate clean` while their dataset exists; a stack with NAT, bridge and
+bridge+dhcp members starts, with a pool address only on the bridge
+member and a warning for the others; crated leaves no zombie behind a
+failed or finished `crate run`.
+
+---
+
 ## 5. Reporting back
 
 ```sh

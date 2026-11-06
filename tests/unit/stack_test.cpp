@@ -378,8 +378,30 @@ ATF_TEST_CASE_BODY(template_candidates_name_and_path) {
 	ATF_REQUIRE(StackPure::templateCandidates("", "/srv", "/home/alice").empty());
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(pool_only_for_bridge_members_on_the_stack_bridge);
+ATF_TEST_CASE_BODY(pool_only_for_bridge_members_on_the_stack_bridge) {
+	// 1.1.70: the cases 1.1.68 got wrong — a NAT member was handed an
+	// address that Spec::validate then refused, and `stack up` stopped.
+	ATF_REQUIRE(!StackPure::poolEligible("nat", "", "bridge10", false));
+	ATF_REQUIRE(!StackPure::poolEligible("nat", "bridge10", "bridge10", false));   // a bridge field does not make NAT a bridge member
+	ATF_REQUIRE(!StackPure::poolEligible("", "", "bridge10", false));              // no net option at all
+	// on the stack's bridge, addressing left to the stack
+	ATF_REQUIRE(StackPure::poolEligible("bridge", "bridge10", "bridge10", false));
+	ATF_REQUIRE(StackPure::poolEligible("auto", "bridge10", "bridge10", false));
+	// another bridge, or none named (auto falls back to the host default bridge)
+	ATF_REQUIRE(!StackPure::poolEligible("bridge", "bridge11", "bridge10", false));
+	ATF_REQUIRE(!StackPure::poolEligible("auto", "", "bridge10", false));
+	ATF_REQUIRE(!StackPure::poolEligible("bridge", "", "", false));
+	// the member's own options/net/ip — a static address, dhcp or none — wins
+	ATF_REQUIRE(!StackPure::poolEligible("bridge", "bridge10", "bridge10", true));
+	// modes whose interface is not on a bridge
+	ATF_REQUIRE(!StackPure::poolEligible("passthrough", "bridge10", "bridge10", false));
+	ATF_REQUIRE(!StackPure::poolEligible("netgraph", "bridge10", "bridge10", false));
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
+	ATF_ADD_TEST_CASE(tcs, pool_only_for_bridge_members_on_the_stack_bridge);
 	ATF_ADD_TEST_CASE(tcs, hosts_command_text_and_guard);
 	ATF_ADD_TEST_CASE(tcs, dns_command_text_and_guard);
 	ATF_ADD_TEST_CASE(tcs, pool_cidr_prefix_from_first_subnet);

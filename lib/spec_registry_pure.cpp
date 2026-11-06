@@ -109,9 +109,13 @@ std::string parseLine(const std::string &line, Entry &out) {
   return "";
 }
 
+std::string targetOf(const Entry &e) {
+  if (!e.warmBase.empty()) return std::string(kWarmBaseTag) + e.warmBase;
+  return e.cratePath;
+}
+
 std::string formatLine(const Entry &e) {
-  if (!e.warmBase.empty()) return e.name + " " + kWarmBaseTag + e.warmBase;
-  return e.name + " " + e.cratePath;
+  return e.name + " " + targetOf(e);
 }
 
 int findIndex(const std::vector<Entry> &entries, const std::string &name) {
