@@ -49,7 +49,8 @@ streams are private files, and crated starts warm-base containers.**
   `nginx-vlan.yml` declared `inbound-tcp` / `inbound-udp` in bridge
   mode, where the spec refuses them (port forwarding is NAT-only; a
   bridged jail is reached at its own address). The maps are gone and a
-  comment says where the ports are.
+  comment says where the ports are. `examples/**` left the workflow's
+  `paths-ignore`, so a change to an example runs the check too.
 - **The `.local` key policy could be sidestepped** (`lib/profile_pure.cpp`,
   `lib/profile.cpp`). The forbidden keys were compared as exact
   top-level strings: the parser's other spelling (`security-advanced`,

@@ -26,7 +26,8 @@ on:
       - 'TODO'
       - 'CHANGELOG.md'
       - 'completions/**'
-      - 'examples/**'
+      # 1.1.71: examples/** більше не ignore'иться — smoke-крок нижче
+      # валідує кожен examples/*.yml, тож зміна прикладу мусить його запускати.
       - 'templates/**'
       - 'crate.5'
       - 'crated.8'
