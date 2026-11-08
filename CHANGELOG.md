@@ -43,7 +43,13 @@ streams are private files, and crated starts warm-base containers.**
   never rescanned. A `${KEY}` whose key was not given still stays as
   text for a script's own shell variable, and `${VAR-default}` (no
   colon) is left to the shell. The lite FreeBSD CI now runs `crate
-  validate` on every `examples/*.yml`, not only `nginx.yml`.
+  validate` on every `examples/*.yml`, not only `nginx.yml` — and its
+  first run found four more that never got past `crate create`:
+  `matrix-coturn.yml`, `matrix-nginx.yml`, `multi-interface.yml` and
+  `nginx-vlan.yml` declared `inbound-tcp` / `inbound-udp` in bridge
+  mode, where the spec refuses them (port forwarding is NAT-only; a
+  bridged jail is reached at its own address). The maps are gone and a
+  comment says where the ports are.
 - **The `.local` key policy could be sidestepped** (`lib/profile_pure.cpp`,
   `lib/profile.cpp`). The forbidden keys were compared as exact
   top-level strings: the parser's other spelling (`security-advanced`,
