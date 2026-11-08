@@ -104,6 +104,14 @@ RunUser effectiveRunUser(const std::string &specUser, const std::string &operato
 // mirrored operator — createUserInJail covers that one).
 bool runUserNeedsAccount(const RunUser &u);
 
+// 1.1.71: the jail home the X cookie (.Xauthority / .ICEauthority) moves
+// to for `u`, whose passwd home in the jail is `pwHome`; "" when it
+// stays where the GUI set-up put it. Under a root `crate run` both copies
+// land in the jail's /root (0600 root, /root 0700), which a dedicated or
+// named run/user cannot read; root reads it there, and the mirrored
+// operator's copy is already in their own home.
+std::string runUserCookieHome(const RunUser &u, const std::string &pwHome);
+
 // `run/user` value rule: "" (default), "root", or a pw(8)-style login
 // name (letter or '_' first, then [A-Za-z0-9._-], <= 32 chars). Returns
 // "" when acceptable, otherwise the reason.

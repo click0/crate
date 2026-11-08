@@ -50,6 +50,9 @@
 #ifndef CRATE_PATH_SH
 #define CRATE_PATH_SH         "/bin/sh"
 #endif
+#ifndef CRATE_PATH_CP
+#define CRATE_PATH_CP         "/bin/cp"         // 1.1.71: etc/keep directories
+#endif
 
 // --- FreeBSD base system: /usr/bin ---
 

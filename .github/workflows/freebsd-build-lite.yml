@@ -26,7 +26,8 @@ on:
       - 'TODO'
       - 'CHANGELOG.md'
       - 'completions/**'
-      - 'examples/**'
+      # 1.1.71: examples/** більше не ignore'иться — smoke-крок нижче
+      # валідує кожен examples/*.yml, тож зміна прикладу мусить його запускати.
       - 'templates/**'
       - 'crate.5'
       - 'crated.8'
@@ -166,6 +167,19 @@ jobs:
               echo "::error::crate validate on a missing file must fail"; exit 1
             fi
           done
+          # 1.1.71: усі приклади, а не лише nginx.yml — webapp.yml роками не
+          # розбирався (`${LISTEN_PORT:-8080}` як ключ порту), і цього ніхто
+          # не бачив. stack-*.yml — файли стеків, не специфікації.
+          bad=""
+          for f in examples/*.yml; do
+            case "$f" in examples/stack-*) continue ;; esac
+            ./crate validate "$f" >/dev/null 2>validate.err || {
+              echo "::error file=$f::crate validate failed: $(tail -n 3 validate.err | tr '\n' ' ')"
+              bad="$bad $f"
+            }
+          done
+          rm -f validate.err
+          [ -z "$bad" ] || { echo "examples that do not validate:$bad"; exit 1; }
 
       - name: Link daemon binaries crated + crate-snmpd + crate-hub
         shell: cpa.sh {0}

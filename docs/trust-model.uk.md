@@ -131,7 +131,10 @@ privileged operations to crated(8)»*).
   у crated.conf); чужа ціль → `403` (`DenyForeignCreatePath`). 1.1.17
   закриває останні крос-тенантні діри: **source**-кінець `mount_nullfs`
   (source усередині `path_master_prefix/<uid>` іншого тенанта → `403`
-  `DenyForeignSource`; host-шляхи та GUI-сокети лишаються дозволені) і
+  `DenyForeignSource`; з 1.1.71 так само source, що *містить*
+  `path_master_prefix` — `/`, `/var`, `/var/run`, — бо раніше через нього
+  кожен тенантський слайс був на відстані одного монтування; інші
+  host-шляхи та GUI-сокети лишаються дозволені) і
   два interface-верби, що оперують **конкретним** jail, а не спільним
   host-станом — `configure_iface` (`jexec`-иться в названий `jid` і
   переносить iface у його vnet → гейт за `jid`) та

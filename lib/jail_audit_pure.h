@@ -107,7 +107,7 @@ std::vector<std::string> parseResolvConf(const std::string &text);
 // --- Classification ---
 
 enum class Reach { Open, Refused, Unreachable, Unknown };
-// `nc -z -w 3 HOST PORT 2>&1` exit status + text.
+// `nc -v -z -w 3 HOST PORT 2>&1` exit status + text.
 Reach classifyNc(int rc, const std::string &text);
 const char *reachLabel(Reach r);
 
@@ -119,7 +119,8 @@ struct DeviceClasses {
   std::vector<std::string> usb;     // usb, usbctl, ugen*
   std::vector<std::string> serial;  // cuau*, cuaU*, ttyu*, ttyU*
   std::vector<std::string> disks;   // ada*, da*, nvd*, nda*, md*, cd*, gpt, diskid, ufs, ufsid, label, zvol
-  std::vector<std::string> raw;     // mem, kmem, io, pf, bpf*, kvm — host-wide access
+  std::vector<std::string> raw;     // mem, kmem, io, pf, kvm — host-wide access
+  std::vector<std::string> bpf;     // 1.1.71: bpf* — host-wide only without vnet
   std::vector<std::string> net;     // tun*, tap*, net, netmap
   unsigned other = 0;               // everything else (null, zero, random, pts, fd...)
 };

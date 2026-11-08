@@ -127,6 +127,12 @@ void execPipeline(const std::vector<std::vector<std::string>> &cmds, const std::
                   const std::string &stdinFile = "", const std::string &stdoutFile = "");
 std::string execPipelineGetOutput(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
                                   const std::string &stdinFile = "");
+// 1.1.71: execPipeline into a NEW file, 0600, refusing an existing one
+// or a symlink (O_EXCL|O_NOFOLLOW) — for streams that hold a dataset or
+// a container (backup, export). execPipeline's own stdoutFile now
+// refuses a symlink too, and keeps 0644 / truncate for everything else.
+void execPipelineToPrivateFile(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
+                               const std::string &stdoutFile);
 void ckSyscallError(int res, const char *syscall, const char *arg, const std::function<bool(int)> whiteWash = [](int /*err*/) {return false;});
 std::string tmSecMs();
 std::string filePathToBareName(const std::string &path);

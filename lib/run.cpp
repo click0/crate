@@ -2234,17 +2234,19 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   // `crate create` added, or one made here (warm templates and crates
   // from before 1.1.64 have none).
   const RunPure::RunUser runUser = RunPure::effectiveRunUser(spec.runUser, user, (unsigned)myuid);
+  auto readJailPasswd = [&]() {
+    std::ifstream f(J("/etc/master.passwd"), std::ios::binary);
+    std::ostringstream ss; ss << f.rdbuf();
+    return ss.str();
+  };
+  PasswdPure::User runUserPw;   // 1.1.71: its jail home, for the X cookie
   if (RunPure::runUserNeedsAccount(runUser)) {
-    std::string passwd;
-    {
-      std::ifstream f(J("/etc/master.passwd"), std::ios::binary);
-      std::ostringstream ss; ss << f.rdbuf(); passwd = ss.str();
-    }
-    PasswdPure::User found;
-    if (!PasswdPure::lookupUser(passwd, runUser.name, found)) {
+    if (!PasswdPure::lookupUser(readJailPasswd(), runUser.name, runUserPw)) {
       LOG("run/user: creating the account '" << runUser.name << "' in the jail")
       execInJail({"/usr/sbin/pw", "useradd", runUser.name, "-m", "-s", "/bin/sh", "-c", "crate run/user"},
                  "create the run/user account in jail");
+      if (!PasswdPure::lookupUser(readJailPasswd(), runUser.name, runUserPw))
+        runUserPw = PasswdPure::User{};
     }
   }
   LOG("run/user: the command runs as '" << runUser.name << "'"
@@ -2399,6 +2401,37 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
 
   // copy X11 authentication files into the user's home directory in jail
   RunGui::copyX11Auth(spec, jailPath, homeDir, myuid, mygid);
+
+  // 1.1.71: ... and into the run user's, when that is not who the copies
+  // above were made for: under a root `crate run` setupX11's auto flow and
+  // copyX11Auth both write the jail's /root (0600 root in a 0700 /root),
+  // so a dedicated or named run/user had no cookie. The /root copies are
+  // moved; a symlink at the destination is removed, never written through.
+  if (const auto cookieHome = RunPure::runUserCookieHome(runUser, runUserPw.home); !cookieHome.empty()) {
+    for (const char *file : {".Xauthority", ".ICEauthority"}) {
+      const auto src = J(STR("/root/" << file));
+      if (!Util::Fs::fileExists(src)) continue;
+      const auto inJail = STR(cookieHome << "/" << file);
+      if (!Util::Fs::dirExists(J(cookieHome))) break;
+      Util::safePath(J(cookieHome), jailPath, "run/user home (X cookie)");
+      struct stat st;
+      if (::lstat(J(inJail).c_str(), &st) == 0 && !S_ISDIR(st.st_mode))
+        (void)::unlink(J(inJail).c_str());
+      try {
+        Util::Fs::copyFile(src, J(inJail));
+        Util::Fs::chown(J(inJail), runUserPw.uid, runUserPw.gid);
+        Util::Fs::chmod(J(inJail), 0600);
+      } catch (const std::exception &e) {
+        std::cerr << rang::fg::yellow << "run/user: " << file << " not copied into " << cookieHome
+                  << " (" << e.what() << ")" << rang::style::reset << std::endl;
+        continue;
+      }
+      (void)::unlink(src.c_str());
+      if (std::string(file) == ".Xauthority")
+        setJailEnv("XAUTHORITY", Util::shellQuote(inJail));   // later wins in env(1)
+      LOG("run/user: " << file << " moved into " << cookieHome << " for '" << runUser.name << "'")
+    }
+  }
 
   // Clipboard proxy daemon (§12)
   RunAtEnd killClipboardProxy = RunGui::setupClipboard(spec, jailXname, jidStr, args.logProgress);

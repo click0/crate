@@ -6,6 +6,140 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.71] — 2026-11-08
+
+**The bug hunt's MED findings: a tenant can no longer nullfs-mount a
+directory that holds every tenant's slice, `${VAR:-default}` works (and
+`examples/webapp.yml` parses at last), a profile's `.local` can no longer
+slip loosening keys past the policy, profiles rebuild when their content
+changes rather than their mtime, `etc/keep` keeps files the jail already
+has, `run/user` gets its own HOME and X cookie under a root `crate run`,
+`profile-from-trace` shares listed directories as directories, `crate
+audit` stops warning about a well-isolated jail, backup and export
+streams are private files, and crated starts warm-base containers.**
+
+- **A tenant could nullfs-mount every tenant's rootfs**
+  (`lib/privops_authz_pure.cpp`). `mount_nullfs`'s source gate refused a
+  source *inside* another tenant's slice of `path_master_prefix`, but not
+  one *above* the tenant root: `/var/run`, `/var` or `/` went through,
+  mounted read-write into the caller's own jail, and `exec_in_jail` as
+  root there reached every tenant's tree. A source that contains the
+  tenant root is now `DenyForeignSource` too (the source is canonical by
+  then — the 1.1.35 realpath gate). trust-model.md said the source end
+  had been closed since 1.1.17; it says what is closed now.
+- **`${VAR:-default}` was not supported** (`lib/spec_pure.cpp`,
+  `lib/spec.cpp`, `lib/stack.cpp`). `SpecPure::substituteVars` replaced
+  only an exact `${KEY}`, and only when some `--var` was given, so
+  `examples/webapp.yml` did not parse (the port key
+  `${LISTEN_PORT:-8080}` went to the port-range parser),
+  `examples/postgres.yml` handed pkg the literal
+  `postgresql${PG_VERSION:-16}-server` after base was extracted, and the
+  stack files' defaults reached their members as text — the stack file
+  went through its own copy of the substitution, which had the same
+  gap. One left-to-right scan now takes the value of a given, non-empty
+  `KEY` and the default otherwise, also with no `--var` at all
+  (`create`, `run`, `validate`, `list`, `wrap` and the stack file); the
+  default may nest (`${TURN_DOMAIN:-${DOMAIN}}`); inserted values are
+  never rescanned. A `${KEY}` whose key was not given still stays as
+  text for a script's own shell variable, and `${VAR-default}` (no
+  colon) is left to the shell. The lite FreeBSD CI now runs `crate
+  validate` on every `examples/*.yml`, not only `nginx.yml` — and its
+  first run found four more that never got past `crate create`:
+  `matrix-coturn.yml`, `matrix-nginx.yml`, `multi-interface.yml` and
+  `nginx-vlan.yml` declared `inbound-tcp` / `inbound-udp` in bridge
+  mode, where the spec refuses them (port forwarding is NAT-only; a
+  bridged jail is reached at its own address). The maps are gone and a
+  comment says where the ports are. `examples/**` left the workflow's
+  `paths-ignore`, so a change to an example runs the check too.
+- **The `.local` key policy could be sidestepped** (`lib/profile_pure.cpp`,
+  `lib/profile.cpp`). The forbidden keys were compared as exact
+  top-level strings: the parser's other spelling (`security-advanced`,
+  `socket-proxy`) passed; the listed `securelevel` is no key at all —
+  `security/securelevel` was allowed; a second `share:` under `dirs`
+  went unchecked (yaml-cpp's lookup answers with the first, the merge
+  and the parser take both); `devices`, `ipc/raw_sockets` and
+  `zfs/datasets` were not listed. Keys are now key paths in the `_`
+  spelling, checked on the top level and one level down;
+  `security/{securelevel,enforce_statfs,children_max,allow_*}`,
+  `ipc/{raw_sockets,sysvipc}`, `zfs/datasets` and `devices` join the
+  list, and a key named twice (in either spelling) is refused. The
+  overlay is checked on every run now, not only before a rebuild.
+- **Profile caches were rebuilt by mtime** (`lib/profile.cpp`,
+  `lib/profile_pure.cpp`). The `.crate` was rebuilt only when the
+  profile or the `.local` was newer than it, in whole seconds: a removed
+  `.local`, another spec winning the search order, a file replaced by an
+  older copy (`cp -p`, a package upgrade) or other `--var` values kept
+  the old archive. `~/.local/share/crate/profiles/NAME.key` now holds
+  the sha256 of the merged spec text (which names its sources), the
+  `--var` values and the crate version; the archive is reused only when
+  that matches and the archive is newer than the merged spec it was
+  built from (nanoseconds). The root recipe printed to an unprivileged
+  operator carries the `--var` values. The first run after the upgrade
+  rebuilds once.
+- **`etc/keep` failed on a file the jail already had** (`lib/create.cpp`).
+  Only directories were removed before the copy, and the file copy
+  refuses an existing destination: base.txz ships `/etc/hosts`, so the
+  typical `etc/keep: [localtime, hosts, ssl]` aborted `crate create`,
+  and `etc/keep: [resolv.conf]` always failed (create copies one in
+  first). Whatever the jail's `/etc` has under the name is removed
+  first — by `lstat`, so a symlink in the jail's `/etc`, whose absolute
+  target would be the host's, is unlinked and never written through.
+- **`run/user` under a root `crate run` kept root's environment**
+  (`lib/jail_query.cpp`, `lib/run.cpp`, `lib/run_pure.cpp`). The user
+  switch in `JailExec` only called `setuid()`, so the command ran with
+  `HOME=/root`, `USER=root` — and `/root` is 0700. After the switch the
+  user's own `HOME`, `USER`, `LOGNAME` and `SHELL` are set from the
+  jail's passwd and the working directory is the home, as `jexec -l` and
+  crated's `exec_in_jail` already did. The X cookie (`.Xauthority`,
+  `.ICEauthority`), which both GUI copy steps put into the jail's `/root`,
+  moves into the run user's home, owned by it, and `XAUTHORITY` points
+  there.
+- **`profile-from-trace` read a directory listing as a file**
+  (`lib/trace_pure.cpp`). An `O_DIRECTORY` open was a file read: a
+  first-level `$HOME` directory landed in `files/share`, which `crate
+  run` then refused (a file share wants regular files); outside `$HOME`
+  the parent was shared — `/zdata/photos` shared all of `/zdata`, `/srv`
+  nothing. A listed directory is now shared as itself; `/`, `/usr`,
+  `/var`, `/home` and the like (ancestors of the system prefixes and of
+  `$HOME`) and listings of `~/.config` / `~/.local/share` are skipped.
+- **`crate audit` warned about a well-isolated jail**
+  (`lib/jail_audit_pure.cpp`). The gateway probe ran `nc -z` without
+  `-v`, so a refused or timed-out connect printed nothing and came out
+  as WARN "nc(1) result not understood" instead of its PASS; and
+  `bpf*`, which crate unhides for every `net` spec, was classed with
+  `mem` / `kmem` as a host device. bpf is its own class now: PASS in a
+  vnet jail (it sees the jail's own interfaces), WARN without vnet. Any
+  WARN makes `crate audit` exit non-zero, so a networked jail used to
+  fail it.
+- **Backup and export streams were 0644 and followed symlinks**
+  (`lib/util.cpp`, `lib/backup.cpp`, `lib/export.cpp`). The output file
+  of `Util::execPipeline` was opened by the last child with
+  `O_CREAT|O_TRUNC`, 0644, through whatever sat at the path: with
+  `--output-dir` / `-o` in a directory others can write (`/tmp`) and a
+  predictable name, a planted symlink made root overwrite any file, and
+  the stream — a plain, decrypted `zfs send` of the jail, or the whole
+  container — was world-readable. `execPipelineToPrivateFile` creates a
+  new file, 0600, with `O_EXCL|O_NOFOLLOW`; backup and export use it,
+  and only a partial file they created is removed on failure (export's
+  existence check is an `lstat` now, so a dangling link no longer
+  passes). The parent opens every pipeline output file now, never
+  through a symlink, and reports why it could not.
+- **crated could not start a warm-base container**
+  (`daemon/control_socket.cpp`, `daemon/routes.cpp`,
+  `lib/spec_registry_pure.cpp`). Start and restart — control socket and
+  HTTP — resolved the registry with `SpecRegistry::lookup`, which
+  answers "" for a `<name> warm-base=<dataset>` entry: such a container
+  could be stopped there but never started again (404).
+  `SpecRegistryPure::runArgsFor` gives the `crate run` arguments of
+  either form (`-f <path>`, or `--warm-base <dataset> --name <name>`).
+- `CRATE_PATH_CP` joins `lib/pathnames.h` (`etc/keep` directories).
+- Tests: +13 unit cases (`spec_subst_test` +5, `profile_pure_test` +3,
+  `privops_authz_pure_test`, `trace_pure_test`, `jail_audit_pure_test`,
+  `run_pure_test`, `spec_registry_pure_test` +1 each, and extended
+  `local_forbidden_keys` / `rebuild_decision` / device classes).
+  On-hardware checks for what unit tests cannot reach are in
+  docs/on-hardware-validation.md §4n.
+
 ## [1.1.70] — 2026-11-06
 
 **The bug hunt's HIGH findings and the regressions of 1.1.65–1.1.69:

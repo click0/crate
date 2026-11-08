@@ -539,6 +539,32 @@ ATF_TEST_CASE_BODY(mount_source_foreign_tenant_denied) {
               == Decision::DenyForeignPath);
 }
 
+// 1.1.71: a source that CONTAINS the tenant root holds every tenant's
+// slice — "/", "/var" or the root itself must not be mountable.
+ATF_TEST_CASE_WITHOUT_HEAD(mount_source_above_tenant_root_denied);
+ATF_TEST_CASE_BODY(mount_source_above_tenant_root_denied) {
+  auto e = env1000();
+  auto l = fixedOwner(77, "web", 1000, "/jails-tenants/1000/web");
+  for (const char *src : {"/", "/jails-tenants"})
+    ATF_REQUIRE(authorize(Verb::MountNullfs, reqMount("/jails-tenants/1000/web/x", src), e, l)
+                == Decision::DenyForeignSource);
+  e.pathMasterPrefix = "/var/run/crate";
+  e.pathPrefix       = "/var/run/crate/1000";
+  auto l2 = fixedOwner(77, "web", 1000, "/var/run/crate/1000/jail-web-0011aabb");
+  for (const char *src : {"/var", "/var/run", "/var/run/crate"})
+    ATF_REQUIRE(authorize(Verb::MountNullfs,
+                  reqMount("/var/run/crate/1000/jail-web-0011aabb/mnt", src), e, l2)
+                == Decision::DenyForeignSource);
+  // a sibling that merely shares a name prefix is not an ancestor
+  ATF_REQUIRE(authorize(Verb::MountNullfs,
+                reqMount("/var/run/crate/1000/jail-web-0011aabb/mnt", "/var/run/cra"), e, l2)
+              == Decision::Allow);
+  // the caller's own slice is still fine
+  ATF_REQUIRE(authorize(Verb::MountNullfs,
+                reqMount("/var/run/crate/1000/jail-web-0011aabb/mnt", "/var/run/crate/1000/data"), e, l2)
+              == Decision::Allow);
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(mount_source_unconfigured_allows);
 ATF_TEST_CASE_BODY(mount_source_unconfigured_allows) {
   // No pathMasterPrefix -> source gate is opt-in, off.
@@ -865,6 +891,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, authorize_create_jail_unconfigured_split_allows);
   ATF_ADD_TEST_CASE(tcs, mount_source_own_and_host_allowed);
   ATF_ADD_TEST_CASE(tcs, mount_source_foreign_tenant_denied);
+  ATF_ADD_TEST_CASE(tcs, mount_source_above_tenant_root_denied);
   ATF_ADD_TEST_CASE(tcs, mount_source_unconfigured_allows);
   ATF_ADD_TEST_CASE(tcs, configure_iface_jid_scoped);
   ATF_ADD_TEST_CASE(tcs, reclaim_iface_name_scoped);

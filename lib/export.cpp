@@ -82,9 +82,14 @@ bool exportCrate(const Args &args) {
     outFile = autoExportName(baseName);
   }
 
-  // Validate output path: don't overwrite existing file unless explicit
-  if (Util::Fs::fileExists(outFile))
-    ERR("output file '" << outFile << "' already exists — remove it first or specify a different output with -o")
+  // Validate output path: don't overwrite existing file unless explicit.
+  // 1.1.71: lstat — a dangling symlink passed the stat-based check, and
+  // root then wrote the archive wherever it pointed.
+  {
+    struct stat lst;
+    if (::lstat(outFile.c_str(), &lst) == 0)
+      ERR("output file '" << outFile << "' already exists — remove it first or specify a different output with -o")
+  }
 
   // If a passphrase file was supplied, validate it before doing any work.
   bool encrypt = !args.exportPassphraseFile.empty();
@@ -109,11 +114,20 @@ bool exportCrate(const Args &args) {
   if (encrypt)
     pipeline.push_back(CryptoPure::buildEncryptArgv(args.exportPassphraseFile));
 
-  Util::execPipeline(
-    pipeline,
-    encrypt ? "export and encrypt container filesystem"
-            : "export container filesystem to crate archive",
-    "", outFile);
+  // 1.1.71: a new file, 0600, no symlink followed (it was 0644 through
+  // whatever sat at the path); a failed pipeline leaves no partial archive.
+  try {
+    Util::execPipelineToPrivateFile(
+      pipeline,
+      encrypt ? "export and encrypt container filesystem"
+              : "export container filesystem to crate archive",
+      outFile);
+  } catch (...) {
+    struct stat lst;
+    if (::lstat(outFile.c_str(), &lst) == 0 && S_ISREG(lst.st_mode) && lst.st_uid == ::geteuid())
+      ::unlink(outFile.c_str());
+    throw;
+  }
 
   // Set ownership to the calling user
   Util::Fs::chown(outFile, myuid, mygid);

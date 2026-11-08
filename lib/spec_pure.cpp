@@ -33,20 +33,72 @@ PortRange parsePortRange(const std::string &str) {
   return r;
 }
 
+// 1.1.71: one left-to-right scan instead of a find/replace per key, so
+// `${KEY:-default}` can be recognised — examples/webapp.yml,
+// postgres.yml and the stack files use it, and before this the text
+// stayed verbatim (webapp.yml did not even parse: the port key
+// `${LISTEN_PORT:-8080}` went to parsePortRange). Inserted values are
+// never rescanned (a value holding "${X}" stays as it is), as before.
+namespace {
+
+bool isVarNameStart(char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_'; }
+bool isVarNameChar(char c)  { return isVarNameStart(c) || (c >= '0' && c <= '9'); }
+
+std::string substituteVarsDepth(const std::string &input,
+                                const std::map<std::string, std::string> &vars,
+                                unsigned depth) {
+  if (depth > 16) return input;   // nesting this deep is not a spec, stop
+  const size_t n = input.size();
+  std::string out;
+  out.reserve(n);
+  size_t i = 0;
+  while (i < n) {
+    if (input.compare(i, 2, "${") != 0) { out += input[i++]; continue; }
+    // ${NAME:-DEFAULT}: NAME is an identifier; DEFAULT runs to the
+    // matching '}' (it may itself hold ${...}) and is substituted in turn.
+    size_t j = i + 2;
+    if (j < n && isVarNameStart(input[j]))
+      while (j < n && isVarNameChar(input[j])) j++;
+    if (j > i + 2 && input.compare(j, 2, ":-") == 0) {
+      size_t k = j + 2;
+      unsigned open = 1;
+      while (k < n) {
+        if (input.compare(k, 2, "${") == 0) { open++; k += 2; continue; }
+        if (input[k] == '}' && --open == 0) break;
+        k++;
+      }
+      if (k < n) {
+        auto it = vars.find(input.substr(i + 2, j - i - 2));
+        if (it != vars.end() && !it->second.empty())
+          out += it->second;
+        else
+          out += substituteVarsDepth(input.substr(j + 2, k - j - 2), vars, depth + 1);
+        i = k + 1;
+        continue;
+      }
+      // unterminated: falls through and stays literal
+    }
+    // ${KEY}: only a key that was given; anything else stays as text
+    // (scripts may use ${VAR} for their own shell variables).
+    size_t close = input.find('}', i + 2);
+    if (close != std::string::npos) {
+      auto it = vars.find(input.substr(i + 2, close - i - 2));
+      if (it != vars.end()) {
+        out += it->second;
+        i = close + 1;
+        continue;
+      }
+    }
+    out += input[i++];
+  }
+  return out;
+}
+
+} // namespace
+
 std::string substituteVars(const std::string &input,
                            const std::map<std::string, std::string> &vars) {
-  if (vars.empty())
-    return input;
-  std::string result = input;
-  for (auto &kv : vars) {
-    std::string token = "${" + kv.first + "}";
-    size_t pos = 0;
-    while ((pos = result.find(token, pos)) != std::string::npos) {
-      result.replace(pos, token.length(), kv.second);
-      pos += kv.second.length();
-    }
-  }
-  return result;
+  return substituteVarsDepth(input, vars, 0);
 }
 
 std::string validateTopLevelNetwork(const std::string &v) {

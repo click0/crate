@@ -74,6 +74,12 @@ bool backupCrate(const Args &args) {
                                  ? plan.sinceSuffix
                                  : "");
 
+  bool streamExisted = false;   // 1.1.71: then the send refuses it (O_EXCL), and it stays
+  {
+    struct stat lst;
+    streamExisted = ::lstat(streamFile.c_str(), &lst) == 0;
+  }
+
   std::cerr << rang::fg::cyan << "backup: "
             << (plan.kind == BackupPure::Plan::Kind::Incremental ? "incremental" : "full")
             << " stream → " << streamFile
@@ -87,12 +93,20 @@ bool backupCrate(const Args &args) {
   // @backup-<ts> snapshot used to stay behind, and findLatestBackupSuffix
   // then picked it as the next incremental base although no stream holds
   // it (unrestorable chain). Destroy it and drop the partial file.
+  //
+  // 1.1.71: a new file, 0600, no symlink followed — the stream is a plain
+  // (decrypted) `zfs send` of the jail, and with --output-dir in a
+  // directory others can write a planted symlink made root overwrite any
+  // file. Only a partial file we created is removed.
   try {
-    Util::execPipeline({sendArgv}, "zfs send to file", "", streamFile);
+    Util::execPipelineToPrivateFile({sendArgv}, "zfs send to file", streamFile);
   } catch (...) {
     try { Util::execCommand(BackupPure::buildDestroySnapshotArgv(dataset, suffix), "zfs destroy snapshot"); }
     catch (...) {}
-    ::unlink(streamFile.c_str());
+    struct stat lst;
+    if (::lstat(streamFile.c_str(), &lst) == 0 && S_ISREG(lst.st_mode) && lst.st_uid == ::geteuid()
+        && !streamExisted)
+      ::unlink(streamFile.c_str());
     throw;
   }
 

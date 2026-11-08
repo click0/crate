@@ -114,7 +114,10 @@ std::string probeScript(bool offline, const std::string &dnsName) {
     // command line.
     s += "case \"$gw\" in\n";
     s += "  ''|*[!0-9.]*) echo @@connect; echo @@rc=255 ;;\n";
-    s += "  *) echo @@connect; nc -z -w 3 \"$gw\" 22 2>&1; echo \"@@rc=$?\" ;;\n";
+    // 1.1.71: -v — without it nc(1) prints nothing when the connect is
+    // refused or times out, and classifyNc had nothing to read (WARN
+    // "result not understood" instead of the PASS meant for it).
+    s += "  *) echo @@connect; nc -v -z -w 3 \"$gw\" 22 2>&1; echo \"@@rc=$?\" ;;\n";
     s += "esac\n";
     // One DNS lookup through the jail's own resolver.
     s += "echo @@dns; drill -Q A '" + dnsName + "' 2>&1; echo \"@@rc=$?\"\n";
@@ -318,7 +321,8 @@ DeviceClasses classifyDevices(const std::vector<std::string> &names) {
     else if (any(n, {"cua", "ttyu", "ttyU"}))                                   d.serial.push_back(n);
     else if (is(n, {"gpt", "diskid", "ufs", "ufsid", "label", "zvol", "mdctl"}) ||
              any(n, {"ada", "da", "nvd", "nda", "md", "cd", "geom"}))           d.disks.push_back(n);
-    else if (is(n, {"mem", "kmem", "io", "pf", "kvm"}) || any(n, {"bpf"}))      d.raw.push_back(n);
+    else if (any(n, {"bpf"}))                                                   d.bpf.push_back(n);   // 1.1.71
+    else if (is(n, {"mem", "kmem", "io", "pf", "kvm"}))                         d.raw.push_back(n);
     else if (is(n, {"net", "netmap"}) || any(n, {"tun", "tap"}))                d.net.push_back(n);
     else d.other++;
   }
@@ -440,7 +444,7 @@ void mountChecks(Report &r, const std::vector<Mount> &mounts) {
   }
 }
 
-void devfsChecks(Report &r, const std::vector<std::string> &names) {
+void devfsChecks(Report &r, const std::vector<std::string> &names, bool vnet) {
   auto d = classifyDevices(names);
   r.checks.push_back(passCheck("devfs", "entries",
     std::to_string(names.size()) + " in /dev, " + std::to_string(d.other) + " basic (null, zero, random, pts, fd...)"));
@@ -453,6 +457,13 @@ void devfsChecks(Report &r, const std::vector<std::string> &names) {
   if (!d.net.empty())    r.checks.push_back(passCheck("devfs", "net",    join(d.net, ", ", 8) + " — tun/tap (VPN inside the jail)"));
   if (!d.disks.empty())  r.checks.push_back(warnCheck("devfs", "disks",  join(d.disks, ", ", 8) + " — raw disk devices: the host's filesystems are readable"));
   if (!d.raw.empty())    r.checks.push_back(warnCheck("devfs", "raw",    join(d.raw, ", ", 8) + " — host memory / packet-filter devices visible"));
+  // 1.1.71: crate unhides bpf for every `net` spec; in a vnet jail it
+  // sees only the jail's own interfaces. It was classed with mem / kmem
+  // and warned about on every networked jail.
+  if (!d.bpf.empty()) {
+    if (vnet) r.checks.push_back(passCheck("devfs", "bpf", join(d.bpf, ", ", 8) + " — packet capture on the jail's own interfaces (vnet)"));
+    else      r.checks.push_back(warnCheck("devfs", "bpf", join(d.bpf, ", ", 8) + " — packet capture without vnet: the host's interfaces"));
+  }
 }
 
 void ifaceChecks(Report &r, const std::vector<Iface> &ifaces, const Routes &routes) {
@@ -596,7 +607,10 @@ DoctorPure::Report buildReport(const std::string &probeStdout, const HostContext
   if (sysctls.empty() && s.find("sysctl") != s.end())
     r.checks.push_back(failCheck("probe", "sysctl", "sysctl(8) printed nothing usable: " + firstLine(sec("sysctl"))));
   mountChecks(r, mounts);
-  devfsChecks(r, parseLines(sec("dev")));
+  {
+    auto v = sysctls.find("security.jail.vnet");
+    devfsChecks(r, parseLines(sec("dev")), v != sysctls.end() && v->second == "1");
+  }
   ifaceChecks(r, parseIfconfig(sec("ifconfig")), parseDefaultRoutes(sec("routes")));
   socketChecks(r, parseSockstat(sec("sockets")), parseLines(sec("fssockets")), mounts);
   processChecks(r, parsePs(sec("ps")), firstLine(sec("id")));

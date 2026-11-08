@@ -135,7 +135,7 @@ ATF_TEST_CASE_BODY(probe_script_shape) {
                         "@@sockets", "@@fssockets", "@@ps", "@@resolv", "@@gw", "@@connect", "@@dns"})
     ATF_REQUIRE(s.find(m) != std::string::npos);
   ATF_REQUIRE(s.find("drill -Q A 'www.freebsd.org'") != std::string::npos);
-  ATF_REQUIRE(s.find("nc -z -w 3") != std::string::npos);
+  ATF_REQUIRE(s.find("nc -v -z -w 3") != std::string::npos);   // 1.1.71: -v, else a refusal prints nothing
   // base-system paths only, no /usr/local
   ATF_REQUIRE(s.find("/usr/local") == std::string::npos);
 
@@ -274,7 +274,8 @@ ATF_TEST_CASE_BODY(classify_nc_devices_paths) {
   ATF_REQUIRE_EQ(d.usb.size(), 2u);
   ATF_REQUIRE_EQ(d.serial.size(), 2u);
   ATF_REQUIRE_EQ(d.disks.size(), 6u);
-  ATF_REQUIRE_EQ(d.raw.size(), 6u);
+  ATF_REQUIRE_EQ(d.raw.size(), 4u);   // 1.1.71: bpf is its own class
+  ATF_REQUIRE_EQ(d.bpf.size(), 2u);
   ATF_REQUIRE_EQ(d.net.size(), 3u);
 
   std::vector<Mount> mounts = parseMountP("/usr/home/a\t/home/a\tnullfs\trw\t0\t0\n"
@@ -454,7 +455,25 @@ ATF_TEST_CASE_BODY(report_edge_cases) {
   ATF_REQUIRE(find(noNc, "connectivity", "dns")->detail.find("drill(1) not found") != std::string::npos);
 }
 
+// 1.1.71: bpf, which crate unhides for every `net` spec, is a WARN only
+// without vnet; a refused / timed-out nc -v is the PASS meant for it.
+ATF_TEST_CASE_WITHOUT_HEAD(bpf_by_vnet);
+ATF_TEST_CASE_BODY(bpf_by_vnet) {
+  HostContext ctx;
+  std::string probe = kDesktopProbe;
+  probe.replace(probe.find("@@dev\n"), 6, "@@dev\nbpf\nbpf0\n");
+  auto vnet = buildReport(probe, ctx);
+  ATF_REQUIRE(find(vnet, "devfs", "bpf")->severity == Severity::Pass);
+  ATF_REQUIRE(find(vnet, "devfs", "raw") == nullptr);
+  probe.replace(probe.find("security.jail.vnet=1"), 20, "security.jail.vnet=0");
+  auto shared = buildReport(probe, ctx);
+  ATF_REQUIRE(find(shared, "devfs", "bpf")->severity == Severity::Warn);
+  // the fixture's gateway probe is a refusal from nc -v: PASS
+  ATF_REQUIRE(find(vnet, "connectivity", "gateway")->severity == Severity::Pass);
+}
+
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, bpf_by_vnet);
   ATF_ADD_TEST_CASE(tcs, probe_script_shape);
   ATF_ADD_TEST_CASE(tcs, split_sections);
   ATF_ADD_TEST_CASE(tcs, parse_mount_ifconfig_routes);

@@ -16,8 +16,12 @@ typedef std::pair<unsigned, unsigned> PortRange;
 // or port 0 / 70000 used to pass straight into pf/ipfw rule text).
 PortRange parsePortRange(const std::string &str);
 
-// Replace ${KEY} tokens in `input` with values from `vars`.
-// No-op if vars is empty. Substitution is multi-pass per key.
+// Replace ${KEY} tokens in `input` with values from `vars`; a ${KEY}
+// whose key was not given stays as text. 1.1.71: ${KEY:-DEFAULT} takes
+// the value when KEY was given non-empty, otherwise DEFAULT (itself
+// substituted, so ${A:-${B}} works) — also with no vars at all. KEY
+// there is an identifier ([A-Za-z_][A-Za-z0-9_]*). Inserted values are
+// not rescanned.
 std::string substituteVars(const std::string &input,
                            const std::map<std::string, std::string> &vars);
 

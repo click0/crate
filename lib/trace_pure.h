@@ -46,6 +46,7 @@ struct Event {
   std::string path;                // Open/Stat/Exec; AF_UNIX address for Connect/Bind
   std::vector<std::string> argv;   // Exec
   bool write = false;              // Open with O_WRONLY/O_RDWR/O_CREAT/O_TRUNC/O_APPEND
+  bool directory = false;          // 1.1.71: Open with O_DIRECTORY (a directory listing)
   bool failed = false;             // ERR# result (a non-blocking connect "in progress" counts as success)
   std::string family;              // "inet", "inet6", "unix", "other"
   bool datagram = false;           // Socket: SOCK_DGRAM
@@ -71,7 +72,8 @@ struct Endpoint {
 struct Summary {
   std::vector<std::string> execs;                 // successful execve paths, first first, deduped
   std::vector<std::vector<std::string>> execArgv; // parallel to execs
-  std::set<std::string> readPaths, writePaths;    // successful absolute opens
+  std::set<std::string> readPaths, writePaths;    // successful absolute opens of files
+  std::set<std::string> dirPaths;                 // 1.1.71: successful absolute O_DIRECTORY opens
   std::set<std::string> probedPaths;              // successful stat/access (not used for shares)
   std::set<std::string> unixSockets;              // successful AF_UNIX connects
   std::set<Endpoint> outbound;                    // inet/inet6 connects (+ sendto for UDP)

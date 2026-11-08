@@ -104,14 +104,6 @@ The bhyve/VM track is in TODO2.
 * (LOW) handlers at privops_handlers.cpp :171,560,577 return raw
   strerror/e.what() that may echo host paths. (jsonError escaping
   fixed in 1.1.35.)
-* (MED, bug hunt 1.1.70) mount_nullfs SOURCE above the tenant root
-  passes: sourceForeign (privops_authz_pure.cpp:147-151) only refuses a
-  source inside path_master_prefix, so a tenant can nullfs-mount
-  /var/run (or /var, /) read-write into its own jail and then
-  exec_in_jail as root there — every tenant's rootfs is reachable.
-  trust-model.md:134-138 says the source end is closed since 1.1.17.
-  Fix: also foreign when pathOwned(env.pathMasterPrefix, source), i.e.
-  the source contains the tenant root.
 * (LOW, bug hunt 1.1.70) JidOwnerRegistry::findOwnerByPath
   (jid_owner_registry.cpp:120-129) answers from stale rows — byJid /
   byName drop dead entries (dropIfStaleLocked_, :93-118), byPath does
@@ -175,30 +167,13 @@ The bhyve/VM track is in TODO2.
   throw there is std::terminate before main.
 * (LOW) `unless-stopped` == `always` in cli/main.cpp; no backoff
   between restarts.
-* (MED, bug hunt 1.1.70) `${VAR:-default}` is not supported:
-  SpecPure::substituteVars (spec_pure.cpp:36-50) and its copy in
-  stack.cpp:677-686 replace only an exact `${KEY}`, and only when some
-  --var was given. examples/webapp.yml:33 (`${LISTEN_PORT:-8080}`) fails
-  to parse — parsePortRange splits at the first '-' (spec_pure.cpp:26);
-  examples/postgres.yml:21-22 hands pkg the literal
-  `postgresql${PG_VERSION:-16}-server` and create fails after base is
-  extracted; stack-webapp.yml:23, stack-matrix.yml:36-37,46,54 and
-  matrix-nginx.yml:67 keep the text verbatim (--var is silently
-  ignored). CI validates only examples/nginx.yml
-  (freebsd-build-lite.yml:164). Fix: `:-` in substituteVars, used by
-  stack.cpp too; `crate validate` every examples/*.yml in CI.
-* (MED, bug hunt 1.1.70) the `.local` key policy can be sidestepped
-  (profile_pure.cpp:50-69, profile.cpp:161-169): forbiddenLocalKeys
-  compares exact strings, while the parser also takes
-  `security-advanced` / `socket-proxy` (spec.cpp:1181,1247); the listed
-  `securelevel` is not a top-level key at all — `security/securelevel`
-  (spec.cpp:992-1022) is allowed; a second `share:` under `dirs` is not
-  checked (yaml-cpp returns the first match) but is merged and parsed;
-  `devices` (all / input / usb), `ipc/raw_sockets`, `zfs/datasets` are
-  not on the list. Not a privilege boundary (an unguarded copy under
-  ~/.config/crate/profiles wins anyway), but crate.5:1700-1712 promises
-  the restriction. Fix: normalise '-' to '_', check nested keys, refuse
-  duplicate keys, add devices.
+* (LOW, left open by 1.1.71) the `.local` key list (profile_pure.cpp
+  forbiddenLocalKeys) is a deny list two levels deep: `run/user: root`,
+  `firewall` (a default `allow`) and `options` details (`tor: {…}`,
+  `net:` modes) still loosen what the profile chose, and a new
+  security/ or ipc/ key passes until someone adds it. An allow list of
+  what a .local may set (pkg, options names, limits, run/args, shares
+  under $HOME) would close the class.
 * (LOW, bug hunt 1.1.70) `devices:` merges by shape: Profile::mergeYaml
   takes the overlay when the shapes differ (profile.cpp:148), so a
   `.local` with `devices: [gpu]` over a profile's `{sound: true}`
@@ -223,9 +198,6 @@ The bhyve/VM track is in TODO2.
 
 === 7. Lifecycle, storage, GUI, monitoring, DNS, VPN ===
 
-* (MED, left open by 1.1.69) crated's control-socket start/restart
-  cannot start a --warm-base container (404): SpecRegistry::lookup
-  returns "" for the `<name> warm-base=<dataset>` entry form.
 * (LOW, left open by 1.1.70) the HTTP snapshot routes (routes.cpp
   datasetForJail) and the ws-console upgrade (ws_console.cpp) still
   look the jail up by kernel name only; every other target goes through
@@ -288,56 +260,12 @@ The bhyve/VM track is in TODO2.
   initCapSyslog/logSyslog via audit.cpp); initCapDns leaks g_capdns
   on repeat calls; unused WARN macro. drm_session.cpp:18,53,63 single
   global g_deviceId — a second openDevice orphans the first.
-* (MED, bug hunt 1.1.70) etc/keep fails on a file the jail's /etc
-  already has: create.cpp:591 uses Util::Fs::copyFile (util.cpp:843-849,
-  copy_file without overwrite_existing) — only directories are removed
-  first (:586-589). base.txz ships /etc/hosts, so crate.5's typical
-  `[localtime, hosts, ssl]` aborts create; `etc/keep: [resolv.conf]`
-  always fails (create.cpp:577 already copied it; :662 expects it).
-  Fix: overwrite_existing for files, a test with dst present.
-* (MED, bug hunt 1.1.70) run/user under a ROOT `crate run` keeps root's
-  environment: the command is `/usr/bin/env <jailEnv> …` (run.cpp:2422)
-  and jailEnv sets no HOME/USER/LOGNAME, while JailExec::execInJail only
-  setuid()s (jail_query.cpp:446-465) — `run/user: crate` runs with
-  HOME=/root, USER=root, and /root is 0700. The X11 cookie goes to
-  /root/.Xauthority 0600 (run_gui.cpp:764-768, :1246-1249). The daemon
-  path (privops_handlers.cpp:963-966) and the `jexec -l` fallback
-  (jail_query.cpp:313) are right. Fix: build HOME/USER/LOGNAME/SHELL from
-  pw after setuid, cookie into the run user's home.
-* (MED, bug hunt 1.1.70) the profile cache is rebuilt by mtime only
-  (profile.cpp:250-253, profile_pure.cpp:112-117, whole seconds, strict
-  `>`): a removed `.local`, a different spec winning the search order
-  (profile.cpp:224-226), a file replaced by an OLDER one (cp -p, pkg
-  upgrade), or other --var values (not part of the key, profile.cpp:
-  286-288) keep the old `.crate`. Fix: store a hash of the merged text,
-  the vars and VERSION next to the cache and compare that.
-* (MED, bug hunt 1.1.70) `crate profile-from-trace` treats an
-  O_DIRECTORY open as a file read (trace_pure.cpp:144-148, 219-224): a
-  first-level $HOME directory lands in files/share (:512) and `crate
-  run` then fails "none of the files in a file-share exists"
-  (run.cpp:2273-2280, fileExists wants S_ISREG); outside $HOME the
-  dirname is shared (:525) — /zdata/photos shares all of /zdata, /srv
-  shares nothing ("/" is dropped, :532). No test covers O_DIRECTORY.
-* (MED, bug hunt 1.1.70) `crate audit` WARNs on a well-isolated jail:
-  the gateway probe runs `nc -z -w 3 "$gw" 22` without -v
-  (jail_audit_pure.cpp:117), so a refused / timed-out connection prints
-  nothing and classifyNc says Unknown (:280-287) -> WARN "nc(1) result
-  not understood" (:555-556) instead of the PASS meant for it
-  (:552-553); the tests feed -v output (jail_audit_pure_test.cpp:
-  255-258, 448). And bpf*, which crate itself unhides for every `net`
-  spec (run.cpp:1034, devices_pure.cpp:98), is classed "raw" (:321) and
-  warned about as a host memory / packet-filter device (:455), though a
-  VNET jail's bpf sees only its own interfaces. Any WARN makes the exit
-  status non-zero (jail_audit.cpp:70).
-* (MED, bug hunt 1.1.70) backup / export streams are created 0644 and
-  through symlinks: execPipeline's stdoutFile branch (util.cpp:379)
-  opens without O_NOFOLLOW / O_EXCL, unlike its neighbours (:642, :651,
-  :879). `crate backup --output-dir` (backup.cpp:69-75, 91) and `crate
-  export -o` (export.cpp:112-119) write there with a predictable name
-  (backup_pure.cpp:17-23): in a directory others can write (/tmp) a
-  planted symlink makes root overwrite any file, and the stream — a
-  plain `zfs send`, decrypted (backup_pure.cpp:127) — is world-readable.
-  Fix: O_NOFOLLOW|O_EXCL (or tmp + rename), mode 0600.
+* (LOW, left open by 1.1.71) the HTTP export (routes.cpp, ARTIFACT_DIR)
+  still goes through execPipeline's shared-output mode: no symlink is
+  followed any more, but the archive is 0644 and an existing file of
+  the same name is truncated. crated's own directory, so only a problem
+  where ARTIFACT_DIR is shared; execPipelineToPrivateFile + rename would
+  match the CLI export.
 * (LOW, bug hunt 1.1.70) `crate replicate` can wedge itself: zfs recv
   runs without -F (replicate_pure.cpp:188-192), and replicate.cpp:
   129-137 destroys the local snapshot on ANY pipeline error even when
@@ -452,7 +380,7 @@ The bhyve/VM track is in TODO2.
   178; daemon/metrics.cpp:86; snmpd/collector.cpp:43), jls
   (daemon/metrics.cpp:78; snmpd/collector.cpp:27), tar (cli/main.cpp:205),
   service (inter_dns.cpp:67), crate (hub/main.cpp:141); without one yet —
-  kldstat, sha256, mount, ps, mkdir, cp (create.cpp:515,589), openssl,
+  kldstat, sha256, mount, ps, mkdir (create.cpp:515), openssl,
   ssh, curl, tail, unbound-control, ipsec, wg-quick, vncviewer. A
   -DCRATE_PATH_* override silently misses these. Add the macros, replace
   the literals, and a grep check in `make check-*`.

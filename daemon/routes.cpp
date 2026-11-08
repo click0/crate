@@ -105,8 +105,8 @@ static std::string getClientId(const httplib::Request &req) {
 // 1.1.65: StatusFd::spawnCrateRun — setsid, stdio to /dev/null, and a
 // `--status-fd` pipe whose read end registerSpawnedJailOwner consumes.
 // pid < 0 on fork failure.
-static StatusFd::Spawned spawnCrateRun(const std::string &crateFile) {
-  return StatusFd::spawnCrateRun({"-f", crateFile});
+static StatusFd::Spawned spawnCrateRun(const std::vector<std::string> &runArgs) {
+  return StatusFd::spawnCrateRun(runArgs);
 }
 
 // Cap constants live in daemon/rate_limit.h since 0.7.15.
@@ -157,14 +157,19 @@ static std::optional<JailQuery::JailInfo> findRouteJail(const httplib::Request &
 
 // 1.1.70: the .crate a stopped container starts from: the root spec
 // registry (crate run -f records it there), else the conventional
-// /var/run/crate/<container>.crate. "" when neither exists.
-static std::string specPathForContainer(const std::string &containerName) {
+// /var/run/crate/<container>.crate. 1.1.71: as `crate run` arguments,
+// so a registered warm-base run (--warm-base <dataset> --name) starts
+// too. Empty when there is nothing to start from.
+static std::vector<std::string> runArgsForContainer(const std::string &containerName) {
   try {
-    auto p = SpecRegistry::lookup(containerName);
-    if (!p.empty() && Util::Fs::fileExists(p)) return p;
+    SpecRegistryPure::Entry entry;
+    if (SpecRegistry::lookupEntry(containerName, entry)
+        && (!entry.warmBase.empty() || Util::Fs::fileExists(entry.cratePath)))
+      return SpecRegistryPure::runArgsFor(entry, containerName);
   } catch (...) {}
   auto conventional = "/var/run/crate/" + containerName + ".crate";
-  return Util::Fs::fileExists(conventional) ? conventional : std::string();
+  if (Util::Fs::fileExists(conventional)) return {"-f", conventional};
+  return {};
 }
 
 // --- GET /api/v1/containers ---
@@ -349,13 +354,13 @@ static void handleContainerStart(const httplib::Request &req, httplib::Response 
 
   // Look for saved .crate file (1.1.70: the registry first, by container name)
   const std::string containerName = RunPure::containerNameOf(name);
-  auto crateFile = specPathForContainer(containerName);
-  if (crateFile.empty()) {
-    jsonError(res, 404, "no saved .crate file for '" + containerName + "'");
+  auto runArgs = runArgsForContainer(containerName);
+  if (runArgs.empty()) {
+    jsonError(res, 404, "no saved .crate file or warm-base run for '" + containerName + "'");
     return;
   }
 
-  auto spawned = spawnCrateRun(crateFile);
+  auto spawned = spawnCrateRun(runArgs);
   pid_t pid = spawned.pid;
   if (pid < 0) {
     jsonError(res, 500, "failed to start container: fork failed");
@@ -673,9 +678,9 @@ static void handleContainerRestart(const httplib::Request &req, httplib::Respons
   }
   const std::string containerName = jail ? RunPure::containerNameOfJail(jail->name, jail->path)
                                          : RunPure::containerNameOf(name);
-  auto crateFile = specPathForContainer(containerName);
-  if (crateFile.empty()) {
-    jsonError(res, 404, "no saved .crate file for '" + containerName + "'; "
+  auto runArgs = runArgsForContainer(containerName);
+  if (runArgs.empty()) {
+    jsonError(res, 404, "no saved .crate file or warm-base run for '" + containerName + "'; "
                         + (jail ? "the container keeps running" : "nothing to restart"));
     return;
   }
@@ -699,7 +704,7 @@ static void handleContainerRestart(const httplib::Request &req, httplib::Respons
     }
   }
 
-  auto spawned = spawnCrateRun(crateFile);
+  auto spawned = spawnCrateRun(runArgs);
   pid_t pid = spawned.pid;
   if (pid < 0) {
     jsonError(res, 500, "failed to start container after stop: fork failed");

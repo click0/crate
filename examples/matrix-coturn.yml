@@ -24,13 +24,9 @@ options:
     ip: 10.99.0.4/24
     gateway: 10.99.0.1
     outbound: wan dns
-    inbound-tcp:
-      3478: 3478
-      5349: 5349
-    inbound-udp:
-      3478: 3478
-      5349: 5349
-      49152-65535: 49152-65535
+    # 1.1.71: no inbound-tcp/udp here — that is NAT-mode port forwarding,
+    # and `crate validate` refuses it in bridge mode. The jail has its own
+    # address on the bridge, so tcp+udp 3478/5349 and the udp relay range 49152-65535 are reached at 10.99.0.4 directly.
 
 limits:
   memoryuse: 512M

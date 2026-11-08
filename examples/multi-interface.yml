@@ -34,9 +34,9 @@ options:
     ip: dhcp
     ip6: slaac
     outbound: wan dns
-    inbound-tcp:
-      80: 80
-      443: 443
+    # 1.1.71: no inbound-tcp/udp here — that is NAT-mode port forwarding,
+    # and `crate validate` refuses it in bridge mode. The jail has its own
+    # address on the bridge, so 80 and 443 are reached at the DHCP address directly.
     extra:
       - mode: bridge
         bridge: bridge1

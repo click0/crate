@@ -7,6 +7,7 @@
 #include <atf-c++.hpp>
 
 #include <string>
+#include <vector>
 
 using namespace ProfilePure;
 
@@ -44,14 +45,45 @@ ATF_TEST_CASE_BODY(search_paths_and_layout) {
 
 ATF_TEST_CASE_WITHOUT_HEAD(local_forbidden_keys);
 ATF_TEST_CASE_BODY(local_forbidden_keys) {
-  for (const char *k : {"security_advanced", "dbus", "base", "scripts", "encrypted", "securelevel",
-                        "socket_proxy"})
+  for (const char *k : {"security_advanced", "dbus", "base", "scripts", "encrypted",
+                        "socket_proxy", "devices"})
     if (checkLocalTopLevelKey(k).empty()) ATF_FAIL(std::string(k) + " must be refused in a .local");
   for (const char *k : {"pkg", "options", "dirs", "files", "run", "limits", "name", "x11", "gui",
-                        "healthcheck", "restart", "clipboard", "dns_filter", "cow"})
+                        "healthcheck", "restart", "clipboard", "dns_filter", "cow",
+                        "security", "ipc", "zfs"})   // the sections themselves; see below
     if (!checkLocalTopLevelKey(k).empty()) ATF_FAIL(std::string(k) + " should be allowed in a .local");
-  ATF_REQUIRE_EQ(forbiddenLocalKeys().size(), 7u);
+  ATF_REQUIRE_EQ(forbiddenLocalKeys().size(), 17u);
   ATF_REQUIRE(checkLocalTopLevelKey("dbus").find("dbus") != std::string::npos);
+}
+
+// 1.1.71: the parser's '-' spelling, nested keys, duplicates
+ATF_TEST_CASE_WITHOUT_HEAD(local_forbidden_key_spellings_and_paths);
+ATF_TEST_CASE_BODY(local_forbidden_key_spellings_and_paths) {
+  for (const char *k : {"security-advanced", "socket-proxy"})
+    if (checkLocalTopLevelKey(k).empty()) ATF_FAIL(std::string(k) + " must be refused like its '_' form");
+  ATF_REQUIRE(checkLocalTopLevelKey("security-advanced").find("security_advanced") != std::string::npos);
+  for (auto p : std::vector<std::vector<std::string>>{
+         {"security", "securelevel"}, {"security", "enforce-statfs"}, {"security", "allow_chflags"},
+         {"security", "allow-mlock"}, {"security", "children_max"}, {"security", "allow_set_hostname"},
+         {"security", "allow_quotas"}, {"ipc", "raw_sockets"}, {"ipc", "raw-sockets"},
+         {"ipc", "sysvipc"}, {"zfs", "datasets"}})
+    if (checkLocalKeyPath(p).empty()) ATF_FAIL(p[0] + "/" + p[1] + " must be refused in a .local");
+  for (auto p : std::vector<std::vector<std::string>>{
+         {"security", "cpuset"}, {"ipc", "mqueue"}, {"dirs", "share"}, {"run", "command"},
+         {"limits", "memoryuse"}, {"securelevel"}})
+    if (!checkLocalKeyPath(p).empty()) ATF_FAIL(p[0] + (p.size() > 1 ? "/" + p[1] : "") + " should be allowed");
+  ATF_REQUIRE_EQ(normaliseKey("dns-filter"), "dns_filter");
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(local_duplicate_keys);
+ATF_TEST_CASE_BODY(local_duplicate_keys) {
+  ATF_REQUIRE_EQ(checkLocalDuplicateKeys({"pkg", "dirs", "run"}, ""), "");
+  ATF_REQUIRE(!checkLocalDuplicateKeys({"share", "share"}, "dirs").empty());
+  ATF_REQUIRE(checkLocalDuplicateKeys({"share", "share"}, "dirs").find("dirs/share") != std::string::npos);
+  // the two spellings of one key are one key
+  ATF_REQUIRE(!checkLocalDuplicateKeys({"dns_filter", "pkg", "dns-filter"}, "").empty());
+  ATF_REQUIRE(checkLocalDuplicateKeys({"dns_filter", "pkg", "dns-filter"}, "").find("'dns_filter' too")
+              != std::string::npos);
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(local_share_host_paths);
@@ -75,19 +107,40 @@ ATF_TEST_CASE_BODY(local_share_host_paths) {
 
 ATF_TEST_CASE_WITHOUT_HEAD(rebuild_decision);
 ATF_TEST_CASE_BODY(rebuild_decision) {
-  ATF_REQUIRE(needsRebuild(-1, 100, -1));       // no crate yet
-  ATF_REQUIRE(needsRebuild(-1, 100, 50));
-  ATF_REQUIRE(!needsRebuild(200, 100, -1));     // crate newer than the profile, no .local
-  ATF_REQUIRE(needsRebuild(200, 300, -1));      // profile edited
-  ATF_REQUIRE(needsRebuild(200, 100, 250));     // .local edited
-  ATF_REQUIRE(!needsRebuild(200, 100, 150));    // both older
-  ATF_REQUIRE(!needsRebuild(200, 200, 200));    // equal mtimes: keep the crate
+  using A = CacheAction;
+  // 1.1.71: keyed by content; mtimes only order the .crate after its merged spec
+  ATF_REQUIRE(cacheAction(-1, -1, "", "k") == A::RewriteAndBuild);     // first run
+  ATF_REQUIRE(cacheAction(500, 100, "", "k") == A::RewriteAndBuild);   // 1.1.70 cache: no key yet
+  ATF_REQUIRE(cacheAction(500, 100, "old", "k") == A::RewriteAndBuild);// spec, .local, vars or version changed
+  ATF_REQUIRE(cacheAction(500, -1, "k", "k") == A::RewriteAndBuild);   // merged spec deleted
+  ATF_REQUIRE(cacheAction(-1, 100, "k", "k") == A::Build);             // root has not built it yet
+  ATF_REQUIRE(cacheAction(100, 100, "k", "k") == A::Build);            // not newer than its spec
+  ATF_REQUIRE(cacheAction(50, 100, "k", "k") == A::Build);             // an older archive
+  ATF_REQUIRE(cacheAction(101, 100, "k", "k") == A::UpToDate);
+  ATF_REQUIRE(cacheAction(101, 100, "", "") == A::RewriteAndBuild);    // no key computed: never trust
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(cache_key_input);
+ATF_TEST_CASE_BODY(cache_key_input) {
+  const std::string spec = "pkg:\n  install: [vim]\n";
+  const auto base = cacheKeyInput(spec, {}, "1.1.71");
+  ATF_REQUIRE(base != cacheKeyInput(spec, {}, "1.1.72"));                        // version
+  ATF_REQUIRE(base != cacheKeyInput(spec + "#\n", {}, "1.1.71"));               // text
+  ATF_REQUIRE(base != cacheKeyInput(spec, {{"PG_VERSION", "16"}}, "1.1.71"));    // a var
+  ATF_REQUIRE(cacheKeyInput(spec, {{"A", "1"}}, "v") != cacheKeyInput(spec, {{"A", "2"}}, "v"));
+  // length prefixes: "A=1 B" is not the same as A="1 B"
+  ATF_REQUIRE(cacheKeyInput(spec, {{"A", "x 1:y"}}, "v") != cacheKeyInput(spec, {{"A", "x"}, {"y", ""}}, "v"));
+  ATF_REQUIRE_EQ(base, cacheKeyInput(spec, {}, "1.1.71"));                       // deterministic
+  ATF_REQUIRE_EQ(cacheKeyPath("/home/alice", "firefox"), "/home/alice/.local/share/crate/profiles/firefox.key");
 }
 
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, profile_names);
   ATF_ADD_TEST_CASE(tcs, search_paths_and_layout);
   ATF_ADD_TEST_CASE(tcs, local_forbidden_keys);
+  ATF_ADD_TEST_CASE(tcs, local_forbidden_key_spellings_and_paths);
+  ATF_ADD_TEST_CASE(tcs, local_duplicate_keys);
   ATF_ADD_TEST_CASE(tcs, local_share_host_paths);
   ATF_ADD_TEST_CASE(tcs, rebuild_decision);
+  ATF_ADD_TEST_CASE(tcs, cache_key_input);
 }

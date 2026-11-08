@@ -36,9 +36,9 @@ options:
     vlan: 10
     static-mac: true
     outbound: wan dns
-    inbound-tcp:
-      80: 80
-      443: 443
+    # 1.1.71: no inbound-tcp/udp here — that is NAT-mode port forwarding,
+    # and `crate validate` refuses it in bridge mode. The jail has its own
+    # address on the bridge, so 80 and 443 are reached at 192.168.10.50 directly.
 
 scripts:
   run:before-start-services:

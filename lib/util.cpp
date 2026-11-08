@@ -310,9 +310,25 @@ std::string execCommandGetOutput(const std::vector<std::string> &argv, const std
 
 // Internal: run a pipeline of commands, optionally capturing last stdout into a string
 static std::string execPipelineImpl(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
-                                    const std::string &stdinFile, const std::string &stdoutFile, bool capture) {
+                                    const std::string &stdinFile, const std::string &stdoutFile, bool capture,
+                                    bool stdoutPrivate = false) {
   if (cmds.empty())
     ERR2("exec pipeline", "empty pipeline for: " << what)
+
+  // 1.1.71: the output file is opened here, by the parent (the last child
+  // did it, and a failure there was only "pipeline failed"), never through
+  // a symlink — like writeFile / appendFile. A private output is a new
+  // file, 0600: backup / export streams used to land 0644 and through a
+  // link planted in /tmp.
+  int outFd = -1;
+  if (!stdoutFile.empty()) {
+    outFd = stdoutPrivate
+      ? ::open(stdoutFile.c_str(), O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC, 0600)
+      : ::open(stdoutFile.c_str(), O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW|O_CLOEXEC, 0644);
+    if (outFd == -1)
+      ERR2("exec pipeline", "cannot create '" << stdoutFile << "' for '" << what << "': " << strerror(errno))
+  }
+  RunAtEnd outGuard([&]() { if (outFd >= 0) ::close(outFd); });
 
   int n = cmds.size();
   // Create n-1 pipes
@@ -375,11 +391,8 @@ static std::string execPipelineImpl(const std::vector<std::vector<std::string>> 
       if (i < n - 1) {
         ::dup2(pipefds[2*i+1], STDOUT_FILENO);
       } else {
-        if (!stdoutFile.empty()) {
-          int fd = ::open(stdoutFile.c_str(), O_WRONLY|O_CREAT|O_TRUNC, 0644);
-          if (fd == -1) ::_exit(127);
-          ::dup2(fd, STDOUT_FILENO);
-          ::close(fd);
+        if (outFd >= 0) {
+          ::dup2(outFd, STDOUT_FILENO);   // the copy has no close-on-exec
         } else if (capture) {
           ::dup2(capturePipe[1], STDOUT_FILENO);
         }
@@ -396,6 +409,7 @@ static std::string execPipelineImpl(const std::vector<std::vector<std::string>> 
   }
 
   // Parent: close all pipe fds (scope guard no longer needed)
+  if (outFd >= 0) { ::close(outFd); outFd = -1; }
   pipesClosedByParent = true;
   for (auto fd : pipefds) ::close(fd);
   if (capturePipe[1] >= 0) ::close(capturePipe[1]);
@@ -430,6 +444,11 @@ static std::string execPipelineImpl(const std::vector<std::vector<std::string>> 
 void execPipeline(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
                   const std::string &stdinFile, const std::string &stdoutFile) {
   execPipelineImpl(cmds, what, stdinFile, stdoutFile, false);
+}
+
+void execPipelineToPrivateFile(const std::vector<std::vector<std::string>> &cmds, const std::string &what,
+                               const std::string &stdoutFile) {
+  execPipelineImpl(cmds, what, "", stdoutFile, false, true);
 }
 
 std::string execPipelineGetOutput(const std::vector<std::vector<std::string>> &cmds, const std::string &what,

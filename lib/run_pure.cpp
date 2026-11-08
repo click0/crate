@@ -136,6 +136,17 @@ bool runUserNeedsAccount(const RunUser &u) {
   return !u.root && !u.mirrored;
 }
 
+std::string runUserCookieHome(const RunUser &u, const std::string &pwHome) {
+  if (u.root || u.mirrored) return "";
+  std::string h = pwHome;
+  while (h.size() > 1 && h.back() == '/') h.pop_back();
+  if (h.empty() || h[0] != '/' || h == "/" || h == "/root") return "";
+  if (h.find("/../") != std::string::npos
+      || (h.size() >= 3 && h.compare(h.size() - 3, 3, "/..") == 0))
+    return "";
+  return h;
+}
+
 std::string validateRunUser(const std::string &user) {
   if (user.empty() || user == "root") return "";
   if (user.size() > 32) return "run/user: name longer than 32 chars";
