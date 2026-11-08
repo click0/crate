@@ -23,6 +23,7 @@
 #include <sys/mount.h>
 #include <unistd.h>
 #include <errno.h>
+#include <string.h>   // 1.1.71: strerror (etc/keep)
 #include <assert.h>
 
 #include <iostream>
@@ -580,14 +581,29 @@ bool createCrate(const Args &args, const Spec &spec) {
   // go into the jail's /etc, which is otherwise the pristine one from
   // base.txz. Names were validated by the spec parser (one path
   // component, no "/" or "..").
+  //
+  // 1.1.71: whatever the jail's /etc already has under that name goes
+  // first, files too — copy_file refuses an existing destination, so
+  // `etc/keep: [hosts]` (base.txz ships /etc/hosts) and `[resolv.conf]`
+  // (copied just above) aborted create. lstat, not stat: a symlink in the
+  // jail's /etc points at an absolute path, which here is the HOST's —
+  // it is unlinked, never followed or written through.
+  auto removeJailEntry = [&](const std::string &dst) {
+    struct stat st;
+    if (::lstat(dst.c_str(), &st) != 0) return;
+    if (S_ISDIR(st.st_mode))
+      Util::Fs::rmdirHier(dst);
+    else if (::unlink(dst.c_str()) != 0)
+      ERR("etc/keep: cannot remove " << dst << " from the jail: " << strerror(errno))
+  };
   for (auto &name : spec.etcKeep) {
     const std::string src = "/etc/" + name;
     const std::string dst = STR(jailPath << "/etc/" << name);
     if (Util::Fs::dirExists(src)) {
-      if (Util::Fs::dirExists(dst))
-        Util::Fs::rmdirHier(dst);
-      Util::execCommand({"/bin/cp", "-RpP", src, dst}, CSTR("etc/keep: copy /etc/" << name));
+      removeJailEntry(dst);
+      Util::execCommand({CRATE_PATH_CP, "-RpP", src, dst}, CSTR("etc/keep: copy /etc/" << name));
     } else if (Util::Fs::fileExists(src)) {
+      removeJailEntry(dst);
       Util::Fs::copyFile(src, dst);
     } else {
       ERR("etc/keep: /etc/" << name << " does not exist on the host")

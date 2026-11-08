@@ -297,6 +297,21 @@ std::optional<JailInfo> findContainer(const std::string &target, unsigned *match
 
 namespace JailExec {
 
+// 1.1.71: after the switch to a jail user, that user's own environment
+// and working directory, as `jexec -l` and crated's exec_in_jail give
+// them — the inherited ones were root's (HOME=/root, USER=root; /root is
+// 0700), so `run/user` under a root `crate run` ran with root's HOME.
+// pw comes from the jail's passwd: getpwnam ran after jail_attach.
+static bool enterUserEnv(const struct passwd *pw) {
+  const char *home = (pw->pw_dir && *pw->pw_dir) ? pw->pw_dir : "/";
+  const char *shell = (pw->pw_shell && *pw->pw_shell) ? pw->pw_shell : CRATE_PATH_SH;
+  if (::setenv("HOME", home, 1) != 0 || ::setenv("USER", pw->pw_name, 1) != 0 ||
+      ::setenv("LOGNAME", pw->pw_name, 1) != 0 || ::setenv("SHELL", shell, 1) != 0)
+    return false;
+  if (::chdir(home) != 0) (void)::chdir("/");
+  return true;
+}
+
 // Build C argv from vector.
 static std::vector<char*> buildArgv(const std::vector<std::string> &args) {
   std::vector<char*> argv;
@@ -459,6 +474,7 @@ int execInJail(int jid, const std::vector<std::string> &argv,
       if (::initgroups(user.c_str(), pw->pw_gid) != 0 || ::setgid(pw->pw_gid) != 0 ||
           ::setuid(pw->pw_uid) != 0)
         ::_exit(124);
+      if (!enterUserEnv(pw)) ::_exit(124);   // 1.1.71
     }
 
     auto cargv = buildArgv(argv);
@@ -552,6 +568,7 @@ std::string execInJailGetOutput(int jid, const std::vector<std::string> &argv,
       if (::initgroups(user.c_str(), pw->pw_gid) != 0 || ::setgid(pw->pw_gid) != 0 ||
           ::setuid(pw->pw_uid) != 0)
         ::_exit(124);
+      if (!enterUserEnv(pw)) ::_exit(124);   // 1.1.71
     }
 
     auto cargv = buildArgv(argv);
@@ -638,6 +655,7 @@ Spawned spawnInJail(int jid, const std::vector<std::string> &argv,
       if (::initgroups(user.c_str(), pw->pw_gid) != 0 || ::setgid(pw->pw_gid) != 0 ||
           ::setuid(pw->pw_uid) != 0)
         ::_exit(124);
+      if (!enterUserEnv(pw)) ::_exit(124);   // 1.1.71
     }
     auto cargv = buildArgv(argv);
     ::execv(argv[0].c_str(), cargv.data());

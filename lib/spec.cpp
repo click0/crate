@@ -1537,13 +1537,13 @@ static Spec parseSpecFromNode(YAML::Node top) {
   return spec;
 }
 
+// 1.1.71: also without --var — ${KEY:-default} takes its default then
+// (validate, list and wrap read specs through here).
 Spec parseSpec(const std::string &fname) {
-  return parseSpecFromNode(YAML::LoadFile(fname));
+  return parseSpecWithVars(fname, {});
 }
 
 Spec parseSpecWithVars(const std::string &fname, const std::map<std::string, std::string> &vars) {
-  if (vars.empty())
-    return parseSpec(fname);
   // Read file, substitute variables, parse from string
   std::ifstream ifs(fname);
   if (!ifs.good())

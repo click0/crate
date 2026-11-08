@@ -134,8 +134,10 @@ differs by transport:
   `403` (`DenyForeignCreatePath`). 1.1.17 closes the last cross-tenant
   holes: `mount_nullfs`'s **source** end (a source inside another
   tenant's `path_master_prefix/<uid>` is denied `403`
-  `DenyForeignSource`; host paths and GUI runtime sockets stay
-  allowed), and the two interface verbs that operate on a *specific*
+  `DenyForeignSource`; since 1.1.71 so is a source that *contains*
+  `path_master_prefix` — `/`, `/var`, `/var/run` — which before held
+  every tenant's slice one mount away; other host paths and GUI runtime
+  sockets stay allowed), and the two interface verbs that operate on a *specific*
   jail rather than shared host state — `configure_iface` (it `jexec`s
   into the named `jid` and moves an iface into its vnet → gated by
   `jid`) and `reclaim_iface_from_vnet` (pulls an iface out of a named

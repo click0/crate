@@ -3,6 +3,8 @@
 #include "profile_pure.h"
 #include "warm_pure.h"
 
+#include <sstream>
+
 namespace ProfilePure {
 
 static const char kLocalSuffix[] = ".local";
@@ -47,6 +49,12 @@ std::string mergedSpecPath(const std::string &home, const std::string &name) {
   return buildDir(home) + "/" + name + ".yml";
 }
 
+// 1.1.71: key PATHS, in the parser's '_' spelling. Until 1.1.70 these
+// were compared as exact top-level strings, so `security-advanced` /
+// `socket-proxy` (the parser takes both spellings) passed, the listed
+// `securelevel` was no key at all (the real one is security/securelevel),
+// and devices / ipc/raw_sockets / zfs/datasets were not listed. A new
+// security/ or ipc/ key that loosens the jail has to be added here.
 const std::vector<std::string> &forbiddenLocalKeys() {
   static const std::vector<std::string> keys = {
     "security_advanced",   // MAC / capsicum / sysctl hardening chosen by the profile
@@ -54,17 +62,53 @@ const std::vector<std::string> &forbiddenLocalKeys() {
     "base",                // host-ro / host-dirs: mounts host directories into the jail
     "scripts",             // shell run as root in the create chroot and at run time
     "encrypted",           // turning encryption off or weakening the cipher
-    "securelevel",         // lowering it
     "socket_proxy",        // exposes host unix sockets (same class as shares outside $HOME)
+    "devices",             // all / input / usb / gpu: host device nodes in the jail's /dev
+    "security/securelevel",        // lowering it
+    "security/enforce_statfs",     // seeing the host's mounts
+    "security/allow_quotas",       // the allow.* flags of jail(8)
+    "security/allow_set_hostname",
+    "security/allow_chflags",
+    "security/allow_mlock",
+    "security/children_max",       // nested jails
+    "ipc/raw_sockets",             // raw sockets: spoofing, sniffing
+    "ipc/sysvipc",                 // the host's System V IPC objects
+    "zfs/datasets",                // host datasets attached to the jail
   };
   return keys;
 }
 
-std::string checkLocalTopLevelKey(const std::string &key) {
+std::string normaliseKey(const std::string &key) {
+  std::string k = key;
+  for (auto &c : k)
+    if (c == '-') c = '_';
+  return k;
+}
+
+std::string checkLocalKeyPath(const std::vector<std::string> &path) {
+  std::string joined;
+  for (auto &p : path) {
+    if (!joined.empty()) joined += '/';
+    joined += normaliseKey(p);
+  }
   for (auto &k : forbiddenLocalKeys())
-    if (k == key)
-      return "a .local override may not set '" + key + "' (it could loosen the profile's "
+    if (k == joined)
+      return "a .local override may not set '" + joined + "' (it could loosen the profile's "
              "isolation); put it in a copy of the profile under ~/.config/crate/profiles/ instead";
+  return "";
+}
+
+std::string checkLocalTopLevelKey(const std::string &key) {
+  return checkLocalKeyPath({key});
+}
+
+std::string checkLocalDuplicateKeys(const std::vector<std::string> &keys, const std::string &where) {
+  for (size_t i = 0; i < keys.size(); i++)
+    for (size_t j = i + 1; j < keys.size(); j++)
+      if (normaliseKey(keys[i]) == normaliseKey(keys[j]))
+        return "a .local override names '" + (where.empty() ? std::string() : where + "/")
+               + keys[j] + "' twice" + (keys[i] != keys[j] ? " (as '" + keys[i] + "' too)" : "")
+               + "; only one of them would be checked";
   return "";
 }
 
@@ -109,11 +153,29 @@ std::string checkLocalShareHostPath(const std::string &hostPath, const std::stri
          + h + "); '" + hostPath + "' is outside it";
 }
 
-bool needsRebuild(long crateMtime, long specMtime, long localMtime) {
-  if (crateMtime < 0) return true;
-  if (specMtime > crateMtime) return true;
-  if (localMtime >= 0 && localMtime > crateMtime) return true;
-  return false;
+std::string cacheKeyPath(const std::string &home, const std::string &name) {
+  return buildDir(home) + "/" + name + ".key";
+}
+
+// Length-prefixed, so no value can imitate another field.
+std::string cacheKeyInput(const std::string &mergedSpec,
+                          const std::map<std::string, std::string> &vars,
+                          const std::string &version) {
+  std::ostringstream s;
+  s << "crate-profile-cache 1\n"
+    << "version " << version.size() << ':' << version << '\n';
+  for (auto &kv : vars)
+    s << "var " << kv.first.size() << ':' << kv.first << ' '
+      << kv.second.size() << ':' << kv.second << '\n';
+  s << "spec " << mergedSpec.size() << ':' << mergedSpec;
+  return s.str();
+}
+
+CacheAction cacheAction(long long crateMtimeNs, long long mergedMtimeNs,
+                        const std::string &storedKey, const std::string &key) {
+  if (key.empty() || storedKey != key || mergedMtimeNs < 0) return CacheAction::RewriteAndBuild;
+  if (crateMtimeNs < 0 || crateMtimeNs <= mergedMtimeNs) return CacheAction::Build;
+  return CacheAction::UpToDate;
 }
 
 } // namespace ProfilePure

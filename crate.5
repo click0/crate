@@ -1425,6 +1425,29 @@ placeholders, so a
 .Sy from_file
 secret is not stored in the
 .Pa .crate .
+.Li ${KEY:-default}
+.Pq since 1.1.71
+takes the value when
+.Ar KEY
+was given and is not empty, and
+.Ar default
+otherwise, also when no variable was given at all; the default may
+hold another placeholder, as in
+.Li ${TURN_DOMAIN:-${DOMAIN}} .
+The same substitution applies to every spec read by
+.Cm create ,
+.Cm run ,
+.Cm validate
+and to the stack file itself.
+A
+.Li ${KEY}
+whose
+.Ar KEY
+was not given stays as text, so a script can use it for its own shell
+variable; a shell default meant for the script itself is written
+.Li ${VAR-default}
+.Pq without the colon ,
+which crate leaves alone.
 .It Sy containers/<name>/volumes
 .Li name:/path[:ro]
 mounts of the stack-level
@@ -1669,9 +1692,13 @@ the examples shipped with crate
 .Pp
 The archive is built on first use into
 .Pa ~/.local/share/crate/profiles/ Ns Ar name Ns Pa .crate
-and reused; it is rebuilt when the profile or its
-.Pa .local
-is newer.
+and reused; it is rebuilt when the merged specification, the
+.Fl -var
+values or the crate version change
+.Po
+.Ar name Ns Pa .key
+next to it holds their sha256; since 1.1.71
+.Pc .
 The build is a
 .Cm crate create ,
 which needs root: an unprivileged operator is told the exact
@@ -1701,8 +1728,22 @@ A
 may add packages, options, limits, run arguments and shares under
 .Ev $HOME ;
 it may not contain the top-level keys
-.Sy security_advanced , dbus , base , scripts , encrypted , securelevel ,
-.Sy socket_proxy ,
+.Sy security_advanced , dbus , base , scripts , encrypted , socket_proxy ,
+.Sy devices ,
+nor
+.Sy security/securelevel , security/enforce_statfs , security/children_max ,
+the
+.Sy security/allow_*
+keys,
+.Sy ipc/raw_sockets , ipc/sysvipc
+or
+.Sy zfs/datasets
+in either spelling,
+.Ql _
+or
+.Ql - ,
+nor name a key twice
+.Pq both since 1.1.71 ,
 nor a
 .Sy dirs/share
 or

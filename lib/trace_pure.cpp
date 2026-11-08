@@ -141,6 +141,10 @@ static bool parseSockaddr(const std::string &a, Event &ev) {
   return false;
 }
 
+static bool openFlagsDirectory(const std::string &f) {
+  return f.find("O_DIRECTORY") != std::string::npos;
+}
+
 static bool openFlagsWrite(const std::string &f) {
   return f.find("O_WRONLY") != std::string::npos || f.find("O_RDWR") != std::string::npos
          || f.find("O_CREAT") != std::string::npos || f.find("O_TRUNC") != std::string::npos
@@ -219,9 +223,11 @@ bool parseLine(const std::string &line, Event &out) {
   if (name == "open") {
     if (args.size() < 2) return false;
     out.kind = K::Open; out.path = unquoteArg(args[0]); out.write = openFlagsWrite(args[1]);
+    out.directory = openFlagsDirectory(args[1]);
   } else if (name == "openat") {
     if (args.size() < 3) return false;
     out.kind = K::Open; out.path = unquoteArg(args[1]); out.write = openFlagsWrite(args[2]);
+    out.directory = openFlagsDirectory(args[2]);
   } else if (name == "stat" || name == "lstat" || name == "access" || name == "eaccess" || name == "readlink") {
     if (args.empty()) return false;
     out.kind = K::Stat; out.path = unquoteArg(args[0]);
@@ -280,7 +286,8 @@ Summary summarize(const std::vector<std::string> &lines) {
     using K = Event::Kind;
     switch (ev.kind) {
     case K::Open:
-      if (!ev.failed && absolute) (ev.write ? s.writePaths : s.readPaths).insert(ev.path);
+      if (!ev.failed && absolute)
+        (ev.directory ? s.dirPaths : ev.write ? s.writePaths : s.readPaths).insert(ev.path);
       break;
     case K::Stat:
       if (!ev.failed && absolute) s.probedPaths.insert(ev.path);
@@ -489,7 +496,24 @@ Generated generate(const Summary &s, const Input &in) {
     ".history", ".login_conf", ".profile", ".cshrc", ".shrc", ".login", ".logout", ".mailrc",
     ".mail_aliases", ".rhosts", ".hushlogin", ".bash_history", ".zsh_history",
   };
-  for (auto &p : allOpened) {
+  // 1.1.71: directory listings (O_DIRECTORY) were taken for file reads:
+  // a first-level $HOME directory became a file share, which `crate run`
+  // refuses (a file-share wants regular files), and elsewhere the PARENT
+  // was shared — /zdata/photos shared all of /zdata, /srv nothing. A
+  // listed directory is shared as itself; the ancestors of the system
+  // prefixes and of $HOME ("/", "/usr", "/var", "/home") are skipped.
+  auto ancestorOfSystemOrHome = [&](const std::string &d) {
+    if (!in.home.empty() && isUnder(in.home, d)) return true;
+    for (auto &pre : ignoredPrefixes())
+      if (isUnder(pre, d)) return true;
+    return false;
+  };
+  std::vector<std::pair<std::string, bool>> opened;   // path, is a directory
+  for (auto &p : allOpened) opened.emplace_back(p, false);
+  for (auto &p : s.dirPaths) opened.emplace_back(p, true);
+  for (auto &po : opened) {
+    const auto &p = po.first;
+    const bool isDir = po.second;
     if (isUnder(p, "/dev")) {
       if (isUnder(p, "/dev/dri")) g.gl = true;
       else if (startsWith(p, "/dev/video")) g.video = true;
@@ -509,7 +533,12 @@ Generated generate(const Summary &s, const Input &in) {
       const auto &top = comps[0];
       if (loginDotfiles.count(top)) continue;
       if (top == ".cache") { cache = true; continue; }
-      if (comps.size() == 1) { pushUnique(g.fileShares, "$HOME/" + top); continue; }
+      if (comps.size() == 1 && !isDir) { pushUnique(g.fileShares, "$HOME/" + top); continue; }
+      // a listing of ~/.config, ~/.local or ~/.local/share is no one application's slice
+      if (isDir && (top == ".config" || top == ".local")
+          && (comps.size() == 1 || (top == ".local" && comps.size() == 2
+                                    && (comps[1] == "share" || comps[1] == "state"))))
+        continue;
       std::string dir = "$HOME/" + top;
       if (top == ".config" || top == ".local") {
         // one application's slice, not the whole tree
@@ -522,6 +551,10 @@ Generated generate(const Summary &s, const Input &in) {
       continue;
     }
     if (isIgnored(p)) continue;
+    if (isDir) {
+      if (!ancestorOfSystemOrHome(p)) otherDirs.insert(p);
+      continue;
+    }
     otherDirs.insert(dirname(p));
   }
   // directories elsewhere: keep the shortest ancestors only

@@ -14,6 +14,7 @@
 #include "stack_pure.h"
 #include "stack_spec.h"  // 1.1.68: the member spec is composed at the YAML level
 #include "profile.h"     // 1.1.70: Profile::mergeYaml for the member bases
+#include "spec_pure.h"   // 1.1.71: substituteVars for the stack file
 #include "status_fd.h"   // 1.1.65: detached `crate run --status-fd`
 
 #include <rang.hpp>
@@ -673,17 +674,10 @@ static ParsedStack parseStackFile(const std::string &fname, const std::map<std::
     content.assign(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
   }
 
-  // Substitute global vars in the stack file itself
-  if (!globalVars.empty()) {
-    for (auto &kv : globalVars) {
-      std::string token = "${" + kv.first + "}";
-      size_t pos = 0;
-      while ((pos = content.find(token, pos)) != std::string::npos) {
-        content.replace(pos, token.length(), kv.second);
-        pos += kv.second.length();
-      }
-    }
-  }
+  // Substitute global vars in the stack file itself. 1.1.71: through
+  // SpecPure::substituteVars (this was a copy without ${KEY:-default},
+  // so `LISTEN_PORT: "${LISTEN_PORT:-8080}"` reached the member as text).
+  content = SpecPure::substituteVars(content, globalVars);
 
   YAML::Node top = YAML::Load(content);
 

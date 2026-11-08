@@ -114,6 +114,12 @@ std::string targetOf(const Entry &e) {
   return e.cratePath;
 }
 
+std::vector<std::string> runArgsFor(const Entry &e, const std::string &containerName) {
+  if (!e.warmBase.empty())
+    return {"--warm-base", e.warmBase, "--name", containerName};
+  return {"-f", e.cratePath};
+}
+
 std::string formatLine(const Entry &e) {
   return e.name + " " + targetOf(e);
 }

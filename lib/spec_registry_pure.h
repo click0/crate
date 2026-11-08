@@ -70,6 +70,12 @@ std::string validateEntry(const Entry &e);
 // "warm-base=<dataset>" (the same text as the line's second field).
 std::string targetOf(const Entry &e);
 
+// 1.1.71: the `crate run` arguments that replay the entry: "-f <path>",
+// or "--warm-base <dataset> --name <container>". crated's start /
+// restart (control socket and HTTP) took only the path form, so a
+// warm-base container could be stopped there but never started (404).
+std::vector<std::string> runArgsFor(const Entry &e, const std::string &containerName);
+
 // --- File format ---
 
 // Parse one registry line "<name> <path>". Returns "" on success.

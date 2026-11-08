@@ -1015,6 +1015,77 @@ carries the kernel's jail name.
 
 ---
 
+## 4n. 1.1.71 — the bug hunt's MED findings
+
+```sh
+# 1. mount_nullfs: a source ABOVE the tenant root is refused. As a tenant (rootless, crated
+#    with path_master_prefix: /var/run/crate), a spec that shares /var/run into the jail:
+printf 'dirs:\n  share:\n    - [/mnt/v, /var/run]\nrun: {command: /bin/ls /mnt/v}\n' > /tmp/up.yml
+#    built by root (crate create -s /tmp/up.yml -o /tmp/up.crate), run by the tenant:
+crate run -f /tmp/up.crate 2>&1 | grep 'contains the per-user tenant root'   # 403, nothing mounted
+#    the same spec with [/mnt/v, $HOME/data] still mounts.
+
+# 2. ${VAR:-default}: the examples parse without --var
+for f in /usr/local/share/examples/crate/*.yml; do case $f in */stack-*) continue;; esac
+  crate validate "$f" >/dev/null || echo "FAIL $f"; done            # no FAIL lines
+crate create -s examples/postgres.yml -o /tmp/pg.crate               # installs postgresql16-server
+crate create -s examples/postgres.yml --var PG_VERSION=17 -o /tmp/pg17.crate   # postgresql17-server
+
+# 3. .local policy: each of these is refused with the reason
+for k in 'security-advanced: {}' 'security: {securelevel: 0}' 'devices: [gpu]' \
+         'ipc: {raw-sockets: true}' 'zfs: {datasets: [zroot/x]}'; do
+  printf '%s\n' "$k" > ~/.config/crate/profiles/firefox.local.yml; crate run firefox 2>&1 | head -1; done
+printf 'dirs:\n  share:\n    - [/a, $HOME/a]\n  share:\n    - [/b, /etc]\n' > ~/.config/crate/profiles/firefox.local.yml
+crate run firefox 2>&1 | head -1                                      # "names 'dirs/share' twice"
+rm ~/.config/crate/profiles/firefox.local.yml
+
+# 4. the profile cache follows content: removing the .local rebuilds, re-running does not
+crate run firefox; ls ~/.local/share/crate/profiles/firefox.key       # the key file exists
+crate -p run firefox 2>&1 | grep 'is up to date'                      # second run: reused
+touch -t 202001010000 ~/.config/crate/profiles/firefox.yml            # an OLDER mtime ...
+echo '# x' >> ~/.config/crate/profiles/firefox.yml; crate run firefox 2>&1 | grep building   # ... still rebuilds
+
+# 5. etc/keep with a file base.txz already has
+printf 'etc:\n  keep: [hosts, resolv.conf, ssl]\nrun: {command: /bin/cat /etc/hosts}\n' > /tmp/k.yml
+crate create -s /tmp/k.yml -o /tmp/k.crate && crate run -f /tmp/k.crate   # the HOST's /etc/hosts
+
+# 6. run/user under root: its own HOME, and the X cookie readable (as root)
+printf 'run:\n  command: /bin/sh\n  args: [-c, "echo $HOME $USER; pwd"]\n  user: crate\n' > /tmp/u.yml
+crate create -s /tmp/u.yml -o /tmp/u.crate && crate run -f /tmp/u.crate   # "/home/crate crate", "/home/crate"
+#    xeyes.yml with `user: crate` added under run: opens its window (before: "No protocol specified");
+#    in the jail, /home/crate/.Xauthority is -rw------- crate and /root/.Xauthority is gone
+
+# 7. profile-from-trace: a listed directory is shared as a directory
+crate profile-from-trace -o /tmp/ls.yml -- /bin/ls ~/Music /srv
+grep -A3 'dirs:' /tmp/ls.yml                                          # $HOME/Music and /srv, no files/share
+
+# 8. crate audit on a NAT jail: no WARN for the gateway probe or bpf
+crate run -f fetch.crate -- -o /dev/null https://www.freebsd.org/ &
+crate audit fetch | grep -E 'gateway|bpf'                             # both PASS; exit status 0 if nothing else warns
+
+# 9. backup / export: private files, no symlink followed
+crate backup web --output-dir /tmp && ls -l /tmp/web-*.zstream        # -rw------- root
+ln -s /etc/motd.template /tmp/x.crate; crate export web -o /tmp/x.crate   # refused: exists
+rm /tmp/x.crate; crate export web -o /tmp/x.crate && ls -l /tmp/x.crate   # -rw------- , owner = you
+
+# 10. crated starts a warm-base container (a control socket from control_sockets: in crated.conf,
+#     and the HTTP API with an admin token)
+crate run --warm-base tank/templates/nginx-warm --name nginxw &  sleep 5; crate stop nginxw
+curl --unix-socket /var/run/crate/control/<group>.sock -X POST http://x/v1/control/containers/nginxw/start   # 202, before 404
+jls name | grep -c '^nginxw_pid'                                                                             # 1
+curl -H "Authorization: Bearer $ADMIN" -X POST http://127.0.0.1:9800/api/v1/containers/nginxw/restart       # 200
+```
+
+Pass criteria: no tenant can mount a directory above the tenant root;
+every example validates; each loosening `.local` is refused; the profile
+cache rebuilds on content and only then; `etc/keep` keeps existing
+files; `run/user` runs with its own HOME and reads its X cookie;
+directory listings become directory shares; `crate audit` passes a
+networked vnet jail; backup / export files are 0600 and refuse links; a
+warm-base container starts through crated.
+
+---
+
 ## 5. Reporting back
 
 ```sh

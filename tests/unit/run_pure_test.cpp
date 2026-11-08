@@ -219,6 +219,23 @@ ATF_TEST_CASE_BODY(epair_unit_and_ip6) {
 }
 
 // 1.1.64: run/user resolution
+// 1.1.71: under a root `crate run` the X cookie sits in the jail's /root;
+// a dedicated or named run/user gets it in its own home.
+ATF_TEST_CASE_WITHOUT_HEAD(run_user_cookie_home);
+ATF_TEST_CASE_BODY(run_user_cookie_home)
+{
+	auto dedicated = RunPure::effectiveRunUser("", "root", 0);
+	ATF_REQUIRE_EQ(RunPure::runUserCookieHome(dedicated, "/home/crate"), "/home/crate");
+	ATF_REQUIRE_EQ(RunPure::runUserCookieHome(dedicated, "/home/crate/"), "/home/crate");
+	auto named = RunPure::effectiveRunUser("www", "root", 0);
+	ATF_REQUIRE_EQ(RunPure::runUserCookieHome(named, "/usr/local/www"), "/usr/local/www");
+	// stays: root itself, the mirrored operator, homes that are not one
+	ATF_REQUIRE_EQ(RunPure::runUserCookieHome(RunPure::effectiveRunUser("root", "root", 0), "/root"), "");
+	ATF_REQUIRE_EQ(RunPure::runUserCookieHome(RunPure::effectiveRunUser("", "alice", 1001), "/home/alice"), "");
+	for (const char *h : {"", "/", "/root", "/root/", "relative", "/home/../root", "/home/x/.."})
+		ATF_REQUIRE_EQ(RunPure::runUserCookieHome(dedicated, h), "");
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(run_user_effective);
 ATF_TEST_CASE_BODY(run_user_effective)
 {
@@ -275,4 +292,5 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, container_name_of_running_jail); // 1.1.70
 	ATF_ADD_TEST_CASE(tcs, epair_unit_and_ip6);
 	ATF_ADD_TEST_CASE(tcs, run_user_effective);
+	ATF_ADD_TEST_CASE(tcs, run_user_cookie_home);
 }

@@ -144,8 +144,18 @@ Decision checkOwnedPath(const std::string &path,
 // a single trust domain w.r.t. the host; this gate only enforces
 // tenant-vs-tenant isolation. Unconfigured deployment (empty
 // pathMasterPrefix) -> nothing to gate.
+//
+// 1.1.71: a source ABOVE the tenant root is foreign too. "/var/run" (or
+// "/var", "/") holds every tenant's slice, so mounting it read-write
+// into one's own jail and exec_in_jail-ing as root there reached all of
+// them — the check above only looked downwards. The source is canonical
+// by the time it gets here (1.1.35 realpath gate in the dispatcher).
 bool sourceForeign(const std::string &source, const PerUserEnvPure::Env &env) {
   if (env.pathMasterPrefix.empty()) return false;       // opt-in
+  // (an empty source is validateMountNullfs's to refuse; ownedUnder
+  // treats an empty prefix as "everything")
+  if (!source.empty() && pathOwned(env.pathMasterPrefix, source))   // contains the tenant root
+    return true;
   return pathOwned(source, env.pathMasterPrefix)        // under the tenant root
       && !pathOwned(source, env.pathPrefix);            // but not the caller's
 }
@@ -370,7 +380,7 @@ const char *decisionReason(Decision d) {
     case Decision::DenyForeignCreatePath:
       return "create_jail path is outside the caller's per-user path prefix";
     case Decision::DenyForeignSource:
-      return "mount source lies inside another operator's per-user path prefix";
+      return "mount source lies inside another operator's per-user path prefix, or contains the per-user tenant root";
     case Decision::DenyUnownedPath:
       return "path is neither inside a jail owned by the caller nor inside the caller's per-user path prefix";
     case Decision::DenyForeignAnchor:

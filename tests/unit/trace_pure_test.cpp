@@ -335,6 +335,51 @@ ATF_TEST_CASE_BODY(generate_server_and_edge_cases) {
   ATF_REQUIRE(y3.find("options:") == std::string::npos);
 }
 
+// 1.1.71: directory listings (O_DIRECTORY) are shared as directories
+ATF_TEST_CASE_WITHOUT_HEAD(generate_directory_opens);
+ATF_TEST_CASE_BODY(generate_directory_opens) {
+  Event e;
+  ATF_REQUIRE(parseLine("openat(AT_FDCWD,\"/home/alice/Music\",O_RDONLY|O_NONBLOCK|O_DIRECTORY|O_CLOEXEC,00) = 4 (0x4)", e));
+  ATF_REQUIRE(e.kind == Event::Kind::Open);
+  ATF_REQUIRE(e.directory);
+  ATF_REQUIRE(!e.write);
+  ATF_REQUIRE(parseLine("open(\"/x\",O_RDONLY) = 3 (0x3)", e));
+  ATF_REQUIRE(!e.directory);
+
+  std::vector<std::string> trace = {
+    "execve(\"/usr/local/bin/app\",[ \"app\" ],0x1) EJUSTRETURN",
+    "openat(AT_FDCWD,\"/home/alice/Music\",O_RDONLY|O_DIRECTORY|O_CLOEXEC,00) = 4 (0x4)",
+    "openat(AT_FDCWD,\"/home/alice/.mozilla\",O_RDONLY|O_DIRECTORY,00) = 5 (0x5)",
+    "openat(AT_FDCWD,\"/home/alice/.config\",O_RDONLY|O_DIRECTORY,00) = 6 (0x6)",
+    "openat(AT_FDCWD,\"/home/alice/.local/share\",O_RDONLY|O_DIRECTORY,00) = 6 (0x6)",
+    "openat(AT_FDCWD,\"/home/alice/notes.txt\",O_RDONLY,00) = 7 (0x7)",
+    "openat(AT_FDCWD,\"/zdata/photos\",O_RDONLY|O_DIRECTORY,00) = 8 (0x8)",
+    "openat(AT_FDCWD,\"/srv\",O_RDONLY|O_DIRECTORY,00) = 9 (0x9)",
+    "openat(AT_FDCWD,\"/usr\",O_RDONLY|O_DIRECTORY,00) = 10 (0xa)",
+    "openat(AT_FDCWD,\"/var\",O_RDONLY|O_DIRECTORY,00) = 10 (0xa)",
+    "openat(AT_FDCWD,\"/home\",O_RDONLY|O_DIRECTORY,00) = 10 (0xa)",
+    "openat(AT_FDCWD,\"/usr/local/share/fonts\",O_RDONLY|O_DIRECTORY,00) = 10 (0xa)",
+    "openat(AT_FDCWD,\"/\",O_RDONLY|O_DIRECTORY,00) = 10 (0xa)",
+  };
+  auto s = summarize(trace);
+  ATF_REQUIRE(s.dirPaths.count("/home/alice/Music"));
+  ATF_REQUIRE(!s.readPaths.count("/home/alice/Music"));
+  Input in;
+  in.home = "/home/alice";
+  auto g = generate(s, in);
+  ATF_REQUIRE(has(g.dirShares, "$HOME/Music"));          // not a file share (crate run refuses that)
+  ATF_REQUIRE(!has(g.fileShares, "$HOME/Music"));
+  ATF_REQUIRE(has(g.stateDirShares, "$HOME/.mozilla"));
+  ATF_REQUIRE(!has(g.stateDirShares, "$HOME/.config"));
+  ATF_REQUIRE(!has(g.stateDirShares, "$HOME/.local/share"));
+  ATF_REQUIRE(has(g.fileShares, "$HOME/notes.txt"));    // a file stays a file
+  ATF_REQUIRE(has(g.dirShares, "/zdata/photos"));        // itself, not all of /zdata
+  ATF_REQUIRE(!has(g.dirShares, "/zdata"));
+  ATF_REQUIRE(has(g.dirShares, "/srv"));                 // before: "/" -> dropped
+  for (const char *no : {"/usr", "/var", "/home", "/", "/usr/local/share/fonts"})
+    ATF_REQUIRE(!has(g.dirShares, no));
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(helpers);
 ATF_TEST_CASE_BODY(helpers) {
   ATF_REQUIRE_EQ(pkgNameFromNameVersion("firefox-128.0,2"), "firefox");
@@ -385,5 +430,6 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, summarize_firefox_like_trace);
   ATF_ADD_TEST_CASE(tcs, generate_firefox_like_spec);
   ATF_ADD_TEST_CASE(tcs, generate_server_and_edge_cases);
+  ATF_ADD_TEST_CASE(tcs, generate_directory_opens);
   ATF_ADD_TEST_CASE(tcs, helpers);
 }

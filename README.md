@@ -542,7 +542,7 @@ Named network fields serve as defaults — explicit values in the container spec
 | `/usr/local/share/crate/profiles/NAME.yml` | the site (directory created by the operator, root-owned) |
 | `/usr/local/share/examples/crate/NAME.yml` | shipped with crate — the examples double as the profile set |
 
-The `.crate` is built on first use into `~/.local/share/crate/profiles/NAME.crate` and reused; it is rebuilt when the profile or its `.local` is newer. The jail is named after the profile, exactly as with `-f NAME.crate`. The build is a `crate create`, which still needs root: an unprivileged operator gets a message with the exact `crate create -s … -o … && chown` recipe for root (the merged spec is already written), and runs normally once the archive exists.
+The `.crate` is built on first use into `~/.local/share/crate/profiles/NAME.crate` and reused; it is rebuilt when the merged spec, the `--var` values or the crate version change — `NAME.key` next to it holds their sha256 (1.1.71; until then only a newer profile or `.local` triggered a rebuild, so a removed `.local`, an older copy or other `--var` values kept the old archive). The jail is named after the profile, exactly as with `-f NAME.crate`. The build is a `crate create`, which still needs root: an unprivileged operator gets a message with the exact `crate create -s … -o … && chown` recipe for root (the merged spec is already written), and runs normally once the archive exists.
 
 An optional `~/.config/crate/profiles/NAME.local.yml` is merged on top of the profile: maps key by key, lists appended without duplicates, `options` by option name, scalars replaced. It may add packages, options, limits, run arguments and shares under `$HOME`:
 
@@ -559,7 +559,7 @@ limits:
     memoryuse: 4G
 ```
 
-It may **not** loosen what the profile author chose: `security_advanced`, `dbus`, `base`, `scripts`, `encrypted`, `securelevel`, `socket_proxy` and shares of host paths outside your home are refused with the reason. For those, copy the profile into `~/.config/crate/profiles/` and edit the copy. The merged spec is written next to the archive as `NAME.yml` (generated) and is what `+CRATE.SPEC` contains. Profile names follow the jail-name rule (`[A-Za-z0-9._-]`), so the `chromium+tor`-style examples need a copy under a dash name.
+It may **not** loosen what the profile author chose: `security_advanced`, `dbus`, `base`, `scripts`, `encrypted`, `socket_proxy`, `devices`, `security/securelevel`, `security/enforce_statfs`, `security/children_max`, the `security/allow_*` keys, `ipc/raw_sockets`, `ipc/sysvipc`, `zfs/datasets` and shares of host paths outside your home are refused with the reason — in either spelling (`socket-proxy` too), and a key named twice is refused as well (1.1.71). For those, copy the profile into `~/.config/crate/profiles/` and edit the copy. The merged spec is written next to the archive as `NAME.yml` (generated) and is what `+CRATE.SPEC` contains. Profile names follow the jail-name rule (`[A-Za-z0-9._-]`), so the `chromium+tor`-style examples need a copy under a dash name.
 
 Since 1.1.59 `crate create --template` uses the same YAML merge and the merged spec goes into the archive; before, the template only affected the build and a `--template privacy` crate ran without tor, encryption, COW or the DNS filter.
 
@@ -597,7 +597,7 @@ Destinations seen, sound/input/USB devices, Wayland sockets, unknown unix socket
 |---|---|
 | `jail` | securelevel, hostname and `kern.hostid` compared with the host's, the `allow.*` flags as the jail sees them (raw sockets, mount, chflags, sysvipc, socket_af, enforce_statfs, devfs ruleset) |
 | `mounts` | every host path visible through nullfs, rw or ro; procfs, zfs, tmpfs |
-| `devfs` | device classes: gpu, video, sound, input, usb, serial, disks, raw (`mem`, `kmem`, `bpf`, `pf`) |
+| `devfs` | device classes: gpu, video, sound, input, usb, serial, disks, raw (`mem`, `kmem`, `pf`), bpf (a warning only without vnet, 1.1.71) |
 | `interfaces` | addresses and the default route |
 | `sockets` | inet listeners; unix sockets on the filesystem that belong to the host (X11, system/session D-Bus, Wayland, sound server) |
 | `processes` | who runs what inside |
@@ -676,7 +676,7 @@ crate run --status-fd 3 -f nginx.crate 3>nginx.status.jsonl
 
 A run that fails before the command ran ends with `failed` (with the error text) and `teardown_done`; a stream carries exactly one of `exited` and `failed` (1.1.70: an error after the command exited goes to stderr only). Values are flat strings, integers and booleans; `ip` appears when the address is known. `crate stack up` and `crated` start containers over such a pipe and read it until `jail_created` instead of polling `jls` for the jail to appear, so a member that fails to start says why.
 
-What a stack adds to a `spec:` member — its `template`, the pool address, the `/etc/hosts` and `resolv.conf` scripts, the named `volumes` — is composed into the member's spec file before the build, so it is what the archived `+CRATE.SPEC` holds and what the member's `crate run` executes (until 1.1.68 the member ran its bare spec). A template given by name is found like `crate create --template` finds it. `${KEY}` placeholders stay in the archive; `crate run --var KEY=VALUE` substitutes them when it reads the spec. A pool address (`ip_range`) goes only to a member in bridge mode on that network's bridge that sets no `ip` of its own; a NAT member cannot hold one, and `stack up` warns about every member left without an address (1.1.70).
+What a stack adds to a `spec:` member — its `template`, the pool address, the `/etc/hosts` and `resolv.conf` scripts, the named `volumes` — is composed into the member's spec file before the build, so it is what the archived `+CRATE.SPEC` holds and what the member's `crate run` executes (until 1.1.68 the member ran its bare spec). A template given by name is found like `crate create --template` finds it. `${KEY}` placeholders stay in the archive; `crate run --var KEY=VALUE` substitutes them when it reads the spec. `${KEY:-default}` takes the default when `KEY` was not given or is empty — also with no `--var` at all, in `create`, `run`, `validate` and the stack file (1.1.71; before, it stayed as text and `examples/webapp.yml` did not parse). A pool address (`ip_range`) goes only to a member in bridge mode on that network's bridge that sets no `ip` of its own; a NAT member cannot hold one, and `stack up` warns about every member left without an address (1.1.70).
 
 `run/timeout: 15m` (firejail `--timeout`; seconds, or `s`/`m`/`h`) starts the command under `timeout(1)`: SIGTERM at the deadline, SIGKILL ten seconds later, exit code 124, `"timed_out": true` in the `exited` event, and the usual teardown.
 

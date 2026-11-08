@@ -76,7 +76,8 @@ enum class Decision {
   DenyForeignJailName,   // jail name is in the registry and owned by another uid
   DenyForeignPath,       // path lies inside a registry-tracked jail owned by another uid
   DenyForeignCreatePath, // create_jail path is outside the caller's per-user path prefix
-  DenyForeignSource,     // mount_nullfs source lies inside another tenant's path prefix
+  DenyForeignSource,     // mount_nullfs source lies inside another tenant's path prefix,
+                         // or (1.1.71) contains the tenant root itself
   DenyUnownedPath,       // 1.1.35: path-scoped target not in a caller-owned jail and
                          // outside the caller's per-user path prefix (per-user split on)
   DenyForeignAnchor,     // 1.1.36: pf anchor is not crate/<jail> or that jail is

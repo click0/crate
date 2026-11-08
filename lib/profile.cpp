@@ -9,6 +9,7 @@
 #include "util.h"
 #include "err.h"
 #include "commands.h"
+#include "version.h"   // 1.1.71: CRATE_VERSION in the cache key
 
 #include <rang.hpp>
 
@@ -27,10 +28,34 @@
 
 namespace Profile {
 
-static long mtimeOf(const std::string &path) {
+// 1.1.71: nanoseconds (st_mtim) — the cache compares the .crate with the
+// merged spec it was built from, often written the same second.
+static long long mtimeNsOf(const std::string &path) {
   struct stat st;
   if (::stat(path.c_str(), &st) != 0) return -1;
-  return (long)st.st_mtime;
+  return (long long)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec;
+}
+
+static std::string readSmallFile(const std::string &path) {
+  std::ifstream f(path);
+  std::string s;
+  if (f) std::getline(f, s);
+  return s;
+}
+
+static void writeAtomically(const std::string &outPath, const std::string &text) {
+  const auto tmp = outPath + ".tmp";
+  {
+    std::ofstream f(tmp, std::ios::trunc);
+    if (!f) ERR("cannot write " << tmp << ": " << strerror(errno))
+    f << text;
+    if (!f) ERR("cannot write " << tmp)
+  }
+  if (::rename(tmp.c_str(), outPath.c_str()) != 0) {
+    int e = errno;
+    ::unlink(tmp.c_str());
+    ERR("cannot rename " << tmp << " to " << outPath << ": " << strerror(e))
+  }
 }
 
 static std::string emit(const YAML::Node &n) {
@@ -158,12 +183,29 @@ void checkLocalOverlay(const YAML::Node &overlay, const std::string &home, const
   if (!overlay.IsMap())
     ERR(path << ": a .local override must be a YAML map of spec keys")
 
-  for (YAML::const_iterator it = overlay.begin(); it != overlay.end(); ++it) {
-    if (!it->first.IsScalar())
-      ERR(path << ": top-level keys must be scalars")
-    const auto key = it->first.as<std::string>();
-    if (auto e = ProfilePure::checkLocalTopLevelKey(key); !e.empty())
+  // 1.1.71: every key of the top level and of the maps one level down,
+  // in either spelling, and none of them twice (see ProfilePure).
+  auto keysOf = [&](const YAML::Node &m, const std::string &where) {
+    std::vector<std::string> keys;
+    for (YAML::const_iterator it = m.begin(); it != m.end(); ++it) {
+      if (!it->first.IsScalar())
+        ERR(path << ": " << (where.empty() ? "top-level" : where) << " keys must be scalars")
+      keys.push_back(it->first.as<std::string>());
+    }
+    if (auto e = ProfilePure::checkLocalDuplicateKeys(keys, where); !e.empty())
       ERR(path << ": " << e)
+    return keys;
+  };
+  keysOf(overlay, "");
+
+  for (YAML::const_iterator it = overlay.begin(); it != overlay.end(); ++it) {
+    const auto key = ProfilePure::normaliseKey(it->first.as<std::string>());
+    if (auto e = ProfilePure::checkLocalKeyPath({key}); !e.empty())
+      ERR(path << ": " << e)
+    if (it->second.IsMap() && key != "options")   // option names are not spec keys
+      for (auto &sub : keysOf(it->second, key))
+        if (auto e = ProfilePure::checkLocalKeyPath({key, sub}); !e.empty())
+          ERR(path << ": " << e)
 
     if ((key == "dirs" || key == "files") && it->second.IsMap()) {
       auto share = it->second["share"];
@@ -184,8 +226,7 @@ void checkLocalOverlay(const YAML::Node &overlay, const std::string &home, const
   }
 }
 
-void writeMerged(const std::string &basePath, const std::string &overlayPath,
-                 const std::string &outPath) {
+static std::string mergedText(const std::string &basePath, const std::string &overlayPath) {
   YAML::Node merged = loadFile(basePath);
   if (!overlayPath.empty())
     merged = mergeYaml(merged, loadFile(overlayPath));
@@ -195,19 +236,12 @@ void writeMerged(const std::string &basePath, const std::string &overlayPath,
   if (!overlayPath.empty()) out << " + " << overlayPath;
   out << "\n# do not edit: change the source file(s) and run again\n";
   out << emit(merged) << "\n";
+  return out.str();
+}
 
-  const auto tmp = outPath + ".tmp";
-  {
-    std::ofstream f(tmp, std::ios::trunc);
-    if (!f) ERR("cannot write " << tmp << ": " << strerror(errno))
-    f << out.str();
-    if (!f) ERR("cannot write " << tmp)
-  }
-  if (::rename(tmp.c_str(), outPath.c_str()) != 0) {
-    int e = errno;
-    ::unlink(tmp.c_str());
-    ERR("cannot rename " << tmp << " to " << outPath << ": " << strerror(e))
-  }
+void writeMerged(const std::string &basePath, const std::string &overlayPath,
+                 const std::string &outPath) {
+  writeAtomically(outPath, mergedText(basePath, overlayPath));
 }
 
 std::string resolveForRun(const Args &args) {
@@ -246,31 +280,43 @@ std::string resolveForRun(const Args &args) {
 
   const auto crate  = ProfilePure::cratePath(home, name);
   const auto merged = ProfilePure::mergedSpecPath(home, name);
+  const auto keyPath = ProfilePure::cacheKeyPath(home, name);
 
-  const long crateM = mtimeOf(crate);
-  const long specM  = mtimeOf(specPath);
-  const long localM = haveLocal ? mtimeOf(localPath) : -1;
-  if (!ProfilePure::needsRebuild(crateM, specM, localM)) {
+  // the .local is the operator's; the profile directories are either the
+  // operator's own or root-owned — only the overlay is policed.
+  // 1.1.71: on every run, since the merge is redone every run.
+  if (haveLocal)
+    checkLocalOverlay(loadFile(localPath), home, localPath);
+
+  // 1.1.71: the cache is keyed by content (see ProfilePure::cacheAction)
+  const auto text = mergedText(specPath, haveLocal ? localPath : "");
+  const auto key = Util::sha256hex(ProfilePure::cacheKeyInput(text, args.vars, CRATE_VERSION));
+  switch (ProfilePure::cacheAction(mtimeNsOf(crate), mtimeNsOf(merged), readSmallFile(keyPath), key)) {
+  case ProfilePure::CacheAction::UpToDate:
     if (args.logProgress)
       std::cerr << rang::fg::gray << Util::tmSecMs() << ": profile '" << name << "': " << crate
                 << " is up to date" << rang::style::reset << std::endl;
     return crate;
+  case ProfilePure::CacheAction::RewriteAndBuild:
+    writeAtomically(merged, text);
+    writeAtomically(keyPath, key + "\n");
+    break;
+  case ProfilePure::CacheAction::Build:
+    break;
   }
-
-  // the .local is the operator's; the profile directories are either the
-  // operator's own or root-owned — only the overlay is policed
-  if (haveLocal)
-    checkLocalOverlay(loadFile(localPath), home, localPath);
-  writeMerged(specPath, haveLocal ? localPath : "", merged);
 
   // `crate create` is not rootless yet (TODO): the create chroot lives in
   // /var/run/crate and needs root. Say so instead of failing on a mkdir,
   // and leave the merged spec behind so root can build exactly that.
-  if (::geteuid() != 0)
-    ERR("profile '" << name << "': " << crate << " has not been built yet and building needs root "
-        "(`crate create` is not rootless); the merged spec is at " << merged << " — as root: "
-        "crate create -s " << merged << " -o " << crate << " && chown " << ::getuid() << " " << crate
-        << ", then run again")
+  if (::geteuid() != 0) {
+    std::ostringstream vars;   // 1.1.71: the build uses them (package names)
+    for (auto &kv : args.vars)
+      vars << " --var " << Util::shellQuote(kv.first + "=" + kv.second);
+    ERR("profile '" << name << "': " << crate << " is not built for the current spec yet and building "
+        "needs root (`crate create` is not rootless); the merged spec is at " << merged << " — as root: "
+        "crate create -s " << merged << vars.str() << " -o " << crate << " && chown " << ::getuid()
+        << " " << crate << ", then run again")
+  }
 
   std::cerr << rang::fg::blue << "profile '" << name << "': building " << crate << " from " << specPath
             << (haveLocal ? " + " + localPath : std::string()) << rang::style::reset << std::endl;

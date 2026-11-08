@@ -252,8 +252,45 @@ void handleStats(std::string &resBody, int &status, const std::string &name) {
 // caller already got 202), and the child's `--status-fd` pipe lets
 // registerSpawnedJailOwner record the jail the moment it exists.
 // pid < 0 on fork failure (errno set).
-StatusFd::Spawned spawnCrateRun(const std::string &cratePath) {
-  return StatusFd::spawnCrateRun({"-f", cratePath});
+StatusFd::Spawned spawnCrateRun(const std::vector<std::string> &runArgs) {
+  return StatusFd::spawnCrateRun(runArgs);
+}
+
+// 1.1.71: the registry entry of a container and the `crate run`
+// arguments that replay it — a warm-base entry too (SpecRegistry::lookup
+// answers "" for one, and start/restart 404'd). False with status and
+// body set when there is nothing to start.
+bool runArgsForContainer(const std::string &containerName, std::vector<std::string> &runArgs,
+                         std::string &target, std::string &resBody, int &status, const char *what) {
+  SpecRegistryPure::Entry entry;
+  bool found = false;
+  try {
+    found = SpecRegistry::lookupEntry(containerName, entry);
+  } catch (const std::exception &e) {
+    status  = 500;
+    resBody = ControlSocketPure::renderErrorJson(
+      std::string("spec-registry read failed: ") + e.what());
+    return false;
+  }
+  if (!found) {
+    status  = 404;
+    resBody = ControlSocketPure::renderErrorJson(
+      "no spec registered for '" + containerName + "' — " + what);
+    return false;
+  }
+  // Verify the registered path still exists. A stale registry
+  // entry for a removed .crate file would otherwise produce a
+  // confusing 200 followed by a silent fork failure.
+  struct stat st{};
+  if (entry.warmBase.empty() && ::stat(entry.cratePath.c_str(), &st) != 0) {
+    status  = 410;   // Gone
+    resBody = ControlSocketPure::renderErrorJson(
+      "registered .crate path no longer exists: " + entry.cratePath);
+    return false;
+  }
+  runArgs = SpecRegistryPure::runArgsFor(entry, containerName);
+  target  = SpecRegistryPure::targetOf(entry);
+  return true;
 }
 
 // 1.1.42: `peerUid` is the control-socket peer (getpeereid); the jail
@@ -276,36 +313,14 @@ void handleStart(std::string &resBody, int &status, const std::string &name,
   }
   const std::string containerName = RunPure::containerNameOf(name);
 
+  std::vector<std::string> runArgs;
   std::string cratePath;
-  try {
-    cratePath = SpecRegistry::lookup(containerName);
-  } catch (const std::exception &e) {
-    status  = 500;
-    resBody = ControlSocketPure::renderErrorJson(
-      std::string("spec-registry read failed: ") + e.what());
+  if (!runArgsForContainer(containerName, runArgs, cratePath, resBody, status,
+                           "start it once via `crate run -f <file>` (or --warm-base … --name) "
+                           "so the registry can record it"))
     return;
-  }
-  if (cratePath.empty()) {
-    status  = 404;
-    resBody = ControlSocketPure::renderErrorJson(
-      "no spec registered for '" + containerName +
-      "' — start it once via `crate run -f <file>` so the registry "
-      "can record the path");
-    return;
-  }
 
-  // Verify the registered path still exists. A stale registry
-  // entry for a removed .crate file would otherwise produce a
-  // confusing 200 followed by a silent fork failure.
-  struct stat st{};
-  if (::stat(cratePath.c_str(), &st) != 0) {
-    status  = 410;   // Gone
-    resBody = ControlSocketPure::renderErrorJson(
-      "registered .crate path no longer exists: " + cratePath);
-    return;
-  }
-
-  auto spawned = spawnCrateRun(cratePath);
+  auto spawned = spawnCrateRun(runArgs);
   pid_t pid = spawned.pid;
   if (pid < 0) {
     status  = 500;
@@ -360,24 +375,10 @@ void handleRestart(std::string &resBody, int &status, const std::string &name,
   const std::string containerName = RunPure::containerNameOfJail(j->name, j->path);
   // Resolve the spec path BEFORE stopping, so a missing registry entry
   // leaves the container running instead of stopped-and-unrestartable.
+  std::vector<std::string> runArgs;
   std::string cratePath;
-  try {
-    cratePath = SpecRegistry::lookup(containerName);
-  } catch (const std::exception &e) {
-    status  = 500;
-    resBody = ControlSocketPure::renderErrorJson(
-      std::string("spec-registry read failed: ") + e.what());
+  if (!runArgsForContainer(containerName, runArgs, cratePath, resBody, status, "cannot restart"))
     return;
-  }
-  struct stat st{};
-  if (cratePath.empty() || ::stat(cratePath.c_str(), &st) != 0) {
-    status  = cratePath.empty() ? 404 : 410;
-    resBody = ControlSocketPure::renderErrorJson(
-      cratePath.empty()
-        ? "no spec registered for '" + containerName + "' — cannot restart"
-        : "registered .crate path no longer exists: " + cratePath);
-    return;
-  }
   // Stop phase: SIGTERM, bounded wait, SIGKILL, destroy — the same
   // sequence `crate stop` runs; bounded by stopTimeout (+1 s).
   Args stopArgs;
@@ -396,7 +397,7 @@ void handleRestart(std::string &resBody, int &status, const std::string &name,
       std::string("stop phase failed: ") + e.what());
     return;
   }
-  auto spawned = spawnCrateRun(cratePath);
+  auto spawned = spawnCrateRun(runArgs);
   pid_t pid = spawned.pid;
   if (pid < 0) {
     status  = 500;

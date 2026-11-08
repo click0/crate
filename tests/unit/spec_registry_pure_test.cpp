@@ -192,7 +192,25 @@ ATF_TEST_CASE_BODY(target_of_entry) {
   ATF_REQUIRE_EQ(formatLine(f), std::string("web /srv/web.crate"));
 }
 
+// 1.1.71: what crated's start / restart hand to `crate run`
+ATF_TEST_CASE_WITHOUT_HEAD(run_args_for_entry);
+ATF_TEST_CASE_BODY(run_args_for_entry) {
+  Entry w; w.name = "web"; w.warmBase = "tank/templates/web-warm";
+  auto a = SpecRegistryPure::runArgsFor(w, "web");
+  ATF_REQUIRE_EQ(a.size(), 4u);
+  ATF_REQUIRE_EQ(a[0], std::string("--warm-base"));
+  ATF_REQUIRE_EQ(a[1], std::string("tank/templates/web-warm"));
+  ATF_REQUIRE_EQ(a[2], std::string("--name"));
+  ATF_REQUIRE_EQ(a[3], std::string("web"));
+  Entry f; f.name = "web"; f.cratePath = "/srv/web.crate";
+  auto b = SpecRegistryPure::runArgsFor(f, "web");
+  ATF_REQUIRE_EQ(b.size(), 2u);
+  ATF_REQUIRE_EQ(b[0], std::string("-f"));
+  ATF_REQUIRE_EQ(b[1], std::string("/srv/web.crate"));
+}
+
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, run_args_for_entry);
   ATF_ADD_TEST_CASE(tcs, name_typical_accepted);
   ATF_ADD_TEST_CASE(tcs, name_rejects_garbage);
   ATF_ADD_TEST_CASE(tcs, path_typical_accepted);
