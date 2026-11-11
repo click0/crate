@@ -137,7 +137,8 @@ differs by transport:
   `DenyForeignSource`; since 1.1.71 so is a source that *contains*
   `path_master_prefix` — `/`, `/var`, `/var/run` — which before held
   every tenant's slice one mount away; other host paths and GUI runtime
-  sockets stay allowed), and the two interface verbs that operate on a *specific*
+  sockets stay allowed — which is why this is not a boundary, see the
+  consequence below), and the two interface verbs that operate on a *specific*
   jail rather than shared host state — `configure_iface` (it `jexec`s
   into the named `jid` and moves an iface into its vnet → gated by
   `jid`) and `reclaim_iface_from_vnet` (pulls an iface out of a named
@@ -176,17 +177,44 @@ Allow as an unknown jid. The bridge named in `bridge_*_member` /
 an operator-controlled ownership signal is gated. The per-verb handlers
 remain uid-blind; the gate runs ahead of them.
 
-> Consequence: whoever can reach privops — an `admin` bearer token, or
-> membership in the privops socket's group — still has host-wide control
-> over the **un-gated** surface (firewall, host interface plumbing,
-> other host-global verbs that touch shared state). The
-> 1.1.12 → 1.1.43 gates close cross-tenant ZFS-dataset, RCTL-umbrella,
-> jid-, name-, path-scoped, create-jail-path, mount-source, and
-> per-jail interface access on the libnv path — every verb that carries
-> an operator-controlled ownership signal in its request is now gated.
-> The shared host-global verbs remain, by design, a single trust
-> domain — handing an operator privops access is still close to handing
-> them the old setuid `crate(1)` for those.
+> Consequence: **whoever can reach privops — an `admin` bearer token, or
+> membership in the privops socket's group — is root on the host.** This
+> is not only a matter of the shared host-global verbs (firewall, host
+> interface plumbing). The gated verbs themselves leave direct paths to
+> host root open, by the "single trust domain w.r.t. the host" design.
+> The known ones:
+>
+> 1. **`mount_nullfs` from a host path.** Only another tenant's slice and
+>    a directory that contains the tenant root are refused as a
+>    *source*. `/etc` (or `/usr/local/etc`, `/root`, `/boot`) can be
+>    mounted read-write into the caller's own jail, and `exec_in_jail`
+>    runs as root there. One line appended to the host's `/etc/crontab`
+>    is host root.
+> 2. **`apply_devfs_rules` on the caller's own private ruleset.** The
+>    ruleset number and the mount path are gated. The rules are checked
+>    for shape (`path <glob> unhide`), not for which devices they reach,
+>    so `path * unhide` puts the host's disks, `mem`, `kmem` and `io`
+>    into the caller's jail.
+> 3. **The host-global verbs.** `add_ipfw_rule`, `configure_ipfw_nat`,
+>    `delete_ipfw_nat` and `remove_ipfw_rule` act on the host's whole ipfw
+>    ruleset (any rule number, any NAT instance). `create_epair` and
+>    `create_bridge` add host interfaces.
+>
+> The 1.1.12 → 1.1.71 gates close cross-tenant ZFS-dataset, RCTL
+> umbrella, jid-, name-, path-scoped, create-jail-path, mount-source and
+> per-jail interface access on the libnv path. Each verb that carries an
+> operator-controlled ownership signal checks it. **Against a hostile
+> operator these gates are not a boundary**, because 1–3 reach the host
+> and through it every tenant. They keep trusted operators of one host
+> from stepping on each other's containers by mistake.
+>
+> Handing an operator privops access is still handing them the old
+> setuid `crate(1)`. Mutually distrusting operators get a pool-scoped
+> control socket or bearer token only (Plane 2). Making privops itself a
+> boundary — a source allow list (the caller's home, the GUI runtime
+> sockets), devfs rules from device classes instead of free text, the
+> firewall and interface verbs tied to the caller's jails — is tracked
+> in TODO §1.
 
 ### Per-user namespacing is convenience, not a boundary
 
