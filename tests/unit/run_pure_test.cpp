@@ -221,6 +221,24 @@ ATF_TEST_CASE_BODY(epair_unit_and_ip6) {
 // 1.1.64: run/user resolution
 // 1.1.71: under a root `crate run` the X cookie sits in the jail's /root;
 // a dedicated or named run/user gets it in its own home.
+// 1.1.72: crate clean keeps crate/<name>_pid<N> while pid N runs
+ATF_TEST_CASE_WITHOUT_HEAD(jail_xname_pid);
+ATF_TEST_CASE_BODY(jail_xname_pid)
+{
+	long pid = 0;
+	ATF_REQUIRE(RunPure::jailXnamePid("web_pid4242", pid));
+	ATF_REQUIRE_EQ(pid, 4242);
+	ATF_REQUIRE(RunPure::jailXnamePid("my_pid_app_pid17", pid));
+	ATF_REQUIRE_EQ(pid, 17);
+	ATF_REQUIRE(!RunPure::jailXnamePid("web", pid));
+	ATF_REQUIRE(!RunPure::jailXnamePid("17", pid));            // a jid-named jail
+	ATF_REQUIRE(!RunPure::jailXnamePid("web_pid", pid));
+	ATF_REQUIRE(!RunPure::jailXnamePid("web_pid12x", pid));
+	ATF_REQUIRE(!RunPure::jailXnamePid("_pid12", pid));         // no name before it
+	ATF_REQUIRE(!RunPure::jailXnamePid("web_pid0", pid));
+	ATF_REQUIRE(!RunPure::jailXnamePid("web_pid12345678901", pid));
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(run_user_cookie_home);
 ATF_TEST_CASE_BODY(run_user_cookie_home)
 {
@@ -293,4 +311,5 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, epair_unit_and_ip6);
 	ATF_ADD_TEST_CASE(tcs, run_user_effective);
 	ATF_ADD_TEST_CASE(tcs, run_user_cookie_home);
+	ATF_ADD_TEST_CASE(tcs, jail_xname_pid);
 }

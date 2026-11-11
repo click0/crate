@@ -670,6 +670,12 @@ std::string validateIpv6Cidr(const std::string &cidr);
 // dangerous to fragments (`; \` ` $`), <=1024 chars.
 std::string validateRuleText(const std::string &text);
 
+// 1.1.72: add_pf_rule's text is a whole anchor — one rule per line, each
+// held to validateRuleText; empty lines are fine, at most
+// kPfRulesetMaxBytes in all.
+constexpr size_t kPfRulesetMaxBytes = 32768;
+std::string validatePfRuleset(const std::string &text);
+
 // pf anchor name: alnum + ._-, <=64 chars (matches pool naming).
 std::string validateAnchorName(const std::string &name);
 

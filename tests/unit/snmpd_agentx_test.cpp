@@ -177,6 +177,85 @@ ATF_TEST_CASE_BODY(get_request_with_context_octetstring) {
   ATF_REQUIRE(oids[0] == a);
 }
 
+// --- 1.1.72: PDU numbers, SearchRange include / end, GetBulk ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(pdu_type_numbers_rfc2741);
+ATF_TEST_CASE_BODY(pdu_type_numbers_rfc2741) {
+  // RFC 2741 §6.1 — raw values, not the enum against itself (they were
+  // one off, and the tests compared the enum with the enum).
+  ATF_REQUIRE_EQ((int)PDU_OPEN, 1);
+  ATF_REQUIRE_EQ((int)PDU_REGISTER, 3);
+  ATF_REQUIRE_EQ((int)PDU_GET, 5);
+  ATF_REQUIRE_EQ((int)PDU_GETNEXT, 6);
+  ATF_REQUIRE_EQ((int)PDU_GETBULK, 7);
+  ATF_REQUIRE_EQ((int)PDU_TESTSET, 8);
+  ATF_REQUIRE_EQ((int)PDU_COMMITSET, 9);
+  ATF_REQUIRE_EQ((int)PDU_NOTIFY, 12);
+  ATF_REQUIRE_EQ((int)PDU_PING, 13);
+  ATF_REQUIRE_EQ((int)PDU_RESPONSE, 18);
+  ATF_REQUIRE_EQ((int)ERR_NOT_WRITABLE, 17);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(search_ranges_include_and_end);
+ATF_TEST_CASE_BODY(search_ranges_include_and_end) {
+  std::vector<uint32_t> a = {1, 3, 6, 1, 4, 1, 59999, 1, 1, 0};
+  std::vector<uint32_t> e = {1, 3, 6, 1, 4, 1, 59999, 2};
+  std::vector<uint8_t> buf;
+  encodeOid(buf, a, /*include=*/true); encodeOid(buf, e);
+  encodeOid(buf, a); encodeOid(buf, std::vector<uint32_t>());
+  std::vector<SearchRange> rs;
+  ATF_REQUIRE_EQ(decodeSearchRanges(buf, 0, 0x10, rs), (int)buf.size());
+  ATF_REQUIRE_EQ(rs.size(), (size_t)2);
+  ATF_REQUIRE(rs[0].include);
+  ATF_REQUIRE(rs[0].start == a);
+  ATF_REQUIRE(rs[0].end == e);
+  ATF_REQUIRE(!rs[1].include);
+  ATF_REQUIRE(rs[1].end.empty());
+  std::vector<uint8_t> bad(buf.begin(), buf.begin() + 6);   // truncated
+  std::vector<SearchRange> none;
+  ATF_REQUIRE_EQ(decodeSearchRanges(bad, 0, 0x10, none), 0);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(getbulk_request_decoding);
+ATF_TEST_CASE_BODY(getbulk_request_decoding) {
+  std::vector<uint8_t> buf = {0x00, 0x01, 0x00, 0x0a};   // non_repeaters 1, max_repetitions 10 (BE)
+  std::vector<uint32_t> a = {1, 3, 6, 1, 4, 1, 59999, 1};
+  encodeOid(buf, a); encodeOid(buf, std::vector<uint32_t>());
+  uint16_t nr = 0, mr = 0;
+  std::vector<SearchRange> rs;
+  ATF_REQUIRE_EQ(decodeGetBulkRequest(buf, 0, 0x10, nr, mr, rs), (int)buf.size());
+  ATF_REQUIRE_EQ(nr, 1);
+  ATF_REQUIRE_EQ(mr, 10);
+  ATF_REQUIRE_EQ(rs.size(), (size_t)1);
+  ATF_REQUIRE(rs[0].start == a);
+  std::vector<uint8_t> shortBuf = {0x00, 0x01};
+  ATF_REQUIRE_EQ(decodeGetBulkRequest(shortBuf, 0, 0x10, nr, mr, rs), 0);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(pick_next_honours_include_and_end);
+ATF_TEST_CASE_BODY(pick_next_honours_include_and_end) {
+  const std::vector<std::vector<uint32_t>> oids = {
+    {1, 3, 6, 1, 4, 1, 59999, 1, 1, 0},
+    {1, 3, 6, 1, 4, 1, 59999, 1, 2, 0},
+    {1, 3, 6, 1, 4, 1, 59999, 1, 3, 0},
+  };
+  SearchRange r;
+  r.start = {1, 3, 6, 1, 4, 1, 59999};          // walk from the subtree root
+  ATF_REQUIRE_EQ(pickNext(oids, r), 0);
+  r.start = oids[0];
+  ATF_REQUIRE_EQ(pickNext(oids, r), 1);          // strictly after
+  r.include = true;
+  ATF_REQUIRE_EQ(pickNext(oids, r), 0);          // the start itself
+  r.include = false;
+  r.start = oids[2];
+  ATF_REQUIRE_EQ(pickNext(oids, r), -1);         // off the end
+  r.start = oids[0];
+  r.end = oids[1];                               // end is exclusive
+  ATF_REQUIRE_EQ(pickNext(oids, r), -1);
+  r.end = oids[2];
+  ATF_REQUIRE_EQ(pickNext(oids, r), 1);
+}
+
 // --- VarBind encoders ---
 
 ATF_TEST_CASE_WITHOUT_HEAD(varbind_integer_encodes_type_tag);
@@ -274,6 +353,10 @@ ATF_TEST_CASE_BODY(oid_is_child_of) {
 }
 
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, pdu_type_numbers_rfc2741);
+  ATF_ADD_TEST_CASE(tcs, search_ranges_include_and_end);
+  ATF_ADD_TEST_CASE(tcs, getbulk_request_decoding);
+  ATF_ADD_TEST_CASE(tcs, pick_next_honours_include_and_end);
   ATF_ADD_TEST_CASE(tcs, header_round_trip);
   ATF_ADD_TEST_CASE(tcs, header_short_input_returns_zero);
   ATF_ADD_TEST_CASE(tcs, header_little_endian_flag_clear);

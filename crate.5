@@ -157,6 +157,16 @@ API.
 ZFS send stream of the jail dataset
 .Pq incremental with Fl -since , or Fl -auto-incremental from the newest Li backup- Ns * snapshot of that dataset .
 A failed send leaves no snapshot behind.
+The jail must run from a dataset of its own (a
+.Fl -warm-base
+clone); since 1.1.72 a jail directory inside another dataset is
+refused, where before that whole dataset \(em usually the host's root
+\(em was sent.
+.Cm backup ,
+.Cm replicate
+and
+.Cm template warm
+find the target by container name, as the other commands do.
 .It Cm backup-prune Ar dir Fl -keep Ar spec
 Delete old
 .Pa .zstream
@@ -177,7 +187,8 @@ the base is the newest snapshot present on both sides
 .Pq the remote is listed over the same ssh hop ;
 nothing in common sends a full stream.
 .It Cm template warm Ar target Fl -output Ar dataset
-Capture a jail's on-disk state as a warm template.
+Capture a jail's on-disk state as a warm template
+.Pq the jail's own dataset, as for Cm backup .
 .It Cm retune Ar target Fl -rctl Ar key=value ...
 Live-tune RCTL limits of a running jail
 .Pq Fl -show , Fl -clear .

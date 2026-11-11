@@ -307,6 +307,22 @@ ATF_TEST_CASE_BODY(detect_empty_when_no_env_no_default) {
   }
 }
 
+// 1.1.72: root never picks the default socket up (it has the direct path;
+// through privops it got uid 0's per-user layout and ensure_user_root
+// answered 400). An explicit $CRATE_PRIVOPS_SOCKET still wins.
+ATF_TEST_CASE_WITHOUT_HEAD(choose_socket_root_keeps_direct_path);
+ATF_TEST_CASE_BODY(choose_socket_root_keeps_direct_path) {
+  using PrivOpsClient::chooseSocketPath;
+  const std::string def = PrivOpsClient::kDefaultSocketPath;
+  ATF_REQUIRE_EQ(chooseSocketPath(nullptr, true, 1001), def);
+  ATF_REQUIRE_EQ(chooseSocketPath(nullptr, false, 1001), std::string());
+  ATF_REQUIRE_EQ(chooseSocketPath(nullptr, true, 0), std::string());
+  ATF_REQUIRE_EQ(chooseSocketPath("", true, 0), std::string());
+  ATF_REQUIRE_EQ(chooseSocketPath("", true, 1001), def);
+  ATF_REQUIRE_EQ(chooseSocketPath("/tmp/x.sock", false, 0), std::string("/tmp/x.sock"));
+  ATF_REQUIRE_EQ(chooseSocketPath("/tmp/x.sock", true, 1001), std::string("/tmp/x.sock"));
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(detect_empty_env_treated_as_unset);
 ATF_TEST_CASE_BODY(detect_empty_env_treated_as_unset) {
   // Explicit empty env var should NOT count as "use empty path".
@@ -351,4 +367,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, detect_uses_env_var_when_set);
   ATF_ADD_TEST_CASE(tcs, detect_empty_when_no_env_no_default);
   ATF_ADD_TEST_CASE(tcs, detect_empty_env_treated_as_unset);
+  ATF_ADD_TEST_CASE(tcs, choose_socket_root_keeps_direct_path);
 }

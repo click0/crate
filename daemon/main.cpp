@@ -28,6 +28,9 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <cerrno>     // 1.1.72: /var/db/crate
+#include <cstring>
+#include <stdexcept>
 
 #include <iostream>
 
@@ -136,6 +139,24 @@ int main(int argc, char **argv) {
       authzCfg.zfsMasterPrefix  = config.zfsMasterPrefix;
       authzCfg.pathMasterPrefix = config.pathMasterPrefix;
       Crated::setPerUserAuthzConfig(authzCfg);
+    }
+
+    // 1.1.72: the registries' directory. Nothing created it — not crated,
+    // the rc script or the package — so every persist threw: the first
+    // HTTP / control-socket start ended in std::terminate (the watcher
+    // thread did not catch it) and the registries lived in memory only.
+    {
+      const char *dbDir = "/var/db/crate";
+      if (::mkdir(dbDir, 0700) != 0 && errno != EEXIST)
+        throw std::runtime_error(std::string("cannot create ") + dbDir + ": " + std::strerror(errno));
+      struct stat st;
+      if (::lstat(dbDir, &st) != 0 || !S_ISDIR(st.st_mode))
+        throw std::runtime_error(std::string(dbDir) + " is not a directory (a symlink is refused)");
+      if (st.st_uid != 0)
+        throw std::runtime_error(std::string(dbDir) + " is owned by uid " + std::to_string(st.st_uid)
+                                 + ", expected root");
+      if ((st.st_mode & 0077) != 0)
+        (void)::chmod(dbDir, 0700);
     }
 
     // 1.1.13: jid->owner registry for the jid- and name-scoped authz

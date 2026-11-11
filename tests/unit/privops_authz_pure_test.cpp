@@ -565,6 +565,28 @@ ATF_TEST_CASE_BODY(mount_source_above_tenant_root_denied) {
               == Decision::Allow);
 }
 
+// 1.1.72: an all-digit name is a jid to jail(8) / ifconfig -vnet — it is
+// gated as that jid, strictly (the name registry never holds it).
+ATF_TEST_CASE_WITHOUT_HEAD(destroy_numeric_name_is_gated_as_jid);
+ATF_TEST_CASE_BODY(destroy_numeric_name_is_gated_as_jid) {
+  auto e = env1000();
+  auto mine    = fixedOwner(17, "web_pid42", 1000);
+  auto foreign = fixedOwner(17, "db_pid43", 1001);
+  ATF_REQUIRE(authorize(Verb::DestroyJail, reqName("17"), e, mine) == Decision::Allow);
+  ATF_REQUIRE(authorize(Verb::DestroyJail, reqName("17"), e, foreign) == Decision::DenyForeignJid);
+  // unregistered jid (root's CLI jails are never recorded) -> denied
+  ATF_REQUIRE(authorize(Verb::DestroyJail, reqName("23"), e, mine) == Decision::DenyUnownedJid);
+  // reclaim_iface_from_vnet the same (its iface gate comes after)
+  Request rq; rq.jailName = "17"; rq.ifname = "epair3a";
+  ATF_REQUIRE(authorize(Verb::ReclaimIfaceFromVnet, rq, e, foreign) == Decision::DenyForeignJid);
+  // names keep the name gate, including names that merely contain digits
+  ATF_REQUIRE(authorize(Verb::DestroyJail, reqName("web_pid42"), e, mine) == Decision::Allow);
+  ATF_REQUIRE(authorize(Verb::DestroyJail, reqName("db_pid43"), e, foreign) == Decision::DenyForeignJailName);
+  // any length: jail(8) parses with strtol, "0000000017" is jid 17
+  ATF_REQUIRE(authorize(Verb::DestroyJail, reqName("0000000017"), e, foreign) == Decision::DenyForeignJid);
+  ATF_REQUIRE(authorize(Verb::DestroyJail, reqName("99999999999999999999"), e, mine) == Decision::DenyUnownedJid);
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(mount_source_unconfigured_allows);
 ATF_TEST_CASE_BODY(mount_source_unconfigured_allows) {
   // No pathMasterPrefix -> source gate is opt-in, off.
@@ -893,6 +915,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, mount_source_foreign_tenant_denied);
   ATF_ADD_TEST_CASE(tcs, mount_source_above_tenant_root_denied);
   ATF_ADD_TEST_CASE(tcs, mount_source_unconfigured_allows);
+  ATF_ADD_TEST_CASE(tcs, destroy_numeric_name_is_gated_as_jid);
   ATF_ADD_TEST_CASE(tcs, configure_iface_jid_scoped);
   ATF_ADD_TEST_CASE(tcs, reclaim_iface_name_scoped);
   ATF_ADD_TEST_CASE(tcs, host_global_verbs_still_allowed);

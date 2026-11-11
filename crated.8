@@ -85,6 +85,13 @@ through which unprivileged
 .Nm crate
 clients request root operations
 .Pq create/destroy jail, ZFS, RCTL, interfaces, firewall .
+A
+.Nm crate
+run as root does not use the socket at its default path; it does the
+operations itself, with the
+.Pa /var/run/crate
+layout
+.Pq since 1.1.72 .
 Group-gated; the peer uid from
 .Xr getpeereid 2
 drives per-user namespacing and the per-tenant authorization gate, and
@@ -246,6 +253,12 @@ Process id of the daemon.
 .It Pa /var/run/crate/<name>.crate
 Saved container archives produced by the export endpoint and
 consumed by the start endpoint.
+.It Pa /var/db/crate/
+The owner registries privops checks against
+.Pq Pa jid_owners.tsv , iface_owners.tsv , fw_leases.tsv ;
+created 0700 by
+.Nm
+at start since 1.1.72.
 .It Pa /var/log/crated.log
 Default log file.
 .El

@@ -8,6 +8,14 @@
 #include "scheduling_pure.h"
 #include "store.h"
 
+// 1.1.72: every hub object has to see httplib configured the same way.
+// poller.cpp defines this and this file did not — an ODR violation:
+// main.o links first, so httplib::Client's inline members came from the
+// non-SSL layout and every TLS node failed with "'https' scheme is not
+// supported" (down for good, and HA ordered failovers of healthy jails).
+#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
+#define CPPHTTPLIB_OPENSSL_SUPPORT
+#endif
 #include <httplib.h>
 
 #include "../lib/json_pure.h"   // 1.1.49: quote() — no more hand-spliced strings

@@ -112,6 +112,32 @@ Decision checkOwnedName(const std::string &name,
   return o.uid == env.uid ? Decision::Allow : Decision::DenyForeignJailName;
 }
 
+// 1.1.72: jail(8) and `ifconfig -vnet` read an all-digit jail name as a
+// jid (crate itself sends destroy_jail with the jid as the name for an
+// auto-named jail, run_jail.cpp). The name registry never holds such a
+// "name", so the bootstrap Allow above let a tenant remove — or pull the
+// interfaces out of — any jail by its jid. An all-digit name is gated as
+// the jid it is, strictly: a tenant's own jails are always registered at
+// create_jail, so an unknown jid is someone else's (root's, most likely).
+// Any length: jail(8) parses with strtol, so "0000000017" is jid 17.
+bool allDigits(const std::string &s) {
+  if (s.empty()) return false;
+  for (char c : s) if (c < '0' || c > '9') return false;
+  return true;
+}
+
+Decision checkOwnedJailNameOrJid(const std::string &name,
+                                 const PerUserEnvPure::Env &env,
+                                 const OwnerLookup &lookup) {
+  if (!allDigits(name)) return checkOwnedName(name, env, lookup);
+  unsigned long long v = 0;
+  for (char c : name) {
+    v = v * 10 + (unsigned)(c - '0');
+    if (v > 0xffffffffull) return Decision::DenyUnownedJid;   // no such jid
+  }
+  return checkOwnedJidStrict((unsigned)v, env, lookup);
+}
+
 // Path-scoped verbs (mount/unmount target, devfs mount_path).
 //
 // 1.1.35: the registry hit decides when there is one; when there is
@@ -252,12 +278,12 @@ Decision authorize(PrivOpsPure::Verb v,
     // vnet, so naming a foreign jail steals/DoSes its networking. Was
     // wrongly in the default Allow arm.
     case V::DestroyJail:
-      return checkOwnedName(req.jailName, env, lookup);
+      return checkOwnedJailNameOrJid(req.jailName, env, lookup);   // 1.1.72
 
     // 1.1.43: reclaim gates the jail name (1.1.17) AND the interface
     // being pulled out of it.
     case V::ReclaimIfaceFromVnet: {
-      Decision d = checkOwnedName(req.jailName, env, lookup);
+      Decision d = checkOwnedJailNameOrJid(req.jailName, env, lookup);   // 1.1.72
       if (d != Decision::Allow) return d;
       return checkOwnedIface(req.ifname, env, lookup);
     }
