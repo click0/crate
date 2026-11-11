@@ -330,6 +330,18 @@ done
 (login.conf entries for `crate-<uid>` classes get auto-created
 by `crated` at first contact in 0.9.13.)
 
+> **Who belongs in `crate-operators`.** Membership is privops access,
+> and privops access is root-equivalent on the host:
+> - nullfs from host paths;
+> - `path * unhide` in one's own devfs ruleset;
+> - the host-wide ipfw verbs.
+>
+> See docs/trust-model.md, Plane 1. The per-uid split above keeps
+> trusted operators out of each other's containers by mistake; it does
+> not stop a hostile one. Add only people you would give root. Untrusted
+> tenants get a pool-scoped control socket or bearer token
+> (trust-model.md, Plane 2).
+
 ### 3. Configure crated
 
 ```yaml
