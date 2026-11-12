@@ -3,6 +3,7 @@
 // PF firewall operations using libpfctl with pfctl(8) fallback.
 
 #include "pfctl_ops.h"
+#include "auto_fw_pure.h"   // 1.1.74: composeFirewallPolicyRules
 #include "net.h"
 #include "pathnames.h"
 #include "util.h"
@@ -183,37 +184,13 @@ ComposedPolicy composeContainerPolicy(const Spec &spec,
   warnIfParentAnchorMissing();
 
   out.anchor = STR("crate/" << jailXname);
-  bool hasV6 = !ipv6.empty();
-  std::ostringstream pf;
-
-  for (auto &cidr : spec.firewallPolicy->blockIp) {
-    pf << "block drop quick from " << ipv4 << " to " << cidr << "\n";
-    if (hasV6) {
-      auto slash = cidr.find('/');
-      auto addr = (slash != std::string::npos) ? cidr.substr(0, slash) : cidr;
-      if (Net::isIpv6Address(addr))
-        pf << "block drop quick from " << ipv6 << " to " << cidr << "\n";
-    }
-  }
-
-  for (auto port : spec.firewallPolicy->allowTcp) {
-    pf << "pass out quick proto tcp from " << ipv4 << " to any port " << port << "\n";
-    if (hasV6)
-      pf << "pass out quick inet6 proto tcp from " << ipv6 << " to any port " << port << "\n";
-  }
-
-  for (auto port : spec.firewallPolicy->allowUdp) {
-    pf << "pass out quick proto udp from " << ipv4 << " to any port " << port << "\n";
-    if (hasV6)
-      pf << "pass out quick inet6 proto udp from " << ipv6 << " to any port " << port << "\n";
-  }
-
-  if (spec.firewallPolicy->defaultPolicy == "block")
-    pf << "block drop all\n";
-  else
-    pf << "pass all\n";
-
-  out.rulesText = pf.str();
+  // 1.1.74: scoped to the jail (AutoFwPure::composeFirewallPolicyRules)
+  std::string err;
+  out.rulesText = AutoFwPure::composeFirewallPolicyRules(
+      spec.firewallPolicy->blockIp, spec.firewallPolicy->allowTcp, spec.firewallPolicy->allowUdp,
+      spec.firewallPolicy->defaultPolicy, ipv4, ipv6, err);
+  if (!err.empty())
+    ERR2("firewall", err)
   return out;
 }
 

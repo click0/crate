@@ -629,36 +629,60 @@ NetgraphInfo createNetgraphInterface(int jid, const std::string &jidStr,
     const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail) {
   NetgraphInfo info;
   info.physIface = physIface;
-  info.bridgeNode = STR("crate_br_" << jailName);
+  // 1.1.74: "crate_br_<jid>_<n>". "crate_br_<jail name>" was cut to
+  // NG_NODESIZ by strlcpy (so the later "<name>:" paths missed it), could
+  // hold a '.', which a netgraph name may not, and was the same for a
+  // jail's main and extra netgraph interfaces — the second `connect`
+  // went to the first bridge.
+  static unsigned seq = 0;
+  info.bridgeNode = RunPure::netgraphBridgeNodeName(jid, seq++);
+  (void)jailName;
 
   // set the lo0 IP address
   execInJail({CRATE_PATH_IFCONFIG, "lo0", "inet", "127.0.0.1"}, "set up the lo0 interface in jail");
 
+  // 1.1.74: every step is checked. They returned bool and were ignored,
+  // so a failed connect or show went on to move a garbage name into the
+  // vnet — and the ng_bridge already on the NIC's `lower` hook stayed
+  // there (its teardown is armed only after this returns): the NIC's
+  // inbound traffic went into it until `ngctl shutdown` or a reboot.
+  bool bridgeMade = false;
+  auto fail = [&](const std::string &what) {
+    if (bridgeMade) {
+      if (!NetgraphOps::shutdown(STR(info.bridgeNode << ":")))
+        NetgraphOps::shutdown(STR(physIface << ":lower"));
+    }
+    ERR2("run_net", "netgraph: " << what << " (" << physIface << ")")
+  };
+
   // Create ng_bridge node attached to the physical interface's lower hook
-  NetgraphOps::mkpeer(STR(physIface << ":"), "bridge", "lower", "link0");
+  if (!NetgraphOps::mkpeer(STR(physIface << ":"), "bridge", "lower", "link0"))
+    fail("cannot attach an ng_bridge to the interface's lower hook");
+  bridgeMade = true;
 
   // Name the bridge node for easier management
-  NetgraphOps::name(STR(physIface << ":lower"), info.bridgeNode);
+  if (!NetgraphOps::name(STR(physIface << ":lower"), info.bridgeNode))
+    fail("cannot name the ng_bridge " + info.bridgeNode);
 
   // Connect the upper hook of the physical interface to the bridge
-  NetgraphOps::connect(STR(physIface << ":"), STR(info.bridgeNode << ":"), "upper", "link1");
+  if (!NetgraphOps::connect(STR(physIface << ":"), STR(info.bridgeNode << ":"), "upper", "link1"))
+    fail("cannot connect the interface's upper hook to " + info.bridgeNode);
 
   // Create an eiface for the jail
-  NetgraphOps::mkpeer(STR(info.bridgeNode << ":"), "eiface", "link2", "ether");
+  if (!NetgraphOps::mkpeer(STR(info.bridgeNode << ":"), "eiface", "link2", "ether"))
+    fail("cannot create the eiface");
 
-  // Get the eiface name
-  info.ngIface = NetgraphOps::show(STR(info.bridgeNode << ":link2"));
-  // Parse the interface name from output (format: "Name: ngeth0  ...")
-  auto namePos = info.ngIface.find("Name: ");
-  if (namePos != std::string::npos) {
-    info.ngIface = info.ngIface.substr(namePos + 6);
-    auto spacePos = info.ngIface.find(' ');
-    if (spacePos != std::string::npos)
-      info.ngIface = info.ngIface.substr(0, spacePos);
-  }
+  // Get the eiface name ("  Name: ngeth0  Type: eiface  ...")
+  info.ngIface = RunPure::ngctlShowName(NetgraphOps::show(STR(info.bridgeNode << ":link2")));
+  if (info.ngIface.empty())
+    fail("cannot read the eiface's name");
 
   // Move eiface into jail
-  moveToVnetPrivopsOrLocal(info.ngIface, jid);
+  try {
+    moveToVnetPrivopsOrLocal(info.ngIface, jid);
+  } catch (const std::exception &e) {
+    fail(std::string("cannot move ") + info.ngIface + " into the jail: " + e.what());
+  }
 
   return info;
 }

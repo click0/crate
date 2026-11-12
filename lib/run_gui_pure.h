@@ -101,4 +101,38 @@ std::vector<std::string> pipewireSocketNames();
 // inspector tools), promote to a list.
 std::string pulseSocketRelpath();
 
+// 1.1.74: the jail's /tmp/.X11-unix in gui nested / headless / gpu mode.
+// It was a nullfs of the host's whole /tmp/.X11-unix, so DISPLAY=:0 in
+// the jail reached the host's own X server, and :N every other run's
+// Xvfb (started -ac). Now crate makes a private directory inside the
+// host's /tmp/.X11-unix (the same filesystem as the socket, so a hard
+// link to it cannot fail with EXDEV), links only its own server's
+// socket into it and mounts that directory. mkdtemp(3) template for it:
+std::string ownXSocketDirTemplate();
+// "X<N>", the socket an X server on display :N creates.
+std::string xSocketName(unsigned displayNum);
+// The host path is such a directory, or inside one (crate audit).
+bool isOwnXSocketDir(const std::string &hostPath);
+
+// 1.1.74: whether copyX11Auth gives the jail the host's .Xauthority /
+// .ICEauthority. Only a jail that talks to the host's X server needs
+// the host cookie, i.e. the shared mode. nested (Xephyr), headless
+// (Xvfb) and gpu (Xorg) run their own server, which crate starts
+// without access control; none, compositor and wayland bind no host X
+// socket at all. Before 1.1.74 the cookie went to nested too (with the
+// whole host /tmp/.X11-unix: a jail could connect to the host display
+// with a valid cookie), and to compositor / none / wayland / auto
+// resolved to headless or gpu.
+//   guiMode       — the resolved mode (resolveGuiMode: shared, nested,
+//                   headless, gpu, none, compositor)
+//   waylandOnly   — `gui.mode: wayland`, which resolves to shared
+//   x11Mode       — the x11 option's mode, "" without x11 options
+//   clipboardMode — the clipboard option's mode, "" without it
+// The pre-1.1.74 rules for the shared mode stay: no cookie with
+// `x11.mode: none`, nor with `clipboard.mode: none` unless the x11 mode
+// is nested.
+bool hostX11CookieWanted(const std::string &guiMode, bool waylandOnly,
+                         const std::string &x11Mode,
+                         const std::string &clipboardMode);
+
 }

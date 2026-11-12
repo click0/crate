@@ -334,6 +334,12 @@ emit warnings when an isolation-weak mode is selected.
 | `shared` | **None** — full read/write access to the host X server | only inside fully trusted jails |
 | `none` | n/a | no GUI |
 
+Since 1.1.74 a `nested`, `headless` or `gpu` jail sees only the socket
+of its own X server in `/tmp/.X11-unix`, and only `shared` gets a copy
+of the host's `.Xauthority`. Earlier releases mounted the host's whole
+`/tmp/.X11-unix` in these modes too, and handed `nested` the host
+cookie, so `DISPLAY=:0` from the jail opened the host display.
+
 **Why `shared` is dangerous.** Mounting the host's `/tmp/.X11-unix`
 into a jail means any process inside that jail can:
 - Read every keystroke typed into any application on the host (X is

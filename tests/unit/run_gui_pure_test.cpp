@@ -351,6 +351,48 @@ ATF_TEST_CASE_BODY(pulseSocketRelpath_has_subdir)
 	ATF_REQUIRE(slash < p.size() - 1);         // non-empty basename
 }
 
+// 1.1.74: the jail's X socket directory and the host-cookie decision.
+ATF_TEST_CASE_WITHOUT_HEAD(own_x_socket_dir);
+ATF_TEST_CASE_BODY(own_x_socket_dir)
+{
+	const std::string t = RunGuiPure::ownXSocketDirTemplate();
+	// inside /tmp/.X11-unix (same filesystem as the socket), mkdtemp form
+	ATF_REQUIRE_EQ(t.compare(0, 15, "/tmp/.X11-unix/"), 0);
+	ATF_REQUIRE(t.size() >= 6 && t.compare(t.size() - 6, 6, "XXXXXX") == 0);
+	ATF_REQUIRE(RunGuiPure::isOwnXSocketDir(t));
+	ATF_REQUIRE(RunGuiPure::isOwnXSocketDir("/tmp/.X11-unix/.crate-Ab12Cd34"));
+	ATF_REQUIRE(!RunGuiPure::isOwnXSocketDir("/tmp/.X11-unix"));
+	ATF_REQUIRE(!RunGuiPure::isOwnXSocketDir("/tmp/.X11-unix/X0"));
+	ATF_REQUIRE(!RunGuiPure::isOwnXSocketDir("/tmp/.X11-unix/.crate-"));
+	ATF_REQUIRE(!RunGuiPure::isOwnXSocketDir("/var/tmp/.X11-unix/.crate-x"));
+	ATF_REQUIRE_EQ(RunGuiPure::xSocketName(0), std::string("X0"));
+	ATF_REQUIRE_EQ(RunGuiPure::xSocketName(12), std::string("X12"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(host_x11_cookie);
+ATF_TEST_CASE_BODY(host_x11_cookie)
+{
+	using RunGuiPure::hostX11CookieWanted;
+	// the shared mode talks to the host's X server
+	ATF_REQUIRE(hostX11CookieWanted("shared", false, "", ""));
+	ATF_REQUIRE(hostX11CookieWanted("shared", false, "shared", "isolated"));
+	// own servers: nested (the bug), headless, gpu
+	ATF_REQUIRE(!hostX11CookieWanted("nested", false, "nested", ""));
+	ATF_REQUIRE(!hostX11CookieWanted("nested", false, "nested", "none"));
+	ATF_REQUIRE(!hostX11CookieWanted("nested", false, "", ""));        // gui.mode: nested
+	ATF_REQUIRE(!hostX11CookieWanted("headless", false, "", ""));
+	ATF_REQUIRE(!hostX11CookieWanted("gpu", false, "", ""));
+	// no host X socket at all
+	ATF_REQUIRE(!hostX11CookieWanted("none", false, "", ""));
+	ATF_REQUIRE(!hostX11CookieWanted("compositor", false, "", ""));
+	ATF_REQUIRE(!hostX11CookieWanted("shared", true, "", ""));         // gui.mode: wayland
+	// the pre-1.1.74 rules of the shared mode
+	ATF_REQUIRE(!hostX11CookieWanted("shared", false, "none", ""));
+	ATF_REQUIRE(!hostX11CookieWanted("shared", false, "shared", "none"));
+	ATF_REQUIRE(hostX11CookieWanted("shared", false, "", "none"));     // no x11 options
+	ATF_REQUIRE(hostX11CookieWanted("shared", false, "nested", "none"));
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
 	// 0.8.18: gui: auto
@@ -384,4 +426,6 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, pipewireSocketNames_excludes_pulse_compat);
 	ATF_ADD_TEST_CASE(tcs, pulseSocketRelpath_canonical);
 	ATF_ADD_TEST_CASE(tcs, pulseSocketRelpath_has_subdir);
+	ATF_ADD_TEST_CASE(tcs, own_x_socket_dir);
+	ATF_ADD_TEST_CASE(tcs, host_x11_cookie);
 }

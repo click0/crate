@@ -1133,6 +1133,63 @@ path.
 
 ---
 
+## 4p. 1.1.74 — the bug hunt's remaining HIGH findings
+
+```sh
+# privops: a FIFO for the per-user audit log no longer pins the listener
+U=$(id -u alice); sudo -u alice sh -c "rm -f /var/run/crate/$U/audit.log; mkfifo /var/run/crate/$U/audit.log"
+sudo -u alice crate run -f /tmp/e.crate; echo "exit=$?"   # exit=0; crated's log: audit_per_user open … Device not configured
+# one uid holds at most 16 connections (alice in the privops group)
+for i in $(jot 17); do sleep 40 | sudo -u alice nc -U /var/run/crate/crated-privops.sock > /tmp/p.$i & done; sleep 2
+ls -l /tmp/p.17      # non-empty at once (503); p.1..p.16 stay empty until the 30 s deadline
+crate run -f /tmp/e.crate; echo "exit=$?"                 # another uid (root here) is not locked out
+
+# HTTP: at most 8 streams; /healthz keeps answering; stop does not hang
+for i in $(jot 9); do curl -sN -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $VIEWER" \
+    "http://127.0.0.1:9800/api/v1/containers/e/logs?follow=true" & done; sleep 2   # one prints 503
+curl -s http://127.0.0.1:9800/healthz                     # answers
+time service crated stop                                  # seconds, with the streams still open
+
+# firewall: the policy names the jail's address; the host's own traffic is not touched
+crate run -f chromium-privacy.crate &                     # default: block
+pfctl -a 'crate/*' -sr                                    # "block drop quick from <jail ip> to any", no "block drop all"
+fetch -o /dev/null https://www.freebsd.org/               # from the host: works while the jail runs
+# a bridge-mode spec with a firewall: map: the SNAT/rdr lines survive the policy load
+pfctl -a 'crate/*' -sn                                    # nat / rdr still listed
+# NAT mode on a host without pf: a clear refusal
+kldunload pf; crate run -f chromium-privacy.crate         # "firewall: the spec's policy needs pf …"
+
+# netgraph: the bridge is named crate_br_<jid>_<n>, the jail gets the ngeth
+crate run -f nginx-netgraph.crate & sleep 10; ngctl list | grep crate_br_   # one per interface
+jexec <jid> ifconfig -l                                   # ngethN present
+# once the run has ended, or failed after the bridge was attached:
+ngctl list | grep -c crate_br_                            # 0, and em0 still receives
+
+# snapshot restore never removes newer snapshots
+crate snapshot create <dataset> s1; crate snapshot create <dataset> s2
+crate snapshot restore <dataset> s1                       # refused, zfs names @s2
+zfs list -t snapshot <dataset>                            # s1 and s2 both still there
+
+# gui nested / headless / gpu: only the run's own X socket
+crate run -f lxqt-desktop-nested.crate & sleep 10
+mount -p | grep '.X11-unix/.crate-'                       # nullfs ro from /tmp/.X11-unix/.crate-…
+jexec <jid> ls -a /tmp/.X11-unix                          # . .. X<N> — no X0
+jexec <jid> sh -c 'ls /root/.Xauthority /home/*/.Xauthority'   # no such file
+crate audit <name> | grep X11-unix                        # PASS "this run's own X server only"
+# the desktop itself still draws (connecting through a read-only nullfs is allowed)
+# after the run: ls -a /tmp/.X11-unix shows no .crate-* directory
+```
+
+Pass criteria: a FIFO audit log and one uid's idle connections do not
+lock other users out of privops; streams are capped at 8 and stop
+does not wait for them; policy rules carry the jail's address and the
+host's traffic passes; bridge-mode SNAT/rdr survive; netgraph runs and a
+failed one leaves no ng_bridge on the NIC; restore keeps newer
+snapshots; a nested jail sees only its own X socket, has no host
+cookie, and its desktop works.
+
+---
+
 ## 5. Reporting back
 
 ```sh

@@ -69,7 +69,37 @@ namespace Crated {
 // multiplex — is tracked as a follow-up; this counter is the
 // operational guard until then.
 static std::atomic<int> g_streamingClients{0};
-static constexpr int     kMaxStreamingClients = 32;
+// 1.1.74: 8, not 32 — 32 was the whole default worker pool
+// (listen.http_workers), so 32 `logs?follow=true` from a viewer token
+// left /healthz and every other route without a thread. The cap now
+// covers stats/stream (SSE) too, which had none.
+static constexpr int     kMaxStreamingClients = 8;
+// 1.1.74: set by Server::stop() — a stream loops until its client goes
+// away, and the server's stop waited for every one of them.
+static std::atomic<bool> g_streamsStopping{false};
+
+static void jsonError(httplib::Response &res, int code, const std::string &msg);   // below
+
+// 1.1.74: a client that stopped listening. A quiet log never writes, so
+// a failed write alone never told the tail loop that its client left.
+static bool streamClientGone(httplib::DataSink &sink) {
+  if (g_streamsStopping.load()) return true;
+  return sink.is_writable && !sink.is_writable();
+}
+
+static bool acquireStreamSlot(httplib::Response &res, const char *what) {
+  int cur = g_streamingClients.load();
+  do {
+    if (cur >= kMaxStreamingClients) {
+      res.status = 503;
+      res.set_header("Retry-After", "5");
+      jsonError(res, 503, std::string(what) + " concurrency limit reached ("
+                + std::to_string(kMaxStreamingClients) + " streams); retry shortly");
+      return false;
+    }
+  } while (!g_streamingClients.compare_exchange_weak(cur, cur + 1));
+  return true;
+}
 
 static bool checkRateLimit(const std::string &clientId, const std::string &endpoint,
                            int maxPerSecond) {
@@ -505,16 +535,7 @@ static void handleContainerLogs(const httplib::Request &req, httplib::Response &
   // queueing on the daemon's thread pool. Underlying kqueue/epoll
   // multiplex refactor remains tracked as future work.
 
-  if (g_streamingClients.load() >= kMaxStreamingClients) {
-    res.status = 503;
-    res.set_header("Retry-After", "5");
-    jsonError(res, 503,
-      "log-stream concurrency limit reached ("
-      + std::to_string(kMaxStreamingClients)
-      + " clients); retry shortly");
-    return;
-  }
-  g_streamingClients.fetch_add(1);
+  if (!acquireStreamSlot(res, "log-stream")) return;   // 1.1.74: atomic check-and-take
 
   res.set_header("X-Content-Type-Options", "nosniff");
   res.set_header("Cache-Control", "no-cache");
@@ -642,6 +663,7 @@ static void handleContainerLogs(const httplib::Request &req, httplib::Response &
 #else
         ::usleep(500000);
 #endif
+        if (streamClientGone(sink)) return false;   // 1.1.74
       }
       // Unreachable; streaming ends when client disconnects.
     },
@@ -870,10 +892,13 @@ static void handleStatsStream(const httplib::Request &req, httplib::Response &re
   std::string jailName = jail->name;
   std::string jailIp = jail->ip4;
 
+  if (!acquireStreamSlot(res, "stats-stream")) return;   // 1.1.74: SSE had no cap
+
   res.set_chunked_content_provider(
     "text/event-stream",
     [jid, jailName, jailIp](size_t /*offset*/, httplib::DataSink &sink) -> bool {
       for (;;) {
+        if (streamClientGone(sink)) return false;   // 1.1.74
         // Bail out if the jail has exited.
         auto current = JailQuery::getJailByJid(jid);
         if (!current) {
@@ -906,7 +931,7 @@ static void handleStatsStream(const httplib::Request &req, httplib::Response &re
         ::sleep(1);
       }
     },
-    [](bool /*success*/) {}
+    [](bool /*success*/) { g_streamingClients.fetch_sub(1); }   // 1.1.74
   );
 }
 
@@ -1135,6 +1160,9 @@ static void handlePrivOp(const httplib::Request &req, httplib::Response &res,
 }
 
 // --- Route registration ---
+
+// 1.1.74: called by Server::stop() before it stops the listeners.
+void stopStreams() { g_streamsStopping.store(true); }
 
 void registerRoutes(httplib::Server &srv, const Config &config,
                     bool isUnixListener) {

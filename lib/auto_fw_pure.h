@@ -65,6 +65,27 @@ std::string formatSnatRule(const std::string &externalIface,
 // Format a single per-jail SNAT line so it can be injected into
 // the pf anchor crate/<jailname>. Trailing newline included so
 // multiple lines concat cleanly.
+// 1.1.74: a jail's `firewall:` policy as pf rules, every rule scoped to
+// the jail's own address. It used to end in `pass all` / `block drop
+// all`, which the host evaluates for ITS packets too (anchor "crate/*"):
+// `default: allow` overrode the host's non-quick blocks, `default:
+// block` (chromium-privacy) blocked the host. And `pass out ... from
+// <jail>` never matched: the host sees the jail's packets coming IN on
+// the epair / bridge member, and after NAT the source is no longer the
+// jail's. Now: block-ip (validated CIDRs) quick, the allowed ports quick
+// in both directions, and for `default: block` a quick block of the
+// rest of the jail's traffic; `default: allow` adds no rule — the host
+// ruleset decides. "" on success; `err` names a bad block-ip entry.
+// 1.1.74: a firewall/block-ip entry — an IPv4/IPv6 address or CIDR
+// ("" when fine). It went into the pf text unchecked.
+std::string validatePolicyCidr(const std::string &cidr);
+std::string composeFirewallPolicyRules(const std::vector<std::string> &blockIp,
+                                       const std::vector<unsigned> &allowTcp,
+                                       const std::vector<unsigned> &allowUdp,
+                                       const std::string &defaultPolicy,
+                                       const std::string &ipv4, const std::string &ipv6,
+                                       std::string &err);
+
 std::string formatSnatAnchorLine(const std::string &externalIface,
                                  const std::string &jailAddr);
 

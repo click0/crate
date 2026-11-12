@@ -9,6 +9,9 @@
 #include "../lib/privops_nv_pure.h"
 
 #include <atomic>
+#include <chrono>    // 1.1.74: request deadline
+#include <map>       // 1.1.74: per-uid connection cap
+#include <mutex>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -17,6 +20,8 @@
 #include <thread>
 
 #include <fcntl.h>      // 1.1.40: FD_CLOEXEC on received descriptors
+#include <poll.h>      // 1.1.74
+#include <sys/ioctl.h> // 1.1.74: FIONREAD
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -41,6 +46,11 @@ constexpr int kAcceptTimeoutSec = 1;       // graceful-stop poll period
 constexpr int kConnIoTimeoutSec = 30;
 constexpr int kMaxActiveConns   = 64;
 std::atomic<int> g_activeConns{0};
+// 1.1.74: no single uid may hold more than this many of the slots — one
+// operator stalling its own requests no longer locks everyone else out.
+constexpr int kMaxConnsPerUid   = 16;
+std::mutex g_perUidMu;
+std::map<uint32_t, int> g_perUidConns;
 
 #ifdef __FreeBSD__
 
@@ -139,6 +149,32 @@ void handleConnection(int connFd, bool rootlessPerUser) {
                 << ": " << e << std::endl;
   }
 
+  // 1.1.74: one uid, at most kMaxConnsPerUid connections in flight.
+  struct UidSlot {
+    uint32_t uid; bool held = false;
+    ~UidSlot() {
+      if (!held) return;
+      std::lock_guard<std::mutex> g(g_perUidMu);
+      if (--g_perUidConns[uid] <= 0) g_perUidConns.erase(uid);
+    }
+  } uidSlot{peerUid};
+  {
+    std::lock_guard<std::mutex> g(g_perUidMu);
+    int &n = g_perUidConns[peerUid];
+    if (n >= kMaxConnsPerUid) {
+      if (n == 0) g_perUidConns.erase(peerUid);
+    } else {
+      n++;
+      uidSlot.held = true;
+    }
+  }
+  if (!uidSlot.held) {
+    writeErrorResponse(connFd, 503,
+        "{\"error\":\"privops listener busy: too many concurrent connections of this uid\"}");
+    ::close(connFd);
+    return;
+  }
+
   // 1.1.43: refuse oversized requests BEFORE libnv allocates for them.
   // nvlist_recv() trusts the size in the peer's header; peek the header
   // and apply PrivOpsNvPure's limits first (1 MiB, 3 descriptors).
@@ -157,6 +193,38 @@ void handleConnection(int connFd, bool rootlessPerUser) {
       writeErrorResponse(connFd, 413, "{\"error\":\"" + why + "\"}");
       ::close(connFd);
       return;
+    }
+    // 1.1.74: the whole request must be here before nvlist_recv runs.
+    // libnv waits in select() without a timeout, so SO_RCVTIMEO did not
+    // bound it: a client that sent a valid header and then nothing held
+    // its slot (and thread) forever. Wait for header + data with a
+    // deadline instead, by the bytes queued on the socket.
+    const size_t want = PrivOpsNvPure::requestStreamBytes(h);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(kConnIoTimeoutSec);
+    for (;;) {
+      int avail = 0;
+      if (::ioctl(connFd, FIONREAD, &avail) == 0 && avail >= 0 && (size_t)avail >= want) break;
+      auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - std::chrono::steady_clock::now()).count();
+      if (left <= 0) {
+        std::cerr << "privops_listener: refusing request from uid " << peerUid
+                  << ": incomplete request after " << kConnIoTimeoutSec << " s" << std::endl;
+        writeErrorResponse(connFd, 408, "{\"error\":\"request incomplete: timed out\"}");
+        ::close(connFd);
+        return;
+      }
+      struct pollfd p{connFd, POLLIN, 0};
+      (void)::poll(&p, 1, 0);
+      if (p.revents & (POLLHUP | POLLERR)) {   // the peer is gone before sending it all
+        int a2 = 0;
+        if (::ioctl(connFd, FIONREAD, &a2) != 0 || a2 < 0 || (size_t)a2 < want) {
+          ::close(connFd);
+          return;
+        }
+      }
+      // poll() would report readable at once while a partial request
+      // sits in the buffer; sleep instead of spinning.
+      std::this_thread::sleep_for(std::chrono::milliseconds(left < 50 ? left : 50));
     }
   }
 

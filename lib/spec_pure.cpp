@@ -19,6 +19,7 @@
 #include "run_pure.h"       // 1.1.64: run/user
 #include "privacy_pure.h"   // 1.1.67: privacy
 #include "privops_pure.h"   // 1.1.44: validateIpv4Cidr / validateIpv6Cidr
+#include "auto_fw_pure.h"   // 1.1.74: validatePolicyCidr
 
 namespace SpecPure {
 
@@ -482,6 +483,10 @@ void Spec::validate() const {
     for (auto port : firewallPolicy->allowUdp)
       if (port == 0 || port > 65535)
         ERR("firewall/allow-udp port out of range: " << port)
+    // 1.1.74: block-ip went into the pf text unchecked
+    for (const auto &cidr : firewallPolicy->blockIp)
+      if (auto e = AutoFwPure::validatePolicyCidr(cidr); !e.empty())
+        ERR(e)
   }
 
   // terminal validation

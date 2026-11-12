@@ -76,27 +76,14 @@ void snapshot(const std::string &fullSnapName) {
 }
 
 void rollback(const std::string &snapName) {
-#ifdef HAVE_LIBZFS
-  auto *h = getHandle();
-  if (h) {
-    // 1.1.48: zfs_rollback(fs, snap, force) — the FILESYSTEM handle first,
-    // the snapshot second. The old call passed the snapshot as `fs` and
-    // nullptr as `snap`, which libzfs dereferences unconditionally →
-    // SIGSEGV before the zfs(8) fallback could run.
-    auto at = snapName.find('@');
-    if (at != std::string::npos) {
-      zfs_handle_t *fs = zfs_open(h, snapName.substr(0, at).c_str(), ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME);
-      zfs_handle_t *snap = zfs_open(h, snapName.c_str(), ZFS_TYPE_SNAPSHOT);
-      int err = -1;
-      if (fs && snap) err = zfs_rollback(fs, snap, B_FALSE);
-      if (snap) zfs_close(snap);
-      if (fs) zfs_close(fs);
-      if (err == 0) return;
-    }
-  }
-#endif
+  // 1.1.74: always zfs(8), without -r. libzfs' zfs_rollback() itself
+  // destroys every snapshot newer than the target, and their clones —
+  // what `zfs rollback` refuses without -r — so a `crate snapshot
+  // restore` built with HAVE_LIBZFS (the port's default) silently took
+  // backup / replicate bases and templates cloned from newer @warm-*
+  // with it. zfs(8) refuses and names the newer snapshots instead.
   Util::execCommand({CRATE_PATH_ZFS, "rollback", snapName},
-    "rollback ZFS snapshot");
+    "rollback ZFS snapshot (zfs refuses while newer snapshots exist; remove or keep them on purpose)");
 }
 
 void destroy(const std::string &name) {

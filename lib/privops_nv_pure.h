@@ -215,6 +215,12 @@ std::string parseNvlistHeader(const unsigned char *buf, size_t len, NvlistHeader
 // to nvlist_recv, otherwise the refusal reason (used in the 413 body).
 std::string checkNvlistHeaderLimits(const NvlistHeader &h);
 
+// 1.1.74: bytes of a request on the stream — header + data (libnv sends
+// the descriptors after these). The listener waits, with a deadline,
+// until this much is queued before handing the socket to nvlist_recv,
+// which itself waits without one.
+uint64_t requestStreamBytes(const NvlistHeader &h);
+
 // --- Verb routing ---
 
 // The `verb` field on the wire is required for every privops

@@ -364,6 +364,43 @@ static RunAtEnd startWebsockify(unsigned vncPort, unsigned &actualWsPort, bool l
   });
 }
 
+// 1.1.74: a private host directory holding a hard link to the socket of
+// the X server this run started, and nothing else; the jail's
+// /tmp/.X11-unix is mounted from it (RunGuiPure::ownXSocketDirTemplate
+// says why). The link is checked to be a socket owned by us (Xephyr,
+// Xvfb) or root (an Xorg wrapper): another user who planted X<N> before
+// our server could bind it is not handed to the jail. Throws rather
+// than fall back to the host's whole /tmp/.X11-unix.
+static std::string makeOwnXSocketDir(unsigned dispNum) {
+  const auto name = RunGuiPure::xSocketName(dispNum);
+  const auto sock = STR("/tmp/.X11-unix/" << name);
+  std::string dir = RunGuiPure::ownXSocketDirTemplate();
+  if (::mkdtemp(&dir[0]) == nullptr)
+    ERR2("x11", "could not create a directory for the jail's X socket in /tmp/.X11-unix: " << strerror(errno))
+  const auto link = STR(dir << "/" << name);
+  if (::linkat(AT_FDCWD, sock.c_str(), AT_FDCWD, link.c_str(), 0) != 0) {
+    const int e = errno;
+    ::rmdir(dir.c_str());
+    ERR2("x11", "could not link the X socket " << sock << " for the jail: " << strerror(e)
+         << (e == EPERM ? " (security.bsd.hardlink_check_uid, and the server runs as another user?)" : ""))
+  }
+  struct stat st;
+  if (::lstat(link.c_str(), &st) != 0 || !S_ISSOCK(st.st_mode) ||
+      (st.st_uid != ::geteuid() && st.st_uid != 0)) {
+    ::unlink(link.c_str());
+    ::rmdir(dir.c_str());
+    ERR2("x11", sock << " is not the socket of the X server crate started"
+         " (not a socket, or owned by another user)")
+  }
+  if (::chmod(dir.c_str(), 0755) != 0) {
+    const int e = errno;
+    ::unlink(link.c_str());
+    ::rmdir(dir.c_str());
+    ERR2("x11", "chmod " << dir << ": " << strerror(e))
+  }
+  return dir;
+}
+
 // Common helper: start VNC + websockify, register entry, return cleanup
 static RunAtEnd setupVncAndRegister(unsigned dispNum, pid_t xServerPid,
                                      const std::string &mode,
@@ -379,8 +416,28 @@ static RunAtEnd setupVncAndRegister(unsigned dispNum, pid_t xServerPid,
   };
 
   auto dispStr = STR(":" << dispNum);
+  // 1.1.74: only this run's own X socket, read-only (connecting to a
+  // socket is allowed on a read-only nullfs; creating entries is not).
+  // This mounted the host's whole /tmp/.X11-unix: the host display and
+  // every other run's X server were reachable from the jail.
+  std::string ownXDir;
+  try {
+    if (!waitForXSocket(dispNum, 5000))
+      ERR2("x11", "the X socket /tmp/.X11-unix/X" << dispNum << " did not appear within 5s")
+    ownXDir = makeOwnXSocketDir(dispNum);
+  } catch (...) {
+    ::kill(xServerPid, SIGTERM);   // nothing owns the server yet
+    int status;
+    ::waitpid(xServerPid, &status, 0);
+    throw;
+  }
+  const auto ownXLink = STR(ownXDir << "/" << RunGuiPure::xSocketName(dispNum));
+  RunAtEnd removeOwnXDir([ownXDir, ownXLink]() {
+    ::unlink(ownXLink.c_str());
+    ::rmdir(ownXDir.c_str());
+  });
   Util::Fs::mkdir(J("/tmp/.X11-unix"), 01777);
-  mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix", MNT_IGNORE));
+  mount(new Mount("nullfs", J("/tmp/.X11-unix"), ownXDir, MNT_RDONLY | MNT_IGNORE));
   setJailEnv("DISPLAY", dispStr);
 
   unsigned vncPort = 0;
@@ -431,7 +488,8 @@ static RunAtEnd setupVncAndRegister(unsigned dispNum, pid_t xServerPid,
   auto ownerPid = ::getpid();
   return RunAtEnd([xServerPid, ownerPid, logProgress, mode,
                    vncCleanup = std::make_shared<RunAtEnd>(std::move(vncCleanup)),
-                   wsCleanup = std::make_shared<RunAtEnd>(std::move(wsCleanup))]() {
+                   wsCleanup = std::make_shared<RunAtEnd>(std::move(wsCleanup)),
+                   removeOwnXDir = std::make_shared<RunAtEnd>(std::move(removeOwnXDir))]() {
     // Unregister from GUI registry
     try {
       auto reg = Ctx::GuiRegistry::lock();
@@ -447,6 +505,7 @@ static RunAtEnd setupVncAndRegister(unsigned dispNum, pid_t xServerPid,
     ::kill(xServerPid, SIGTERM);
     int status;
     ::waitpid(xServerPid, &status, 0);
+    removeOwnXDir->doNow();
   });
 }
 
@@ -1234,13 +1293,15 @@ void copyX11Auth(const Spec &spec, const std::string &jailPath,
 
   auto J = [&jailPath](auto subdir) { return STR(jailPath << subdir); };
 
-  bool skipX11Auth = (spec.x11Options && spec.x11Options->mode == "none") ||
-                     (spec.clipboardOptions && spec.clipboardOptions->mode == "none" &&
-                      spec.x11Options && spec.x11Options->mode != "nested");
-  // headless/gpu modes don't need host X auth
-  if (spec.guiOptions && (spec.guiOptions->mode == "headless" || spec.guiOptions->mode == "gpu"))
-    skipX11Auth = true;
-  if (skipX11Auth)
+  // 1.1.74: the host cookie only for the shared mode (RunGuiPure::
+  // hostX11CookieWanted). nested got it too, and with the host's whole
+  // /tmp/.X11-unix mounted DISPLAY=:0 opened the host display from the
+  // jail; compositor / none / wayland and auto resolved to headless or
+  // gpu got it for nothing.
+  if (!RunGuiPure::hostX11CookieWanted(resolveGuiMode(spec),
+                                       spec.guiOptions && spec.guiOptions->mode == "wayland",
+                                       spec.x11Options ? spec.x11Options->mode : std::string(),
+                                       spec.clipboardOptions ? spec.clipboardOptions->mode : std::string()))
     return;
 
   for (auto &file : {STR(homeDir << "/.Xauthority"), STR(homeDir << "/.ICEauthority")})

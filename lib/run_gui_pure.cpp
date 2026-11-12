@@ -145,6 +145,28 @@ std::string pulseSocketRelpath() {
   return "pulse/native";
 }
 
+std::string ownXSocketDirTemplate() {
+  return "/tmp/.X11-unix/.crate-XXXXXXXX";
+}
+
+std::string xSocketName(unsigned displayNum) {
+  return "X" + std::to_string(displayNum);
+}
+
+bool isOwnXSocketDir(const std::string &hostPath) {
+  static const std::string prefix = "/tmp/.X11-unix/.crate-";
+  return hostPath.size() > prefix.size() && hostPath.compare(0, prefix.size(), prefix) == 0;
+}
+
+bool hostX11CookieWanted(const std::string &guiMode, bool waylandOnly,
+                         const std::string &x11Mode,
+                         const std::string &clipboardMode) {
+  if (guiMode != "shared" || waylandOnly) return false;
+  if (x11Mode == "none") return false;
+  if (clipboardMode == "none" && !x11Mode.empty() && x11Mode != "nested") return false;
+  return true;
+}
+
 std::string parseWaylandDisplay(const std::string &waylandDisplayEnv) {
   if (waylandDisplayEnv.empty()) return "";
   // Reject anything that looks like a path — only basename form

@@ -65,6 +65,14 @@ std::string containerNameOf(const std::string &jailName);
 // match anchors against kernel jail names.
 bool jailXnamePid(const std::string &jailName, long &pidOut);
 
+// 1.1.74: the ng_bridge node of a netgraph-mode interface:
+// "crate_br_<jid>_<seq>" — short enough for NG_NODESIZ (31 chars), only
+// characters a netgraph name may hold, and unique per interface.
+std::string netgraphBridgeNodeName(int jid, unsigned seq);
+// 1.1.74: the node name from `ngctl show <path>` output ("  Name: ngeth0
+// Type: eiface ..."); "" when there is none.
+std::string ngctlShowName(const std::string &showOutput);
+
 // 1.1.70: the container name of a RUNNING jail. The privops path names
 // the jail "<name>_pid<N>" (containerNameOf); the root path creates it
 // without a name, so the kernel calls it by its jid ("12") — there the
