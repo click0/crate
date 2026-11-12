@@ -3,6 +3,7 @@
 
 #include "mount.h"
 #include "privops_client.h"
+#include "mounts_pure.h"   // 1.1.77: normalizeMountPoint
 #include "util.h"
 #include "err.h"
 #include <rang.hpp>
@@ -14,6 +15,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <limits.h>   // PATH_MAX (1.1.77)
 
 #include <vector>
 #include <iostream>
@@ -21,7 +23,7 @@
 #define ERR(msg...) ERR2("mount/unmount directories", msg)
 
 Mount::Mount(const char *newFstype, const std::string &newFspath, const std::string &newTarget, int newFlags)
-: fstype(newFstype), fspath(newFspath), target(newTarget), flags(newFlags)
+: fstype(newFstype), fspath(MountsPure::normalizeMountPoint(newFspath)), target(newTarget), flags(newFlags)
 {
   // 0.9.19: nullfs gets routed through privops when crated's
   // unix-socket listener is available. Detect once at construction;
@@ -81,6 +83,22 @@ void Mount::mount() {
           << "' failed (status " << resp.status << "): " << resp.body)
     mounted = true;
     return;
+  }
+
+  // 1.1.77: nmount(2) follows a symlink anywhere in fspath, and the jail
+  // tree can hold one (a --warm-base clone, an archive, the jail's own
+  // processes — the shares are mounted after /etc/rc ran): a link on
+  // the way put the mount over a host directory. The mount point must
+  // resolve to itself — the rule crated has applied to the same mounts
+  // under rootless since 1.1.35. (Checked here, then used by path: a
+  // jail process swapping a component in between still wins; TODO §2.)
+  {
+    char real[PATH_MAX];
+    if (::realpath(fspath.c_str(), real) == nullptr)
+      ERR("mount point '" << fspath << "': " << strerror(errno))
+    if (fspath != real)
+      ERR("mount point '" << fspath << "' resolves to '" << real
+          << "': a symlink on the way is not followed")
   }
 
   // Legacy nmount(2) path — unchanged from pre-0.9.19.

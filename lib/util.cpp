@@ -929,10 +929,10 @@ void copyFile(const std::string &srcFile, const std::string &dstFile) {
   }
 }
 
-namespace {
 // Walk up the path until stat() succeeds; return the device id of the
 // nearest existing ancestor. Returns -1 if even "/" cannot be stat'd
-// (which should be impossible on a healthy system).
+// (which should be impossible on a healthy system). 1.1.77: public —
+// the host side of a files/share (the jail side is FsBeneath's).
 dev_t deviceOfNearestExisting(const std::string &path) {
   std::string p = path;
   for (;;) {
@@ -948,7 +948,6 @@ dev_t deviceOfNearestExisting(const std::string &path) {
   if (::stat("/", &st) == 0)
     return st.st_dev;
   return (dev_t)-1;
-}
 }
 
 bool sameDevice(const std::string &a, const std::string &b) {

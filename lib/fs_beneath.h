@@ -68,4 +68,28 @@ void unlink(const std::string &root, const std::string &rel);
 // must be directories (not symlinks to one).
 void mkdirs(const std::string &root, const std::string &rel, mode_t mode);
 
+// 1.1.77: an (empty) mount target for a file: created O_EXCL with `mode`
+// when missing; an existing one must be a regular file and is left as
+// it is.
+void touch(const std::string &root, const std::string &rel, mode_t mode = 0600);
+
+// 1.1.77: a descriptor of the directory rel (O_DIRECTORY, O_CLOEXEC),
+// walked like everything else; "" or "/" is root itself. For work that
+// must stay on that directory after the check (bind(2) relative to it
+// after fchdir).
+int openDirectory(const std::string &root, const std::string &rel);
+
+// 1.1.77: st_dev of the directory that holds rel's last component — the
+// file system a link at rel would have to be on.
+dev_t parentDevice(const std::string &root, const std::string &rel);
+
+// 1.1.77: hard links across the tree's edge (`files/share`). linkIn
+// links the host file (followed — the host's side) in at rel, which
+// must not exist. linkOut links the regular file at rel (not followed)
+// out to hostDst; when what got linked is not the file that was
+// checked (the jail swapped it in between), hostDst is removed again
+// and it throws.
+void linkIn(const std::string &hostSrc, const std::string &root, const std::string &rel);
+void linkOut(const std::string &root, const std::string &rel, const std::string &hostDst);
+
 }

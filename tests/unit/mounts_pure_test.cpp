@@ -128,10 +128,25 @@ ATF_TEST_CASE_BODY(tmpfs_before_gui) {
   ATF_REQUIRE(!tmpfsMountedBeforeGui("/var/tmp"));
 }
 
+// 1.1.77: the form Mount compares with realpath(3).
+ATF_TEST_CASE_WITHOUT_HEAD(normalize_mount_point);
+ATF_TEST_CASE_BODY(normalize_mount_point) {
+  using MountsPure::normalizeMountPoint;
+  ATF_REQUIRE_EQ(normalizeMountPoint("/var/run/crate/0/jail-a/dev"), std::string("/var/run/crate/0/jail-a/dev"));
+  ATF_REQUIRE_EQ(normalizeMountPoint("/j//home/u/"), std::string("/j/home/u"));
+  ATF_REQUIRE_EQ(normalizeMountPoint("/j/./tmp/.X11-unix"), std::string("/j/tmp/.X11-unix"));
+  ATF_REQUIRE_EQ(normalizeMountPoint("/j/a/../b"), std::string("/j/a/../b"));   // kept: realpath decides
+  ATF_REQUIRE_EQ(normalizeMountPoint("/"), std::string("/"));
+  ATF_REQUIRE_EQ(normalizeMountPoint("///"), std::string("/"));
+  ATF_REQUIRE_EQ(normalizeMountPoint(""), std::string(""));
+  ATF_REQUIRE_EQ(normalizeMountPoint("/j/.hidden/x"), std::string("/j/.hidden/x"));
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, tmpfs_before_gui);   // 1.1.70
   ATF_ADD_TEST_CASE(tcs, ro_suffix_and_flag);
   ATF_ADD_TEST_CASE(tcs, tmpfs_size_and_path);
   ATF_ADD_TEST_CASE(tcs, etc_keep_names);
   ATF_ADD_TEST_CASE(tcs, under_and_params);
+  ATF_ADD_TEST_CASE(tcs, normalize_mount_point);
 }

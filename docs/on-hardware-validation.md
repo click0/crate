@@ -1256,6 +1256,32 @@ rootless run mounts its /dev through `mount_devfs` and gets its private
 ruleset as before (§4e); `cow:` unionfs is refused before anything is
 mounted.
 
+## 4s. 1.1.77 — shares, mount targets and the socket proxy
+
+```sh
+# a template whose source jail planted links (as in §4r)
+crate run -f share.crate & sleep 5; J=$(jls path | grep jail-share- | head -1)
+#   share.yml:  files/share: [{host: /home/alice/app.conf, jail: /etc/app.conf}]
+#               dirs/share:  [{host: /home/alice/data, jail: /data/}]     (trailing slash)
+#               socket_proxy: {proxy: [{host: /var/run/x.sock, jail: /var/run/proxy/x.sock}]}
+ln -sf /etc/master.passwd $J/etc/app.conf            # the jail file is a link to a host file
+rm -rf $J/var/run/proxy && ln -s /etc $J/var/run/proxy
+crate template warm share --output tank/templates/evil-share
+crate run --warm-base tank/templates/evil-share --name es -- /bin/echo ok
+#   expect: the files/share step either replaces the link (host file exists) or refuses it
+#   ("is not a regular file"); /home/alice/app.conf is never a link or copy of master.passwd
+#   expect: socket proxy refused — "'proxy' is a symbolic link …"; no x.sock in /etc
+ls -l /etc/x.sock 2>/dev/null; ls -li /home/alice/app.conf /etc/master.passwd
+# a plain run: shares, the trailing-slash dir share, tmpfs and the GUI sockets mount as before
+crate run -f share.crate -- /bin/sh -c 'mount | grep -c nullfs; ls -l /var/run/proxy/x.sock'
+# a share whose jail path runs through a link inside the tree is refused
+#   (dirs/share jail: /lnk/data, the tree has /lnk -> tmp): "'lnk' is a symbolic link …"
+```
+
+Pass criteria: no host file is linked, copied or created through a link
+in the tree; the socket appears only inside the jail; ordinary shares,
+tmpfs and GUI sockets mount as before (a trailing slash included).
+
 ---
 
 ## 5. Reporting back

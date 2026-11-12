@@ -656,7 +656,7 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
           }
           ERR("thin jail: host directory '" << source << "' does not exist on this host")
         }
-        Util::Fs::mkdirIfNotExists(target, 0755);
+        FsBeneath::mkdirs(jailPath, source, 0755);   // 1.1.77: target == jailPath + source
         mount(new Mount("nullfs", target, source, MNT_RDONLY|MNT_IGNORE));
       }
     }
@@ -1150,7 +1150,7 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   // path-gated by the target.
   auto mountSpecTmpfs = [&](const Spec::Tmpfs &t, const std::string &p) {
     Util::safePath(J(p), jailPath, "tmpfs mount point");
-    std::filesystem::create_directories(J(p));
+    FsBeneath::mkdirs(jailPath, p, 0755);   // 1.1.77: no symlink in the tree followed
     auto *m = new Mount("tmpfs", J(p), "", MNT_IGNORE);
     const bool underHome = !homeDir.empty() && MountsPure::isUnder(p, homeDir);
     for (auto &kv : MountsPure::tmpfsParams(t.size, underHome, (unsigned)myuid, (unsigned)mygid))
@@ -2341,43 +2341,48 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
     Util::safePath(J(dirJail), jailPath, "shared directory (jail side)");
     if (!Util::Fs::dirExists(dirHost))
       ERR("shared directory '" << dirHost << "' doesn't exist on the host, can't run the app")
-    std::filesystem::create_directories(J(dirJail));
+    FsBeneath::mkdirs(jailPath, dirJail, 0755);   // 1.1.77: no symlink in the tree followed
     mount(new Mount("nullfs", J(dirJail), dirHost, MNT_IGNORE | (dirShare.readOnly ? MNT_RDONLY : 0)));
     if (dirShare.readOnly)
       LOG("dirs/share: " << dirHost << " -> " << dirJail << " read-only")
   }
 
   // share files if requested
+  // 1.1.77: the jail's side through FsBeneath. By path, link(2), copy,
+  // unlink and touch followed a symlink in the tree: a link at the jail
+  // file sent the host's own file (a hard link or a copy) to fileHost,
+  // and a symlinked directory put the hard link or the touched mount
+  // target into a host directory.
   for (auto &fileShare : spec.filesShare) {
     const auto fileJail = Util::pathSubstituteVarsInPath(fileShare.jail);
     const auto fileHost = Util::pathSubstituteVarsInPath(fileShare.host);
     Util::safePath(J(fileJail), jailPath, "shared file (jail side)");
     SharePure::FileShareInputs inp{
       Util::Fs::fileExists(fileHost),
-      Util::Fs::fileExists(J(fileJail)),
-      Util::Fs::sameDevice(fileHost, J(fileJail)),
+      FsBeneath::exists(jailPath, fileJail),
+      Util::Fs::deviceOfNearestExisting(fileHost) == FsBeneath::parentDevice(jailPath, fileJail),
     };
     switch (SharePure::chooseFileStrategy(inp)) {
       case SharePure::FileStrategy::Error:
         ERR("none of the files in a file-share exists: fileHost=" << fileHost << " fileJail=" << fileJail)
       case SharePure::FileStrategy::HardLinkHostToJail:
-        Util::Fs::unlink(J(fileJail));
-        Util::Fs::link(fileHost, J(fileJail));
+        FsBeneath::unlink(jailPath, fileJail);
+        FsBeneath::linkIn(fileHost, jailPath, fileJail);
         break;
       case SharePure::FileStrategy::HardLinkHostToJailNew:
-        Util::Fs::link(fileHost, J(fileJail));
+        FsBeneath::linkIn(fileHost, jailPath, fileJail);
         break;
       case SharePure::FileStrategy::HardLinkJailToHost:
-        Util::Fs::link(J(fileJail), fileHost);
+        FsBeneath::linkOut(jailPath, fileJail, fileHost);
         break;
       case SharePure::FileStrategy::CopyJailToHostThenBind:
-        Util::Fs::copyFile(J(fileJail), fileHost);
+        FsBeneath::copyOut(jailPath, fileJail, fileHost);
         // fall through into NullfsBindHostToJail
         [[fallthrough]];
       case SharePure::FileStrategy::NullfsBindHostToJail:
-        if (Util::Fs::fileExists(J(fileJail)))
-          Util::Fs::unlink(J(fileJail));
-        Util::Fs::touchFile(J(fileJail));
+        if (FsBeneath::exists(jailPath, fileJail))
+          FsBeneath::unlink(jailPath, fileJail);
+        FsBeneath::touch(jailPath, fileJail, 0644);
         mount(new Mount("nullfs", J(fileJail), fileHost, MNT_IGNORE));
         LOG("file-share: cross-device path '" << fileHost << "' bound onto '" << J(fileJail) << "' via nullfs")
         break;

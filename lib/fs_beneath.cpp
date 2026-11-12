@@ -292,6 +292,88 @@ void unlink(const std::string &root, const std::string &rel) {
     ERR("'" << what << "': unlink: " << ::strerror(errno))
 }
 
+void touch(const std::string &root, const std::string &rel, mode_t mode) {
+  const std::string what = where(root, rel);
+  Walk w = walkToParent(root, rel);
+  if (w.dfd < 0)
+    ERR("'" << what << "': " << w.why)
+  Fd dir(w.dfd);
+  const std::string &leaf = w.parts.back();
+  struct stat st;
+  if (::fstatat(dir.fd, leaf.c_str(), &st, AT_SYMLINK_NOFOLLOW) == 0) {
+    if (!S_ISREG(st.st_mode))
+      ERR("'" << what << "' is not a regular file (a symlink, directory or socket left in the jail?)")
+    return;
+  }
+  Fd f(::openat(dir.fd, leaf.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode));
+  if (f.fd < 0)
+    ERR("'" << what << "': " << reason(dir.fd, leaf, errno))
+  closeChecked(f, what);
+}
+
+int openDirectory(const std::string &root, const std::string &rel) {
+  if (rel.find_first_not_of('/') == std::string::npos) {
+    int fd = ::open(root.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd < 0)
+      ERR("'" << root << "': " << ::strerror(errno))
+    return fd;
+  }
+  const std::string what = where(root, rel);
+  Walk w = walkToParent(root, rel);
+  if (w.dfd < 0)
+    ERR("'" << what << "': " << w.why)
+  Fd dir(w.dfd);
+  const std::string &leaf = w.parts.back();
+  int fd = ::openat(dir.fd, leaf.c_str(), kDirFlags);
+  if (fd < 0)
+    ERR("'" << what << "': " << reason(dir.fd, leaf, errno))
+  return fd;
+}
+
+dev_t parentDevice(const std::string &root, const std::string &rel) {
+  Walk w = walkToParent(root, rel);
+  if (w.dfd < 0)
+    ERR("'" << where(root, rel) << "': " << w.why)
+  Fd dir(w.dfd);
+  struct stat st;
+  if (::fstat(dir.fd, &st) != 0)
+    ERR("'" << where(root, rel) << "': fstat: " << ::strerror(errno))
+  return st.st_dev;
+}
+
+void linkIn(const std::string &hostSrc, const std::string &root, const std::string &rel) {
+  const std::string what = where(root, rel);
+  Walk w = walkToParent(root, rel);
+  if (w.dfd < 0)
+    ERR("'" << what << "': " << w.why)
+  Fd dir(w.dfd);
+  if (::linkat(AT_FDCWD, hostSrc.c_str(), dir.fd, w.parts.back().c_str(), AT_SYMLINK_FOLLOW) != 0)
+    ERR("link '" << hostSrc << "' -> '" << what << "': " << ::strerror(errno))
+}
+
+void linkOut(const std::string &root, const std::string &rel, const std::string &hostDst) {
+  const std::string what = where(root, rel);
+  Walk w = walkToParent(root, rel);
+  if (w.dfd < 0)
+    ERR("'" << what << "': " << w.why)
+  Fd dir(w.dfd);
+  const std::string &leaf = w.parts.back();
+  struct stat st;
+  if (::fstatat(dir.fd, leaf.c_str(), &st, AT_SYMLINK_NOFOLLOW) != 0)
+    ERR("'" << what << "': " << ::strerror(errno))
+  if (!S_ISREG(st.st_mode))
+    ERR("'" << what << "' is not a regular file")
+  // flags 0: the name itself is linked, a symlink is never followed
+  if (::linkat(dir.fd, leaf.c_str(), AT_FDCWD, hostDst.c_str(), 0) != 0)
+    ERR("link '" << what << "' -> '" << hostDst << "': " << ::strerror(errno))
+  struct stat lt;
+  if (::lstat(hostDst.c_str(), &lt) != 0 || !S_ISREG(lt.st_mode) ||
+      lt.st_ino != st.st_ino || lt.st_dev != st.st_dev) {
+    (void)::unlink(hostDst.c_str());
+    ERR("'" << what << "' changed while it was linked to '" << hostDst << "' — link removed")
+  }
+}
+
 void mkdirs(const std::string &root, const std::string &rel, mode_t mode) {
   const std::string what = where(root, rel);
   Walk w = walkToParent(root, rel, mode);

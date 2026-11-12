@@ -115,6 +115,25 @@ tmpfsParams(const std::string &size, bool underHome, unsigned uid, unsigned gid)
   return p;
 }
 
+std::string normalizeMountPoint(const std::string &path) {
+  std::string out;
+  size_t i = 0;
+  const bool absolute = !path.empty() && path[0] == '/';
+  while (i < path.size()) {
+    while (i < path.size() && path[i] == '/') i++;
+    if (i >= path.size()) break;
+    size_t j = path.find('/', i);
+    if (j == std::string::npos) j = path.size();
+    std::string name = path.substr(i, j - i);
+    i = j;
+    if (name == ".") continue;
+    if (!out.empty() || absolute) out += '/';
+    out += name;
+  }
+  if (out.empty()) return absolute ? "/" : "";
+  return out;
+}
+
 std::string validateDecimal(const std::string &s, const char *what) {
   if (s.empty()) return std::string(what) + " is empty";
   if (s.size() > 10) return std::string(what) + " longer than 10 digits";

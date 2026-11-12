@@ -106,20 +106,33 @@ RunAtEnd setupSocketProxy(const Spec &spec, const std::string &jailPath, bool lo
     auto jailParent = entry.jail.substr(0, entry.jail.rfind('/'));
     if (!jailParent.empty())
       FsBeneath::mkdirs(jailPath, jailParent, 0755);   // 1.1.76
+    // 1.1.77: socat binds the socket relative to the directory held open
+    // here. UNIX-LISTEN:J(entry.jail) resolved the path again in socat,
+    // so a symlinked directory in the tree — one a jail process swaps in
+    // too — put the root-owned socket into a host directory. The child
+    // fchdir()s to the descriptor and binds the bare name; bind(2) never
+    // follows a symlink at the last component.
+    const auto leaf = entry.jail.substr(entry.jail.rfind('/') + 1);
+    if (leaf.empty() || leaf == "." || leaf == "..")
+      ERR("socket proxy (jail side) '" << entry.jail << "' names no socket file")
+    const int dirFd = FsBeneath::openDirectory(jailPath, jailParent);
+    const auto listenArg = STR("UNIX-LISTEN:" << leaf << ",fork");
+    const auto connectArg = STR("UNIX-CONNECT:" << entry.host);
     pid_t pid = ::fork();
     // 1.1.27: a fork() failure was silently dropped (pid < 0 fell through
     // to "not started") — the proxy simply never existed, with no error.
-    if (pid < 0)
+    if (pid < 0) {
+      ::close(dirFd);
       ERR("fork failed for socat socket proxy '" << entry.jail << "'")
+    }
     if (pid == 0) {
-      ::execl(CRATE_PATH_SOCAT, "socat",
-              STR("UNIX-LISTEN:" << J(entry.jail) << ",fork").c_str(),
-              STR("UNIX-CONNECT:" << entry.host).c_str(),
-              nullptr);
+      if (::fchdir(dirFd) != 0)
+        ::_exit(127);
+      ::execl(CRATE_PATH_SOCAT, "socat", listenArg.c_str(), connectArg.c_str(), nullptr);
       ::_exit(127);
     }
-    if (pid > 0)
-      socatPids.push_back(pid);
+    ::close(dirFd);
+    socatPids.push_back(pid);
   }
 
   if (socatPids.empty())

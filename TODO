@@ -112,10 +112,16 @@ The bhyve/VM track is in TODO2.
   open(O_RESOLVE_BENEATH) relative to the caller's prefix and
   nmount with "fspath" replaced by an fd ("fd" iov) / jail path via
   fdescfs, or at least a second realpath() after the operation with
-  rollback. Same for lib/run_gui.cpp's mount targets (lstat then
-  mount). Low practical exposure (needs a compromised jail racing
-  its own operator's `crate run`), but the only remaining gap in the
-  path chain.
+  rollback. Same for crate(1)'s own nmount(2) on the root path: since
+  1.1.77 Mount refuses a mount point that does not resolve to itself and
+  the targets are made through FsBeneath, but the mount then goes by
+  path — and the shares, tmpfs and socket mounts come after /etc/rc,
+  with the jail's processes running. Without an fd-based nmount:
+  fchdir() to the target directory (opened through FsBeneath) and
+  nmount fspath "." (the kernel turns it into the global path of that
+  vnode); file targets would still need parent + name. Low practical
+  exposure (needs a compromised jail racing its own operator's `crate
+  run`), but the only remaining gap in the path chain.
 
 * (by design, documented) a pool-scoped ADMIN token can POST
   /imports/:name + /containers/:name/start for a name in its pool and
@@ -509,17 +515,6 @@ The bhyve/VM track is in TODO2.
   (status_pure.cpp:23-27) and crated / hub responses, which strict
   readers (Python json.loads on bytes) refuse. Replace invalid
   sequences with \ufffd.
-* (MED, left open by 1.1.76) the file writes into a jail tree go through
-  FsBeneath (no symlink followed in any component) since 1.1.76, but
-  three kinds of host-side operation on the tree still go by path: the
-  file shares (run.cpp, `files/share`: unlink / link / touch / copy of
-  J(fileJail), and link(2) may follow a symlinked source); the mount
-  targets made with create_directories / mkdir (dirs/share, tmpfs,
-  /tmp/.X11-unix, /tmp/wayland, the GUI runtime dir) and nmount(2)
-  itself, which follows a symlink in fspath — Util::safePath's realpath
-  check runs first, so it is §2's check-then-use race; and socket_proxy's
-  socat, which binds J(entry.jail) by path. A tree from a --warm-base
-  clone or an archive can hold such links.
 * (LOW, left open by 1.1.75) the trusted spec store of warm templates
   (/var/db/crate/warm/<guid>.spec / .thin) is never pruned: a destroyed
   template leaves its files (harmless — a new dataset gets a new guid).

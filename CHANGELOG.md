@@ -6,6 +6,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.77] — 2026-11-12
+
+**The shares, mount targets and the socket proxy no longer follow a
+symlink the jail made either: what 1.1.76 left open on the host's way
+into the tree is closed, except a race against a running jail (TODO
+§2).**
+
+- **files/share followed links in the tree** (`lib/run.cpp`,
+  `lib/fs_beneath.cpp`). The share code linked, copied, unlinked and
+  touched `<tree>/<jail file>` by path as host root. A symlink at the
+  jail file sent the host's own file to the share's host path (link(2)
+  follows it; a copy of /etc/master.passwd landed in the operator's
+  file), and a symlinked directory put the hard link — a host file the
+  user can write, in a host directory — or the mount target outside the
+  tree. The jail's side now goes through FsBeneath (new `touch`,
+  `linkIn`, `linkOut`, `parentDevice`): a link from the jail is made only
+  from a regular file and checked again after linking, and the host's
+  side is followed as before (a dotfile that is a symlink still shares).
+- **Mount targets and nmount(2)** (`lib/mount.cpp`, `lib/run.cpp`,
+  `lib/run_gui.cpp`, `lib/mounts_pure.cpp`). Directories for dirs/share,
+  tmpfs, the thin jail, /tmp/.X11-unix, /tmp/wayland, the PulseAudio and
+  seatd sockets were made with mkdir / create_directories, which follow
+  links on the way, and nmount(2) follows a link anywhere in the mount
+  point. The targets are made through FsBeneath now, and on the root
+  path Mount refuses a mount point that does not resolve to itself
+  (`realpath`) — the rule crated has applied to rootless mounts since
+  1.1.35. Mount points are normalised first (`//`, `/.`, a trailing
+  slash), so `dirs/share` with a trailing slash still mounts. The
+  mounts still go by path after the check, and the shares come after
+  /etc/rc: a jail process that swaps a component in between wins —
+  that race stays in TODO §2 with the way to close it.
+- **socket_proxy's socat bound by path** (`lib/run_services.cpp`).
+  `UNIX-LISTEN:<tree>/<path>` let a symlinked directory put the
+  root-owned socket into a host directory. socat now runs in the
+  directory opened through FsBeneath (fchdir) and binds the bare name.
+- Docs: the on-hardware runbook §4s.
+
 ## [1.1.76] — 2026-11-12
 
 **The host no longer follows a symlink the jail made when it writes into
