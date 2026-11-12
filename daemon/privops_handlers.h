@@ -242,6 +242,9 @@ PrivOpsWirePure::DispatchResult handleApplyDevfsRules(const PrivOpsPure::ApplyDe
 // 1.1.63: nmount(2) a tmpfs at the target with the given options.
 PrivOpsWirePure::DispatchResult handleMountTmpfs(const PrivOpsPure::MountTmpfsReq &r);
 
+// 1.1.76: nmount(2) a devfs at the target (a jail's /dev), MNT_IGNORE.
+PrivOpsWirePure::DispatchResult handleMountDevfs(const PrivOpsPure::MountDevfsReq &r);
+
 // 1.1.11: send a signal to all processes in a jail. Wraps
 // `jexec <jid> /bin/kill -<signal> -1`.
 PrivOpsWirePure::DispatchResult handleSignalJail(const PrivOpsPure::SignalJailReq &r);

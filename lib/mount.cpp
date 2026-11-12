@@ -30,7 +30,11 @@ Mount::Mount(const char *newFstype, const std::string &newFspath, const std::str
   // matching privops verb for them, so they keep using nmount(2).
   // 1.1.63: tmpfs too (mount_tmpfs verb; unmount is the generic
   // unmount_nullfs, which is unmount(2) on a path-gated target).
-  if (::strcmp(newFstype, "nullfs") == 0 || ::strcmp(newFstype, "tmpfs") == 0)
+  // 1.1.76: devfs too (mount_devfs) — a rootless `crate run` got EPERM
+  // from nmount(2) for the jail's /dev. unionfs still has no verb
+  // (`cow:` is refused under rootless before it gets here).
+  if (::strcmp(newFstype, "nullfs") == 0 || ::strcmp(newFstype, "tmpfs") == 0 ||
+      ::strcmp(newFstype, "devfs") == 0)
     privopsSocket_ = PrivOpsClient::detectSocketPath();
 }
 
@@ -53,6 +57,16 @@ void Mount::mount() {
         ERR("privops mount_tmpfs '" << fspath << "' transport error: " << resp.transportError)
       if (resp.status >= 400)
         ERR("privops mount_tmpfs '" << fspath << "' failed (status " << resp.status << "): " << resp.body)
+      mounted = true;
+      return;
+    }
+    if (::strcmp(fstype, "devfs") == 0) {   // 1.1.76
+      auto resp = PrivOpsClient::sendRequest(privopsSocket_,
+          PrivOpsClient::buildMountDevfs(fspath));
+      if (!resp.transportError.empty())
+        ERR("privops mount_devfs '" << fspath << "' transport error: " << resp.transportError)
+      if (resp.status >= 400)
+        ERR("privops mount_devfs '" << fspath << "' failed (status " << resp.status << "): " << resp.body)
       mounted = true;
       return;
     }

@@ -211,6 +211,9 @@ std::string parseApplyDevfsRules(const std::string &body,
 // 1.1.63: "target", optional "size", "uid", "gid", "mode" (all strings).
 std::string parseMountTmpfs(const std::string &body,
                             PrivOpsPure::MountTmpfsReq &out);
+// 1.1.76: "target".
+std::string parseMountDevfs(const std::string &body,
+                            PrivOpsPure::MountDevfsReq &out);
 // 1.1.41
 std::string parseSetIfaceMac(const std::string &body,
                              PrivOpsPure::SetIfaceMacReq &out);
@@ -396,6 +399,9 @@ std::string formatAddDevfsUnhideRuleSuccess(const std::string &mountPath,
 
 // 1.1.63: 200 OK body for mount_tmpfs. {"mounted":true,"target":"..."}
 std::string formatMountTmpfsSuccess(const std::string &target);
+
+// 1.1.76: 200 OK body for mount_devfs. {"mounted":true,"target":"..."}
+std::string formatMountDevfsSuccess(const std::string &target);
 
 // 1.1.62: 200 OK body for apply_devfs_rules.
 // {"applied":true,"mount_path":"...","ruleset":N,"rules":<count>}

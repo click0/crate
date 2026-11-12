@@ -263,6 +263,15 @@ ATF_TEST_CASE_BODY(builders_1141_round_trip) {
     auto tm2 = PrivOpsClient::buildMountTmpfs("/jails/web/tmp", {});
     ATF_REQUIRE_EQ(tm2.size(), 2u);   // verb + target only
 
+    // 1.1.76: mount_devfs
+    auto dm = PrivOpsClient::buildMountDevfs("/jails/web/dev");
+    ATF_REQUIRE_EQ(dm.at("verb"), std::string("mount_devfs"));
+    ATF_REQUIRE_EQ(dm.size(), 2u);
+    PrivOpsPure::MountDevfsReq dmr;
+    ATF_REQUIRE_EQ(PrivOpsNvPure::parseMountDevfs(dm, dmr), std::string());
+    ATF_REQUIRE_EQ(dmr.target, std::string("/jails/web/dev"));
+    ATF_REQUIRE_EQ(PrivOpsPure::validateMountDevfs(dmr), std::string());
+
     auto m = PrivOpsClient::buildCreateBridge("bridge0");
     PrivOpsPure::CreateBridgeReq r;
     ATF_REQUIRE_EQ(m.at("verb"), std::string("create_bridge"));

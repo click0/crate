@@ -11,6 +11,7 @@
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
+#include "fs_beneath.h"   // 1.1.76
 
 #include <sstream>
 
@@ -632,10 +633,6 @@ void createUserInJail(const Spec &spec, const std::string &jailPath, int jid,
                       const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail,
                       const std::function<void(const char*)> &runScript,
                       bool logProgress) {
-  auto J = [&jailPath](auto subdir) {
-    return STR(jailPath << subdir);
-  };
-
   // 1.1.64: a root operator has no account to mirror — `pw groupadd root`
   // would fail on the existing group and root's home is there already.
   // The command runs as the dedicated `crate` account instead (run.cpp).
@@ -651,9 +648,11 @@ void createUserInJail(const Spec &spec, const std::string &jailPath, int jid,
   if (logProgress)
     std::cerr << rang::fg::gray << "create user's home directory " << homeDir << ", uid=" << uid << " gid=" << gid << rang::style::reset << std::endl;
 
-  Util::Fs::mkdir(J("/home"), 0755);
-  Util::Fs::mkdir(J(homeDir), 0755);
-  Util::Fs::chown(J(homeDir), uid, gid);
+  // 1.1.76: FsBeneath — a /home -> / that the tree holds no longer puts
+  // the user's home (owned by the user) into the host's root; an existing
+  // /home (a --warm-base clone) is fine, mkdir(2) refused it with EEXIST.
+  FsBeneath::mkdirs(jailPath, homeDir, 0755);
+  FsBeneath::chown(jailPath, homeDir, uid, gid);
 
   runScript("run:before-create-users");
 

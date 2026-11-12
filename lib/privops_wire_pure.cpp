@@ -536,6 +536,18 @@ std::string parseMountTmpfs(const std::string &body,
   return "";
 }
 
+// 1.1.76
+std::string parseMountDevfs(const std::string &body,
+                            PrivOpsPure::MountDevfsReq &out) {
+  return requireStringField(body, "target", out.target);
+}
+
+std::string formatMountDevfsSuccess(const std::string &target) {
+  std::ostringstream o;
+  o << "{\"mounted\":true,\"target\":\"" << JsonPure::escape(target) << "\"}";
+  return o.str();
+}
+
 std::string formatMountTmpfsSuccess(const std::string &target) {
   std::ostringstream o;
   o << "{\"mounted\":true,\"target\":\"" << JsonPure::escape(target) << "\"}";
@@ -1094,6 +1106,8 @@ DispatchResult parseValidateAndDispatch(PrivOpsPure::Verb v,
       return runVerb<ApplyDevfsRulesReq>(body, v, parseApplyDevfsRules, validateApplyDevfsRules);
     case Verb::MountTmpfs:        // 1.1.63
       return runVerb<MountTmpfsReq>(body, v, parseMountTmpfs, validateMountTmpfs);
+    case Verb::MountDevfs:        // 1.1.76
+      return runVerb<MountDevfsReq>(body, v, parseMountDevfs, validateMountDevfs);
     case Verb::Unknown:
       break;
   }

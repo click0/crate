@@ -13,11 +13,12 @@
 // privops verbs instead of calling nmount(2)/unmount(2) directly.
 // The detection happens once at construction; later environment
 // changes don't affect a live Mount object.
-// Other fstypes (devfs, unionfs) always use nmount(2) — those verbs
-// don't exist in the 0.9.0 taxonomy yet. MNT_IGNORE is dropped on
-// the privops path (daemon's mount_nullfs verb doesn't carry
-// arbitrary mount flags); operators using privops mode see the
-// nullfs mounts in mount(8) output. Accept that trade-off; a
+// 1.1.63 / 1.1.76: tmpfs and devfs too (mount_tmpfs, mount_devfs; the
+// unmount is unmount_nullfs for all three). unionfs always uses
+// nmount(2) — there is no verb for it. MNT_IGNORE is dropped on
+// the privops path for nullfs and tmpfs (the verbs don't carry
+// arbitrary mount flags; mount_devfs always sets it); operators using
+// privops mode see those mounts in mount(8) output. Accept that trade-off; a
 // future verb extension can pass flags through.
 //
 

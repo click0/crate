@@ -115,6 +115,7 @@ const char *verbName(Verb v) {
     case Verb::ReleaseFwLease:       return "release_fw_lease";
     case Verb::ApplyDevfsRules:      return "apply_devfs_rules";
     case Verb::MountTmpfs:           return "mount_tmpfs";
+    case Verb::MountDevfs:           return "mount_devfs";
     case Verb::Unknown:         return "unknown";
   }
   return "unknown";
@@ -160,6 +161,7 @@ Verb parseVerb(const std::string &name) {
   if (name == "release_fw_lease")        return Verb::ReleaseFwLease;
   if (name == "apply_devfs_rules")       return Verb::ApplyDevfsRules;
   if (name == "mount_tmpfs")             return Verb::MountTmpfs;
+  if (name == "mount_devfs")             return Verb::MountDevfs;
   return Verb::Unknown;
 }
 
@@ -579,6 +581,16 @@ std::string validateMountTmpfs(const MountTmpfsReq &r) {
   if (r.uid.empty() != r.gid.empty()) return "uid and gid must be given together";
   if (!r.mode.empty())
     if (auto e = MountsPure::validateOctalMode(r.mode); !e.empty()) return e;
+  return "";
+}
+
+// 1.1.76: only a jail's /dev — the one place crate mounts a devfs.
+std::string validateMountDevfs(const MountDevfsReq &r) {
+  if (auto e = validateAbsolutePath(r.target); !e.empty()) return "target: " + e;
+  static const std::string kDev = "/dev";
+  if (r.target.size() <= kDev.size() ||
+      r.target.compare(r.target.size() - kDev.size(), kDev.size(), kDev) != 0)
+    return "target: a devfs mounts only at a jail's /dev (<path>/dev)";
   return "";
 }
 

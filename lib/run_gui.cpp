@@ -12,6 +12,7 @@
 #include "x11_ops.h"
 #include "vnc_server.h"
 #include "err.h"
+#include "fs_beneath.h"      // 1.1.76: writes into the tree never follow its symlinks
 
 #include <rang.hpp>
 
@@ -822,8 +823,9 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
     if (!xauthPath.empty() && Util::Fs::fileExists(xauthPath)) {
       auto jailXauth = J("/root/.Xauthority");
       try {
-        Util::Fs::copyFile(xauthPath, jailXauth);
-        ::chmod(jailXauth.c_str(), 0600);
+        // 1.1.76: FsBeneath — a symlink in the tree is neither followed
+        // nor written through (copy_file + chmod followed both)
+        FsBeneath::copyIn(xauthPath, jailPath, "/root/.Xauthority", 0600);
         setJailEnv("XAUTHORITY", "/root/.Xauthority");
         if (logProgress)
           std::cerr << rang::fg::gray << "gui: auto: copied $XAUTHORITY -> "
@@ -1055,8 +1057,12 @@ void setupDbus(const Spec &spec, const std::string &jailPath,
   if (!spec.dbusOptions)
     return;
 
-  auto J = [&jailPath](auto subdir) { return STR(jailPath << subdir); };
-  auto writeFileInJail = [&J](auto str, auto file) { Util::Fs::writeFile(str, J(file)); };
+  // 1.1.76: FsBeneath — no symlink in the tree is followed; mkdirs also
+  // lets an existing directory be (dbus installed in the jail made
+  // Util::Fs::mkdir fail with EEXIST)
+  auto writeFileInJail = [&jailPath](const std::string &str, const std::string &file) {
+    FsBeneath::writeFile(jailPath, file, str);
+  };
 
   if (spec.dbusOptions->sessionBus) {
     if (logProgress)
@@ -1077,9 +1083,9 @@ void setupDbus(const Spec &spec, const std::string &jailPath,
       policy << "    <deny send_destination=\"" << name << "\"/>" << std::endl;
     policy << "  </policy>" << std::endl;
     policy << "</busconfig>" << std::endl;
-    Util::Fs::mkdir(J("/usr/local/etc/dbus-1"), 0755);
+    FsBeneath::mkdirs(jailPath, "/usr/local/etc/dbus-1", 0755);
     writeFileInJail(policy.str(), "/usr/local/etc/dbus-1/session-local.conf");
-    Util::Fs::mkdir(J("/var/run/dbus"), 0755);
+    FsBeneath::mkdirs(jailPath, "/var/run/dbus", 0755);
     setJailEnv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/var/run/dbus/session_bus");
     if (logProgress)
       std::cerr << rang::fg::gray << "D-Bus session bus configured" << rang::style::reset << std::endl;
@@ -1291,8 +1297,6 @@ void copyX11Auth(const Spec &spec, const std::string &jailPath,
   if (!spec.optionExists("x11") && !spec.guiOptions)
     return;
 
-  auto J = [&jailPath](auto subdir) { return STR(jailPath << subdir); };
-
   // 1.1.74: the host cookie only for the shared mode (RunGuiPure::
   // hostX11CookieWanted). nested got it too, and with the host's whole
   // /tmp/.X11-unix mounted DISPLAY=:0 opened the host display from the
@@ -1304,11 +1308,12 @@ void copyX11Auth(const Spec &spec, const std::string &jailPath,
                                        spec.clipboardOptions ? spec.clipboardOptions->mode : std::string()))
     return;
 
+  // 1.1.76: FsBeneath — the copy replaces whatever the jail left at the
+  // destination and follows no symlink in the tree (copy_file + chown
+  // followed both)
   for (auto &file : {STR(homeDir << "/.Xauthority"), STR(homeDir << "/.ICEauthority")})
-    if (Util::Fs::fileExists(file)) {
-      Util::Fs::copyFile(file, J(file));
-      Util::Fs::chown(J(file), uid, gid);
-    }
+    if (Util::Fs::fileExists(file))
+      FsBeneath::copyIn(file, jailPath, file, 0600, uid, gid);
 }
 
 }

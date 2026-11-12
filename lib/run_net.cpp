@@ -14,6 +14,7 @@
 #include "privops_wire_pure.h"
 #include "util.h"
 #include "err.h"
+#include "fs_beneath.h"   // 1.1.76
 
 #include <rang.hpp>
 
@@ -735,10 +736,10 @@ void destroyBridgeEpair(const BridgeInfo &info) {
 void configureDhcp(const std::string &jailSideIface,
     const std::string &jailPath, int jid, const std::string &jidStr,
     const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail) {
-  // Write SYNCDHCP config to jail's rc.conf
-  Util::Fs::appendFile(
-    STR("ifconfig_" << jailSideIface << "=\"SYNCDHCP\"" << std::endl),
-    STR(jailPath << "/etc/rc.conf"));
+  // Write SYNCDHCP config to jail's rc.conf (1.1.76: FsBeneath — no
+  // symlink in the tree is followed)
+  FsBeneath::appendFile(jailPath, "/etc/rc.conf",
+    STR("ifconfig_" << jailSideIface << "=\"SYNCDHCP\"" << std::endl));
 
   // Bring interface up
   execInJail({CRATE_PATH_IFCONFIG, jailSideIface, "up"}, "bring up jail interface for DHCP");
@@ -785,10 +786,9 @@ void configureStaticIp(const std::string &jailSideIface,
 void configureSlaac(const std::string &jailSideIface,
     const std::string &jailPath, int jid, const std::string &jidStr,
     const std::function<void(const std::vector<std::string>&, const std::string&)> &execInJail) {
-  // Write SLAAC config to jail's rc.conf
-  Util::Fs::appendFile(
-    STR("ifconfig_" << jailSideIface << "_ipv6=\"inet6 -ifdisabled accept_rtadv\"" << std::endl),
-    STR(jailPath << "/etc/rc.conf"));
+  // Write SLAAC config to jail's rc.conf (1.1.76: FsBeneath)
+  FsBeneath::appendFile(jailPath, "/etc/rc.conf",
+    STR("ifconfig_" << jailSideIface << "_ipv6=\"inet6 -ifdisabled accept_rtadv\"" << std::endl));
 
   // Enable IPv6 and accept router advertisements on the interface
   execInJail({CRATE_PATH_IFCONFIG, jailSideIface, "inet6", "-ifdisabled", "accept_rtadv"},

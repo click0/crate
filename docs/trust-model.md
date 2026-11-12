@@ -119,9 +119,9 @@ differs by transport:
   the operator uid at `create_jail` time; subsequent verbs from a
   different operator are denied `403` against the same registry. 1.1.14
   extends the same registry with a longest-prefix `byPath` lookup that
-  gates the **path-scoped verbs** — `mount_nullfs` / `unmount_nullfs`
-  (by `target`) and `apply_devfs_ruleset` / `add_devfs_unhide_rule` / `apply_devfs_rules` / `mount_tmpfs` (by
-  `mount_path`). A path that lies inside another operator's registered
+  gates the **path-scoped verbs** — `mount_nullfs` / `unmount_nullfs` /
+  `mount_tmpfs` / `mount_devfs` (by `target`) and `apply_devfs_ruleset` /
+  `add_devfs_unhide_rule` / `apply_devfs_rules` (by `mount_path`). A path that lies inside another operator's registered
   jail is denied `403` (`DenyForeignPath`). 1.1.70 adds the ruleset
   itself: `apply_devfs_rules` deletes and refills the set it names, so a
   per-user caller may name only a private one (10000..59999) that no live
@@ -388,7 +388,7 @@ security boundary:
    bootstrap concession allows them through to preserve the upgrade
    path.
    *Done (1.1.14):* the path-scoped verbs — `mount_nullfs` /
-   `unmount_nullfs` / `mount_tmpfs` (gated by `target`) and `apply_devfs_ruleset` / `apply_devfs_rules` /
+   `unmount_nullfs` / `mount_tmpfs` / `mount_devfs` (gated by `target`) and `apply_devfs_ruleset` / `apply_devfs_rules` /
    `add_devfs_unhide_rule` (gated by `mount_path`). The registry now
    exposes a longest-prefix `byPath` lookup; a path inside a tracked
    jail owned by another uid is denied `403` (`DenyForeignPath`); paths

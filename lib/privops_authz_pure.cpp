@@ -311,6 +311,7 @@ Decision authorize(PrivOpsPure::Verb v,
     case V::UnmountNullfs:
     case V::ApplyDevfsRuleset:
     case V::MountTmpfs:        // 1.1.63 (by "target", like unmount_nullfs)
+    case V::MountDevfs:        // 1.1.76 (by "target")
       return checkOwnedPath(req.path, env, lookup);
 
     // 1.1.62 verb, 1.1.70 gate: the mount_path as above AND the ruleset

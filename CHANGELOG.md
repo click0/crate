@@ -6,6 +6,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.76] — 2026-11-12
+
+**The host no longer follows a symlink the jail made when it writes into
+the jail's tree, and a rootless `crate run` mounts the jail's /dev
+through crated instead of failing with EPERM.**
+
+- **Host writes into the tree followed symlinked directories**
+  (`lib/fs_beneath.{h,cpp}` new; `lib/run.cpp`, `lib/run_net.cpp`,
+  `lib/run_services.cpp`, `lib/run_gui.cpp`, `lib/run_jail.cpp`).
+  `crate run` writes /etc/rc.conf, /etc/hostid, /etc/resolv.conf, the
+  crontabs, the init marker, /run.sh, the dns_filter and D-Bus configs
+  and the X cookies into the tree as host root, by path. O_NOFOLLOW
+  guarded the last component only, so a symlinked directory — `/etc ->
+  /etc`, absolute, resolves against the host's root when the host walks
+  it — sent the append to the host's own /etc/rc.conf. A --warm-base
+  clone's tree was written by the source jail's root, and an archive can
+  carry any link. These writes now go through `FsBeneath`: the path is
+  walked one component at a time with openat(2) and O_NOFOLLOW, a
+  symlink anywhere on it is refused, "." and ".." too; a FIFO, device
+  or directory where a file is expected is refused instead of blocking
+  or being truncated; a copy replaces whatever the jail left at the
+  destination; chown / chmod act on the open descriptor. The user's home
+  in the jail is made the same way (a `/home -> /` put it in the host's
+  root, owned by the user).
+- **The X-cookie move copied a host file to the run user**
+  (`lib/run.cpp`). 1.1.71's move of /root/.Xauthority to the run user's
+  home ran for every root `crate run` and followed a link the jail's
+  root had placed there: `/root/.Xauthority -> /etc/master.passwd`
+  copied the host's file into the jail, owned by the run user. Both ends
+  go through FsBeneath now; a link stops the move with a warning.
+- **Rootless `crate run` failed on the jail's /dev** (`lib/mount.cpp`,
+  `lib/privops_*`, `daemon/privops_handlers.cpp`). The devfs was
+  nmount(2) from crate(1) — EPERM for a non-root caller, before any of
+  the jail existed. New privops verb `mount_devfs`: a devfs at
+  `<path>/dev` only, MNT_IGNORE, gated by `target` like `mount_tmpfs`
+  (the caller's own jail or path prefix); unmounted by `unmount_nullfs`.
+  `cow:` with backend unionfs has no verb and is refused under rootless
+  up front instead of with EPERM after the shares were mounted.
+- `dbus:` with a session bus failed when the jail had dbus installed:
+  `mkdir` of /usr/local/etc/dbus-1 and /var/run/dbus refused an
+  existing directory (EEXIST). dns_filter's unbound directory too.
+- Docs: crate.5 (`cow/backend` unionfs under rootless), trust-model
+  (mount_devfs among the path-gated verbs; mount_tmpfs was listed under
+  `mount_path`), the on-hardware runbook §4r.
+
 ## [1.1.75] — 2026-11-12
 
 **Nothing the jail controls runs or is read as the host's root any more:

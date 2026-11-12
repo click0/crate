@@ -7,6 +7,7 @@
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
+#include "fs_beneath.h"   // 1.1.76
 
 #include <rang.hpp>
 
@@ -16,7 +17,6 @@
 
 #include <iostream>
 #include <sstream>
-#include <filesystem>
 
 #define ERR(msg...) ERR2("services", msg)
 
@@ -25,8 +25,6 @@ namespace RunServices {
 void setupDnsFilter(const Spec &spec, const std::string &jailPath, bool logProgress) {
   if (!spec.dnsFilter)
     return;
-
-  auto J = [&jailPath](auto subdir) { return STR(jailPath << subdir); };
 
   std::ostringstream conf;
   conf << "server:" << std::endl;
@@ -56,9 +54,11 @@ void setupDnsFilter(const Spec &spec, const std::string &jailPath, bool logProgr
   conf << "  name: \".\"" << std::endl;
   conf << "  forward-addr: " << nameserverIpDns << std::endl;
 
-  Util::Fs::mkdir(J("/usr/local/etc/unbound"), 0755);
-  Util::Fs::writeFile(conf.str(), J("/usr/local/etc/unbound/unbound.conf"));
-  Util::Fs::writeFile("nameserver 127.0.0.1\n", J("/etc/resolv.conf"));
+  // 1.1.76: FsBeneath — no symlink in the tree is followed (mkdirs also
+  // lets an existing /usr/local/etc/unbound be, which mkdir refused)
+  FsBeneath::mkdirs(jailPath, "/usr/local/etc/unbound", 0755);
+  FsBeneath::writeFile(jailPath, "/usr/local/etc/unbound/unbound.conf", conf.str());
+  FsBeneath::writeFile(jailPath, "/etc/resolv.conf", "nameserver 127.0.0.1\n");
 
   if (logProgress)
     std::cerr << rang::fg::gray << "DNS filtering configured: " << spec.dnsFilter->block.size()
@@ -82,9 +82,11 @@ RunAtEnd setupSocketProxy(const Spec &spec, const std::string &jailPath, bool lo
     // bug fixed in util_pure.cpp this release — so the feature was
     // simultaneously unusable AND unguarded.)
     Util::safePath(J(sockPath), jailPath, "shared socket (jail side)");
+    // 1.1.76: FsBeneath — no symlink in the tree is followed
     auto parentDir = sockPath.substr(0, sockPath.rfind('/'));
-    std::filesystem::create_directories(J(parentDir));
-    Util::Fs::writeFile("", J(sockPath));
+    if (!parentDir.empty())
+      FsBeneath::mkdirs(jailPath, parentDir, 0755);
+    FsBeneath::writeFile(jailPath, sockPath, "");
     // Note: actual nullfs mount must be done by caller since we don't have mount list here
     if (logProgress)
       std::cerr << rang::fg::gray << "shared socket: " << sockPath << rang::style::reset << std::endl;
@@ -102,7 +104,8 @@ RunAtEnd setupSocketProxy(const Spec &spec, const std::string &jailPath, bool lo
     if (logProgress)
       std::cerr << rang::fg::gray << "starting socket proxy: " << entry.host << " <-> " << entry.jail << rang::style::reset << std::endl;
     auto jailParent = entry.jail.substr(0, entry.jail.rfind('/'));
-    std::filesystem::create_directories(J(jailParent));
+    if (!jailParent.empty())
+      FsBeneath::mkdirs(jailPath, jailParent, 0755);   // 1.1.76
     pid_t pid = ::fork();
     // 1.1.27: a fork() failure was silently dropped (pid < 0 fell through
     // to "not started") — the proxy simply never existed, with no error.
@@ -137,14 +140,12 @@ void setupManagedServices(const Spec &spec, const std::string &jailPath,
   if (spec.managedServices.empty())
     return;
 
-  auto J = [&jailPath](auto subdir) { return STR(jailPath << subdir); };
-
   std::ostringstream rcConf;
   for (auto &svc : spec.managedServices) {
     auto var = svc.rcvar.empty() ? STR(svc.name << "_enable") : svc.rcvar;
     rcConf << var << "=\"" << (svc.enable ? "YES" : "NO") << "\"" << std::endl;
   }
-  Util::Fs::appendFile(rcConf.str(), J("/etc/rc.conf"));
+  FsBeneath::appendFile(jailPath, "/etc/rc.conf", rcConf.str());   // 1.1.76
 
   if (logProgress)
     std::cerr << rang::fg::gray << "managed services: " << spec.managedServices.size()
