@@ -625,7 +625,7 @@ crate run --status-fd 3 -f nginx.crate 3>nginx.status.jsonl
 ```
 ```json
 {"event":"started","ts":1761300000,"pid":4242}
-{"event":"jail_created","ts":1761300001,"jid":12,"name":"nginx_pid4242","path":"/var/run/crate/jail-nginx-1a2b"}
+{"event":"jail_created","ts":1761300001,"jid":12,"name":"nginx_pid4242","path":"/var/run/crate/0/jail-nginx-1a2b"}
 {"event":"net_ready","ts":1761300001,"mode":"bridge","ip":"10.0.0.7"}
 {"event":"mounts_ready","ts":1761300001}
 {"event":"services_started","ts":1761300002}
@@ -803,7 +803,7 @@ make HAVE_LIBZFS=1 HAVE_LIBIFCONFIG=1 HAVE_LIBPFCTL=1 HAVE_CAPSICUM=1 \
 | `GET /api/v1/containers/:name/console` (WS) | так | RFC 6455 WebSocket — інтерактивна `/bin/sh` через PTY (окремий listener; роль admin) |
 | `POST /api/v1/containers/:name/export` | так | Експорт активного контейнера в `/var/run/crate/<name>-<unixtime>.crate`; повертає `{file,size,sha256}` |
 | `GET /api/v1/exports/:filename` | так | Стрім раніше експортованого `.crate` до клієнта |
-| `POST /api/v1/imports/:name` | так | Завантаження raw `.crate` (octet-stream); атомарне rename у `/var/run/crate/<name>.crate` |
+| `POST /api/v1/imports/:name` | так | Завантаження raw `.crate` (octet-stream); атомарне rename у `/var/run/crate/0/<name>.crate` (1.1.73; раніше `/var/run/crate/<name>.crate`) |
 | `GET /api/v1/host` | — | Інформація про хост-систему |
 | `GET /metrics` | — | Prometheus-метрики |
 

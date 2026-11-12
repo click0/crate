@@ -32,6 +32,21 @@ std::string perUserRoot(uint32_t uid) {
   return std::string(kLegacyRoot) + "/" + uidStr(uid);
 }
 
+std::string rootJailsRoot() {
+  return perUserRoot(0);
+}
+
+unsigned runtimeRootMode(bool hasLegacyJailTrees) {
+  return hasLegacyJailTrees ? 0700 : 0711;
+}
+
+bool isLegacyJailTreeName(const std::string &n) {
+  auto starts = [&](const char *p) { return n.compare(0, std::string(p).size(), p) == 0; };
+  static const std::string kCow = "-cow-writable";
+  return starts("jail-") || starts("chroot-create-")
+      || (n.size() > kCow.size() && n.compare(n.size() - kCow.size(), kCow.size(), kCow) == 0);
+}
+
 std::string perUserLeasesDir(uint32_t uid) {
   return perUserRoot(uid) + "/leases";
 }

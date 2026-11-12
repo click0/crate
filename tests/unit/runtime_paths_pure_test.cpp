@@ -137,7 +137,25 @@ ATF_TEST_CASE_BODY(crate_jail_path_rejects_others) {
   ATF_REQUIRE_EQ(crateJailDirName("/var/run/crate/1000/leases"), std::string());
 }
 
+// 1.1.73: root's jail trees behind a 0700 directory; the runtime root
+// searchable (0711) once no pre-1.1.73 jail tree is left in it.
+ATF_TEST_CASE_WITHOUT_HEAD(root_jails_root_and_runtime_mode);
+ATF_TEST_CASE_BODY(root_jails_root_and_runtime_mode) {
+  ATF_REQUIRE_EQ(rootJailsRoot(), std::string("/var/run/crate/0"));
+  ATF_REQUIRE_EQ(rootJailsRoot(), perUserRoot(0));
+  ATF_REQUIRE_EQ(runtimeRootMode(false), 0711u);
+  ATF_REQUIRE_EQ(runtimeRootMode(true), 0700u);
+  for (const char *n : {"jail-web-0011aabb", "chroot-create-web-12ab34cd", "jail-web-0011aabb-cow-writable"})
+    ATF_REQUIRE(isLegacyJailTreeName(n));
+  for (const char *n : {"0", "1001", "control", "crated.sock", "crated-privops.sock", "spec-registry.txt",
+                        "network-leases.txt", "ifaces", "web.crate", "-cow-writable", "dns-net0"})
+    ATF_REQUIRE(!isLegacyJailTreeName(n));
+  // a jail directory under the new root is still recognised
+  ATF_REQUIRE_EQ(crateJailDirName("/var/run/crate/0/jail-web-0011aabb"), std::string("jail-web-0011aabb"));
+}
+
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, root_jails_root_and_runtime_mode);
   ATF_ADD_TEST_CASE(tcs, crate_jail_path_both_layouts);
   ATF_ADD_TEST_CASE(tcs, crate_jail_path_rejects_others);
   ATF_ADD_TEST_CASE(tcs, legacy_root_is_var_run_crate);

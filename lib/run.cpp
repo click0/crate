@@ -422,7 +422,9 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   // tree the lease file and spec registry already use — not in the
   // root-owned /var/run/crate, where an unprivileged mkdir fails. The
   // daemon creates and chowns that root (ensure_user_root).
-  std::string jailBaseDir = Locations::jailDirectoryPath;
+  // 1.1.73: root's jail trees live in /var/run/crate/0 (0700), so that
+  // /var/run/crate itself can be searchable for the rootless users.
+  std::string jailBaseDir = RuntimePathsPure::rootJailsRoot();
   {
     // 1.1.72: root keeps /var/run/crate even with an explicit
     // CRATE_PRIVOPS_SOCKET — crated answers ensure_user_root for peer
@@ -461,8 +463,11 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   }
 
   // Warm-base prep: validate inputs, snapshot the warm template, clone
-  // it under the jails parent dataset so the clone's mountpoint
-  // inherits to <Locations::jailDirectoryPath>/jail-<name>-<hex> = jailPath.
+  // it under the jails parent dataset. 1.1.73: with mountpoint=jailPath
+  // set on the clone — inheriting gave <parent's mountpoint>/<clone>,
+  // which is jailPath only when the jails directory is itself that
+  // dataset's mountpoint (it is not since jails moved to
+  // /var/run/crate/0, and on a default install it never was).
   std::string warmCloneName, warmSnapName;
   RunAtEnd destroyWarmClone;
   if (warmBase) {
@@ -485,7 +490,7 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
     ZfsOps::snapshot(warmSnapName);
     LOG("warm-base: clone -> " << warmCloneName << " (auto-mounts at " << jailPath << ")")
     try {
-      ZfsOps::clone(warmSnapName, warmCloneName);
+      ZfsOps::clone(warmSnapName, warmCloneName, jailPath);   // 1.1.73: mounted at jailPath
     } catch (...) {
       try { ZfsOps::destroy(warmSnapName); } catch (...) {}   // 1.1.69: no orphan @warm-run-* on failure
       throw;

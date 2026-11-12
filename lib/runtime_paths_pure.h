@@ -48,10 +48,30 @@
 
 namespace RuntimePathsPure {
 
-// Returns "/var/run/crate" (no trailing slash). Single-tenant
-// legacy root; existing call sites keep using this until they
-// migrate to per-user.
+// Returns "/var/run/crate" (no trailing slash): the runtime root. It
+// holds crated's sockets, the per-user roots and root's own state files.
+// 1.1.73: NOT root's jail directories any more (see rootJailsRoot), so
+// it can be searchable (0711) for the unprivileged users who need the
+// sockets and their own per-user roots.
 std::string legacyRoot();
+
+// 1.1.73: "/var/run/crate/0" — where a root `crate run` puts its jail
+// directories (and `crate create` its chroot, crated its artifacts):
+// the per-user root of uid 0, 0700. Jail trees must sit behind a
+// directory others cannot search — a jail's root can plant setuid
+// binaries there, and the paths are public (jls). Until 1.1.72 they sat
+// directly in /var/run/crate, which therefore had to stay 0700 and kept
+// every non-root user away from crated's sockets.
+std::string rootJailsRoot();
+
+// 1.1.73: the mode /var/run/crate gets: 0711 — unless it still holds a
+// jail tree from before 1.1.73 (`hasLegacyJailTrees`), which it must
+// keep hidden: 0700 until those are gone.
+unsigned runtimeRootMode(bool hasLegacyJailTrees);
+
+// 1.1.73: is this entry of /var/run/crate a jail tree from before 1.1.73
+// (jail-*, chroot-create-*, *-cow-writable)?
+bool isLegacyJailTreeName(const std::string &entryName);
 
 // Returns "/var/run/crate/<uid>" (no trailing slash). The bare
 // per-user root, used as a parent for leases / exports / imports.

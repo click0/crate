@@ -20,7 +20,10 @@ void rollback(const std::string &snapName);
 void destroy(const std::string &name);           // dataset, snapshot, or clone
 
 // Clone
-void clone(const std::string &snapName, const std::string &targetName);
+// 1.1.73: with `mountpoint` set the clone gets that mountpoint and is
+// mounted there (zfs(8); libzfs' zfs_clone() does not mount).
+void clone(const std::string &snapName, const std::string &targetName,
+           const std::string &mountpoint = "");
 
 // Properties
 std::string getMountpoint(const std::string &dataset);

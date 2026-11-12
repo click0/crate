@@ -664,7 +664,7 @@ crate run --status-fd 3 -f nginx.crate 3>nginx.status.jsonl
 ```
 ```json
 {"event":"started","ts":1761300000,"pid":4242}
-{"event":"jail_created","ts":1761300001,"jid":12,"name":"nginx_pid4242","path":"/var/run/crate/jail-nginx-1a2b"}
+{"event":"jail_created","ts":1761300001,"jid":12,"name":"nginx_pid4242","path":"/var/run/crate/0/jail-nginx-1a2b"}
 {"event":"net_ready","ts":1761300001,"mode":"bridge","ip":"10.0.0.7"}
 {"event":"mounts_ready","ts":1761300001}
 {"event":"services_started","ts":1761300002}
@@ -852,7 +852,7 @@ All native API wrappers fall back to shell commands when compiled without the co
 | `GET /api/v1/containers/:name/console` (WS) | yes | RFC 6455 WebSocket — interactive `/bin/sh` over a PTY (separate listener; admin role) |
 | `POST /api/v1/containers/:name/export` | yes | Export running container to `/var/run/crate/<name>-<unixtime>.crate`; returns `{file,size,sha256}` |
 | `GET /api/v1/exports/:filename` | yes | Stream a previously-exported `.crate` back to the client |
-| `POST /api/v1/imports/:name` | yes | Upload a raw `.crate` body (octet-stream); atomic-rename into `/var/run/crate/<name>.crate` |
+| `POST /api/v1/imports/:name` | yes | Upload a raw `.crate` body (octet-stream); atomic-rename into `/var/run/crate/0/<name>.crate` (1.1.73; `/var/run/crate/<name>.crate` before) |
 | `GET /api/v1/host` | — | Host system info |
 | `GET /metrics` | — | Prometheus metrics |
 

@@ -88,7 +88,7 @@ root.
 
 ```
 /var/run/crate/<uid>/              # per-user root (mode 0700, owned by uid)
-/var/run/crate/<uid>/jail-<name>-<hex>/   # jail roots (1.1.39; root keeps /var/run/crate/jail-*)
+/var/run/crate/<uid>/jail-<name>-<hex>/   # jail roots (1.1.39; root's in /var/run/crate/0/ since 1.1.73)
 /var/run/crate/<uid>/network-leases.txt   # IPv4 pool leases (per user)
 /var/run/crate/<uid>/network-leases6.txt  # IPv6 pool leases
 /var/run/crate/<uid>/spec-registry.txt    # name -> .crate path
