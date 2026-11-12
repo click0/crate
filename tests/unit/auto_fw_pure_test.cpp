@@ -5,6 +5,7 @@
 #include <atf-c++.hpp>
 
 #include <set>
+#include <sstream>
 #include <string>
 
 using AutoFwPure::RedirPort;
@@ -614,7 +615,52 @@ ATF_TEST_CASE_BODY(orphan_nat_ids_skips_non_nat_lines) {
   ATF_REQUIRE_EQ(orphans[0], 30001u);
 }
 
+// 1.1.74: the firewall policy is scoped to the jail's own address
+ATF_TEST_CASE_WITHOUT_HEAD(firewall_policy_scoped_to_jail);
+ATF_TEST_CASE_BODY(firewall_policy_scoped_to_jail) {
+  std::string err;
+  auto block = AutoFwPure::composeFirewallPolicyRules(
+      {"192.0.2.0/24", "2001:db8::/32"}, {443}, {53}, "block", "10.66.0.2", "fd00::2", err);
+  ATF_REQUIRE_EQ(err, std::string());
+  ATF_REQUIRE(block.find("block drop quick from 10.66.0.2 to 192.0.2.0/24\n") != std::string::npos);
+  ATF_REQUIRE(block.find("block drop quick inet6 from fd00::2 to 2001:db8::/32\n") != std::string::npos);
+  ATF_REQUIRE(block.find("pass quick proto tcp from 10.66.0.2 to any port 443\n") != std::string::npos);
+  ATF_REQUIRE(block.find("pass quick proto udp from 10.66.0.2 to any port 53\n") != std::string::npos);
+  ATF_REQUIRE(block.find("block drop quick from 10.66.0.2 to any\n") != std::string::npos);
+  // nothing unscoped: no `all`, no rule without the jail's address
+  ATF_REQUIRE(block.find(" all") == std::string::npos);
+  std::istringstream lines(block);
+  for (std::string l; std::getline(lines, l);)
+    ATF_REQUIRE(l.find("from 10.66.0.2 ") != std::string::npos || l.find("from fd00::2 ") != std::string::npos);
+  // the allows come before the default block (first quick match wins)
+  ATF_REQUIRE(block.find("port 443") < block.find("to any\n"));
+  // default allow adds no rule: the host's ruleset decides
+  auto allow = AutoFwPure::composeFirewallPolicyRules({}, {}, {}, "allow", "10.66.0.2", "", err);
+  ATF_REQUIRE_EQ(allow, std::string());
+  // no IPv6 -> no inet6 rules; a v6 block-ip entry is then skipped
+  auto v4only = AutoFwPure::composeFirewallPolicyRules({"2001:db8::/32"}, {80}, {}, "block", "10.66.0.2", "", err);
+  ATF_REQUIRE(v4only.find("inet6") == std::string::npos);
+  // a bad CIDR or no jail address is an error, not pf text
+  AutoFwPure::composeFirewallPolicyRules({"10.0.0.0/33"}, {}, {}, "block", "10.66.0.2", "", err);
+  ATF_REQUIRE(!err.empty());
+  AutoFwPure::composeFirewallPolicyRules({"any\npass all"}, {}, {}, "block", "10.66.0.2", "", err);
+  ATF_REQUIRE(!err.empty());
+  AutoFwPure::composeFirewallPolicyRules({}, {}, {}, "block", "", "", err);
+  ATF_REQUIRE(!err.empty());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(policy_cidr_validation);
+ATF_TEST_CASE_BODY(policy_cidr_validation) {
+  for (const char *ok : {"10.0.0.0/8", "192.0.2.1", "2001:db8::/32", "::1", "0.0.0.0/0"})
+    ATF_REQUIRE_EQ(AutoFwPure::validatePolicyCidr(ok), std::string());
+  for (const char *bad : {"", "10.0.0.0/", "10.0.0.0/33", "2001:db8::/129", "10.0.0.0/8 port 22",
+                          "any", "10.0.0.0/8\npass all", "300.0.0.1", "10.0.0.0/-1"})
+    ATF_REQUIRE(!AutoFwPure::validatePolicyCidr(bad).empty());
+}
+
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, firewall_policy_scoped_to_jail);
+  ATF_ADD_TEST_CASE(tcs, policy_cidr_validation);
   ATF_ADD_TEST_CASE(tcs, iface_typical_accepted);
   ATF_ADD_TEST_CASE(tcs, iface_invalid_rejected);
   ATF_ADD_TEST_CASE(tcs, address_typical_accepted);

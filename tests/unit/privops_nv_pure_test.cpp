@@ -473,7 +473,18 @@ ATF_TEST_CASE_BODY(nvlist_header_parse_and_limits) {
   ATF_REQUIRE_EQ(PrivOpsNvPure::kNvlistHeaderSize, 19u);
 }
 
+// 1.1.74: what the listener waits for before nvlist_recv (which has no timeout)
+ATF_TEST_CASE_WITHOUT_HEAD(request_stream_bytes);
+ATF_TEST_CASE_BODY(request_stream_bytes) {
+  PrivOpsNvPure::NvlistHeader h;
+  h.size = 0;
+  ATF_REQUIRE_EQ(PrivOpsNvPure::requestStreamBytes(h), (uint64_t)PrivOpsNvPure::kNvlistHeaderSize);
+  h.size = 300; h.descriptors = 3;
+  ATF_REQUIRE_EQ(PrivOpsNvPure::requestStreamBytes(h), (uint64_t)PrivOpsNvPure::kNvlistHeaderSize + 300);
+}
+
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, request_stream_bytes);
   ATF_ADD_TEST_CASE(tcs, parse_apply_devfs_rules);
   ATF_ADD_TEST_CASE(tcs, parse_mount_tmpfs);
   ATF_ADD_TEST_CASE(tcs, require_string_present_absent);

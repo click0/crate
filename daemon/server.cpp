@@ -178,6 +178,7 @@ void Server::applyUnixSocketPerms() {
 }
 
 void Server::stop() {
+  stopStreams();   // 1.1.74: a follow stream no longer holds the stop up
   if (impl_->httpSrv)
     impl_->httpSrv->stop();
   if (impl_->tcpThread.joinable())

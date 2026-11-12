@@ -71,8 +71,14 @@ bool appendPerUserAuditLine(uint32_t uid, const std::string &jsonLine) {
   // refused. A file we accept is handed to the operator (fchown) so
   // the "operator-readable copy" is actually readable, and crate(1)'s
   // own fallback (crate-audit.log, lib/audit.cpp) sits next to it.
+  // 1.1.74: O_NONBLOCK — the operator can put a FIFO here, and a
+  // blocking O_WRONLY open of a FIFO waits for a reader: every privops
+  // request of that operator then pinned one of the listener's global
+  // slots, and 64 of them locked privops out for everyone. Non-blocking,
+  // a reader-less FIFO is ENXIO and one with a reader is refused by the
+  // fstat below; a regular file is unaffected.
   int fd = ::open(path.c_str(),
-                  O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC,
+                  O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK,
                   0600);
   if (fd < 0) {
     std::fprintf(stderr,

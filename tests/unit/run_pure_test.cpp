@@ -239,6 +239,24 @@ ATF_TEST_CASE_BODY(jail_xname_pid)
 	ATF_REQUIRE(!RunPure::jailXnamePid("web_pid12345678901", pid));
 }
 
+// 1.1.74: netgraph mode's node name and the eiface name from ngctl show
+ATF_TEST_CASE_WITHOUT_HEAD(netgraph_names);
+ATF_TEST_CASE_BODY(netgraph_names)
+{
+	const auto n = RunPure::netgraphBridgeNodeName(2147483647, 4294967295u);
+	ATF_REQUIRE(n.size() <= 31);                                // NG_NODESIZ - 1
+	ATF_REQUIRE(n.find_first_of(".:[]") == std::string::npos);  // not allowed in netgraph names
+	ATF_REQUIRE(RunPure::netgraphBridgeNodeName(12, 0) != RunPure::netgraphBridgeNodeName(12, 1));
+	ATF_REQUIRE_EQ(RunPure::netgraphBridgeNodeName(12, 0), std::string("crate_br_12_0"));
+	ATF_REQUIRE_EQ(RunPure::ngctlShowName(
+		"  Name: ngeth0          Type: eiface          ID: 0000000a   Num hooks: 1\n"), std::string("ngeth0"));
+	ATF_REQUIRE_EQ(RunPure::ngctlShowName("Name: ngeth12\tType: eiface"), std::string("ngeth12"));
+	ATF_REQUIRE_EQ(RunPure::ngctlShowName(""), std::string());
+	ATF_REQUIRE_EQ(RunPure::ngctlShowName("ngctl: send msg: No such file or directory"), std::string());
+	ATF_REQUIRE_EQ(RunPure::ngctlShowName("  Name: <unnamed>  Type: eiface"), std::string());
+	ATF_REQUIRE_EQ(RunPure::ngctlShowName("  Name: ng;rm  Type: eiface"), std::string());
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(run_user_cookie_home);
 ATF_TEST_CASE_BODY(run_user_cookie_home)
 {
@@ -311,5 +329,6 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, epair_unit_and_ip6);
 	ATF_ADD_TEST_CASE(tcs, run_user_effective);
 	ATF_ADD_TEST_CASE(tcs, run_user_cookie_home);
+	ATF_ADD_TEST_CASE(tcs, netgraph_names);
 	ATF_ADD_TEST_CASE(tcs, jail_xname_pid);
 }

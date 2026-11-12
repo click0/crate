@@ -428,6 +428,10 @@ std::string parseNvlistHeader(const unsigned char *buf, size_t len, NvlistHeader
   return "";
 }
 
+uint64_t requestStreamBytes(const NvlistHeader &h) {
+  return (uint64_t)kNvlistHeaderSize + h.size;
+}
+
 std::string checkNvlistHeaderLimits(const NvlistHeader &h) {
   if (h.size > kMaxNvlistRequestBytes)
     return "request too large (" + std::to_string(h.size) + " bytes, limit " +

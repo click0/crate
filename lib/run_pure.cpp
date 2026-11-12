@@ -90,6 +90,24 @@ bool jailXnamePid(const std::string &jailName, long &pidOut) {
   return pidOut > 0;
 }
 
+std::string netgraphBridgeNodeName(int jid, unsigned seq) {
+  return "crate_br_" + std::to_string(jid < 0 ? 0 : jid) + "_" + std::to_string(seq);
+}
+
+std::string ngctlShowName(const std::string &out) {
+  const auto pos = out.find("Name: ");
+  if (pos == std::string::npos) return "";
+  size_t b = pos + 6;
+  while (b < out.size() && out[b] == ' ') b++;
+  size_t e = b;
+  while (e < out.size() && !std::isspace((unsigned char)out[e])) e++;
+  const std::string name = out.substr(b, e - b);
+  if (name.empty() || name == "<unnamed>") return "";
+  for (char c : name)
+    if (!std::isalnum((unsigned char)c) && c != '_' && c != '-') return "";
+  return name;
+}
+
 std::string containerNameOfJail(const std::string &jailName, const std::string &jailPath) {
   const std::string byName = containerNameOf(jailName);
   if (byName != jailName) return byName;

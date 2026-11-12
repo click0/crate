@@ -499,7 +499,12 @@ void socketChecks(Report &r, const std::vector<Socket> &listening,
     const Mount *hm = hostMountFor(p, mounts);
     if (!hm) { local.push_back(p); continue; }
     std::string via = " (nullfs from host " + hm->special + ")";
-    if (startsWith(p, "/tmp/.X11-unix/"))
+    // 1.1.74: nested / headless / gpu mount a private directory holding
+    // only their own server's socket (RunGuiPure::ownXSocketDirTemplate;
+    // the prefix is repeated here, jail_audit_pure links no GUI code).
+    if (startsWith(p, "/tmp/.X11-unix/") && startsWith(hm->special, "/tmp/.X11-unix/.crate-"))
+      r.checks.push_back(passCheck("sockets", p, "this run's own X server only" + via));
+    else if (startsWith(p, "/tmp/.X11-unix/"))
       r.checks.push_back(warnCheck("sockets", p, "host X11 display socket" + via + " — the host display is reachable; x11/mode: nested isolates it"));
     else if (p == "/var/run/dbus/system_bus_socket")
       r.checks.push_back(warnCheck("sockets", p, "host system D-Bus" + via + " — dbus/policy decides what the jail may call"));

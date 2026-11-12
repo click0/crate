@@ -6,6 +6,90 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.74] — 2026-11-12
+
+**Six HIGH findings of the 1.1.71 bug hunt: one tenant can no longer
+lock everyone out of privops, nor a viewer token the HTTP API; the
+`firewall:` policy only touches the jail's own traffic and no longer
+wipes bridge-mode SNAT; netgraph mode checks every step and cannot leave
+the host NIC cut off; `crate snapshot restore` never destroys newer
+snapshots; a nested, headless or gpu jail sees only its own X server.**
+
+- **privops: one tenant blocked the socket for everyone**
+  (`daemon/audit_per_user.cpp`, `daemon/privops_listener.cpp`,
+  `lib/privops_nv_pure.cpp`). A FIFO at `/var/run/crate/<uid>/audit.log`
+  (the directory is the operator's) made the root audit open, O_WRONLY
+  without O_NONBLOCK, wait for a reader — the fstat check came after it
+  — so 64 cheap requests pinned the listener's 64 slots and everyone got
+  503 until a restart. The open is non-blocking now (a FIFO without a
+  reader is ENXIO, one with a reader is refused by the fstat), one uid
+  holds at most 16 of the slots, and after the header peek the listener
+  waits for header + data with the 30 s deadline before nvlist_recv
+  runs: libnv select()s without a timeout, so SO_RCVTIMEO did not bound
+  a client that went quiet after a valid header (408 now).
+- **A viewer token took the HTTP API down** (`daemon/routes.cpp`,
+  `daemon/server.cpp`). The log-follow cap was 32, the size of the
+  default worker pool, stats/stream (SSE) had none, and a quiet log
+  never writes, so a closed client was never noticed: 32 `?follow=true`
+  requests left `/healthz` and every other route without a thread, and
+  `Server::stop()` waited for them (`service crated stop` hung). Both
+  streams share a cap of 8, taken with a compare-and-swap, check
+  `sink.is_writable()` on every tick, and end when the server stops.
+- **The `firewall:` policy was not scoped to the jail**
+  (`lib/auto_fw_pure.cpp`, `lib/pfctl_ops.cpp`, `lib/spec_pure.cpp`,
+  `lib/run.cpp`). The anchor ended with `pass all` / `block drop all`,
+  and the host evaluates `crate/*` for its own packets too: `default:
+  block` (chromium-privacy) blocked the host's new connections, `default:
+  allow` passed what non-quick host rules block. Every rule now matches
+  `from <jail ip>` and is `quick` — `block drop quick from <ip> to
+  <cidr>`, `pass quick proto tcp|udp from <ip> to any port N`, `block
+  drop quick from <ip> to any` for `default: block` — and `default:
+  allow` adds no rule. The policy governs what the jail sends;
+  connections to the jail are left to the host's ruleset and rdr (the
+  old `block drop all` dropped them along with the host's own). block-ip entries are validated as CIDRs
+  (`crate validate` refuses a bad one; they went into the ruleset text
+  as written). In bridge mode the policy load replaced the SNAT/rdr
+  loaded into the same anchor just before (`pfctl -a X -f -` replaces
+  the whole anchor); it carries them along now, nat/rdr first. In NAT
+  mode a host without pf fails with what is missing instead of a bare
+  pfctl error.
+- **netgraph mode could not work and could cut the host NIC off**
+  (`lib/netgraph_ops.cpp`, `lib/run_net.cpp`, `lib/run_pure.cpp`,
+  `lib/run.cpp`). `NetgraphOps::show` called NgNameNode — the setter —
+  with an uninitialised buffer, which renamed the eiface; every
+  mkpeer / name / connect result was ignored; the bridge name
+  `crate_br_<jail name>` was cut to NG_NODESIZ, could hold a '.' and was
+  the same for a jail's main and extra interfaces; the teardown was
+  armed only after the setup returned, so a failed run left the
+  ng_bridge on the NIC's `lower` hook and the NIC's inbound traffic was
+  lost until `ngctl shutdown` or a reboot. `show` is `ngctl show` only,
+  every step is checked and a failure shuts the bridge down, bridges are
+  `crate_br_<jid>_<n>`, the eiface name is parsed and checked, and the
+  teardown (main and extra interfaces) is armed as soon as the interface
+  exists.
+- **`crate snapshot restore` destroyed newer snapshots**
+  (`lib/zfs_ops.cpp`). With libzfs (HAVE_LIBZFS, the port's default)
+  `zfs_rollback()` itself destroys every snapshot newer than the target
+  and their clones — what `zfs rollback` refuses without -r — so backup
+  and replicate bases and templates cloned from a newer @warm-* went
+  silently. The restore always runs `zfs rollback` without -r, which
+  refuses and names the newer snapshots.
+- **gui nested gave the jail the host display** (`lib/run_gui.cpp`,
+  `lib/run_gui_pure.cpp`, `lib/jail_audit_pure.cpp`). The nested,
+  headless and gpu modes nullfs-mounted the host's whole /tmp/.X11-unix,
+  and nested also got a copy of the host's .Xauthority: DISPLAY=:0 from
+  the jail reached the host X server with a valid cookie (keylogging,
+  input injection), and :N every other run's Xvfb, which runs `-ac`.
+  The jail's /tmp/.X11-unix is now a read-only nullfs of a private
+  directory `/tmp/.X11-unix/.crate-XXXXXXXX` holding only a hard link
+  to the socket of the server crate started (checked to be a socket of
+  ours or root's; the run fails rather than fall back), removed at
+  teardown. The host cookies go to the shared mode only — also no longer
+  to compositor, none, wayland, and auto resolved to headless or gpu.
+  `crate audit` reports such a socket as PASS.
+- Docs: crate.5 (firewall policy, snapshot restore, X11 isolation),
+  README / README_UK (X11 modes), the on-hardware runbook §4p.
+
 ## [1.1.73] — 2026-11-12
 
 **Root's jail directories move from /var/run/crate into /var/run/crate/0

@@ -20,4 +20,8 @@ namespace Crated {
 void registerRoutes(httplib::Server &srv, const Config &config,
                     bool isUnixListener = false);
 
+// 1.1.74: make the streaming providers (logs?follow, stats/stream) end
+// at their next tick, so stopping the server does not wait on clients.
+void stopStreams();
+
 }

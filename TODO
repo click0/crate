@@ -168,24 +168,18 @@ The bhyve/VM track is in TODO2.
   name the delete verbs). Since 1.1.57 the fw lease gives a per-jail
   slot — gating rule / NAT numbers by the caller's leased slot would
   make all four tenant-scoped.
-* (HIGH, bug hunt 1.1.71) one tenant blocks the privops socket for
-  everyone: a FIFO at /var/run/crate/<uid>/audit.log makes the audit
-  open (O_WRONLY without O_NONBLOCK, audit_per_user.cpp:74-76, called
-  from privops_handlers.cpp:2040) block until a reader appears — the
-  fstat check comes after it. 64 cheap requests pin the 64 global slots
-  (privops_listener.cpp:42,248-254); everyone else gets 503 until a
-  restart. Plausible variant: a client that goes silent after a valid
-  header (libnv's buf_recv select()s without a timeout, SO_RCVTIMEO does
-  not apply). Reachable once /var/run/crate is searchable (§1). Fix:
-  O_NONBLOCK on open, a per-uid cap, a deadline before nvlist_unpack.
-* (HIGH, bug hunt 1.1.71) a viewer token takes the HTTP API down: the
-  log-follow cap (32, routes.cpp:70-71) equals the worker count
-  (config.h:59), stats/stream has no cap, and a quiet log never writes,
-  so a closed client is never noticed (routes.cpp:517-650, 851-906). 32
-  `?follow=true` requests leave /healthz and everything else without a
-  worker, and Server::stop() waits for them: `service crated stop`
-  hangs. Fix: sink.is_writable() in the loop, a cap below the worker
-  count, the same for SSE.
+* (MED, left open by 1.1.74) the privops request deadline covers the
+  header and the data, not the descriptor part: a request whose header
+  announces descriptors and that never sends the SCM_RIGHTS message
+  still waits in nvlist_recv (libnv's fd receive select()s without a
+  timeout). The per-uid cap (16, privops_listener.cpp) keeps one uid to a
+  quarter of the 64 slots; four uids of one tenant, or colluding
+  tenants, still take them all. Fix: receive the descriptors ourselves
+  with a deadline, or a libnv receive with a timeout.
+* (LOW, left open by 1.1.74) the HTTP stream cap (8 log-follow + SSE,
+  routes.cpp) is per daemon, not per token: one viewer token can hold
+  all 8 and other viewers' streams get 503 (the rest of the API keeps
+  its workers). A per-token share of the cap would close it.
 * (MED, bug hunt 1.1.71) devfs ruleset claims can be exhausted: the
   claim is recorded before the request is validated
   (privops_handlers.cpp:1134-1144, 1689-1696) and released only when the
@@ -256,30 +250,18 @@ The bhyve/VM track is in TODO2.
   by content.
 * (LOW) healthcheck `retries: 0` means the first failure is UNHEALTHY —
   that is the documented meaning of zero retries; left as is.
-* (HIGH, bug hunt 1.1.71, host-traffic impact plausible: depends on
-  pf.conf) the `firewall:` policy is not scoped to the jail:
-  pfctl_ops.cpp:211-214 ends the anchor with `pass all` / `block drop
-  all` (no `from <jail ip>`), and the host evaluates crate/* for its own
-  packets too. `default: allow` (also what a `firewall:` with only
-  block-ip means) passes what non-quick host rules block; `default:
-  block` (examples/chromium-privacy.yml) blocks the host's new
-  connections. block-ip CIDRs go into the text unvalidated (:190). In
-  bridge mode the policy load (run.cpp:1874-1877) replaces the SNAT/rdr
-  that run.cpp:1668 put into the same anchor (-f replaces the anchor).
-  NAT: a pf error is not caught (run.cpp:2119), so on an ipfw-only host
-  a spec with `firewall:` never starts. Hidden under privops by the §1
-  newline item. Fix: rules `from <ip>`, CIDRs through NetAddrPure,
-  policy and nat/rdr in separate sub-anchors.
-* (HIGH, bug hunt 1.1.71, ng_ether behaviour plausible) netgraph mode
-  cannot work and can cut the host NIC off: NetgraphOps::show
-  (netgraph_ops.cpp:128-134) calls NgNameNode — the setter — with an
-  uninitialised buffer; the bool results are ignored
-  (run_net.cpp:638-661); name() truncates with strlcpy (:71), so names
-  over 13 chars or with '.' never get the `upper` hook;
-  destroyNetgraphAtEnd is armed only at run.cpp:1971, after the function
-  returned. A failed run leaves an ng_bridge on the physical NIC's
-  `lower` hook, and the NIC's inbound traffic is lost until `ngctl
-  shutdown` or a reboot.
+* (LOW, left open by 1.1.74) the `firewall:` policy and bridge-mode
+  SNAT/rdr still share the anchor crate/<jail>: the policy load carries
+  the translation text along (run.cpp, bridgePfTranslation), so either
+  one cannot be reloaded alone. Sub-anchors (crate/<jail>/nat,
+  crate/<jail>/policy) would separate them; the teardown flushes would
+  have to recurse. Also decide whether `default: block` should drop new
+  connections TO the jail that no rdr covers — since 1.1.74 the policy
+  covers what the jail sends only (`from <jail ip>`), inbound is the
+  host ruleset's.
+* (LOW, left open by 1.1.74) netgraph mode and the X11 socket isolation
+  (a read-only nullfs of /tmp/.X11-unix/.crate-*, a hard link to the
+  server's socket) are not run by CI: on-hardware-validation.md §4p.
 * (MED, bug hunt 1.1.71) NAT `ipv6: true` always fails:
   RunPure::epairIp6 builds "fd00:cra7:e::…" (run_pure.cpp:169) — 'r' is
   not a hex digit — and the address is refused (run.cpp:2055). The epair
@@ -480,10 +462,8 @@ The bhyve/VM track is in TODO2.
   `gui resize` (gui.cpp:402) BadMatch hits Xlib's default handler
   which exit()s the whole `crate run` (no XSetErrorHandler) →
   RunAtEnd teardown skipped. (plausible)
-* (LOW) run_gui.cpp:1187-1194 copyX11Auth still copies host
-  .Xauthority/.ICEauthority for gui.mode compositor/none/wayland;
-  :878,889 setupClipboard reads only x11Options, ignoring gui.mode
-  nested; :227-228 fork failure leaves the vncpw file behind; :1084
+* (LOW) run_gui.cpp setupClipboard reads only x11Options, ignoring
+  gui.mode nested; :227-228 fork failure leaves the vncpw file behind; :1084
   `vnc: true` with backend drm silently ignored; wayvnc's 127.0.0.1 is
   the jail's loopback in a vnet jail so the advertised port (:1157) is
   unreachable from the host.
@@ -526,13 +506,6 @@ The bhyve/VM track is in TODO2.
   (status_pure.cpp:23-27) and crated / hub responses, which strict
   readers (Python json.loads on bytes) refuse. Replace invalid
   sequences with \ufffd.
-* (HIGH, bug hunt 1.1.71, plausible) `crate snapshot restore` with
-  libzfs (zfs_ops.cpp:91, zfs_rollback(fs, snap, B_FALSE)): libzfs'
-  zfs_rollback itself destroys every newer snapshot and its clones —
-  what zfs(8) refuses without -r. Backup and replicate bases, and
-  templates cloned from a newer @warm-*, silently go. HAVE_LIBZFS is in
-  the port's OPTIONS_DEFAULT and CI never builds it. Fix: refuse when
-  newer snapshots exist.
 * (HIGH, bug hunt 1.1.71) jail-controlled files run or are read as host
   root. (a) Hooks run as `chroot <jailPath> /bin/sh` on the host
   (run.cpp:974-978) — host network, no jail limits — and
@@ -544,14 +517,6 @@ The bhyve/VM track is in TODO2.
   `template warm`: the template grants itself shares, scripts and
   allow.*. Fix: hooks after jail creation through execInJail
   (jail_attach); keep a warm template's spec outside its tree.
-* (HIGH, bug hunt 1.1.71) gui nested gives the jail the host display:
-  setupX11 nullfs-mounts the host's whole /tmp/.X11-unix into the jail
-  (run_gui.cpp:382-383, the host's X0 included) and copyX11Auth copies
-  the host's .Xauthority for nested (run_gui.cpp:1237-1250), so
-  DISPLAY=:0 from the jail reaches the host X server with a valid
-  cookie: keylogging, input injection. Variant of the copyX11Auth LOW
-  item above, which names compositor/none/wayland only. Fix: mount only
-  Xephyr's X<N> socket; no host cookie for nested.
 * (MED, bug hunt 1.1.71) 1.1.71's X-cookie move follows a symlink in the
   SOURCE (run.cpp:2411-2429): it runs for every root `crate run` with
   the default run user, X11 or not, and fileExists / copy_file of

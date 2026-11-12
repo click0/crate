@@ -126,13 +126,9 @@ bool shutdown(const std::string &path) {
 }
 
 std::string show(const std::string &path) {
-#ifdef __FreeBSD__
-  if (ensureSocket()) {
-    char name[NG_NODESIZ];
-    if (NgNameNode(g_csock, path.c_str(), "%s", name) >= 0)
-      return std::string(name);
-  }
-#endif
+  // 1.1.74: no libnetgraph fast path — the one here called NgNameNode,
+  // which NAMES a node, with an uninitialised buffer: it renamed the
+  // eiface to garbage and returned that garbage as its name.
   try {
     return Util::execCommandGetOutput({CRATE_PATH_NGCTL, "show", STR(path << ":")},
       "ngctl show");

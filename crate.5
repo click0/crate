@@ -68,6 +68,13 @@ Validate a specification file for syntax and logical consistency.
 .It Cm snapshot Ar subcommand
 Manage ZFS snapshots:
 .Cm create , list , restore , delete , diff .
+.Cm restore
+is
+.Ql zfs rollback
+without
+.Fl r :
+it refuses while newer snapshots exist
+.Pq since 1.1.74; built with libzfs it destroyed them and their clones .
 .It Cm list Op Fl j
 List running containers in table or JSON format.
 A
@@ -727,17 +734,35 @@ IP address or
 .Ss Firewall policy
 .Bl -tag -width "default"
 .It Sy firewall/block-ip
-CIDR ranges to block.
+IPv4 / IPv6 addresses or CIDR ranges the jail may not reach
+.Pq checked by Cm validate since 1.1.74 .
 .It Sy firewall/allow-tcp
-TCP ports to allow.
+TCP ports the jail may reach.
 .It Sy firewall/allow-udp
-UDP ports to allow.
+UDP ports the jail may reach.
 .It Sy firewall/default
-Default policy:
-.Cm allow
+Default policy for the rest of the jail's traffic:
+.Cm block ,
 or
-.Cm block .
+.Cm allow
+.Pq no rule \(em the host's ruleset decides .
 .El
+.Pp
+Every rule is scoped to the jail's own address
+.Pq Li from <jail ip> ,
+quick, in both directions, so that it holds where the host sees the
+jail's packets arrive on the epair or bridge member; since 1.1.74 \(em
+before, the default was an unscoped
+.Li pass all
+or
+.Li block drop all
+that also applied to the host's own traffic, and the allow rules
+.Pq Li pass out No only
+never matched.
+In bridge mode the policy is loaded together with the SNAT / rdr rules
+of the same anchor
+.Pq it used to replace them .
+A NAT-mode jail whose policy cannot be loaded (no pf) does not start.
 .Pp
 The policy is loaded into the per-jail pf anchor
 .Pa crate/<jail>
@@ -746,9 +771,10 @@ address is known at start (a static
 .Sy ip
 or a
 .Sy network_pool
-allocation). With DHCP addressing there is no address to anchor the
-rules on and the policy is skipped with a warning. The anchor is
-flushed at teardown in every mode.
+allocation).
+With DHCP addressing there is no address to anchor the
+rules on and the policy is skipped with a warning.
+The anchor is flushed at teardown in every mode.
 .Ss GUI
 .Bl -tag -width "vnc_password"
 .It Sy gui/mode
@@ -837,6 +863,33 @@ Boolean; default true.
 .Sy x11: true
 is accepted as the short form of the option; any other scalar is
 rejected.
+.Pp
+In the
+.Cm nested ,
+.Cm headless
+and
+.Cm gpu
+modes the jail's
+.Pa /tmp/.X11-unix
+holds only the socket of the X server
+.Nm crate
+started for the run: a read-only
+.Xr nullfs 5
+of a private directory
+.Pa /tmp/.X11-unix/.crate-XXXXXXXX
+on the host with a hard link to that socket, removed at teardown.
+The host's own display and the servers of other runs are not reachable,
+and the host's
+.Pa .Xauthority
+and
+.Pa .ICEauthority
+are copied into the jail only in the
+.Cm shared
+mode
+.Pq since 1.1.74; earlier releases mounted the host's whole Pa /tmp/.X11-unix No and gave Cm nested No the host cookie, so Ev DISPLAY Ns =:0 No in the jail opened the host display .
+If the socket cannot be linked
+.Pq e.g.\& an Xorg running as another user with Va security.bsd.hardlink_check_uid No set
+the run fails rather than mount the whole directory.
 .Ss Privacy
 What a program inside the jail learns about the machine (1.1.67; bwrap
 and firejail

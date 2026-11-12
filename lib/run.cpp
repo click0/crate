@@ -1477,6 +1477,10 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
     // feeds the per-container firewall policy below. Empty for DHCP
     // (address not known at this point) and for ip: none.
     std::string bridgeJailIp;
+    // 1.1.74: the SNAT/rdr text loaded into crate/<jail> — `pfctl -a X -f -`
+    // replaces the whole anchor, so the firewall policy loaded after it
+    // used to wipe it; the policy load now carries it along.
+    std::string bridgePfTranslation;
 
     // Configure IP addressing
     if (optionNet->ipMode == Spec::NetOptDetails::IpMode::Dhcp) {
@@ -1681,6 +1685,7 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
             warnOnRdrHostPortCollision(optionNet, anchor);
             try {
               addPfRulePrivopsOrLocal(anchor, rule);
+              bridgePfTranslation = rule;   // 1.1.74: see its declaration
               LOG("auto-fw[pf]: rules added to anchor " << anchor
                   << " (" << ipBare << " -> " << externalIface << ")")
               // 1.1.38: flush the anchor at teardown. The comment above
@@ -1882,7 +1887,9 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
         auto composed = PfctlOps::composeContainerPolicy(spec, jailXname, bridgeJailIp, v6);
         if (!composed.anchor.empty()) {
           try {
-            addPfRulePrivopsOrLocal(composed.anchor, composed.rulesText);
+            // 1.1.74: translation rules first (pf wants nat/rdr before
+            // filter rules in a ruleset), then the policy
+            addPfRulePrivopsOrLocal(composed.anchor, bridgePfTranslation + composed.rulesText);
             LOG("pf anchor '" << composed.anchor << "' policy loaded (bridge mode)")
             if (!destroyPfAnchor) {
               auto anchorName = composed.anchor;
@@ -1961,6 +1968,11 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
 
     auto ngInfo = RunNet::createNetgraphInterface(jid, jidStr, optionNet->netgraphIface, jailXname, execInJail);
     jailSideIface = ngInfo.ngIface;
+    // 1.1.74: armed at once — the static MAC and VLAN steps below can
+    // throw, and the ng_bridge on the NIC's lower hook must not outlive us.
+    destroyNetgraphAtEnd.reset([ngInfo]() {
+      RunNet::destroyNetgraphInterface(ngInfo);
+    });
 
     // Static MAC
     if (optionNet->staticMac) {
@@ -1975,10 +1987,6 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
       RunNet::createVlanInJail(jid, ngInfo.ngIface, optionNet->vlanId, execInJail);
       LOG("netgraph mode: VLAN " << optionNet->vlanId)
     }
-
-    destroyNetgraphAtEnd.reset([ngInfo]() {
-      RunNet::destroyNetgraphInterface(ngInfo);
-    });
 
     // Configure IP addressing
     if (optionNet->ipMode == Spec::NetOptDetails::IpMode::Dhcp) {
@@ -2124,7 +2132,15 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
       auto composed = PfctlOps::composeContainerPolicy(
                           spec, jailXname, epair.ipB, v6addr);
       if (!composed.anchor.empty()) {
-        addPfRulePrivopsOrLocal(composed.anchor, composed.rulesText);
+        // 1.1.74: fail closed with the reason — a jail whose spec asks for
+        // a firewall must not run without it, but "pfctl failed" said
+        // nothing about pf missing on an ipfw-only host.
+        try {
+          addPfRulePrivopsOrLocal(composed.anchor, composed.rulesText);
+        } catch (const std::exception &e) {
+          ERR("firewall: the spec's policy needs pf (kldload pf, and `anchor \"crate/*\"` in "
+              "pf.conf) and could not be loaded: " << e.what())
+        }
         auto anchorName = composed.anchor;
         LOG("pf anchor '" << anchorName << "' loaded")
         destroyPfAnchor.reset([anchorName, &args]() {
@@ -2180,13 +2196,13 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
         RunNet::ensureNetgraphModules();
         auto ni = RunNet::createNetgraphInterface(jid, jidStr, ex.netgraphIface, jailXname, execInJail);
         extraIface = ni.ngIface;
+        destroyExtraInterfaces.emplace_back([ni]() { RunNet::destroyNetgraphInterface(ni); });   // 1.1.74: at once
         if (ex.staticMac) {
           auto [macA, macB] = RunNet::generateStaticMac(nameComponent, ni.ngIface);
           execInJail({CRATE_PATH_IFCONFIG, ni.ngIface, "ether", macB}, "set static MAC on extra netgraph");
         }
         if (ex.vlanId >= 0)
           RunNet::createVlanInJail(jid, ni.ngIface, ex.vlanId, execInJail);
-        destroyExtraInterfaces.emplace_back([ni]() { RunNet::destroyNetgraphInterface(ni); });
         LOG("extra[" << i << "]: netgraph via " << ni.ngIface)
       }
 

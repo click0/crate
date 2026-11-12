@@ -1,6 +1,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "auto_fw_pure.h"
+#include "netaddr_pure.h"
 
 #include <sstream>
 #include <utility>
@@ -52,6 +53,52 @@ std::string formatSnatRule(const std::string &externalIface,
     << " to ! " << jailAddr
     << " -> (" << externalIface << ")";
   return o.str();
+}
+
+std::string validatePolicyCidr(const std::string &cidr) {
+  const auto slash = cidr.find('/');
+  const std::string addr = cidr.substr(0, slash);
+  const std::string len = slash == std::string::npos ? "" : cidr.substr(slash + 1);
+  const bool v4 = NetAddrPure::isV4(addr), v6 = NetAddrPure::isV6(addr);
+  bool lenOk = slash == std::string::npos;
+  if (!lenOk && !len.empty() && len.size() <= 3 && len.find_first_not_of("0123456789") == std::string::npos) {
+    unsigned n = (unsigned)std::stoul(len);
+    lenOk = v4 ? n <= 32 : n <= 128;
+  }
+  if ((!v4 && !v6) || !lenOk)
+    return "firewall/block-ip: '" + cidr + "' is not an IPv4/IPv6 address or CIDR";
+  return "";
+}
+
+std::string composeFirewallPolicyRules(const std::vector<std::string> &blockIp,
+                                       const std::vector<unsigned> &allowTcp,
+                                       const std::vector<unsigned> &allowUdp,
+                                       const std::string &defaultPolicy,
+                                       const std::string &ipv4, const std::string &ipv6,
+                                       std::string &err) {
+  err.clear();
+  if (!NetAddrPure::isV4(ipv4)) { err = "no IPv4 address of the jail to scope the policy on"; return ""; }
+  const bool hasV6 = !ipv6.empty() && NetAddrPure::isV6(ipv6);
+  std::ostringstream pf;
+  for (const auto &cidr : blockIp) {
+    if (auto e = validatePolicyCidr(cidr); !e.empty()) { err = e; return ""; }
+    const bool v4 = NetAddrPure::isV4(cidr.substr(0, cidr.find('/')));
+    if (v4) pf << "block drop quick from " << ipv4 << " to " << cidr << "\n";
+    else if (hasV6) pf << "block drop quick inet6 from " << ipv6 << " to " << cidr << "\n";
+  }
+  for (auto port : allowTcp) {
+    pf << "pass quick proto tcp from " << ipv4 << " to any port " << port << "\n";
+    if (hasV6) pf << "pass quick inet6 proto tcp from " << ipv6 << " to any port " << port << "\n";
+  }
+  for (auto port : allowUdp) {
+    pf << "pass quick proto udp from " << ipv4 << " to any port " << port << "\n";
+    if (hasV6) pf << "pass quick inet6 proto udp from " << ipv6 << " to any port " << port << "\n";
+  }
+  if (defaultPolicy == "block") {
+    pf << "block drop quick from " << ipv4 << " to any\n";
+    if (hasV6) pf << "block drop quick inet6 from " << ipv6 << " to any\n";
+  }
+  return pf.str();
 }
 
 std::string formatSnatAnchorLine(const std::string &externalIface,

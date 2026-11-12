@@ -472,7 +472,25 @@ ATF_TEST_CASE_BODY(bpf_by_vnet) {
   ATF_REQUIRE(find(vnet, "connectivity", "gateway")->severity == Severity::Pass);
 }
 
+// 1.1.74: gui nested / headless / gpu mount a private directory with only
+// their own server's socket — a PASS, not the host-display WARN.
+ATF_TEST_CASE_WITHOUT_HEAD(own_x_socket_dir);
+ATF_TEST_CASE_BODY(own_x_socket_dir) {
+  HostContext ctx;
+  std::string probe = kDesktopProbe;
+  const std::string hostX = "/tmp/.X11-unix\t/tmp/.X11-unix\tnullfs\tro";
+  probe.replace(probe.find(hostX), hostX.size(), "/tmp/.X11-unix/.crate-Ab12Cd34\t/tmp/.X11-unix\tnullfs\tro");
+  auto r = buildReport(probe, ctx);
+  const Check *c = find(r, "sockets", "/tmp/.X11-unix/X0");
+  ATF_REQUIRE(c != nullptr);
+  ATF_REQUIRE(c->severity == Severity::Pass);
+  ATF_REQUIRE(c->detail.find("own X server") != std::string::npos);
+  // the host's whole directory stays a WARN
+  ATF_REQUIRE(find(buildReport(kDesktopProbe, ctx), "sockets", "/tmp/.X11-unix/X0")->severity == Severity::Warn);
+}
+
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, own_x_socket_dir);
   ATF_ADD_TEST_CASE(tcs, bpf_by_vnet);
   ATF_ADD_TEST_CASE(tcs, probe_script_shape);
   ATF_ADD_TEST_CASE(tcs, split_sections);
