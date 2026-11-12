@@ -46,13 +46,20 @@ namespace PrivOpsClient {
 
 // Resolve the socket path crate(1) should use:
 //   1. $CRATE_PRIVOPS_SOCKET if non-empty
-//   2. /var/run/crate/crated-privops.sock if it exists (S_IFSOCK)
-//   3. "" if neither
+//   2. /var/run/crate/crated-privops.sock if it exists (S_IFSOCK) and
+//      the caller is not root (1.1.72: root keeps the direct path)
+//   3. "" otherwise
 //
 // Empty return signals "fall back to legacy exec path".
 // The detection is side-effect-free except for one stat(2);
 // callers cache the result.
 std::string detectSocketPath();
+
+constexpr const char *kDefaultSocketPath = "/var/run/crate/crated-privops.sock";
+
+// 1.1.72: the decision behind detectSocketPath, without the stat and
+// the getenv — `env` is $CRATE_PRIVOPS_SOCKET (may be null).
+std::string chooseSocketPath(const char *env, bool defaultIsSocket, unsigned euid);
 
 // --- Pure request builders ---
 //

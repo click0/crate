@@ -164,6 +164,58 @@ int decodeGetRequest(const std::vector<uint8_t> &buf, size_t offset,
   return (int)(pos - offset);
 }
 
+namespace {
+int skipContext(const std::vector<uint8_t> &buf, size_t pos, uint8_t flags) {
+  if (!(flags & 0x08)) return (int)pos;
+  std::string ctx;
+  int n = decodeOctetString(buf, pos, ctx, (flags & 0x10) != 0);
+  return n <= 0 ? -1 : (int)(pos + (size_t)n);
+}
+
+int decodeRangesFrom(const std::vector<uint8_t> &buf, size_t pos, bool be,
+                     std::vector<SearchRange> &out) {
+  while (pos < buf.size()) {
+    SearchRange r;
+    int n = decodeSearchRange(buf, pos, r.start, r.end, &r.include, be);
+    if (n <= 0) return -1;
+    pos += (size_t)n;
+    out.push_back(std::move(r));
+  }
+  return (int)pos;
+}
+} // anon
+
+int decodeSearchRanges(const std::vector<uint8_t> &buf, size_t offset, uint8_t flags,
+                       std::vector<SearchRange> &out) {
+  int pos = skipContext(buf, offset, flags);
+  if (pos < 0) return 0;
+  int end = decodeRangesFrom(buf, (size_t)pos, (flags & 0x10) != 0, out);
+  return end < 0 ? 0 : (int)((size_t)end - offset);
+}
+
+int decodeGetBulkRequest(const std::vector<uint8_t> &buf, size_t offset, uint8_t flags,
+                         uint16_t &nonRepeaters, uint16_t &maxRepetitions,
+                         std::vector<SearchRange> &out) {
+  const bool be = (flags & 0x10) != 0;
+  int pos = skipContext(buf, offset, flags);
+  if (pos < 0 || buf.size() < (size_t)pos + 4) return 0;
+  const uint8_t *p = buf.data() + pos;
+  nonRepeaters   = be ? (uint16_t)((p[0] << 8) | p[1]) : (uint16_t)((p[1] << 8) | p[0]);
+  maxRepetitions = be ? (uint16_t)((p[2] << 8) | p[3]) : (uint16_t)((p[3] << 8) | p[2]);
+  int end = decodeRangesFrom(buf, (size_t)pos + 4, be, out);
+  return end < 0 ? 0 : (int)((size_t)end - offset);
+}
+
+int pickNext(const std::vector<std::vector<uint32_t>> &sortedOids, const SearchRange &r) {
+  for (size_t i = 0; i < sortedOids.size(); i++) {
+    int c = compareOid(sortedOids[i], r.start);
+    if (c < 0 || (c == 0 && !r.include)) continue;
+    if (!r.end.empty() && compareOid(sortedOids[i], r.end) >= 0) return -1;
+    return (int)i;
+  }
+  return -1;
+}
+
 // --- VarBind encoders ---
 
 namespace {

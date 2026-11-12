@@ -40,7 +40,7 @@ const std::string &effectivePath() {
   if (!computed) {
     if (g_pathOverridden) {
       cached = g_path;  // honour test override
-    } else if (!PrivOpsClient::detectSocketPath().empty()) {
+    } else if (!PrivOpsClient::detectSocketPath().empty() && ::getuid() != 0) {   // 1.1.72: root keeps the legacy file
       cached = RuntimePathsPure::perUserRoot((uint32_t)::getuid())
              + "/network-leases.txt";
     } else {

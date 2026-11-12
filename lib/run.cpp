@@ -424,7 +424,10 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   // daemon creates and chowns that root (ensure_user_root).
   std::string jailBaseDir = Locations::jailDirectoryPath;
   {
-    std::string sock = PrivOpsClient::detectSocketPath();
+    // 1.1.72: root keeps /var/run/crate even with an explicit
+    // CRATE_PRIVOPS_SOCKET — crated answers ensure_user_root for peer
+    // uid 0 with the legacy root anyway.
+    std::string sock = ::geteuid() != 0 ? PrivOpsClient::detectSocketPath() : std::string();
     if (!sock.empty()) {
       auto resp = PrivOpsClient::sendRequest(sock, PrivOpsClient::buildEnsureUserRoot());
       if (!resp.transportError.empty())

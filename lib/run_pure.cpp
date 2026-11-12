@@ -81,6 +81,15 @@ std::string containerNameOf(const std::string &jailName) {
   return jailName.substr(0, at);
 }
 
+bool jailXnamePid(const std::string &jailName, long &pidOut) {
+  const std::string base = containerNameOf(jailName);
+  if (base == jailName) return false;   // no well-formed _pid<digits>
+  const std::string digits = jailName.substr(base.size() + 4);
+  if (digits.empty() || digits.size() > 9) return false;
+  pidOut = std::stol(digits);
+  return pidOut > 0;
+}
+
 std::string containerNameOfJail(const std::string &jailName, const std::string &jailPath) {
   const std::string byName = containerNameOf(jailName);
   if (byName != jailName) return byName;

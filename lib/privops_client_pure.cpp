@@ -6,6 +6,7 @@
 #include <string>
 
 #include <sys/stat.h>
+#include <unistd.h>   // 1.1.72: geteuid
 
 //
 // Pure half of privops_client (0.9.16, hotfix split from 0.9.15).
@@ -63,16 +64,23 @@ std::string toString(unsigned u) {
 
 // --- Detection ---
 
+std::string chooseSocketPath(const char *env, bool defaultIsSocket, unsigned euid) {
+  if (env && env[0] != '\0') return env;
+  // 1.1.72: root does not pick the default socket up. It has the direct
+  // (legacy) path for everything, and going through privops gave it the
+  // per-user layout of uid 0 instead: ensure_user_root answers 400 to
+  // peer uid 0, so every root `crate run` — crated's own HTTP and
+  // control-socket starts included — died as soon as crated listened on
+  // the default path.
+  if (euid == 0) return "";
+  return defaultIsSocket ? kDefaultSocketPath : "";
+}
+
 std::string detectSocketPath() {
   const char *env = ::getenv("CRATE_PRIVOPS_SOCKET");
-  if (env && env[0] != '\0') return env;
-
-  const char *defaultPath = "/var/run/crate/crated-privops.sock";
   struct stat st;
-  if (::stat(defaultPath, &st) == 0 && S_ISSOCK(st.st_mode))
-    return defaultPath;
-
-  return "";
+  const bool isSock = ::stat(kDefaultSocketPath, &st) == 0 && S_ISSOCK(st.st_mode);
+  return chooseSocketPath(env, isSock, (unsigned)::geteuid());
 }
 
 // --- Pure builders ---

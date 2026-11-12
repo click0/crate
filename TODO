@@ -64,40 +64,27 @@ The bhyve/VM track is in TODO2.
   runtime sockets), devfs rules built from device classes (DevicesPure)
   instead of free globs, and the ipfw verbs tied to the caller's fw
   lease slot.
-* (HIGH, bug hunt 1.1.71) a ROOT `crate run` fails whenever the privops
-  socket exists at its default path: run.cpp:426-433 sends
-  ensure_user_root without looking at the uid, and handleEnsureUserRoot
-  (privops_handlers.cpp:532-538) answers 400 to peer uid 0. crated's own
-  HTTP and control-socket start / restart spawn `crate run` as root and
-  fail the same way. With the socket present SpecRegistry::effectivePath
-  (spec_registry.cpp:33-46) also points root at
-  /var/run/crate/0/spec-registry.txt, which nothing writes, so
-  control-socket start answers 404. Fix: uid 0 keeps the legacy root
-  (skip the verb in the client, or answer it with /var/run/crate).
-* (HIGH, bug hunt 1.1.71) crated chmods /var/run/crate to 0700 on every
-  start (daemon/main.cpp:96 -> createJailsDirectoryIfNeeded,
-  misc.cpp:38-58), and so does every root `crate` call. The default
-  privops socket, crated.sock, control/*.sock and /var/run/crate/<uid>
-  all live under it, so no non-root user can reach any of them (EACCES
-  on the path): the rootless path and the per-group control sockets are
-  unreachable. Fix: 0711 on /var/run/crate itself, 0700 on jail-* and
-  chroot-create-*.
+* (HIGH, bug hunt 1.1.71; open: needs a layout decision) crated chmods
+  /var/run/crate to 0700 on every start (daemon/main.cpp:96 ->
+  createJailsDirectoryIfNeeded, misc.cpp:38-58), and so does every root
+  `crate` call. The default privops socket, crated.sock, control/*.sock
+  and /var/run/crate/<uid> all live under it, so no non-root user can
+  reach any of them: the rootless path and the per-group control sockets
+  are unreachable. 0711 alone is NOT the fix: root-path jails live
+  directly in /var/run/crate/jail-*, their paths are public (jls), and a
+  searchable parent lets any host user run a setuid binary that a jail's
+  root planted in its tree — host root. Options: (A) 0710 with the
+  privops group (root-equivalent anyway, trust-model.md Plane 1) and the
+  control sockets moved out of /var/run/crate; (B) root-path jails and
+  chroot-create-* into a 0700 subdirectory (e.g. /var/run/crate/0, like
+  the per-user roots), then 0711 on /var/run/crate — a layout change for
+  clean, list, warm and the docs.
 * (HIGH, bug hunt 1.1.71, plausible: EPERM paths not run on hardware)
   rootless runs reach operations that have no privops route:
   Mount("devfs") (mount.cpp:33, run.cpp:983) and the unionfs of `cow:`
   (run.cpp:817) call nmount(2) directly, and the scripts and cron
   sections go through chroot(8) (run.cpp:974-978, 2359-2360) — EPERM for
   a non-root caller. Most examples have scripts.
-* (HIGH, bug hunt 1.1.71) privops add_pf_rule refuses every ruleset
-  crate sends: validateRuleText (privops_pure.cpp:388-399) rejects '\n',
-  and addPfRulePrivopsOrLocal (run.cpp:154-169) sends the whole anchor
-  text (pfctl_ops.cpp:189-214, auto_fw_pure.cpp:57-59,109 —
-  newline-terminated lines) in one call whenever the socket exists, root
-  runs included (detectSocketPath ignores the euid). NAT with
-  `firewall:` throws uncaught at run.cpp:2119 (chromium-privacy does not
-  start); bridge only warns (run.cpp:1885-1890) and the jail runs with
-  no policy and no SNAT/rdr (run.cpp:1675-1694). Fix: validate per line
-  and keep one call (`pfctl -a X -f -` replaces the whole anchor).
 * (MED, bug hunt 1.1.71) crate.yml's securelevel / children_max defaults
   are lost on the privops path: run.cpp:1200-1204 computes the effective
   values, but run_jail.cpp:75-78,108-111 sends only spec.*, and the
@@ -108,6 +95,13 @@ The bhyve/VM track is in TODO2.
   with a bridge jail already running, a NAT jail never sets up `nat
   50000` (no outbound), and when the bridge jail is the last to go the
   shared rule stays.
+* (LOW, left open by 1.1.72) a tenant's own `crate run` teardown sends
+  destroy_jail with the jid as the name (run_jail.cpp:245), which 1.1.72
+  gates strictly by jid. A jid the registry lost (a crated restart
+  before 1.1.72, when /var/db/crate did not exist and nothing persisted)
+  is now DenyUnownedJid, the fallback jail_remove is EPERM for a
+  non-root caller, and the jail stays. Send the kernel name (the xname)
+  instead of the jid.
 
 === 2. crated privops / HTTP — security ===
 
@@ -176,26 +170,6 @@ The bhyve/VM track is in TODO2.
   name the delete verbs). Since 1.1.57 the fw lease gives a per-jail
   slot — gating rule / NAT numbers by the caller's leased slot would
   make all four tenant-scoped.
-* (HIGH, bug hunt 1.1.71) /var/db/crate is created by nothing — not
-  crated (daemon/main.cpp:149,174,190), not the rc script, not pkg-plist
-  — so every registry persist throws. The status-fd thread of
-  registerSpawnedJailOwner calls recordCreate without try
-  (privops_handlers.cpp:2100): the first HTTP or control-socket start
-  ends in std::terminate (crated SIGABRT), and a failed write (ENOSPC)
-  does the same with the directory present. Without it acquire_fw_lease
-  has set the sysctl and then answers 500 (fw_lease_registry.cpp:44-46),
-  and the registries live in memory only: after a restart every tenant
-  jail is unknown (bootstrap Allow). Fix: mkdir -p 0700 at start,
-  try/catch around recordCreate.
-* (HIGH, bug hunt 1.1.71) destroy_jail / reclaim_iface_from_vnet with a
-  numeric name pass the name gate: validateJailName
-  (privops_pure.cpp:167-188) allows digits only, a name the registry
-  does not know gets the bootstrap Allow
-  (privops_authz_pure.cpp:254-263), and `jail -r 17`
-  (privops_handlers.cpp:445-447) or `ifconfig -vnet 17` take it as a
-  jid. A tenant removes another tenant's registered jail, whose fw lease
-  then leaks. Fix: refuse all-digit names, or resolve the name to a jid
-  and gate by jid.
 * (HIGH, bug hunt 1.1.71) one tenant blocks the privops socket for
   everyone: a FIFO at /var/run/crate/<uid>/audit.log makes the audit
   open (O_WRONLY without O_NONBLOCK, audit_per_user.cpp:74-76, called
@@ -344,13 +318,6 @@ The bhyve/VM track is in TODO2.
   and left out of the stack's hosts/DNS. Injecting mode + bridge for
   such members (a `containers/<name>/network: <net>` key?) is a design
   decision, not a fix.
-* (HIGH, bug hunt 1.1.71) `network_policy` is removed right after `crate
-  stack up`: applyNetworkPolicies returns RunAtEnd guards kept in the
-  local vector policyCleanups (stack.cpp:937,1019); since 1.1.51 the
-  members run detached and `stack up` returns at :1177, so the
-  destructors remove every rule. Default-deny and stack isolation never
-  apply. Fix: release the guards on success and leave the removal to
-  `stack down`.
 * (MED, bug hunt 1.1.71) StackSpec::netInfo substitutes only when vars
   are given (stack_spec.cpp:66): a member without vars and without --var
   keeps `ip: "${DB_IP:-10.0.0.5}/24"` or `bridge: "${BR:-bridge0}"`
@@ -562,37 +529,6 @@ The bhyve/VM track is in TODO2.
   (status_pure.cpp:23-27) and crated / hub responses, which strict
   readers (Python json.loads on bytes) refuse. Replace invalid
   sequences with \ufffd.
-* (HIGH, bug hunt 1.1.71, EBUSY in (b) plausible) Util::Fs::rmdirHier
-  crosses mount points (util.cpp:727-737: no st_dev check; Fs::unlink
-  clears schg on EPERM). (a) `crate clean` (clean.cpp:78,99) removes
-  orphaned jail-* and chroot-create-* trees without looking for mounts:
-  after a killed `crate create` (read-write nullfs of the host's
-  /var/cache/pkg, devfs) or a crashed or SIGKILLed `crate run`
-  (dirs/share of $HOME) it wipes the host data under them. (b) `crate
-  run` teardown: the unmount loop (run.cpp:2596-2600) throws on the
-  first EBUSY, the rest stay mounted, and destroyJailDir
-  (run.cpp:533-539) walks the read-write shares as root; under rootless
-  a failed destroy_jail leaves the jail live and rmdirHier runs over it.
-  How much goes depends on readdir order. Fix: never cross st_dev in
-  rmdirHier; skip (clean) or refuse (teardown) a tree with a mount under
-  it (getmntinfo); clean never clears flags.
-* (HIGH, bug hunt 1.1.71) `crate clean` flushes the pf anchors of LIVE
-  root jails (clean.cpp:379-389): it compares crate/<name>_pid<N> with
-  kernel jail names, but a root-path jail is named by its jid (jail_setv
-  without name), so every running root jail loses SNAT, rdr and its
-  firewall policy. Fix: an anchor is live while its pid runs (or match
-  through containerNameOfJail plus the pid).
-* (HIGH, bug hunt 1.1.71) backup / replicate / template warm act on the
-  dataset that CONTAINS the jail directory: ZfsDataset::datasetForJail
-  (zfs_dataset.cpp:24) and warm.cpp:40 take statfs' f_mntfromname, and
-  `crate run` never makes a per-jail dataset (run.cpp does not use
-  zfs_enable) — on a default install that is zroot/ROOT/default. `crate
-  backup web` snapshots and sends the whole host (crated tokens, every
-  jail); --auto-incremental picks another jail's snapshot as base;
-  replicate ships the host; template warm clones it, --promote makes the
-  boot environment a clone of the template, and --warm-base from it
-  fails (no +CRATE.SPEC at the clone root). Fix: require f_mntonname ==
-  the jail path, refuse otherwise.
 * (HIGH, bug hunt 1.1.71, plausible) `crate snapshot restore` with
   libzfs (zfs_ops.cpp:91, zfs_rollback(fs, snap, B_FALSE)): libzfs'
   zfs_rollback itself destroys every newer snapshot and its clones —
@@ -636,11 +572,6 @@ The bhyve/VM track is in TODO2.
   stopped, updated or restarted; container `3` is shadowed by jid 3.
   Fix: prefer the registry owner's jail, crate jails only,
   containerNameOf(name) for start.
-* (MED, bug hunt 1.1.71) backup / replicate look the jail up by kernel
-  name only (zfs_dataset.cpp:15, getJailByName): `crate backup web` says
-  not found; with the kernel name the stream is named web_pid4242-… or
-  <jid>-…, and `backup-prune --jail web` finds nothing. 1.1.70's
-  findContainer switch missed it.
 * (MED, bug hunt 1.1.71) warm-base teardown leaks the clone when it has
   snapshots (run.cpp:503-510, zfs_ops.cpp:102-117: destroy without -r) —
   after any backup, replicate, snapshot create or template warm of it.
@@ -715,6 +646,14 @@ The bhyve/VM track is in TODO2.
   command's own options (-l) are taken for crate's. chown/chmod by path
   after services started (run.cpp:2422-2423, 2500-2503) race with a
   jail-root symlink (variant of §2's realpath item).
+* (MED, left open by 1.1.72) a plain `crate run` jail has no ZFS dataset
+  of its own — crate.yml's zfs_enable is not used by run.cpp, the jail
+  directory is a directory — so since 1.1.72 `crate backup`, `crate
+  replicate` and `crate template warm` refuse it (before, they took the
+  dataset containing it: the host's root). Only --warm-base clones
+  qualify, and the first template needs a jail on its own dataset. Make
+  `crate run` create <dataset of /var/run/crate>/jail-<name>-<hex> when
+  that directory is on ZFS.
 
 === 8. crate-hub ===
 
@@ -738,18 +677,6 @@ The bhyve/VM track is in TODO2.
   orders from the hub's own view only (hub-side partition → orders
   while the primary is healthy; mitigated because `crate migrate`
   needs the source).
-* (HIGH, bug hunt 1.1.71) crate-hub cannot poll any TLS node:
-  hub/poller.cpp:8-11 defines CPPHTTPLIB_OPENSSL_SUPPORT,
-  hub/main.cpp:22 and hub/api.cpp:11 include httplib without it — an ODR
-  violation. main.o links first (Makefile:86), so httplib::Client's
-  inline members come from the non-SSL layout and every `tls: true` /
-  tls_cert node throws "'https' scheme is not supported"
-  (poller.cpp:143,145; caught at :200) — down for good. In a mixed TLS
-  primary / HTTP partner setup /api/v1/ha/orders orders a failover of a
-  healthy container after threshold_seconds; `crate-hub schedule
-  --hub-url https://…` dies on an uncaught invalid_argument. The same
-  ODR bug was fixed for crated (CHANGELOG). Fix:
-  -DCPPHTTPLIB_OPENSSL_SUPPORT for all HUB_OBJS.
 * (MED, bug hunt 1.1.71) the hub's sqlite store is write-only and grows
   without bound: recordPoll on every poll (poller.cpp:198), no SELECT
   anywhere, prune only through the POST endpoint (api.cpp:230-239; the
@@ -794,16 +721,6 @@ The bhyve/VM track is in TODO2.
   collector.cpp:52 stores raw percent; netRx/netTx/uptimeTicks never
   populated. Either implement the table + Notify PDUs or trim the MIB
   and README to the four scalars.
-* (HIGH, bug hunt 1.1.71) the AgentX PDU type numbers are off by one:
-  snmpd/mib_pure.h:32-34 has GET=6, GETNEXT=7, GETBULK=8; RFC 2741 §6.1
-  has Get=5, GetNext=6, GetBulk=7, TestSet=8. A real Get hits the
-  default branch (an empty Response, noError), GetNext is served as an
-  exact Get (noSuchInstance: snmpwalk returns nothing), GetBulk's
-  non_repeaters / max_repetitions parse as an OID, and TestSet /
-  CommitSet are answered noError (snmpset "succeeds"). crate-snmpd.8's
-  snmpget / snmpwalk examples do not work; the tests use the enum, not
-  the raw numbers. Fix: 5/6/7, tests on raw values, notWritable for
-  TestSet.
 * (MED, bug hunt 1.1.71) CRATE-MIB.txt and the agent disagree: the MIB
   is enterprises 60117 with version .1.1, hostname .1.2, count .1.3,
   running .1.4 (CRATE-MIB.txt:24,33-59); the agent registers 59999 with
@@ -824,6 +741,11 @@ The bhyve/VM track is in TODO2.
   is the main loop (main.cpp:111-116), which blocks AgentX while it
   collects; main.cpp:5 promises the table and traps; registerMib's
   result is ignored (main.cpp:70,98), with no retry.
+* (LOW, left open by 1.1.72) AgentX: 1.1.72 answers Get, GetNext
+  (include bit, range end) and GetBulk, and refuses TestSet with
+  notWritable; the container table and the traps are still the MED item
+  above. Nothing exercises the agent against a real net-snmp master in
+  CI.
 
 === 10. Carried over from the previous TODO ===
 

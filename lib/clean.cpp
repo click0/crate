@@ -13,11 +13,13 @@
 #include "pfctl_ops.h"
 #include "spec_registry.h"
 #include "dir_lock.h"   // 1.1.69: skip directories a run/create holds
+#include "run_pure.h"   // 1.1.72: jailXnamePid
 #include "util.h"
 #include "err.h"
 
 #include <rang.hpp>
 
+#include <cerrno>
 #include <dirent.h>
 #include <signal.h>
 #include <sys/stat.h>
@@ -381,6 +383,14 @@ bool cleanCrates(const Args &args) {
         runningNames.insert(j.name);
       for (const auto &name : AutoFwPure::parseCrateAnchorJailNames(out)) {
         if (runningNames.count(name)) continue;
+        // 1.1.72: the anchor is crate/<name>_pid<N>, but a root-path jail
+        // is named by its jid in the kernel — the name test alone flushed
+        // the SNAT, rdr and firewall policy of every running root jail.
+        // The anchor lives as long as its `crate run` (pid N) does; a
+        // reused pid only keeps a stale anchor a little longer.
+        long pid = 0;
+        if (RunPure::jailXnamePid(name, pid) && (::kill((pid_t)pid, 0) == 0 || errno == EPERM))
+          continue;
         auto anchor = "crate/" + name;
         if (dryRun) {
           std::cout << "  [dry-run] would flush stale pf anchor: " << anchor << std::endl;

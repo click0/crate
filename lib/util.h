@@ -70,6 +70,7 @@ public:
   OnDestroy(const std::function<void()> &newFnAction);
   ~OnDestroy();
   void doNow();
+  void disarm() { fnAction = []() { }; }   // 1.1.72
 };
 
 class RunAtEnd : public std::unique_ptr<OnDestroy> {
@@ -78,6 +79,9 @@ public:
   RunAtEnd(const std::function<void()> &newFnAction);
   void reset(const std::function<void()> &newFnAction);
   void doNow();
+  // 1.1.72: keep the resource — the action never runs. (reset() would
+  // run the old action while replacing it.)
+  void disarm() { if (get()) get()->disarm(); }
 };
 
 // RAII wrapper for file descriptors
@@ -180,7 +184,11 @@ void mkdir(const std::string &dir, mode_t mode);
 void mkdirIfNotExists(const std::string &dir, mode_t mode);
 void rmdir(const std::string &dir);
 void rmdirFlat(const std::string &dir);
+// 1.1.72: refuses (throws, deleting nothing) when anything is mounted
+// under `dir`, and never descends into another file system.
 void rmdirHier(const std::string &dir);
+// 1.1.72: the mount points equal to or under `path` (FreeBSD; empty elsewhere).
+std::vector<std::string> mountsUnder(const std::string &path);
 bool rmdirFlatExcept(const std::string &dir, const std::set<std::string> &except);
 bool rmdirHierExcept(const std::string &dir, const std::set<std::string> &except);
 bool isXzArchive(const char *file);
@@ -197,6 +205,10 @@ bool sameDevice(const std::string &a, const std::string &b);
 void touchFile(const std::string &path, mode_t mode = 0644);
 std::vector<std::string> expandWildcards(const std::string &wildcardPath, const std::string &rootPrefix = "");
 bool isOnZfs(const std::string &path);
+// 1.1.72: the dataset mounted exactly at `path`; "" when `path` is only a
+// directory inside a dataset mounted higher up (getZfsDataset returns
+// that one — for a `crate run` jail directory usually the host's root).
+std::string getZfsDatasetMountedAt(const std::string &path);
 std::string getZfsDataset(const std::string &path);
 bool isZfsEncrypted(const std::string &dataset);
 bool isZfsKeyLoaded(const std::string &dataset);

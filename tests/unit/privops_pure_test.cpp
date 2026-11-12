@@ -86,6 +86,10 @@ ATF_TEST_CASE_BODY(jailname_rejects_empty_and_reserved) {
   ATF_REQUIRE(!validateJailName("").empty());
   ATF_REQUIRE(!validateJailName(".").empty());
   ATF_REQUIRE(!validateJailName("..").empty());
+  // 1.1.72: an argument of `jail -r` — no option look-alikes
+  ATF_REQUIRE(!validateJailName("-r").empty());
+  ATF_REQUIRE(!validateJailName("-17").empty());
+  ATF_REQUIRE_EQ(validateJailName("a-r"), std::string());
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(jailname_rejects_metas);
@@ -591,12 +595,41 @@ ATF_TEST_CASE_BODY(add_pf_rule_requires_anchor_and_text) {
   r.ruleText = "pass on em0 from 10.0.0.0/24";
   ATF_REQUIRE_EQ(validateAddPfRule(r), std::string());
 
+  // 1.1.72: an anchor's text is one rule per line — what crate sends
   r.ruleText = "rule1\nrule2";
+  ATF_REQUIRE_EQ(validateAddPfRule(r), std::string());
+  r.ruleText = "rule1\nrule2;rm";
   ATF_REQUIRE(!validateAddPfRule(r).empty());
 
   r.ruleText = "pass";
   r.anchor = "crate;rm";
   ATF_REQUIRE(!validateAddPfRule(r).empty());
+}
+
+// 1.1.72: the rulesets PfctlOps / AutoFwPure build (newline-terminated)
+ATF_TEST_CASE_WITHOUT_HEAD(pf_ruleset_multi_line);
+ATF_TEST_CASE_BODY(pf_ruleset_multi_line) {
+  const std::string policy =
+    "block drop quick from 10.66.0.2 to 192.0.2.0/24\n"
+    "pass out quick proto tcp from 10.66.0.2 to any port 443\n"
+    "pass out quick proto udp from 10.66.0.2 to any port 53\n"
+    "block drop all\n";
+  ATF_REQUIRE_EQ(validatePfRuleset(policy), std::string());
+  ATF_REQUIRE_EQ(validatePfRuleset("nat on em0 from 10.66.0.2 to any -> (em0)\n"
+                                   "rdr pass on em0 proto tcp from any to (em0) port 8080 -> 10.66.0.2 port 80\n"),
+                 std::string());
+  ATF_REQUIRE_EQ(validatePfRuleset("one rule, no newline"), std::string());
+  ATF_REQUIRE_EQ(validatePfRuleset("a\n\nb\n"), std::string());          // blank line
+  ATF_REQUIRE(!validatePfRuleset("").empty());
+  ATF_REQUIRE(!validatePfRuleset("\n\n").empty());                          // no rules
+  ATF_REQUIRE(validatePfRuleset("pass\nblock $x\n").find("line 2") != std::string::npos);
+  ATF_REQUIRE(!validatePfRuleset("pass\r\nblock\n").empty());              // CR
+  ATF_REQUIRE(!validatePfRuleset(std::string("pass\n\0block", 11)).empty());// NUL
+  ATF_REQUIRE(!validatePfRuleset(std::string(kPfRulesetMaxBytes + 1, 'a')).empty());
+  // a single line keeps the single-rule limit
+  ATF_REQUIRE(!validatePfRuleset(std::string(2000, 'a')).empty());
+  // add_ipfw_rule & co. stay single-line
+  ATF_REQUIRE(!validateRuleText("rule1\nrule2").empty());
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(add_ipfw_rule_validates_set_number_action);
@@ -1252,6 +1285,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, configure_iface_requires_at_least_one_addr);
   ATF_ADD_TEST_CASE(tcs, configure_iface_validates_mac);
   ATF_ADD_TEST_CASE(tcs, add_pf_rule_requires_anchor_and_text);
+  ATF_ADD_TEST_CASE(tcs, pf_ruleset_multi_line);
   ATF_ADD_TEST_CASE(tcs, add_ipfw_rule_validates_set_number_action);
   ATF_ADD_TEST_CASE(tcs, destroy_jail_minimal);
   ATF_ADD_TEST_CASE(tcs, teardown_iface_minimal);

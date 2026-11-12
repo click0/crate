@@ -1172,6 +1172,13 @@ bool stackCommand(const Args &args) {
                 << "Started: " << e.name << std::endl;
     }
 
+    // 1.1.72: the members run detached and outlive this process; so must
+    // their network_policy. The guards only undo a FAILED `stack up` —
+    // returning here destroyed them and removed every rule right after
+    // "started", so default-deny and stack isolation never applied.
+    // `stack down` removes the rules (policyRulesForBridge).
+    for (auto &c : policyCleanups) c.disarm();
+
     std::cout << std::endl;
     std::cout << rang::fg::green << "Stack started successfully." << rang::style::reset << std::endl;
     return true;
@@ -1238,9 +1245,9 @@ bool stackCommand(const Args &args) {
       }
     }
 
-    // 1.1.45: network_policy rules of this stack's bridges. They are
-    // deleted by `stack up`'s own exit path, but a killed `stack up`
-    // (or one from a previous boot's layout) leaves them behind.
+    // 1.1.45: network_policy rules of this stack's bridges. 1.1.72: this
+    // is where they go — `stack up` keeps them for as long as the stack
+    // runs (its own guards only undo a failed `up`).
     for (auto &net : downNetworks) {
       if (net.bridge.empty()) continue;
       try {

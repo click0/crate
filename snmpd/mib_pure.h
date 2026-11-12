@@ -25,15 +25,25 @@ struct Header {
 };
 
 // PDU types we care about. RFC 2741 §6.1.
+// 1.1.72: Get is 5, GetNext 6, GetBulk 7 — they were 6/7/8, one off, so
+// a real Get got an empty Response, GetNext was served as an exact Get
+// (snmpwalk returned nothing), GetBulk's header parsed as an OID, and
+// TestSet (8) was "answered" as a GetBulk.
 enum PduType : uint8_t {
-  PDU_OPEN     = 1,
-  PDU_CLOSE    = 2,
-  PDU_REGISTER = 3,
-  PDU_GET      = 6,
-  PDU_GETNEXT  = 7,
-  PDU_GETBULK  = 8,
-  PDU_NOTIFY   = 12,
-  PDU_RESPONSE = 18,
+  PDU_OPEN       = 1,
+  PDU_CLOSE      = 2,
+  PDU_REGISTER   = 3,
+  PDU_UNREGISTER = 4,
+  PDU_GET        = 5,
+  PDU_GETNEXT    = 6,
+  PDU_GETBULK    = 7,
+  PDU_TESTSET    = 8,
+  PDU_COMMITSET  = 9,
+  PDU_UNDOSET    = 10,
+  PDU_CLEANUPSET = 11,
+  PDU_NOTIFY     = 12,
+  PDU_PING       = 13,
+  PDU_RESPONSE   = 18,
 };
 
 // AgentX VarBind value tags (RFC 2741 §5.4).
@@ -58,6 +68,7 @@ enum ErrorStatus : uint16_t {
   ERR_GENERIC  = 5,
   ERR_NO_ACCESS    = 6,
   ERR_WRONG_TYPE   = 7,
+  ERR_NOT_WRITABLE = 17,   // 1.1.72: the answer to TestSet — every object here is read-only
 };
 
 // --- Encoders (already used by mib.cpp; kept stable) ---
@@ -113,6 +124,25 @@ constexpr uint32_t kMaxPayloadLen = 1u << 20;
 int decodeGetRequest(const std::vector<uint8_t> &buf, size_t offset,
                      uint8_t flags,
                      std::vector<std::vector<uint32_t>> &out);
+
+// 1.1.72: a SearchRange as GetNext needs it — the start, whether the
+// start itself qualifies (include bit), and the end (empty = no bound).
+struct SearchRange {
+  std::vector<uint32_t> start, end;
+  bool include = false;
+};
+// The whole SearchRangeList of a Get / GetNext payload. Returns bytes
+// consumed, 0 on a malformed payload.
+int decodeSearchRanges(const std::vector<uint8_t> &buf, size_t offset, uint8_t flags,
+                       std::vector<SearchRange> &out);
+// A GetBulk payload: [context] non_repeaters(2) max_repetitions(2) SearchRangeList.
+int decodeGetBulkRequest(const std::vector<uint8_t> &buf, size_t offset, uint8_t flags,
+                         uint16_t &nonRepeaters, uint16_t &maxRepetitions,
+                         std::vector<SearchRange> &out);
+// The scalar GetNext should return for `r` among `sortedOids` (ascending):
+// the first OID > start (>= with the include bit) and < end; -1 = none
+// (endOfMibView).
+int pickNext(const std::vector<std::vector<uint32_t>> &sortedOids, const SearchRange &r);
 
 // --- VarBind encoders ---
 

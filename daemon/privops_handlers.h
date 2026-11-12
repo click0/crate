@@ -145,10 +145,9 @@ PrivOpsWirePure::DispatchResult handleTeardownIface(const PrivOpsPure::TeardownI
 //
 // add_pf_rule: load `ruleText` into the named anchor via
 // PfctlOps::addRules (atomically replaces the anchor's existing
-// rules). For now ruleText is single-line per the validator;
-// multi-rule anchors land via either repeated calls (using a
-// future per-rule append verb) or future relaxation of the
-// validator.
+// rules). 1.1.72: ruleText is the anchor's whole ruleset, one rule
+// per line (PrivOpsPure::validatePfRuleset); it was single-line
+// before, which refused every ruleset crate(1) sends.
 // remove_pf_rule: flushes the anchor entirely (pfctl has no
 // per-rule removal primitive). The `ruleText` field is ignored
 // but kept in the request for forward compat.

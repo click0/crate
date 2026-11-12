@@ -724,16 +724,71 @@ void rmdirFlat(const std::string &dir) {
   rmdir(dir);
 }
 
-void rmdirHier(const std::string &dir) {
+std::vector<std::string> mountsUnder(const std::string &path) {
+  std::vector<std::string> out;
+#ifdef __FreeBSD__
+  std::string p = path;
+  while (p.size() > 1 && p.back() == '/') p.pop_back();
+  int n = ::getfsstat(nullptr, 0, MNT_NOWAIT);
+  if (n <= 0) return out;
+  std::vector<struct statfs> buf((size_t)n + 16);
+  n = ::getfsstat(buf.data(), (long)(buf.size() * sizeof(struct statfs)), MNT_NOWAIT);
+  for (int i = 0; i < n; i++) {
+    const std::string on = buf[(size_t)i].f_mntonname;
+    if (on == p || (on.size() > p.size() && on.compare(0, p.size(), p) == 0 && on[p.size()] == '/'))
+      out.push_back(on);
+  }
+#else
+  (void)path;
+#endif
+  return out;
+}
+
+namespace {
+// 1.1.72: never into another file system. A directory whose st_dev
+// differs from the tree's is a mount point (nullfs reports its own
+// fsid), and what is mounted there is not ours to delete.
+void rmdirHierOnDev(const std::string &dir, dev_t dev) {
   for (const auto &entry : fs::directory_iterator(dir)) {
-    if (entry.is_symlink())
-      unlink(entry.path());
-    else if (entry.is_directory())
-      rmdirHier(entry.path());
-    else
-      unlink(entry.path());
+    const std::string p = entry.path().string();
+    struct stat st;
+    if (::lstat(p.c_str(), &st) != 0)
+      ERR2("remove directory", "cannot stat '" << p << "': " << strerror(errno))
+    if (S_ISDIR(st.st_mode)) {
+      if (st.st_dev != dev)
+        ERR2("remove directory", "'" << p << "' is a mount point — not removing what is mounted "
+             "there; unmount it and run again")
+      rmdirHierOnDev(p, dev);
+    } else {
+      unlink(p);
+    }
   }
   rmdir(dir);
+}
+} // namespace
+
+void rmdirHier(const std::string &dir) {
+  // 1.1.72: the walk used to descend into mount points — `crate clean`
+  // emptied the host's /var/cache/pkg (a killed `crate create`) or the
+  // $HOME shares of a crashed `crate run`, and a run teardown whose
+  // unmount had failed walked its read-write shares as root. Refuse the
+  // whole tree when anything is mounted under it (nothing is deleted),
+  // and stay on its file system anyway.
+  struct stat top;
+  if (::lstat(dir.c_str(), &top) != 0)
+    ERR2("remove directory", "cannot stat '" << dir << "': " << strerror(errno))
+  if (S_ISLNK(top.st_mode)) {   // a link is removed, never followed
+    unlink(dir);
+    return;
+  }
+  if (auto m = mountsUnder(dir); !m.empty()) {
+    std::string mlist;   // (not `ss`: STR() declares its own)
+    for (size_t i = 0; i < m.size() && i < 4; i++) mlist += (i ? ", " : "") + m[i];
+    if (m.size() > 4) mlist += ", …";
+    ERR2("remove directory", "'" << dir << "' still has file systems mounted under it (" << mlist
+         << ") — not removed; unmount them and run again")
+  }
+  rmdirHierOnDev(dir, top.st_dev);
 }
 
 bool rmdirFlatExcept(const std::string &dir, const std::set<std::string> &except) {
@@ -750,13 +805,20 @@ bool rmdirFlatExcept(const std::string &dir, const std::set<std::string> &except
 
 bool rmdirHierExcept(const std::string &dir, const std::set<std::string> &except) {
   unsigned cntSkip = 0;
+  struct stat top;
+  const bool haveTop = ::lstat(dir.c_str(), &top) == 0;
   for (const auto &entry : fs::directory_iterator(dir))
     if (except.find(entry.path()) == except.end()) {
+      struct stat st;
       if (entry.is_symlink())
         unlink(entry.path());
-      else if (entry.is_directory())
-        cntSkip += rmdirHierExcept(entry.path(), except);
-      else
+      else if (entry.is_directory()) {
+        // 1.1.72: a mount point (another st_dev) is skipped, not emptied
+        if (haveTop && ::lstat(entry.path().c_str(), &st) == 0 && st.st_dev != top.st_dev)
+          cntSkip++;
+        else
+          cntSkip += rmdirHierExcept(entry.path(), except);
+      } else
         unlink(entry.path());
     } else {
       cntSkip++;
@@ -920,6 +982,18 @@ bool isOnZfs(const std::string &path) {
   if (::statfs(path.c_str(), &sfs) == -1)
     return false;
   return std::string(sfs.f_fstypename) == "zfs";
+}
+
+std::string getZfsDatasetMountedAt(const std::string &path) {
+  struct statfs sfs;
+  if (::statfs(path.c_str(), &sfs) == -1)
+    return "";
+  if (std::string(sfs.f_fstypename) != "zfs")
+    return "";
+  std::string p = path;
+  while (p.size() > 1 && p.back() == '/') p.pop_back();
+  if (p != sfs.f_mntonname) return "";   // 1.1.72: a directory inside someone else's dataset
+  return sfs.f_mntfromname;
 }
 
 std::string getZfsDataset(const std::string &path) {

@@ -6,6 +6,102 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.72] — 2026-11-11
+
+**The post-1.1.71 bug hunt's HIGH findings that broke a basic setup or
+destroyed data: a root `crate run` works again next to crated's privops
+socket, crated creates its registry directory instead of aborting on the
+first start, privops accepts the rulesets crate sends, a tenant can no
+longer remove a jail by its jid, `crate clean` and the run teardown stop
+deleting what is mounted under a jail, `clean` keeps the pf anchors of
+running jails, backup / replicate / template warm stop taking the
+host's root dataset, a stack's network_policy stays in force, crate-hub
+polls TLS nodes, and crate-snmpd speaks AgentX with the right PDU
+numbers.**
+
+- **A root `crate run` failed whenever crated's privops socket existed**
+  (`lib/privops_client_pure.cpp`, `lib/run.cpp`, `lib/spec_registry.cpp`,
+  `lib/network_lease*.cpp`, `daemon/privops_handlers.cpp`).
+  `detectSocketPath` did not look at the uid, so root went through
+  privops with uid 0's per-user layout, and `ensure_user_root` answered
+  400 to peer uid 0: every root `crate run` — and every start and
+  restart crated spawns itself over HTTP and the control sockets — died
+  as soon as crated listened on the default path. Root now keeps the
+  direct path (an explicit `CRATE_PRIVOPS_SOCKET` still wins, with the
+  /var/run/crate layout), and crated answers `ensure_user_root` for uid
+  0 with the legacy root instead of 400.
+- **crated aborted on the first container start** (`daemon/main.cpp`,
+  `daemon/privops_handlers.cpp`). Nothing created `/var/db/crate` — not
+  crated, the rc script or the package — so every owner-registry persist
+  threw, and the status-stream watcher thread did not catch it:
+  `std::terminate`. The registries lived in memory only, so after a
+  restart every tenant jail was unknown. crated creates the directory
+  0700 at start (refusing a symlink or a foreign owner), and a failed
+  persist is logged, with the row kept in memory.
+- **privops refused every pf ruleset crate sends**
+  (`lib/privops_pure.cpp`). `add_pf_rule` took one line, but an anchor's
+  text is a ruleset: NAT with `firewall:` did not start
+  (chromium-privacy) and bridge jails ran without SNAT, rdr or policy.
+  `validatePfRuleset` holds each line to the single-rule checks, up to
+  32 KiB; the anchor is still loaded in one call.
+- **A tenant could remove any jail by its jid**
+  (`lib/privops_authz_pure.cpp`, `lib/privops_pure.cpp`). jail(8) and
+  `ifconfig -vnet` read an all-digit name as a jid, and the name registry
+  never knows such a name, so `destroy_jail` / `reclaim_iface_from_vnet`
+  with name "17" got the bootstrap Allow. An all-digit name — any length,
+  "0000000017" too — is now gated strictly as that jid; a name starting
+  with '-' is refused.
+- **`crate clean` and the run teardown deleted what was mounted under a
+  jail** (`lib/util.cpp`). `rmdirHier` walked into mount points: after a
+  killed `crate create` `clean` emptied the host's `/var/cache/pkg`,
+  after a crashed run the `$HOME` shares, and a teardown whose unmount
+  had failed walked its read-write shares as root. It now refuses a tree
+  with anything mounted under it (`getfsstat`; nothing is deleted, and
+  clean reports why), never descends into another file system (`st_dev`),
+  and removes a symlink instead of following it; `rmdirHierExcept` skips
+  mount points too.
+- **`crate clean` flushed the pf anchors of running jails**
+  (`lib/clean.cpp`, `lib/run_pure.cpp`). Anchors are
+  `crate/<name>_pid<N>`, but a root-path jail is named by its jid, so the
+  name test flushed the SNAT, rdr and firewall policy of every running
+  root jail. An anchor is kept while its `crate run` (pid N) lives.
+- **backup / replicate / template warm took the host's root dataset**
+  (`lib/zfs_dataset.cpp`, `lib/warm.cpp`, `lib/util.cpp`). They used the
+  dataset *containing* the jail directory, and a plain `crate run` jail
+  is a directory — on a default install inside the root dataset: `crate
+  backup web` sent the whole host, `template warm --promote` re-parented
+  the boot environment. They now require the jail's own dataset (a
+  --warm-base clone) and say so otherwise; backup and replicate find the
+  jail by container name as well. A plain run getting a dataset of its
+  own is in TODO §7.
+- **A stack's network_policy was removed right after `stack up`**
+  (`lib/stack.cpp`, `lib/util.h`). The rules' RunAtEnd guards lived in a
+  local vector, so returning from `stack up` removed them: default-deny
+  and stack isolation never applied. They are disarmed on success
+  (`RunAtEnd::disarm`); `stack down` removes the rules.
+- **crate-hub could not poll any TLS node** (`hub/main.cpp`,
+  `hub/api.cpp`). Only `poller.cpp` built httplib with OpenSSL support;
+  `main.o` links first, so the binary got the non-SSL `httplib::Client`
+  and every `tls: true` node failed with "'https' scheme is not
+  supported" — permanently down, and HA ordered failovers of healthy
+  containers; `crate-hub schedule --hub-url https://…` aborted. Every
+  hub object now defines the macro.
+- **crate-snmpd's AgentX PDU numbers were off by one**
+  (`snmpd/mib_pure.*`, `snmpd/mib.cpp`). Get, GetNext and GetBulk are 5,
+  6 and 7 (RFC 2741), not 6, 7 and 8: snmpget got an empty answer and
+  snmpwalk nothing. GetNext now honours the include bit and the range
+  end, GetBulk is answered (non-repeaters, then up to max-repetitions),
+  and TestSet is refused with notWritable.
+- Not in this release: `/var/run/crate`'s 0700, which keeps non-root users
+  away from crated's sockets, needs a layout decision first — 0711 alone
+  would expose root-path jail trees (setuid binaries planted by a jail's
+  root) to every host user. TODO §1 lists the options.
+- Tests: +8 unit cases (`privops_client_pure_test`, `privops_pure_test`,
+  `privops_authz_pure_test`, `run_pure_test` +1 each, `snmpd_agentx_test`
+  +4) and extended validator tests. crate-hub and crate-snmpd were also
+  built and linked on Linux; the old hub binary aborts on an https URL,
+  the new one connects.
+
 ## [1.1.71] — 2026-11-08
 
 **The bug hunt's MED findings: a tenant can no longer nullfs-mount a

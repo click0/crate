@@ -177,6 +177,9 @@ std::string validateJailName(const std::string &name) {
   if (name.size() > NameLimits::kKernelJailName)
     return "jail name longer than " + std::to_string(NameLimits::kKernelJailName) + " chars";
   if (name == "." || name == "..") return "jail name is reserved";
+  // 1.1.72: the name is an argument of `jail -r` / `ifconfig -vnet`;
+  // a leading '-' would be read as an option.
+  if (name[0] == '-') return "jail name must not start with '-'";
   for (char c : name) {
     bool ok = isAlnum(c) || c == '.' || c == '_' || c == '-';
     if (!ok) {
@@ -623,6 +626,35 @@ std::string validateConfigureIface(const ConfigureIfaceReq &r) {
   return "";
 }
 
+// 1.1.72: a pf ruleset — the whole text of one anchor, one rule per
+// line, as PfctlOps / AutoFwPure / composeContainerPolicy produce it.
+// validateRuleText refused any '\n', so every ruleset crate sent through
+// privops was a 400: NAT with `firewall:` did not start and bridge
+// jails ran without SNAT, rdr or policy. Each line is held to the
+// single-rule rules; the anchor still has to be loaded in ONE call
+// (`pfctl -a X -f -` replaces the anchor).
+std::string validatePfRuleset(const std::string &text) {
+  if (text.empty()) return "rule text is empty";
+  if (text.size() > kPfRulesetMaxBytes)
+    return "ruleset longer than " + std::to_string(kPfRulesetMaxBytes) + " bytes";
+  size_t start = 0, lineNo = 0, rules = 0;
+  while (start <= text.size()) {
+    size_t nl = text.find('\n', start);
+    const std::string line = text.substr(start, nl == std::string::npos ? std::string::npos : nl - start);
+    lineNo++;
+    if (!line.empty()) {
+      if (auto e = validateRuleText(line); !e.empty())
+        return "line " + std::to_string(lineNo) + ": " + e;
+      rules++;
+    }
+    if (nl == std::string::npos) break;
+    start = nl + 1;
+  }
+  if (rules == 0) return "rule text has no rules";
+  if (text.find('\0') != std::string::npos) return "rule text contains NUL";
+  return "";
+}
+
 std::string validateTeardownIface(const TeardownIfaceReq &r) {
   if (auto e = validateIfaceName(r.ifname); !e.empty()) return e;
   return "";
@@ -630,7 +662,7 @@ std::string validateTeardownIface(const TeardownIfaceReq &r) {
 
 std::string validateAddPfRule(const AddPfRuleReq &r) {
   if (auto e = validateAnchorName(r.anchor); !e.empty()) return "anchor: " + e;
-  if (auto e = validateRuleText(r.ruleText); !e.empty()) return "rule: " + e;
+  if (auto e = validatePfRuleset(r.ruleText); !e.empty()) return "rule: " + e;   // 1.1.72
   return "";
 }
 

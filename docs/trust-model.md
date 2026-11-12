@@ -111,7 +111,10 @@ differs by transport:
   (1.1.40: `exec_in_jail` too — and strictly: an *unregistered* jid is
   denied as well, since exec-as-root into a jail is exactly what the
   registry exists to confine; the bootstrap "unknown → allow"
-  concession the other jid verbs keep does not apply).
+  concession the other jid verbs keep does not apply). Since 1.1.72 an
+  all-digit name in `destroy_jail` / `reclaim_iface_from_vnet` is gated
+  strictly as the jid jail(8) reads it as; before, the name registry
+  never knew it and any jail was removable by its jid.
   A daemon-owned jid→owner registry (`lib/jid_owner_registry.*`) records
   the operator uid at `create_jail` time; subsequent verbs from a
   different operator are denied `403` against the same registry. 1.1.14

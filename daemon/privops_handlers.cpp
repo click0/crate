@@ -530,12 +530,11 @@ DispatchResult handleCreateEpair(const PrivOpsPure::CreateEpairReq &/*r*/) {
 // --- handleEnsureUserRoot (1.1.39) ---
 
 DispatchResult handleEnsureUserRoot(uint32_t peerUid) {
-  if (peerUid == 0) {
-    return {400, PrivOpsWirePure::formatHandlerError(
-                  "no_peer_uid",
-                  "ensure_user_root needs the libnv transport (peer uid > 0); "
-                  "root uses /var/run/crate directly")};
-  }
+  // 1.1.72: root (and the HTTP transport, whose peer uid is 0) gets the
+  // legacy root instead of a 400 — a root `crate run` that found the
+  // socket died here, and so did every start crated spawned itself.
+  if (peerUid == 0)
+    return {200, PrivOpsWirePure::formatEnsureUserRootSuccess(0, RuntimePathsPure::legacyRoot())};
   if (auto e = ensurePerUserRoot(peerUid); !e.empty())
     return {500, PrivOpsWirePure::formatHandlerError("mkdir_failed", e)};
   return {200, PrivOpsWirePure::formatEnsureUserRootSuccess(
@@ -2097,11 +2096,19 @@ void registerSpawnedJailOwner(long crateRunPid, uint32_t ownerUid,
       auto w = StatusFd::waitForJail(statusFd, (pid_t)crateRunPid, (unsigned)kMaxProbes, ev);
       long long jid = 0;
       if (w == StatusFd::Wait::JailCreated && ev.getInt("jid", jid) && jid > 0) {
-        g_jidOwnerRegistry->recordCreate(static_cast<unsigned>(jid), ownerUid,
-                                         ev.get("name"), ev.get("path"));
-        std::cerr << "crated: container '" << container << "' started as pid "
-                  << crateRunPid << " -> jail " << ev.get("name") << " (jid " << jid
-                  << ") recorded for uid " << ownerUid << std::endl;
+        // 1.1.72: a failed persist (no /var/db/crate, ENOSPC) threw out of
+        // this detached thread — std::terminate took crated down. The row
+        // is in memory before the write, so the gate still has it.
+        try {
+          g_jidOwnerRegistry->recordCreate(static_cast<unsigned>(jid), ownerUid,
+                                           ev.get("name"), ev.get("path"));
+          std::cerr << "crated: container '" << container << "' started as pid "
+                    << crateRunPid << " -> jail " << ev.get("name") << " (jid " << jid
+                    << ") recorded for uid " << ownerUid << std::endl;
+        } catch (const std::exception &e) {
+          std::cerr << "crated: container '" << container << "' (jid " << jid
+                    << "): owner recorded in memory only: " << e.what() << std::endl;
+        }
       } else {
         std::cerr << "crated: container '" << container << "' (pid " << crateRunPid
                   << "): " << StatusFd::describe(w, ev) << "; owner not recorded" << std::endl;
@@ -2116,11 +2123,16 @@ void registerSpawnedJailOwner(long crateRunPid, uint32_t ownerUid,
       try {
         for (const auto &j : JailQuery::getAllJails(/*crateOnly=*/true)) {
           if (j.dying || !RunPure::jailXnameHasPid(j.name, crateRunPid)) continue;
-          g_jidOwnerRegistry->recordCreate(static_cast<unsigned>(j.jid), ownerUid,
-                                           j.name, j.path);
-          std::cerr << "crated: container '" << container << "' started as pid "
-                    << crateRunPid << " -> jail " << j.name << " (jid " << j.jid
-                    << ") recorded for uid " << ownerUid << std::endl;
+          try {   // 1.1.72: as above — a failed persist must not retry every second
+            g_jidOwnerRegistry->recordCreate(static_cast<unsigned>(j.jid), ownerUid,
+                                             j.name, j.path);
+            std::cerr << "crated: container '" << container << "' started as pid "
+                      << crateRunPid << " -> jail " << j.name << " (jid " << j.jid
+                      << ") recorded for uid " << ownerUid << std::endl;
+          } catch (const std::exception &e) {
+            std::cerr << "crated: container '" << container << "' (jid " << j.jid
+                      << "): owner recorded in memory only: " << e.what() << std::endl;
+          }
           reapCrateRun(crateRunPid);   // 1.1.70
           return;
         }

@@ -47,6 +47,7 @@
 #include <cerrno>   // 1.1.50
 #include <cstdint>
 #include <mutex>
+#include <algorithm>   // 1.1.72: std::min (GetBulk)
 #include <iostream>
 #include <vector>
 
@@ -415,16 +416,22 @@ void resolveGet(const std::vector<uint32_t> &oid, std::vector<uint8_t> &out) {
 }
 
 // --- GetNext-resolver: lexicographic next OID. ---
-void resolveGetNext(const std::vector<uint32_t> &oid, std::vector<uint8_t> &out) {
+// 1.1.72: honours the SearchRange — the include bit (the start itself
+// qualifies) and the end bound. Returns the OID it answered with (the
+// start again for endOfMibView), so GetBulk can chain repetitions.
+std::vector<uint32_t> resolveGetNext(const MibPure::SearchRange &r, std::vector<uint8_t> &out) {
   std::lock_guard<std::mutex> lock(g_mibMutex);
-  for (auto &s : scalarTable()) {
-    if (MibPure::compareOid(s.oid, oid) > 0) {
-      encodeScalarValue(out, s);
-      return;
-    }
+  const auto &table = scalarTable();
+  std::vector<std::vector<uint32_t>> oids;
+  for (auto &s : table) oids.push_back(s.oid);
+  int i = MibPure::pickNext(oids, r);
+  if (i < 0) {
+    // Walked off the end of our subtree (or of the requested range).
+    MibPure::encodeVarBindEndOfMibView(out, r.start);
+    return {};
   }
-  // Walked off the end of our subtree.
-  MibPure::encodeVarBindEndOfMibView(out, oid);
+  encodeScalarValue(out, table[(size_t)i]);
+  return table[(size_t)i].oid;
 }
 
 } // anon
@@ -465,18 +472,43 @@ bool dispatchOnce(int timeoutMs) {
   // with another Response (1.1.50).
   if (h.type == MibPure::PDU_RESPONSE) return true;
 
-  // Only Get and GetNext are handled; everything else is acknowledged
-  // with an empty Response so the master agent doesn't stall.
+  // Get, GetNext and GetBulk are answered; TestSet is refused
+  // (notWritable — every object here is read-only); everything else
+  // (Commit/Undo/CleanupSet, Ping, ...) gets an empty noError Response
+  // so the master agent doesn't stall.
   std::vector<uint8_t> respPayload;
   MibPure::encodeResponseHeader(respPayload, /*sysUpTime*/0,
-                                MibPure::ERR_NO_ERROR, 0);
+                                h.type == MibPure::PDU_TESTSET ? MibPure::ERR_NOT_WRITABLE
+                                                               : MibPure::ERR_NO_ERROR,
+                                h.type == MibPure::PDU_TESTSET ? 1 : 0);
 
   if (h.type == MibPure::PDU_GET || h.type == MibPure::PDU_GETNEXT) {
-    std::vector<std::vector<uint32_t>> oids;
-    MibPure::decodeGetRequest(payload, 0, h.flags, oids);
-    for (auto &oid : oids) {
-      if (h.type == MibPure::PDU_GET) resolveGet(oid, respPayload);
-      else                            resolveGetNext(oid, respPayload);
+    std::vector<MibPure::SearchRange> ranges;
+    MibPure::decodeSearchRanges(payload, 0, h.flags, ranges);
+    for (auto &r : ranges) {
+      if (h.type == MibPure::PDU_GET) resolveGet(r.start, respPayload);
+      else                            resolveGetNext(r, respPayload);
+    }
+  } else if (h.type == MibPure::PDU_GETBULK) {
+    // 1.1.72: GetBulk (RFC 2741 §7.2.3.3): the first non_repeaters
+    // ranges once, the rest repeated up to max_repetitions times, each
+    // repetition continuing from what the previous one returned.
+    uint16_t nonRep = 0, maxRep = 0;
+    std::vector<MibPure::SearchRange> ranges;
+    if (MibPure::decodeGetBulkRequest(payload, 0, h.flags, nonRep, maxRep, ranges) > 0) {
+      size_t n = std::min<size_t>(nonRep, ranges.size());
+      for (size_t i = 0; i < n; i++) resolveGetNext(ranges[i], respPayload);
+      std::vector<MibPure::SearchRange> rep(ranges.begin() + (long)n, ranges.end());
+      const unsigned reps = std::min<unsigned>(maxRep, 64);   // bounded: four scalars
+      for (unsigned k = 0; k < reps && !rep.empty(); k++) {
+        bool any = false;
+        for (auto &r : rep) {
+          auto got = resolveGetNext(r, respPayload);
+          if (!got.empty()) { r.start = got; r.include = false; any = true; }
+          else r.start = r.end.empty() ? std::vector<uint32_t>{~0u} : r.end;   // stays at the end
+        }
+        if (!any) break;
+      }
     }
   }
 

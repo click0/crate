@@ -37,7 +37,14 @@ bool templateWarmCommand(const Args &args) {
   if (!jail) ERR("jail '" << args.warmTarget << "' not found or not running")
   if (!Util::Fs::isOnZfs(jail->path))
     ERR("jail '" << args.warmTarget << "' is not on ZFS — warm templates require ZFS")
-  auto sourceDataset = Util::Fs::getZfsDataset(jail->path);
+  // 1.1.72: the jail's own dataset, not the one its directory lies in
+  // (that cloned — and with --promote re-parented — the host's root).
+  auto sourceDataset = Util::Fs::getZfsDatasetMountedAt(jail->path);
+  if (sourceDataset.empty())
+    ERR("jail '" << args.warmTarget << "' has no ZFS dataset of its own: " << jail->path
+        << " is a directory in " << Util::Fs::getZfsDataset(jail->path)
+        << " — a warm template needs a jail that runs from a dataset of its own (a plain "
+        "`crate run` does not get one yet)")
 
   auto suffix = WarmPure::warmSnapshotSuffix(::time(nullptr));
 
