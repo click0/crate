@@ -130,7 +130,7 @@ if [ -n "$BASH_VERSION" ]; then
         return
         ;;
       template)
-        COMPREPLY=( $(compgen -W "warm --output --promote -h --help" -- "$cur") )
+        COMPREPLY=( $(compgen -W "warm trust --output --promote --spec -h --help" -- "$cur") )
         return
         ;;
       retune)
@@ -245,7 +245,7 @@ if [ -n "$ZSH_VERSION" ]; then
       'restore:replay a backup stream into a fresh dataset'
       'backup-prune:apply Proxmox-style retention to .zstream files'
       'replicate:stream a ZFS snapshot to a remote host via ssh'
-      'template:capture warm template (template warm)'
+      'template:warm templates (template warm, template trust)'
       'retune:live RCTL adjustment without restart'
       'throttle:dummynet token-bucket network shaping'
       'doctor:health check for crate host'
@@ -421,9 +421,10 @@ if [ -n "$ZSH_VERSION" ]; then
             ;;
           template)
             _arguments \
-              '1:subcommand:(warm)' \
+              '1:subcommand:(warm trust)' \
               '--output[ZFS dataset for the clone]:dataset:' \
               '--promote[zfs promote after clone]' \
+              '--spec[.crate whose spec the template runs with]:crate file:_files -g "*.crate"' \
               '(-h --help)'{-h,--help}'[show help]' \
               '2:jail:'
             ;;

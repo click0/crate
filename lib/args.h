@@ -149,9 +149,10 @@ public:
   std::string replicateSshConfig;      // --ssh-config /path/to/ssh_config
   std::vector<std::string> replicateSshOpts; // repeatable --ssh-opt KEY=VAL
 
-  // template parameters (subcommand: "warm")
-  std::string templateSubcmd;       // currently only "warm"
-  std::string warmTarget;           // jail name
+  // template parameters (subcommands: "warm", 1.1.75 "trust")
+  std::string templateSubcmd;       // "warm" or "trust"
+  std::string warmTarget;           // jail name (warm) / template dataset (trust)
+  std::string warmSpecFile;         // 1.1.75: --spec <file.crate>, the trusted spec
   std::string warmOutputDataset;    // ZFS dataset to clone into
   bool        warmPromote = false;  // --promote: zfs promote after clone
 

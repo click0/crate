@@ -24,6 +24,8 @@
 #include "net_detect.h"
 #include "ifconfig_ops.h"
 #include "scripts.h"
+#include "scripts_pure.h"     // 1.1.75: where a hook runs
+#include "warm_trust.h"       // 1.1.75: a warm template's trusted spec
 #include "ctx.h"
 #include "jail_query.h"
 #include "zfs_ops.h"
@@ -397,8 +399,8 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   // --name <name>` instead of `-f <file.crate>`. We snapshot+clone the
   // warm dataset (on-disk state captured by `crate template warm`) and
   // let ZFS auto-mount it as the jail directory, skipping the
-  // tar-extract entirely. The cloned dataset still has +CRATE.SPEC
-  // because the source jail had it from when it was first extracted.
+  // tar-extract entirely. (1.1.75: the spec comes from the template's
+  // trusted entry, WarmTrust, not from the +CRATE.SPEC in the clone.)
   // ------------------------------------------------------------------
   const bool warmBase = !args.runWarmBase.empty();
   const std::string runHex = Util::randomHex(4);
@@ -469,10 +471,15 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   // dataset's mountpoint (it is not since jails moved to
   // /var/run/crate/0, and on a default install it never was).
   std::string warmCloneName, warmSnapName;
+  std::string warmSpecPath, warmThinPath;   // 1.1.75: the template's trusted spec (WarmTrust)
   RunAtEnd destroyWarmClone;
   if (warmBase) {
     if (auto e = WarmPure::validateTemplateDataset(args.runWarmBase); !e.empty())
       ERR("--warm-base: " << e)
+    // 1.1.75: the spec and the thin-jail manifest come from the root-only
+    // store, not from the clone — refused before anything is cloned when
+    // the template has no entry there.
+    WarmTrust::storePathsFor(args.runWarmBase, warmSpecPath, warmThinPath);
     // (--name is validated up front, right after nameComponent, since 1.1.33.)
 
     if (!Util::Fs::isOnZfs(jailBaseDir))
@@ -577,14 +584,9 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
       {{CRATE_PATH_XZ, Cmd::xzThreadsArg, "--decompress"}, {CRATE_PATH_TAR, "xf", "-", "-C", jailPath}},
       "extract the crate file into the jail directory", args.runCrateFile);
   } else {
-    LOG("warm-base: rootfs comes from ZFS clone — skipping tar extraction")
-    // Sanity check: the warm dataset must contain +CRATE.SPEC. Warm
-    // templates produced by `crate template warm` always do (the source
-    // jail was extracted from a .crate that put it there) but a
-    // hand-rolled template might not.
-    if (!Util::Fs::fileExists(J("/+CRATE.SPEC")))
-      ERR("--warm-base: cloned dataset is missing +CRATE.SPEC at " << J("/+CRATE.SPEC")
-          << " — was it produced by `crate template warm` of a `crate run` jail?")
+    LOG("warm-base: rootfs comes from ZFS clone — skipping tar extraction; spec from " << warmSpecPath)
+    // 1.1.75: the clone's own +CRATE.SPEC / +CRATE.THIN are not read: the
+    // source jail's root could have rewritten them before `template warm`.
   }
 
   // parse +CRATE.SPEC. 1.1.68: with the run's --var values — `crate create`
@@ -593,7 +595,20 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   // `crate stack up` passes every member's vars to this run, so a
   // placeholder in a run-time field (scripts, env, a share path) was
   // left as literal text until now.
-  auto spec = parseSpecWithVars(J("/+CRATE.SPEC"), args.vars).preprocess();
+  auto spec = parseSpecWithVars(warmBase ? warmSpecPath : J("/+CRATE.SPEC"), args.vars).preprocess();
+
+  // 1.1.75: the sections that run before the jail exists or after it is
+  // gone run in a throw-away jail(8), which needs root (ScriptsPure::
+  // hookPlace). Under rootless they failed with EPERM from chroot(8) —
+  // run:after-remove-jail in the middle of the teardown; refuse up front.
+  if (::geteuid() != 0) {
+    std::vector<std::string> sections;
+    for (auto &kv : spec.scripts) sections.push_back(kv.first);
+    if (auto sec = ScriptsPure::firstThrowAwaySection(sections); !sec.empty())
+      ERR("scripts/" << sec << " runs outside the jail (before it is created or after it is "
+          "removed), in a throw-away jail(8), which needs root; a rootless run supports the "
+          "sections that run inside the jail (run:after-create-jail and later)")
+  }
 
   // 1.1.58: thin jail (base/mode: host-ro). The archive holds the
   // writable layer only; mount the host's userland read-only now, before
@@ -604,8 +619,9 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   // order at teardown, routed through crated's mount_nullfs (read_only)
   // under rootless.
   {
-    auto manifestPath = J(STR("/" << ThinJailPure::kManifestFile));
-    const bool haveManifest = Util::Fs::fileExists(manifestPath);
+    // 1.1.75: a warm template's manifest comes from the trusted store too
+    auto manifestPath = warmBase ? warmThinPath : J(STR("/" << ThinJailPure::kManifestFile));
+    const bool haveManifest = !manifestPath.empty() && Util::Fs::fileExists(manifestPath);
     if (spec.baseHostRo && !haveManifest)
       ERR("the spec says base/mode: host-ro but the crate has no " << ThinJailPure::kManifestFile
           << " — it was created by an older crate or by hand; re-create it with `crate create`")
@@ -979,10 +995,27 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   }
 
   // helper
-  auto runScript = [&jailPath,&spec](const char *section) {
-    Scripts::section(section, spec.scripts, [&jailPath,section](const std::string &cmd) {
-      Util::execCommand({"/usr/sbin/chroot", jailPath, "/bin/sh", "-c",
-                         STR("ASSUME_ALWAYS_YES=yes " << cmd)}, CSTR("run script#" << section));
+  // 1.1.75: a section runs inside the jail while it exists, as its root;
+  // before it exists and after it is gone, in a throw-away jail(8) on
+  // the tree (ScriptsPure::hookPlace). Every section used to run as
+  // `chroot <tree> /bin/sh` as host root — the host's network, no jail
+  // limits — and by run:before-execute the jail's root could have
+  // replaced /bin/sh, or anything a hook calls, which then ran as host
+  // root and could leave the chroot.
+  int hookJid = -1;   // set once the jail exists
+  bool hookInet6 = false;   // ip6=inherit is an unknown jail(8) parameter without INET6
+  try { hookInet6 = Util::getSysctlInt("kern.features.inet6") == 1; } catch (...) {}
+  auto runScript = [&jailPath,&spec,&hookJid,hookInet6](const char *section) {
+    Scripts::section(section, spec.scripts, [&](const std::string &cmd) {
+      const std::string line = STR("ASSUME_ALWAYS_YES=yes " << cmd);
+      const std::string what = STR("run script#" << section);
+      if (ScriptsPure::hookPlace(section) == ScriptsPure::HookPlace::InJail) {
+        if (hookJid <= 0)
+          ERR("internal: scripts/" << section << " runs inside the jail, which does not exist yet")
+        JailExec::execInJailChecked(hookJid, {CRATE_PATH_SH, "-c", line}, "root", what);
+      } else {
+        Util::execCommand(ScriptsPure::throwAwayJailArgv(jailPath, line, hookInet6), what);
+      }
     });
   };
   runScript("run:begin");
@@ -1172,6 +1205,7 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
 
   auto jailInfo = RunJail::createJail(spec, jailPath, jailXname, args.logProgress, identity);
   int jid = jailInfo.jid;
+  hookJid = jid;   // 1.1.75: scripts from here on run inside the jail
 
   // 0.8.31: publish jid to the MAC bsdextended cleanup handler so
   // it can scope removeUgidfwRules() to this jail. See the
@@ -1280,10 +1314,22 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   }
 
   RunAtEnd destroyJail([jailInfo,&jailXname,runScript,&args]() {
-    runScript("run:before-remove-jail");
+    // 1.1.75: a failing hook here no longer keeps the jail: the throw
+    // skipped removeJail (and, through doNow on the success path, the
+    // rest of the teardown). Each hook call stays on a line of its
+    // own: the Makefile greps them for the list of section names.
+    try {
+      runScript("run:before-remove-jail");
+    } catch (const std::exception &e) {
+      WARN("scripts/run:before-remove-jail: " << e.what())
+    }
     LOG("removing jail " << jailXname << " jid=" << jailInfo.jid << " ...")
     RunJail::removeJail(jailInfo);
-    runScript("run:after-remove-jail");
+    try {
+      runScript("run:after-remove-jail");
+    } catch (const std::exception &e) {
+      WARN("scripts/run:after-remove-jail: " << e.what())
+    }
     LOG("removing jail " << jailXname << " jid=" << jailInfo.jid << " done")
   });
 
@@ -2379,9 +2425,10 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
       for (auto *job : kv.second)
         crontab << job->schedule << "\t" << job->command << std::endl;
       Util::Fs::writeFile(crontab.str(), J(STR("/var/cron/tabs/" << cronUser)));
-      // Ensure correct ownership and permissions (cron requires 0600)
-      Util::execCommand({"/usr/sbin/chroot", jailPath, "/bin/sh", "-c",
-        STR("chmod 0600 /var/cron/tabs/" << cronUser)}, "set crontab permissions");
+      // Ensure correct ownership and permissions (cron requires 0600).
+      // 1.1.75: inside the jail — this was `chroot <tree> /bin/sh` as host
+      // root (EPERM under rootless; the jail's own sh and chmod as host root).
+      execInJail({CRATE_PATH_CHMOD, "0600", STR("/var/cron/tabs/" << cronUser)}, "set crontab permissions");
     }
     // Enable cron in rc.conf
     Util::Fs::appendFile("cron_enable=\"YES\"\n", J("/etc/rc.conf"));

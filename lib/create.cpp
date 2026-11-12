@@ -85,7 +85,7 @@ static void notifyUserOfLongProcess(bool begin, const std::string &processName, 
 static void runChrootCommand(const std::string &jailPath, const std::vector<std::string> &argv,
                              const char *descr, const std::string &stdoutFile = "",
                              const std::string &logFile = "") {
-  auto fullArgv = std::vector<std::string>{"/usr/sbin/chroot", jailPath, "/usr/bin/env", "ASSUME_ALWAYS_YES=yes"};
+  auto fullArgv = std::vector<std::string>{CRATE_PATH_CHROOT, jailPath, CRATE_PATH_ENV, "ASSUME_ALWAYS_YES=yes"};
   fullArgv.insert(fullArgv.end(), argv.begin(), argv.end());
   if (!stdoutFile.empty())
     Util::execPipeline({fullArgv}, descr, "", stdoutFile);
@@ -215,7 +215,7 @@ static std::set<std::string> getElfDependencies(const std::string &elfPath, cons
   // Use ldd(1) via exec (no shell) and parse output in C++
   // ldd output format: "  libfoo.so.1 => /usr/lib/libfoo.so.1 (0x...)"
   auto output = Util::execCommandGetOutput(
-    {"/usr/sbin/chroot", jailPath, "ldd", elfPath}, "get elf dependencies");
+    {CRATE_PATH_CHROOT, jailPath, "ldd", elfPath}, "get elf dependencies");
   std::istringstream is(output);
   std::string line;
   while (std::getline(is, line)) {
@@ -655,7 +655,7 @@ bool createCrate(const Args &args, const Spec &spec) {
       LOG("run/user: account '" << spec.runUser << "' exists in the jail (uid " << found.uid << ")")
     } else {
       LOG("run/user: creating the account '" << spec.runUser << "' in the jail")
-      Util::execCommand({"/usr/sbin/chroot", jailPath, "/usr/sbin/pw", "useradd", spec.runUser,
+      Util::execCommand({CRATE_PATH_CHROOT, jailPath, CRATE_PATH_PW, "useradd", spec.runUser,
                          "-m", "-s", "/bin/sh", "-c", "crate run/user"},
                         CSTR("create the run/user account '" << spec.runUser << "' in jail"));
     }

@@ -121,4 +121,24 @@ std::string warmRunCloneName(const std::string &parentDataset,
                              const std::string &jailName,
                              const std::string &hex);
 
+// --- 1.1.75: the trusted spec of a warm template ---
+//
+// `crate run --warm-base` read +CRATE.SPEC and +CRATE.THIN from the
+// clone — files the source jail's root could rewrite before `template
+// warm`, so a template could grant itself shares, scripts, allow.* and
+// host-ro mounts. The spec a template runs with now lives outside every
+// tree, in a root-only store keyed by the template dataset's ZFS guid
+// (a rename keeps it; a destroyed and recreated dataset gets a new one):
+// `template warm` fills it from the .crate the source jail was started
+// from (the spec registry), from the base template's entry when the
+// source was itself a --warm-base run, or from --spec <file.crate>;
+// `template trust <dataset> --spec <file.crate>` fills it for a template
+// made before 1.1.75. A template with no entry is refused.
+std::string trustedStoreDir();                    // /var/db/crate/warm
+// "" when `guid` is not a ZFS guid (decimal, 1..20 digits).
+std::string trustedSpecPath(const std::string &guid);
+std::string trustedThinPath(const std::string &guid);
+// `zfs get -H -o value guid <dataset>`
+std::vector<std::string> buildGuidArgv(const std::string &dataset);
+
 } // namespace WarmPure

@@ -6,6 +6,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.75] — 2026-11-12
+
+**Nothing the jail controls runs or is read as the host's root any more:
+`scripts:` sections run inside the jail (or, before it exists and after
+it is gone, in a throw-away jail), and a warm template runs with a spec
+kept outside its tree.**
+
+- **Hooks ran as `chroot <tree> /bin/sh` as host root** (`lib/run.cpp`,
+  `lib/scripts_pure.cpp`). Every `scripts:` section did — with the host's
+  network and no jail limits — and from run:after-create-jail on the
+  jail's root could have replaced /bin/sh, or any command a hook calls,
+  which then ran as host root and could leave the chroot. Under rootless
+  chroot(8) was EPERM, so a spec with scripts did not run at all. Now
+  the sections from run:after-create-jail to run:before-remove-jail run
+  inside the jail as its root (jail_attach; crated's exec_in_jail under
+  rootless): the jail's network and limits. run:begin,
+  run:before-create-jail and run:after-remove-jail run in a throw-away
+  `jail -c path=<tree> ip4=inherit [ip6=inherit] command=/bin/sh -c …`
+  (no vnet, gone when the command exits); they need root, and a rootless
+  run refuses a spec that has them up front instead of failing with
+  EPERM — run:after-remove-jail did so in the middle of the teardown. A
+  failing run:before-remove-jail no longer skips the removal of the jail.
+  The crontab `chmod 0600` runs inside the jail too.
+- **A warm template could grant itself shares, scripts and `allow.*`**
+  (`lib/warm.cpp`, `lib/warm_pure.cpp`, `lib/run.cpp`, `cli/`).
+  `crate run --warm-base` read +CRATE.SPEC and +CRATE.THIN from the
+  clone — files the source jail's root could rewrite before `template
+  warm`. The spec a template runs with now lives in a root-only store,
+  `/var/db/crate/warm/<guid>.spec` (and `.thin`), keyed by the template
+  dataset's ZFS guid. `template warm` fills it from `--spec
+  <file.crate>`, else from the .crate the jail was started from (the
+  spec registry), else from the base template's entry; `run
+  --warm-base` reads only that and refuses a template without an entry.
+  **A template made before 1.1.75 needs one `crate template trust
+  <dataset> --spec <file.crate>`** (new subcommand) before it runs
+  again.
+- Hygiene: `create.cpp`'s chroot calls and warm's zfs calls use the
+  `CRATE_PATH_*` names (`/usr/sbin/chroot`, `/usr/bin/env`, `/usr/sbin/pw`,
+  `/sbin/zfs` were spelled out); `CRATE_PATH_CHMOD` is new.
+- Docs: crate.5 (every hook section, in run order, and where it runs —
+  `create:begin` was documented, the section is `create:start`; template
+  warm / trust), README / README_UK, usage text, shell completions, the
+  on-hardware runbook §4q.
+
 ## [1.1.74] — 2026-11-12
 
 **Six HIGH findings of the 1.1.71 bug hunt: one tenant can no longer

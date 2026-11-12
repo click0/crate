@@ -65,6 +65,7 @@ static void usage() {
   std::cout << "  restore STREAM --to DATASET     replay a backup stream into a fresh dataset" << std::endl;
   std::cout << "  replicate TARGET --to HOST --dest-dataset DS  stream a ZFS snapshot to a remote host" << std::endl;
   std::cout << "  template warm TARGET --output DS  capture jail's on-disk state as a ZFS warm template" << std::endl;
+  std::cout << "  template trust DS --spec F.crate  record the spec a warm template runs with" << std::endl;
   std::cout << "  retune TARGET --rctl K=V...   live-tune jail RCTL limits without restart (--show, --clear)" << std::endl;
   std::cout << "  throttle TARGET --ingress R --egress R    dummynet token-bucket network shaping" << std::endl;
   std::cout << "  doctor [-j]                health check for crate host (kernel modules, commands, ZFS, jails, ...)" << std::endl;
@@ -604,7 +605,8 @@ static void usageRetune() {
 }
 
 static void usageTemplate() {
-  std::cout << "usage: crate template warm <jail> --output <dataset> [--promote]" << std::endl;
+  std::cout << "usage: crate template warm <jail> --output <dataset> [--promote] [--spec <file.crate>]" << std::endl;
+  std::cout << "       crate template trust <dataset> --spec <file.crate>" << std::endl;
   std::cout << "" << std::endl;
   std::cout << "Capture the on-disk state of a running jail as a ZFS clone the" << std::endl;
   std::cout << "operator can later pass to `crate run --warm-base <dataset>`." << std::endl;
@@ -623,6 +625,14 @@ static void usageTemplate() {
   std::cout << "                     longer dependent on the source snapshot — useful" << std::endl;
   std::cout << "                     when the operator wants to delete old warm" << std::endl;
   std::cout << "                     snapshots without breaking the template." << std::endl;
+  std::cout << "  --spec FILE        the .crate whose spec the template runs with." << std::endl;
+  std::cout << "                     Default: the .crate the jail was started from" << std::endl;
+  std::cout << "                     (spec registry), or the base template's spec." << std::endl;
+  std::cout << "" << std::endl;
+  std::cout << "Since 1.1.75 `crate run --warm-base` takes the spec and the thin-jail" << std::endl;
+  std::cout << "manifest from a root-only store (/var/db/crate/warm), not from the" << std::endl;
+  std::cout << "clone, whose +CRATE.SPEC the source jail's root could have rewritten." << std::endl;
+  std::cout << "`template trust` records it for a template made before 1.1.75." << std::endl;
   std::cout << "" << std::endl;
 }
 
@@ -1586,6 +1596,7 @@ Args parseArguments(int argc, char** argv, unsigned &processed) {
           if (strEq(argLong, "help")) { usageTemplate(); exit(0); }
           else if (strEq(argLong, "output"))   args.warmOutputDataset = getArgParam(++a, argc, argv);
           else if (strEq(argLong, "promote"))  args.warmPromote = true;
+          else if (strEq(argLong, "spec"))     args.warmSpecFile = getArgParam(++a, argc, argv);   // 1.1.75
           else err("unsupported long option '%s'", argv[a]);
         } else if (args.templateSubcmd.empty()) {
           args.templateSubcmd = argv[a];

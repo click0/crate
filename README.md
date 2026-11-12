@@ -73,8 +73,9 @@ Crate containers contain everything needed to run the containerized software —
 * **Tor integration**: built-in tor proxy option with optional control port
 
 ### Lifecycle Hooks
-* `run:begin`, `run:after-create-jail`, `run:before-start-services`, `run:before-execute`, `run:after-execute`, `run:end`
-* `create:begin`, `create:end`
+* `run:begin`, `run:before-create-jail`, `run:after-create-jail`, `run:before-create-users`, `run:after-create-users`, `init`, `run:before-start-services`, `run:after-start-services`, `run:before-execute`, `run:after-execute`, `run:end`, `run:before-remove-jail`, `run:after-remove-jail`
+* `create:start`, `create:end`
+* Since 1.1.75 the `run` sections from `run:after-create-jail` on run inside the jail as its root; `run:begin`, `run:before-create-jail` and `run:after-remove-jail` run in a throw-away jail on the same tree (root only). They used to run as `chroot <tree> /bin/sh` as the host's root.
 
 ## Commands
 

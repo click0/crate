@@ -66,10 +66,15 @@ The bhyve/VM track is in TODO2.
   lease slot.
 * (HIGH, bug hunt 1.1.71, plausible: EPERM paths not run on hardware)
   rootless runs reach operations that have no privops route:
-  Mount("devfs") (mount.cpp:33, run.cpp:983) and the unionfs of `cow:`
-  (run.cpp:817) call nmount(2) directly, and the scripts and cron
-  sections go through chroot(8) (run.cpp:974-978, 2359-2360) — EPERM for
-  a non-root caller. Most examples have scripts.
+  Mount("devfs") (mount.cpp:33, run.cpp) and the unionfs of `cow:`
+  (run.cpp) call nmount(2) directly — EPERM for a non-root caller. (The
+  scripts and the crontab chmod went through chroot(8) too; since 1.1.75
+  they run inside the jail.)
+* (LOW, left open by 1.1.75) scripts/run:begin, run:before-create-jail
+  and run:after-remove-jail run in a throw-away jail(8) (ScriptsPure::
+  hookPlace), which needs root: a rootless run refuses a spec that has
+  them. A privops verb that creates such a jail on the caller's own tree
+  and runs one command in it would lift that.
 * (MED, bug hunt 1.1.71) crate.yml's securelevel / children_max defaults
   are lost on the privops path: run.cpp:1200-1204 computes the effective
   values, but run_jail.cpp:75-78,108-111 sends only spec.*, and the
@@ -506,17 +511,21 @@ The bhyve/VM track is in TODO2.
   (status_pure.cpp:23-27) and crated / hub responses, which strict
   readers (Python json.loads on bytes) refuse. Replace invalid
   sequences with \ufffd.
-* (HIGH, bug hunt 1.1.71) jail-controlled files run or are read as host
-  root. (a) Hooks run as `chroot <jailPath> /bin/sh` on the host
-  (run.cpp:974-978) — host network, no jail limits — and
-  run:before-execute / after-execute / end / *-remove-jail run after the
-  jail's root processes could replace /bin/sh, which then runs as host
-  root and leaves the chroot; crate.5:1064-1077 does not say where hooks
-  run. (b) --warm-base reads +CRATE.SPEC and +CRATE.THIN from the clone
-  (run.cpp:577-588), files the source jail's root could rewrite before
-  `template warm`: the template grants itself shares, scripts and
-  allow.*. Fix: hooks after jail creation through execInJail
-  (jail_attach); keep a warm template's spec outside its tree.
+* (MED, left open by 1.1.75) host-side writes into a jail tree still run
+  as root by path while the tree may hold jail-made symlinks: on a
+  --warm-base clone (the source jail's root wrote it) writeFileInJail /
+  appendFileInJail (/etc/rc.conf, /etc/hostid, /var/cron/tabs/<user>,
+  the init marker; run.cpp) go through Util::Fs::writeFile / appendFile,
+  whose O_NOFOLLOW guards the last component only: a symlinked directory
+  — /etc -> /etc, absolute, resolves against the HOST's root — sends the
+  append to the host's /etc/rc.conf. Write through an openat() walk that
+  refuses symlinked components (O_RESOLVE_BENEATH), or inside the jail.
+* (LOW, left open by 1.1.75) the trusted spec store of warm templates
+  (/var/db/crate/warm/<guid>.spec / .thin) is never pruned: a destroyed
+  template leaves its files (harmless — a new dataset gets a new guid).
+  `crate clean` could drop entries whose guid no dataset has. `crate
+  info` / `list` of a running warm-base jail still show the clone's own
+  +CRATE.SPEC, not the trusted one it runs with.
 * (MED, bug hunt 1.1.71) 1.1.71's X-cookie move follows a symlink in the
   SOURCE (run.cpp:2411-2429): it runs for every root `crate run` with
   the default run user, X11 or not, and fileExists / copy_file of
