@@ -352,7 +352,7 @@ static int mainGuarded(int argc, char** argv) {
     succ = replicateCrate(args);
     break;
   } case CmdTemplate: {
-    // currently the only subcommand is "warm"
+    // "warm"; 1.1.75 "trust" (dispatched inside)
     succ = templateWarmCommand(args);
     break;
   } case CmdRetune: {

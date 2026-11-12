@@ -53,6 +53,9 @@
 #ifndef CRATE_PATH_CP
 #define CRATE_PATH_CP         "/bin/cp"         // 1.1.71: etc/keep directories
 #endif
+#ifndef CRATE_PATH_CHMOD
+#define CRATE_PATH_CHMOD      "/bin/chmod"      // 1.1.75: crontab mode, inside the jail
+#endif
 
 // --- FreeBSD base system: /usr/bin ---
 

@@ -1190,6 +1190,45 @@ cookie, and its desktop works.
 
 ---
 
+## 4q. 1.1.75 — hooks inside the jail, trusted warm-template specs
+
+```sh
+# a spec with hooks in every place (hooks.yml):
+#   scripts:
+#     run:begin:              ["hostname > /tmp/h-begin"]
+#     run:after-create-jail:  ["hostname > /tmp/h-after; ifconfig -l > /tmp/if-after"]
+#     run:before-execute:     ["id -u > /tmp/id"]
+#     run:after-remove-jail:  ["hostname > /tmp/h-gone"]
+crate create -s hooks.yml -o /tmp/hooks.crate && crate run -f /tmp/hooks.crate -- /bin/sleep 3 &
+sleep 2; J=$(jls path | grep jail-hooks- | head -1)
+cat $J/tmp/h-after $J/tmp/if-after   # the jail's hostname and ITS interfaces (lo0, epair…b), not the host's
+cat $J/tmp/id                        # 0 — the jail's root
+# run:begin / run:after-remove-jail ran in a jail: `jls` showed a short-lived jail with path=$J
+# rootless: a spec with run:begin is refused up front
+sudo -u alice crate run -f /tmp/hooks.crate          # "scripts/run:begin runs outside the jail … needs root"
+# a spec with only run:before-start-services hooks (nginx.yml) runs rootless now
+sudo -u alice crate run -f nginx.crate &             # starts; the hook ran inside the jail
+
+# warm templates: the trusted spec
+crate run -f nginx.crate & sleep 5
+crate template warm nginx --output tank/templates/nginx-warm   # "spec from /…/nginx.crate"
+ls -l /var/db/crate/warm/                                      # <guid>.spec, -rw------- root
+# a rewritten +CRATE.SPEC inside the template is not used
+echo 'options: [net]' >> $(zfs get -H -o value mountpoint tank/templates/nginx-warm)/+CRATE.SPEC
+crate run --warm-base tank/templates/nginx-warm --name nw -- /bin/echo ok   # runs with the stored spec
+# a template made before 1.1.75: refused until trusted
+zfs create tank/templates/hand-made; crate run --warm-base tank/templates/hand-made --name hm   # "no trusted spec … crate template trust"
+crate template trust tank/templates/nginx-warm --spec nginx.crate                               # re-records it
+```
+
+Pass criteria: in-jail hooks see the jail's hostname and interfaces as
+uid 0 of the jail; the outside sections run in a short-lived jail;
+rootless refuses only the outside sections; `template warm` records the
+spec in /var/db/crate/warm and `run --warm-base` ignores the clone's
+own +CRATE.SPEC; an untrusted template is refused with the remedy.
+
+---
+
 ## 5. Reporting back
 
 ```sh

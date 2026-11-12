@@ -193,9 +193,33 @@ With
 the base is the newest snapshot present on both sides
 .Pq the remote is listed over the same ssh hop ;
 nothing in common sends a full stream.
-.It Cm template warm Ar target Fl -output Ar dataset
+.It Cm template warm Ar target Fl -output Ar dataset Oo Fl -promote Oc Oo Fl -spec Ar file.crate Oc
 Capture a jail's on-disk state as a warm template
 .Pq the jail's own dataset, as for Cm backup .
+Since 1.1.75 the spec the template runs with is recorded outside the
+jail's tree, in
+.Pa /var/db/crate/warm/<guid>.spec
+.Pq and Pa .thin No for a thin jail ,
+root-only and keyed by the template dataset's ZFS guid: from
+.Fl -spec ,
+else from the
+.Pa .crate
+the jail was started from, else, for a jail that itself runs from a
+template, from that template's entry.
+.Cm run Fl -warm-base
+reads the spec and the thin-jail manifest only from there and refuses
+a template without an entry: the
+.Pa +CRATE.SPEC
+and
+.Pa +CRATE.THIN
+inside the clone are the source jail's files, which its root could
+have rewritten to grant the template shares, scripts,
+.Va allow.*
+or host directories.
+.It Cm template trust Ar dataset Fl -spec Ar file.crate
+Record the spec a warm template made before 1.1.75
+.Pq or by hand
+runs with.
 .It Cm retune Ar target Fl -rctl Ar key=value ...
 Live-tune RCTL limits of a running jail
 .Pq Fl -show , Fl -clear .
@@ -1120,24 +1144,74 @@ stops; rules other containers or the operator added are left alone
 Prevent enumeration of other jails.
 .El
 .Ss Lifecycle hooks
+Each
+.Sy scripts
+section is a list of shell commands, run in this order by
+.Cm create
+and
+.Cm run :
 .Bl -tag -width "run:before-start-services"
-.It Sy scripts/create:begin
-Before container creation.
-.It Sy scripts/create:end
-After container creation.
+.It Sy scripts/create:start , scripts/create:end
+At the start and the end of
+.Cm create ,
+in a
+.Xr chroot 8
+of the tree being built.
 .It Sy scripts/run:begin
-Before container execution.
+Before anything is mounted into the tree.
+.It Sy scripts/run:before-create-jail
+Before the jail is created.
 .It Sy scripts/run:after-create-jail
-After jail is created.
-.It Sy scripts/run:before-start-services
-Before services start.
+Right after the jail is created.
+.It Sy scripts/run:before-create-users , scripts/run:after-create-users
+Around the creation of the run user.
+.It Sy scripts/init
+On the first start only
+.Pq a marker file Pa /.crate-initialized No records it .
+.It Sy scripts/run:before-start-services , scripts/run:after-start-services
+Around the services.
 .It Sy scripts/run:before-execute
-Before main command execution.
+Before the main command.
 .It Sy scripts/run:after-execute
-After main command exits.
+After the main command exits.
 .It Sy scripts/run:end
-After container shutdown.
+After that, before the teardown.
+.It Sy scripts/run:before-remove-jail
+At the teardown, before the jail is removed.
+.It Sy scripts/run:after-remove-jail
+After the jail is removed.
 .El
+.Pp
+Since 1.1.75 every section of
+.Cm run
+from
+.Sy run:after-create-jail
+to
+.Sy run:before-remove-jail
+runs inside the jail as its root
+.Pq Xr jail_attach 2 ; through crated under rootless
+\(em the jail's network, its limits.
+.Sy run:begin ,
+.Sy run:before-create-jail
+and
+.Sy run:after-remove-jail
+run in a throw-away
+.Xr jail 8
+on the same tree
+.Pq no vnet, the host's addresses inherited, removed when the command exits ;
+they need root, and a rootless run refuses a spec that has them.
+Earlier releases ran every section as
+.Ql chroot <tree> /bin/sh
+as the host's root: with the host's network and no jail limits, and,
+once the jail's processes had run, with a
+.Pa /bin/sh
+\(em or any command a hook calls \(em that the jail's root could have
+replaced, run as the host's root.
+A failing
+.Sy run:before-remove-jail
+or
+.Sy run:after-remove-jail
+command is reported and the teardown goes on.
 .Ss Health check
 .Bl -tag -width "start_period"
 .It Sy healthcheck

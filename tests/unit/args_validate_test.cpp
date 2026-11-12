@@ -444,8 +444,35 @@ ATF_TEST_CASE_BODY(default_no_command_throws)
 	ATF_REQUIRE_THROW(Exception, a.validate());
 }
 
+// 1.1.75: `template trust <dataset> --spec <file.crate>`
+ATF_TEST_CASE_WITHOUT_HEAD(template_trust_rules);
+ATF_TEST_CASE_BODY(template_trust_rules)
+{
+	auto a = mkArgs(CmdTemplate);
+	a.templateSubcmd = "trust";
+	ATF_REQUIRE_THROW(Exception, a.validate());            // no dataset
+	a.warmTarget = "tank/templates/nginx-warm";
+	ATF_REQUIRE_THROW(Exception, a.validate());            // no --spec
+	a.warmSpecFile = "/root/nginx.crate";
+	a.validate();
+	a.warmPromote = true;
+	ATF_REQUIRE_THROW(Exception, a.validate());            // --promote is warm's
+	auto w = mkArgs(CmdTemplate);
+	w.templateSubcmd = "warm";
+	w.warmTarget = "nginx";
+	w.warmOutputDataset = "tank/templates/nginx-warm";
+	w.validate();
+	w.warmSpecFile = "/root/nginx.crate";                  // warm takes --spec too
+	w.validate();
+	auto x = mkArgs(CmdTemplate);
+	x.templateSubcmd = "frobnicate";
+	x.warmTarget = "nginx";
+	ATF_REQUIRE_THROW(Exception, x.validate());
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
+	ATF_ADD_TEST_CASE(tcs, template_trust_rules);
 	ATF_ADD_TEST_CASE(tcs, create_requires_spec_or_template);
 	ATF_ADD_TEST_CASE(tcs, create_with_spec_only_ok);
 	ATF_ADD_TEST_CASE(tcs, create_template_not_found_throws);

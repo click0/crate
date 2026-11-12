@@ -189,7 +189,24 @@ ATF_TEST_CASE_BODY(warm_run_clone_name_shape) {
   // responsibility (it comes from getZfsDataset, not user input).
 }
 
+// 1.1.75: the trusted spec store of warm templates.
+ATF_TEST_CASE_WITHOUT_HEAD(trusted_store_paths);
+ATF_TEST_CASE_BODY(trusted_store_paths)
+{
+  ATF_REQUIRE_EQ(WarmPure::trustedStoreDir(), std::string("/var/db/crate/warm"));
+  ATF_REQUIRE_EQ(WarmPure::trustedSpecPath("12345678901234567890"),
+                 std::string("/var/db/crate/warm/12345678901234567890.spec"));
+  ATF_REQUIRE_EQ(WarmPure::trustedThinPath("42"), std::string("/var/db/crate/warm/42.thin"));
+  // only a ZFS guid names a store file: no path pieces from a dataset or `zfs get` noise
+  for (const char *bad : {"", "-", "../x", "12a", "1 2", "123456789012345678901", "tank/x", "42\n"})
+    ATF_REQUIRE_EQ(WarmPure::trustedSpecPath(bad), std::string(""));
+  auto v = WarmPure::buildGuidArgv("tank/templates/nginx-warm");
+  std::vector<std::string> want = {"/sbin/zfs", "get", "-H", "-o", "value", "guid", "tank/templates/nginx-warm"};
+  ATF_REQUIRE(v == want);
+}
+
 ATF_INIT_TEST_CASES(tcs) {
+  ATF_ADD_TEST_CASE(tcs, trusted_store_paths);
   ATF_ADD_TEST_CASE(tcs, template_dataset_typical);
   ATF_ADD_TEST_CASE(tcs, template_dataset_invalid);
   ATF_ADD_TEST_CASE(tcs, suffix_typical);

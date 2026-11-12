@@ -72,8 +72,9 @@ Crate — контейнеризатор для FreeBSD. Пакує застос
 * **Tor інтеграція**: вбудована опція tor проксі з опціональним control port
 
 ### Хуки життєвого циклу
-* `run:begin`, `run:after-create-jail`, `run:before-start-services`, `run:before-execute`, `run:after-execute`, `run:end`
-* `create:begin`, `create:end`
+* `run:begin`, `run:before-create-jail`, `run:after-create-jail`, `run:before-create-users`, `run:after-create-users`, `init`, `run:before-start-services`, `run:after-start-services`, `run:before-execute`, `run:after-execute`, `run:end`, `run:before-remove-jail`, `run:after-remove-jail`
+* `create:start`, `create:end`
+* З 1.1.75 секції `run`, починаючи з `run:after-create-jail`, виконуються всередині jail від його root; `run:begin`, `run:before-create-jail` і `run:after-remove-jail` — у тимчасовому jail на тому самому дереві (лише root). Раніше всі вони йшли як `chroot <дерево> /bin/sh` від root хоста.
 
 ## Команди
 

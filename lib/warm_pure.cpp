@@ -1,6 +1,7 @@
 // Copyright (C) 2026 by Vladyslav V. Prodan <github.com/click0>. All rights reserved.
 
 #include "warm_pure.h"
+#include "pathnames.h"   // 1.1.75: CRATE_PATH_ZFS, was "/sbin/zfs"
 #include "name_limits.h"
 
 #include <string>
@@ -80,18 +81,18 @@ std::string fullSnapshotName(const std::string &dataset,
 
 std::vector<std::string> buildSnapshotArgv(const std::string &sourceDataset,
                                            const std::string &suffix) {
-  return {"/sbin/zfs", "snapshot", sourceDataset + "@" + suffix};
+  return {CRATE_PATH_ZFS, "snapshot", sourceDataset + "@" + suffix};
 }
 
 std::vector<std::string> buildCloneArgv(const std::string &sourceDataset,
                                         const std::string &suffix,
                                         const std::string &templateDataset) {
-  return {"/sbin/zfs", "clone",
+  return {CRATE_PATH_ZFS, "clone",
           sourceDataset + "@" + suffix, templateDataset};
 }
 
 std::vector<std::string> buildPromoteArgv(const std::string &templateDataset) {
-  return {"/sbin/zfs", "promote", templateDataset};
+  return {CRATE_PATH_ZFS, "promote", templateDataset};
 }
 
 // --- Warm-base consumer side ---
@@ -128,6 +129,28 @@ std::string warmRunCloneName(const std::string &parentDataset,
   // Caller is responsible for having validated parentDataset (via
   // ZfsOps queries it sees on the host) and jailName (validateJailName).
   return parentDataset + "/jail-" + jailName + "-" + hex;
+}
+
+// --- 1.1.75: trusted spec store ---
+
+std::string trustedStoreDir() { return "/var/db/crate/warm"; }
+
+static bool isGuid(const std::string &g) {
+  if (g.empty() || g.size() > 20) return false;
+  for (char c : g) if (c < '0' || c > '9') return false;
+  return true;
+}
+
+std::string trustedSpecPath(const std::string &guid) {
+  return isGuid(guid) ? trustedStoreDir() + "/" + guid + ".spec" : "";
+}
+
+std::string trustedThinPath(const std::string &guid) {
+  return isGuid(guid) ? trustedStoreDir() + "/" + guid + ".thin" : "";
+}
+
+std::vector<std::string> buildGuidArgv(const std::string &dataset) {
+  return {CRATE_PATH_ZFS, "get", "-H", "-o", "value", "guid", dataset};
 }
 
 } // namespace WarmPure

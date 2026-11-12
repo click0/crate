@@ -257,9 +257,18 @@ void Args::validate() {
     break;
   case CmdTemplate:
     if (templateSubcmd.empty())
-      ERR("the 'template' command requires a subcommand: 'warm'")
+      ERR("the 'template' command requires a subcommand: 'warm' or 'trust'")
+    if (templateSubcmd == "trust") {   // 1.1.75
+      if (warmTarget.empty())
+        ERR("the 'template trust' command requires a template dataset")
+      if (warmSpecFile.empty())
+        ERR("the 'template trust' command requires --spec <file.crate>")
+      if (!warmOutputDataset.empty() || warmPromote)
+        ERR("--output and --promote belong to 'template warm'")
+      break;
+    }
     if (templateSubcmd != "warm")
-      ERR("'template " << templateSubcmd << "' is not supported (only 'warm')")
+      ERR("'template " << templateSubcmd << "' is not supported (only 'warm' and 'trust')")
     if (warmTarget.empty())
       ERR("the 'template warm' command requires a jail name")
     if (warmOutputDataset.empty())
