@@ -14,6 +14,7 @@
 #include "spec_registry.h"
 #include "dir_lock.h"   // 1.1.69: skip directories a run/create holds
 #include "run_pure.h"   // 1.1.72: jailXnamePid
+#include "runtime_paths_pure.h"   // 1.1.73: rootJailsRoot
 #include "util.h"
 #include "err.h"
 
@@ -54,7 +55,9 @@ bool cleanCrates(const Args &args) {
   std::cout << rang::style::bold << "Scanning for orphaned jail directories..."
             << rang::style::reset << std::endl;
   // 1.1.39: also sweep the per-user roots /var/run/crate/<uid>/ where
-  // rootless `crate run` places its jail directories.
+  // rootless `crate run` places its jail directories. 1.1.73: root's are
+  // in /var/run/crate/0 (one of them); /var/run/crate itself only holds
+  // those of earlier releases.
   std::vector<std::string> jailDirs{std::string(Locations::jailDirectoryPath)};
   if (DIR *top = ::opendir(Locations::jailDirectoryPath)) {
     struct dirent *ent;
@@ -184,8 +187,9 @@ bool cleanCrates(const Args &args) {
   // 4. Clean stale COW overlay directories
   std::cout << rang::style::bold << "Scanning for stale COW overlays..."
             << rang::style::reset << std::endl;
-  {
-    auto jailDir = std::string(Locations::jailDirectoryPath);
+  // 1.1.73: root's overlays sit next to its jails in /var/run/crate/0;
+  // the old place is still swept for those left by earlier releases.
+  for (const auto &jailDir : {std::string(Locations::jailDirectoryPath), RuntimePathsPure::rootJailsRoot()}) {
     DIR *dir = ::opendir(jailDir.c_str());
     if (dir) {
       struct dirent *ent;

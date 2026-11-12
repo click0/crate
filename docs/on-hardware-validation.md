@@ -1086,6 +1086,53 @@ warm-base container starts through crated.
 
 ---
 
+## 4o. 1.1.72 / 1.1.73 — privops next to root, data-loss guards, /var/run/crate layout
+
+```sh
+# 1.1.72: root next to crated's privops socket (crated.conf: privops_socket set)
+ls -l /var/run/crate/crated-privops.sock && crate run -f /tmp/e.crate; echo "exit=$?"   # exit=0
+ls -ld /var/db/crate                                   # drwx------ root, created by crated
+sudo -u alice crate run -f chromium-privacy.crate &     # NAT + firewall: through privops as a tenant
+pfctl -a 'crate/*' -sr | head                          # the policy and the nat/rdr lines are loaded
+
+# a tenant cannot remove a jail by its jid: unit-tested (privops_authz_pure_test,
+# destroy_numeric_name_is_gated_as_jid); with a libnv client at hand, destroy_jail
+# name=<another tenant's jid> answers 403
+
+# crate clean never deletes through a mount
+mkdir -p /var/run/crate/0/jail-x-00000000/mnt && mount -t nullfs /tmp/keep /var/run/crate/0/jail-x-00000000/mnt
+crate clean | grep 'still has file systems mounted'   # refused; /tmp/keep intact
+umount /var/run/crate/0/jail-x-00000000/mnt && crate clean   # removed
+# a running root jail keeps its anchor
+crate run -f fetch.crate -- -o /dev/null https://www.freebsd.org/ & sleep 5; crate clean; pfctl -a 'crate/*' -s Anchors   # still listed
+
+# backup refuses a jail without its own dataset (a plain run); a --warm-base one works
+crate backup <plain jail> --output-dir /tmp      # "has no ZFS dataset of its own"
+# stack network_policy stays after `stack up`, goes with `stack down`
+crate stack up s.yml; ipfw list | grep -c 'via bridge'   # > 0
+crate stack down s.yml; ipfw list | grep -c 'via bridge' # 0
+# crate-hub polls a TLS node; snmpwalk sees the scalars
+snmpwalk -v2c -c public localhost .1.3.6.1.4.1.59999     # four values
+
+# 1.1.73: layout
+ls -ld /var/run/crate /var/run/crate/0                   # drwx--x--x root, drwx------ root
+crate run -f /tmp/e.crate & sleep 3; jls path            # /var/run/crate/0/jail-e-…
+sudo -u alice ls /var/run/crate/0                        # Permission denied
+sudo -u alice crate run -f /tmp/e.crate                  # rootless: reaches the socket now
+# with a jail of 1.1.72 still running from /var/run/crate/jail-*: crated keeps 0700 and says so
+crate run --warm-base tank/templates/nginx-warm --name nw & sleep 5; zfs get -H -o value mountpoint $(zfs list -H -o name | grep jail-nw-)   # = the jail path
+```
+
+Pass criteria: root runs work next to the privops socket; crated
+starts containers without aborting; firewall policies load under
+rootless; no jail is removable by jid; clean never deletes through a
+mount and keeps live anchors; backup never sends a containing
+dataset; a stack keeps its policy; /var/run/crate is 0711 with root's
+jails in a 0700 /var/run/crate/0; a warm clone is mounted at its jail
+path.
+
+---
+
 ## 5. Reporting back
 
 ```sh

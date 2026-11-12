@@ -9,6 +9,7 @@
 #include "mount.h"
 #include "scripts.h"
 #include "pathnames.h"
+#include "runtime_paths_pure.h"   // 1.1.73: rootJailsRoot
 #include "log_pure.h"
 #include "thin_jail_pure.h"   // 1.1.58: base/mode: host-ro
 #include "dir_lock.h"         // 1.1.69: the chroot directory is locked against `crate clean`
@@ -454,7 +455,8 @@ bool createCrate(const Args &args, const Spec &spec) {
   auto crateFileName = !args.createOutput.empty() ? args.createOutput : STR(guessCrateName(spec) << ".crate");
 
   // create the jail directory
-  auto jailPath = STR(Locations::jailDirectoryPath << "/chroot-create-" << Util::filePathToBareName(crateFileName) << "-" << Util::randomHex(4));
+  // 1.1.73: next to root's jail trees in /var/run/crate/0 (0700)
+  auto jailPath = STR(RuntimePathsPure::rootJailsRoot() << "/chroot-create-" << Util::filePathToBareName(crateFileName) << "-" << Util::randomHex(4));
   res = mkdir(jailPath.c_str(), S_IRUSR|S_IWUSR|S_IXUSR);
   if (res == -1)
     ERR("failed to create the jail directory '" << jailPath << "': " << strerror(errno))

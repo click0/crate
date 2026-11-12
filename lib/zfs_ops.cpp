@@ -120,7 +120,13 @@ void destroy(const std::string &name) {
 // Clone
 // ---------------------------------------------------------------------------
 
-void clone(const std::string &snapName, const std::string &targetName) {
+void clone(const std::string &snapName, const std::string &targetName,
+           const std::string &mountpoint) {
+  if (!mountpoint.empty()) {
+    Util::execCommand({CRATE_PATH_ZFS, "clone", "-o", "mountpoint=" + mountpoint, snapName, targetName},
+      "clone ZFS snapshot");
+    return;
+  }
 #ifdef HAVE_LIBZFS
   auto *h = getHandle();
   if (h) {

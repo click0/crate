@@ -12,6 +12,7 @@
 #include "run_pure.h"       // 1.1.70: containerNameOf
 #include "spec_registry.h"
 #include "util.h"
+#include "runtime_paths_pure.h"   // 1.1.73: rootJailsRoot
 #include "warm_pure.h"   // 1.1.48: validateJailName for `crate logs`
 #include "err.h"
 
@@ -512,11 +513,16 @@ bool restartCrate(const Args &args) {
   // entry) or single-tenant deployments that placed the spec under
   // the conventional /var/run/crate/<name>.crate path.
   if (!warm && (crateFile.empty() || !Util::Fs::fileExists(crateFile))) {
-    crateFile = STR("/var/run/crate/" << containerName << ".crate");
-    if (!Util::Fs::fileExists(crateFile)) {
-      auto bareName = Util::filePathToBareName(jailPath);
-      crateFile = STR("/var/run/crate/" << bareName << ".crate");
-    }
+    // 1.1.73: crated's uploads are in /var/run/crate/0 now; earlier
+    // releases used /var/run/crate.
+    crateFile.clear();
+    for (const auto &dir : {RuntimePathsPure::rootJailsRoot(), RuntimePathsPure::legacyRoot()})
+      for (const auto &n : {containerName, Util::filePathToBareName(jailPath)}) {
+        auto c = STR(dir << "/" << n << ".crate");
+        if (crateFile.empty() && Util::Fs::fileExists(c)) crateFile = c;
+      }
+    if (crateFile.empty())
+      crateFile = STR(RuntimePathsPure::rootJailsRoot() << "/" << containerName << ".crate");   // for the message
   }
 
   // 1.1.70: decided BEFORE the stop — a container nobody can start again

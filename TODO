@@ -64,21 +64,6 @@ The bhyve/VM track is in TODO2.
   runtime sockets), devfs rules built from device classes (DevicesPure)
   instead of free globs, and the ipfw verbs tied to the caller's fw
   lease slot.
-* (HIGH, bug hunt 1.1.71; open: needs a layout decision) crated chmods
-  /var/run/crate to 0700 on every start (daemon/main.cpp:96 ->
-  createJailsDirectoryIfNeeded, misc.cpp:38-58), and so does every root
-  `crate` call. The default privops socket, crated.sock, control/*.sock
-  and /var/run/crate/<uid> all live under it, so no non-root user can
-  reach any of them: the rootless path and the per-group control sockets
-  are unreachable. 0711 alone is NOT the fix: root-path jails live
-  directly in /var/run/crate/jail-*, their paths are public (jls), and a
-  searchable parent lets any host user run a setuid binary that a jail's
-  root planted in its tree — host root. Options: (A) 0710 with the
-  privops group (root-equivalent anyway, trust-model.md Plane 1) and the
-  control sockets moved out of /var/run/crate; (B) root-path jails and
-  chroot-create-* into a 0700 subdirectory (e.g. /var/run/crate/0, like
-  the per-user roots), then 0711 on /var/run/crate — a layout change for
-  clean, list, warm and the docs.
 * (HIGH, bug hunt 1.1.71, plausible: EPERM paths not run on hardware)
   rootless runs reach operations that have no privops route:
   Mount("devfs") (mount.cpp:33, run.cpp:983) and the unionfs of `cow:`
@@ -102,6 +87,19 @@ The bhyve/VM track is in TODO2.
   is now DenyUnownedJid, the fallback jail_remove is EPERM for a
   non-root caller, and the jail stays. Send the kernel name (the xname)
   instead of the jid.
+* (LOW, left open by 1.1.73) root's state files stay directly in
+  /var/run/crate, which is searchable (0711) since 1.1.73:
+  spec-registry.txt, network-leases*.txt, ctx-*, pfctl.lock and the
+  stacks' dns-<network> directories are readable by any local user
+  wherever they are 0644 — container names, IPs, .crate paths (mostly
+  what jls shows anyway). Move them into /var/run/crate/0 (with a
+  one-time move of the old files) or create them 0600.
+* (LOW, left open by 1.1.73) the HTTP export (routes.cpp, ARTIFACT_DIR,
+  now /var/run/crate/0, 0700) still goes through execPipeline's
+  shared-output mode: an existing file of the same name is truncated,
+  and the archive is 0644 (unreachable for others behind the 0700
+  directory). execPipelineToPrivateFile + rename would match the CLI
+  export.
 
 === 2. crated privops / HTTP — security ===
 
@@ -417,6 +415,11 @@ The bhyve/VM track is in TODO2.
   (run_gui_pure.cpp:72,84 — quotes and newlines inject sections),
   services/managed/rcvar into rc.conf. Trusted on the root path by
   design, but they should be validated.
+* (LOW, found checking 1.1.73) crate.yml's `prefix` is parsed
+  (config.cpp:24,72) and used nowhere — crate.5 calls it the "jail
+  directory root" (default /var/run/crate), but the jail directories are
+  fixed: /var/run/crate/0 for root, /var/run/crate/<uid> per user. Drop
+  the key or make it the runtime root.
 
 === 6. crate doctor ===
 
@@ -492,12 +495,6 @@ The bhyve/VM track is in TODO2.
   initCapSyslog/logSyslog via audit.cpp); initCapDns leaks g_capdns
   on repeat calls; unused WARN macro. drm_session.cpp:18,53,63 single
   global g_deviceId — a second openDevice orphans the first.
-* (LOW, left open by 1.1.71) the HTTP export (routes.cpp, ARTIFACT_DIR)
-  still goes through execPipeline's shared-output mode: no symlink is
-  followed any more, but the archive is 0644 and an existing file of
-  the same name is truncated. crated's own directory, so only a problem
-  where ARTIFACT_DIR is shared; execPipelineToPrivateFile + rename would
-  match the CLI export.
 * (LOW, bug hunt 1.1.70) `crate replicate` can wedge itself: zfs recv
   runs without -F (replicate_pure.cpp:188-192), and replicate.cpp:
   129-137 destroys the local snapshot on ANY pipeline error even when
@@ -577,12 +574,6 @@ The bhyve/VM track is in TODO2.
   after any backup, replicate, snapshot create or template warm of it.
   The clone stays mounted, @warmrun pinned, and a later clean empties
   it.
-* (MED, bug hunt 1.1.71, plausible) --warm-base on the default build and
-  layout: libzfs zfs_clone() does not mount (zfs(8) does), and
-  <parent>/jail-… is the jail path only when /var/run/crate is the
-  mountpoint of its dataset; on a default install the clone mounts at
-  /jail-… (run.cpp:485), and the user sees a false "missing
-  +CRATE.SPEC".
 * (MED, bug hunt 1.1.71) `cow:` and `base_container:` do nothing
   (run.cpp:717-768, 787-813): the ZFS clone is made but the jail does
   not use it, `persistent` leaves a clone and a snapshot of the parent

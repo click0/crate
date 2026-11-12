@@ -88,10 +88,9 @@ clients request root operations
 A
 .Nm crate
 run as root does not use the socket at its default path; it does the
-operations itself, with the
-.Pa /var/run/crate
-layout
-.Pq since 1.1.72 .
+operations itself, its jails in
+.Pa /var/run/crate/0
+.Pq since 1.1.72; the directory since 1.1.73 .
 Group-gated; the peer uid from
 .Xr getpeereid 2
 drives per-user namespacing and the per-tenant authorization gate, and
@@ -135,8 +134,9 @@ Tail container console log;
 holds the connection open.
 .It POST Pa /api/v1/containers/:name/start
 Resume a container from its
-.Pa /var/run/crate/<name>.crate
-file.
+.Pa /var/run/crate/0/<name>.crate
+file
+.Pq Pa /var/run/crate/<name>.crate No before 1.1.73, still read .
 .It POST Pa /api/v1/containers/:name/stop
 Send SIGTERM, then SIGKILL after a grace window.
 .It POST Pa /api/v1/containers/:name/restart
@@ -183,7 +183,7 @@ Accept a raw
 body
 .Pq Ic Content-Type: application/octet-stream
 and atomic-rename into
-.Pa /var/run/crate/<name>.crate .
+.Pa /var/run/crate/0/<name>.crate .
 .It GET Pa /api/v1/containers/:name/console
 .Pq WebSocket
 Interactive
@@ -250,9 +250,21 @@ Pristine reference shipped with the package.
 Unix domain control socket.
 .It Pa /var/run/crate/crated.pid
 Process id of the daemon.
-.It Pa /var/run/crate/<name>.crate
-Saved container archives produced by the export endpoint and
-consumed by the start endpoint.
+.It Pa /var/run/crate/
+The runtime root: the sockets, the per-user roots
+.Pa <uid>/
+and root's state files.
+Mode 0711 since 1.1.73, so that unprivileged users reach the sockets and
+their own roots; it stays 0700 while jail directories of an earlier
+release still sit in it.
+.It Pa /var/run/crate/0/
+Root's jail directories, the
+.Cm crate create
+chroots, and the archives the export and import endpoints write and the
+start endpoint reads
+.Pq Pa <name>.crate ;
+mode 0700
+.Pq since 1.1.73; they were directly in Pa /var/run/crate .
 .It Pa /var/db/crate/
 The owner registries privops checks against
 .Pq Pa jid_owners.tsv , iface_owners.tsv , fw_leases.tsv ;

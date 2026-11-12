@@ -95,8 +95,10 @@ int main(int argc, char **argv) {
     if (Util::Fs::fileExists(configPath))
       config = Crated::Config::load(configPath);
 
-    // Ensure /var/run/crate exists
-    createJailsDirectoryIfNeeded();
+    // Ensure /var/run/crate exists (1.1.73: 0711, root's jail trees in
+    // /var/run/crate/0)
+    if (auto note = createJailsDirectoryIfNeeded(); !note.empty())
+      std::cerr << "crated: " << note << std::endl;
 
     // Daemonize unless -f
     if (!foreground)

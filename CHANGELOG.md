@@ -6,6 +6,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.73] — 2026-11-12
+
+**Root's jail directories move from /var/run/crate into /var/run/crate/0
+(0700), and /var/run/crate itself becomes 0711: unprivileged users reach
+crated's privops socket, its control sockets and their own per-user
+roots at last, while jail trees stay out of their reach. A --warm-base
+clone is mounted where the jail expects it on any layout.**
+
+- **Non-root users could not reach any of crated's sockets**
+  (`lib/misc.cpp`, `lib/runtime_paths_pure.cpp`, `daemon/main.cpp`).
+  crated — and every root `crate` call — set /var/run/crate to 0700, and
+  the default privops socket, `crated.sock`, `control/*.sock` and the
+  per-user roots `/var/run/crate/<uid>` all live under it: the rootless
+  path and the per-group control sockets were unreachable. 0711 alone
+  would not do: root's jail trees sat directly in /var/run/crate, their
+  paths are public (jls), and a searchable parent lets any host user run
+  a setuid binary a jail's root planted in its tree. Root's jail
+  directories, the `crate create` chroots and the unionfs overlays now
+  live in `/var/run/crate/0` (the per-user root of uid 0, 0700), and
+  /var/run/crate is 0711. While a jail tree of an earlier release still
+  sits directly in /var/run/crate it stays 0700 (crated says so at
+  start); once those containers are stopped or `crate clean` has removed
+  the orphans, the next root `crate` call opens it.
+- **crated's artifacts** (`daemon/routes.cpp`, `lib/lifecycle.cpp`): the
+  export and import endpoints write into `/var/run/crate/0` — an export
+  `<name>-<unixtime>.crate` (the whole container) or an upload would
+  have been readable in a searchable /var/run/crate by anyone who
+  guessed the name. The start endpoint and `crate restart` look for
+  `<name>.crate` there first and in /var/run/crate second.
+- **--warm-base clones are mounted at the jail path** (`lib/zfs_ops.cpp`,
+  `lib/run.cpp`). The clone inherited its mountpoint from the parent
+  dataset, which is the jail path only when the jails directory is that
+  dataset's mountpoint — never on a default install, and not with the
+  new subdirectory; libzfs' `zfs_clone()` did not mount it at all. The
+  clone is now made with `zfs clone -o mountpoint=<jail path>`.
+- `crate list` names a jail without a kernel name after its directory
+  wherever that sits (`RuntimePathsPure::crateJailDirName`), and `crate
+  clean` sweeps orphans and overlays in both places.
+- crated.8 FILES describes /var/run/crate and /var/run/crate/0; the
+  README and crate.5 examples show the new path.
+- Tests: +1 unit case (`runtime_paths_pure_test`). The two releases' on-
+  hardware checks are docs/on-hardware-validation.md §4o.
+
 ## [1.1.72] — 2026-11-11
 
 **The post-1.1.71 bug hunt's HIGH findings that broke a basic setup or

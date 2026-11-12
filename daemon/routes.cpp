@@ -11,6 +11,7 @@
 #include "status_fd.h"   // 1.1.65: spawnCrateRun over a --status-fd pipe
 #include "routes_pure.h"
 #include "transfer_pure.h"
+#include "runtime_paths_pure.h"   // 1.1.73: rootJailsRoot
 
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include <httplib.h>
@@ -167,8 +168,12 @@ static std::vector<std::string> runArgsForContainer(const std::string &container
         && (!entry.warmBase.empty() || Util::Fs::fileExists(entry.cratePath)))
       return SpecRegistryPure::runArgsFor(entry, containerName);
   } catch (...) {}
-  auto conventional = "/var/run/crate/" + containerName + ".crate";
-  if (Util::Fs::fileExists(conventional)) return {"-f", conventional};
+  // 1.1.73: uploads land in /var/run/crate/0; /var/run/crate is where
+  // earlier releases put them.
+  for (const auto &dir : {RuntimePathsPure::rootJailsRoot(), RuntimePathsPure::legacyRoot()}) {
+    auto conventional = dir + "/" + containerName + ".crate";
+    if (Util::Fs::fileExists(conventional)) return {"-f", conventional};
+  }
   return {};
 }
 
@@ -931,8 +936,11 @@ static std::string sha256OfFile(const std::string &path) {
     std::string(reinterpret_cast<char*>(hash), hashLen));
 }
 
-// Where the daemon stores generated/uploaded artifacts.
-static const std::string ARTIFACT_DIR = "/var/run/crate";
+// Where the daemon stores generated/uploaded artifacts. 1.1.73: in
+// /var/run/crate/0 (0700) — /var/run/crate is searchable now, and an
+// export (<name>-<unixtime>.crate, the whole container) or an upload
+// there was readable by anyone who guessed its name.
+static const std::string ARTIFACT_DIR = RuntimePathsPure::rootJailsRoot();
 
 // --- F2: POST /api/v1/containers/:name/export ---
 // Synchronously exports the live container to

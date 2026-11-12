@@ -29,7 +29,7 @@ bool mkdirIfNeeded(const std::string &dir, mode_t mode) {
 } // anon
 
 std::string ensurePerUserRoot(uint32_t uid) {
-  if (uid == 0) return "";   // root uses the legacy tree
+  if (uid == 0) return "";   // root: crate(1) makes /var/run/crate/0 itself (1.1.73: misc.cpp)
   std::string dir = RuntimePathsPure::perUserRoot(uid);
   if (!mkdirIfNeeded(dir, 0700))
     return "mkdir(" + dir + "): " + std::strerror(errno);

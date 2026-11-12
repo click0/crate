@@ -534,7 +534,7 @@ DispatchResult handleEnsureUserRoot(uint32_t peerUid) {
   // legacy root instead of a 400 — a root `crate run` that found the
   // socket died here, and so did every start crated spawned itself.
   if (peerUid == 0)
-    return {200, PrivOpsWirePure::formatEnsureUserRootSuccess(0, RuntimePathsPure::legacyRoot())};
+    return {200, PrivOpsWirePure::formatEnsureUserRootSuccess(0, RuntimePathsPure::rootJailsRoot())};   // 1.1.73
   if (auto e = ensurePerUserRoot(peerUid); !e.empty())
     return {500, PrivOpsWirePure::formatHandlerError("mkdir_failed", e)};
   return {200, PrivOpsWirePure::formatEnsureUserRootSuccess(

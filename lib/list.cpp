@@ -5,6 +5,7 @@
 #include "spec.h"
 #include "locs.h"
 #include "jail_query.h"
+#include "runtime_paths_pure.h"   // 1.1.73: crateJailDirName
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
@@ -50,9 +51,11 @@ static std::vector<CrateEntry> discoverRunningCrates() {
     e.path = j.path;
     e.hostname = j.hostname;
     e.ip = j.ip4;
-    e.name = j.name.empty()
-      ? j.path.substr(std::string(Locations::jailDirectoryPath).size() + 1)
-      : j.name;
+    // 1.1.73: the jail directory's own name (jail-<name>-<hex>), wherever
+    // it sits — /var/run/crate/<uid>/ since 1.1.73, directly in
+    // /var/run/crate before (substr past that prefix is wrong for both).
+    e.name = j.name.empty() ? RuntimePathsPure::crateJailDirName(j.path) : j.name;
+    if (e.name.empty()) e.name = j.path;
 
     // check for +CRATE.SPEC and extract info
     auto specPath = e.path + "/+CRATE.SPEC";
