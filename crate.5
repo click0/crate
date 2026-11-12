@@ -1786,7 +1786,14 @@ Site-local profiles.
 .It Pa ~/.local/share/crate/profiles/
 Archives and merged specifications built from profiles.
 .It Pa /var/run/crate/
-Runtime jail directories and context files.
+The runtime root, mode 0711: crated's sockets, the per-user roots
+.Pa <uid>/
+and root's context files.
+.It Pa /var/run/crate/0/
+Root's jail directories and
+.Cm create
+chroots, mode 0700
+.Pq since 1.1.73; they were directly in Pa /var/run/crate .
 .It Pa /var/cache/crate/
 Cache directory.
 .It Pa /var/log/crate/

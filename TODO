@@ -415,6 +415,11 @@ The bhyve/VM track is in TODO2.
   (run_gui_pure.cpp:72,84 — quotes and newlines inject sections),
   services/managed/rcvar into rc.conf. Trusted on the root path by
   design, but they should be validated.
+* (LOW, found checking 1.1.73) crate.yml's `prefix` is parsed
+  (config.cpp:24,72) and used nowhere — crate.5 calls it the "jail
+  directory root" (default /var/run/crate), but the jail directories are
+  fixed: /var/run/crate/0 for root, /var/run/crate/<uid> per user. Drop
+  the key or make it the runtime root.
 
 === 6. crate doctor ===
 

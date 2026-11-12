@@ -88,10 +88,9 @@ clients request root operations
 A
 .Nm crate
 run as root does not use the socket at its default path; it does the
-operations itself, with the
-.Pa /var/run/crate
-layout
-.Pq since 1.1.72 .
+operations itself, its jails in
+.Pa /var/run/crate/0
+.Pq since 1.1.72; the directory since 1.1.73 .
 Group-gated; the peer uid from
 .Xr getpeereid 2
 drives per-user namespacing and the per-tenant authorization gate, and
