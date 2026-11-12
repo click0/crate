@@ -263,6 +263,15 @@ enum class Verb {
   // Path-scoped by `target` like unmount_nullfs; the unmount at
   // teardown is unmount_nullfs itself (unmount(2) on the target).
   MountTmpfs,
+
+  // 1.1.76: mount a devfs at a jail's /dev (MNT_IGNORE). Rootless `crate
+  // run` called nmount(2) for it directly — EPERM for a non-root caller.
+  // The target must end in "/dev"; path-scoped by `target` like
+  // mount_tmpfs. The mount starts with no ruleset (the host's view, but
+  // with the host's node permissions — what /dev itself gives the
+  // caller); apply_devfs_rules narrows it next, before the jail exists.
+  // The unmount at teardown is unmount_nullfs.
+  MountDevfs,
 };
 
 // Returns the verb's canonical wire-format token (lowercase, no
@@ -491,6 +500,11 @@ struct MountTmpfsReq {
   std::string mode;     // octal "01777" / "0700"; "" = tmpfs default
 };
 
+// 1.1.76: mount_devfs.
+struct MountDevfsReq {
+  std::string target;   // absolute "<jail>/dev"
+};
+
 // 1.1.62: one devfs rulespec: "hide" | "include <1..65535>" |
 // "path <glob> unhide" (glob: alnum . _ - / *, no leading slash,
 // <=256 chars). "" when valid, otherwise the reason.
@@ -616,6 +630,7 @@ std::string validateAcquireFwLease(const AcquireFwLeaseReq &r);
 std::string validateReleaseFwLease(const ReleaseFwLeaseReq &r);
 std::string validateApplyDevfsRules(const ApplyDevfsRulesReq &r);   // 1.1.62
 std::string validateMountTmpfs(const MountTmpfsReq &r);             // 1.1.63
+std::string validateMountDevfs(const MountDevfsReq &r);             // 1.1.76
 
 // --- Field-level validators (exposed for tests + reuse) ---
 //

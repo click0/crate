@@ -64,12 +64,10 @@ The bhyve/VM track is in TODO2.
   runtime sockets), devfs rules built from device classes (DevicesPure)
   instead of free globs, and the ipfw verbs tied to the caller's fw
   lease slot.
-* (HIGH, bug hunt 1.1.71, plausible: EPERM paths not run on hardware)
-  rootless runs reach operations that have no privops route:
-  Mount("devfs") (mount.cpp:33, run.cpp) and the unionfs of `cow:`
-  (run.cpp) call nmount(2) directly — EPERM for a non-root caller. (The
-  scripts and the crontab chmod went through chroot(8) too; since 1.1.75
-  they run inside the jail.)
+* (LOW, left open by 1.1.76) `cow:` with backend unionfs is refused
+  under rootless up front: its overlay is nmount(2) and there is no
+  privops verb for unionfs. Worth a verb once `cow:` does something
+  (the MED item on `cow:` / `base_container:` below).
 * (LOW, left open by 1.1.75) scripts/run:begin, run:before-create-jail
   and run:after-remove-jail run in a throw-away jail(8) (ScriptsPure::
   hookPlace), which needs root: a rootless run refuses a spec that has
@@ -511,29 +509,23 @@ The bhyve/VM track is in TODO2.
   (status_pure.cpp:23-27) and crated / hub responses, which strict
   readers (Python json.loads on bytes) refuse. Replace invalid
   sequences with \ufffd.
-* (MED, left open by 1.1.75) host-side writes into a jail tree still run
-  as root by path while the tree may hold jail-made symlinks: on a
-  --warm-base clone (the source jail's root wrote it) writeFileInJail /
-  appendFileInJail (/etc/rc.conf, /etc/hostid, /var/cron/tabs/<user>,
-  the init marker; run.cpp) go through Util::Fs::writeFile / appendFile,
-  whose O_NOFOLLOW guards the last component only: a symlinked directory
-  — /etc -> /etc, absolute, resolves against the HOST's root — sends the
-  append to the host's /etc/rc.conf. Write through an openat() walk that
-  refuses symlinked components (O_RESOLVE_BENEATH), or inside the jail.
+* (MED, left open by 1.1.76) the file writes into a jail tree go through
+  FsBeneath (no symlink followed in any component) since 1.1.76, but
+  three kinds of host-side operation on the tree still go by path: the
+  file shares (run.cpp, `files/share`: unlink / link / touch / copy of
+  J(fileJail), and link(2) may follow a symlinked source); the mount
+  targets made with create_directories / mkdir (dirs/share, tmpfs,
+  /tmp/.X11-unix, /tmp/wayland, the GUI runtime dir) and nmount(2)
+  itself, which follows a symlink in fspath — Util::safePath's realpath
+  check runs first, so it is §2's check-then-use race; and socket_proxy's
+  socat, which binds J(entry.jail) by path. A tree from a --warm-base
+  clone or an archive can hold such links.
 * (LOW, left open by 1.1.75) the trusted spec store of warm templates
   (/var/db/crate/warm/<guid>.spec / .thin) is never pruned: a destroyed
   template leaves its files (harmless — a new dataset gets a new guid).
   `crate clean` could drop entries whose guid no dataset has. `crate
   info` / `list` of a running warm-base jail still show the clone's own
   +CRATE.SPEC, not the trusted one it runs with.
-* (MED, bug hunt 1.1.71) 1.1.71's X-cookie move follows a symlink in the
-  SOURCE (run.cpp:2411-2429): it runs for every root `crate run` with
-  the default run user, X11 or not, and fileExists / copy_file of
-  J("/root/.Xauthority") follow a link that the jail's root (rc,
-  services, a saved rootfs) placed there — `/root/.Xauthority ->
-  /etc/master.passwd` copies the HOST file into /home/crate/.Xauthority,
-  owned by the run user. chown and chmod after the copy follow links
-  too. Fix: lstat + S_ISREG, open O_NOFOLLOW, copy by fd, fchown/fchmod.
 * (MED, bug hunt 1.1.71) JailQuery::findContainer ignores the owner and
   the kind of jail (jail_query.cpp:263-288). Root `crate stop web`, HTTP
   DELETE or restart hit another tenant's web_pidN when the own `web` is
@@ -608,9 +600,7 @@ The bhyve/VM track is in TODO2.
   which a jail with allow_set_hostname controls (may contain '/').
   `crate console web ls /tmp` joins the words into one argv element
   (args.cpp:1241-1247 -> console.cpp:89, execvp("ls /tmp")), and the
-  command's own options (-l) are taken for crate's. chown/chmod by path
-  after services started (run.cpp:2422-2423, 2500-2503) race with a
-  jail-root symlink (variant of §2's realpath item).
+  command's own options (-l) are taken for crate's.
 * (MED, left open by 1.1.72) a plain `crate run` jail has no ZFS dataset
   of its own — crate.yml's zfs_enable is not used by run.cpp, the jail
   directory is a directory — so since 1.1.72 `crate backup`, `crate

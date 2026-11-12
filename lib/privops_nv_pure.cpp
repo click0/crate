@@ -404,6 +404,12 @@ std::string parseMountTmpfs(const FieldMap &m,
   return "";
 }
 
+// 1.1.76
+std::string parseMountDevfs(const FieldMap &m,
+                            PrivOpsPure::MountDevfsReq &out) {
+  return requireString(m, "target", out.target);
+}
+
 // --- 1.1.43: nvlist header pre-check ---
 
 std::string parseNvlistHeader(const unsigned char *buf, size_t len, NvlistHeader &out) {

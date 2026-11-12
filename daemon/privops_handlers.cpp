@@ -713,6 +713,37 @@ DispatchResult handleMountTmpfs(const PrivOpsPure::MountTmpfsReq &r) {
 #endif
 }
 
+// --- handleMountDevfs (1.1.76) ---
+
+DispatchResult handleMountDevfs(const PrivOpsPure::MountDevfsReq &r) {
+  if (auto e = nonCanonicalReason(r.target, "target"); !e.empty()) return rejectNonCanonical(e);
+#ifndef __FreeBSD__
+  return {500, PrivOpsWirePure::formatHandlerError(
+                "platform_unsupported",
+                "devfs mount only supported on FreeBSD")};
+#else
+  std::vector<iovec> iov;
+  auto add = [&iov](const char *name, const void *value, size_t valLen) {
+    iov.push_back({::strdup(name), ::strlen(name) + 1});
+    iov.push_back({const_cast<void*>(value), valLen});
+  };
+  char errmsg[256] = {0};
+  add("fstype", "devfs", 6);
+  add("fspath", r.target.c_str(), r.target.size() + 1);
+  add("errmsg", errmsg, sizeof(errmsg));
+  int res = ::nmount(iov.data(), iov.size(), MNT_IGNORE);
+  int savedErrno = errno;
+  for (size_t i = 0; i < iov.size(); i += 2)
+    ::free(iov[i].iov_base);
+  if (res != 0) {
+    std::string msg = ::strerror(savedErrno);
+    if (errmsg[0]) { msg += " ("; msg += errmsg; msg += ")"; }
+    return {500, PrivOpsWirePure::formatHandlerError("nmount_failed", msg)};
+  }
+  return {200, PrivOpsWirePure::formatMountDevfsSuccess(r.target)};
+#endif
+}
+
 // --- handleApplyDevfsRules (1.1.62) ---
 
 DispatchResult handleApplyDevfsRules(const PrivOpsPure::ApplyDevfsRulesReq &r) {
@@ -1511,6 +1542,14 @@ DispatchResult dispatchPrivOp(Verb v, const std::string &body,
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleMountTmpfs(r);
     }
+    case Verb::MountDevfs: {   // 1.1.76
+      PrivOpsPure::MountDevfsReq r;
+      if (auto e = PrivOpsWirePure::parseMountDevfs(body, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateMountDevfs(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleMountDevfs(r);
+    }
     case Verb::SignalJail: {
       PrivOpsPure::SignalJailReq r;
       if (auto e = PrivOpsWirePure::parseSignalJail(body, r); !e.empty())
@@ -1648,6 +1687,7 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
         break;
       case Verb::UnmountNullfs:        req.path = field("target");     break;
       case Verb::MountTmpfs:           req.path = field("target");     break;   // 1.1.63
+      case Verb::MountDevfs:           req.path = field("target");     break;   // 1.1.76
       case Verb::ApplyDevfsRuleset:
       case Verb::AddDevfsUnhideRule:
       case Verb::ApplyDevfsRules:      req.path = field("mount_path"); break;   // 1.1.62
@@ -1963,6 +2003,14 @@ DispatchResult dispatchPrivOpFromMap(const PrivOpsNvPure::FieldMap &m,
       if (auto e = PrivOpsPure::validateMountTmpfs(r); !e.empty())
         return {400, PrivOpsWirePure::formatValidateError(e)};
       return handleMountTmpfs(r);
+    }
+    case Verb::MountDevfs: {   // 1.1.76
+      PrivOpsPure::MountDevfsReq r;
+      if (auto e = PrivOpsNvPure::parseMountDevfs(m, r); !e.empty())
+        return {400, PrivOpsWirePure::formatParseError(e)};
+      if (auto e = PrivOpsPure::validateMountDevfs(r); !e.empty())
+        return {400, PrivOpsWirePure::formatValidateError(e)};
+      return handleMountDevfs(r);
     }
     case Verb::SignalJail: {
       PrivOpsPure::SignalJailReq r;

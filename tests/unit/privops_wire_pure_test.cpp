@@ -596,6 +596,7 @@ ATF_TEST_CASE_BODY(dispatch_covers_every_verb) {
     Verb::AcquireFwLease, Verb::ReleaseFwLease,                   // 1.1.57
     Verb::ApplyDevfsRules,                                        // 1.1.62
     Verb::MountTmpfs,                                             // 1.1.63
+    Verb::MountDevfs,                                             // 1.1.76
   };
   for (auto v : verbs) {
     auto r = parseValidateAndDispatch(v, "{}");
@@ -681,6 +682,20 @@ ATF_TEST_CASE_BODY(parse_mount_tmpfs_fields) {
   ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::MountTmpfs, R"({"target":"/jails/web/tmp","size":"big"})").status, 400);
   ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::MountTmpfs, R"({"target":"relative"})").status, 400);
   ATF_REQUIRE(formatMountTmpfsSuccess("/jails/web/tmp").find("\"mounted\":true") != std::string::npos);
+}
+
+// --- mount_devfs (1.1.76) ---
+
+ATF_TEST_CASE_WITHOUT_HEAD(parse_mount_devfs_fields);
+ATF_TEST_CASE_BODY(parse_mount_devfs_fields) {
+  PrivOpsPure::MountDevfsReq r;
+  ATF_REQUIRE_EQ(parseMountDevfs(R"({"target":"/jails/web/dev"})", r), std::string());
+  ATF_REQUIRE_EQ(r.target, std::string("/jails/web/dev"));
+  ATF_REQUIRE(!parseMountDevfs(R"({})", r).empty());
+  ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::MountDevfs, R"({"target":"/jails/web/dev"})").status, 501);
+  ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::MountDevfs, R"({"target":"/dev"})").status, 400);
+  ATF_REQUIRE_EQ(parseValidateAndDispatch(Verb::MountDevfs, R"({"target":"/jails/web/etc"})").status, 400);
+  ATF_REQUIRE(formatMountDevfsSuccess("/jails/web/dev").find("\"mounted\":true") != std::string::npos);
 }
 
 // --- apply_devfs_rules (1.1.62) ---
@@ -905,6 +920,7 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, parse_exec_in_jail_argv_fields);
   ATF_ADD_TEST_CASE(tcs, parse_apply_devfs_rules_fields);
   ATF_ADD_TEST_CASE(tcs, parse_mount_tmpfs_fields);
+  ATF_ADD_TEST_CASE(tcs, parse_mount_devfs_fields);
   ATF_ADD_TEST_CASE(tcs, parse_1141_verbs_and_rctl_limits);
   ATF_ADD_TEST_CASE(tcs, escape_round_trips_control_bytes);
 }

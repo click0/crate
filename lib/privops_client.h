@@ -94,6 +94,8 @@ PrivOpsNvPure::FieldMap buildUnmountNullfs(const std::string &target,
 // dropped here so the wire carries only what the daemon validates.
 PrivOpsNvPure::FieldMap buildMountTmpfs(const std::string &target,
                                         const std::vector<std::pair<std::string, std::string>> &params);
+// 1.1.76: mount a devfs at `target` (a jail's /dev).
+PrivOpsNvPure::FieldMap buildMountDevfs(const std::string &target);
 
 PrivOpsNvPure::FieldMap buildConfigureIface(long jid,
                                             const std::string &ifname,

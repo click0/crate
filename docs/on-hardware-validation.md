@@ -1227,6 +1227,35 @@ rootless refuses only the outside sections; `template warm` records the
 spec in /var/db/crate/warm and `run --warm-base` ignores the clone's
 own +CRATE.SPEC; an untrusted template is refused with the remedy.
 
+## 4r. 1.1.76 — no symlink followed into the tree, mount_devfs
+
+```sh
+# a warm template whose source jail turned /etc into a link to the host's /etc
+crate run -f nginx.crate & sleep 5
+J=$(jls path | grep jail-nginx- | head -1)
+mv $J/etc $J/etc.real && ln -s /etc $J/etc       # what a hostile jail root can do
+crate template warm nginx --output tank/templates/evil
+cp /etc/rc.conf /tmp/rc.conf.before
+crate run --warm-base tank/templates/evil --name ev -- /bin/echo ok
+#   expect: refused — "'etc' is a symbolic link, which is not followed from the host"
+cmp /etc/rc.conf /tmp/rc.conf.before             # unchanged
+# the X cookie of a root run: a planted /root/.Xauthority link is not copied
+#   (run a gui spec with run/user: crate after `ln -sf /etc/master.passwd $J/root/.Xauthority`
+#   in its template): "run/user: .Xauthority not copied into /home/crate (… symbolic link …)"
+
+# rootless: the jail's /dev comes from crated
+sudo -u alice crate run -f nginx.crate -- /bin/ls /dev     # null, zero, random, … — no EPERM
+grep mount_devfs /var/run/crate/$(id -u alice)/audit.log | tail -1   # target=…/dev, allowed
+# a spec with cow: {backend: unionfs} is refused up front
+sudo -u alice crate run -f cow.crate                        # "cow/backend: unionfs … needs root"
+```
+
+Pass criteria: a symlinked directory or file in the tree stops the write
+with the "symbolic link" message and leaves the host file as it was; a
+rootless run mounts its /dev through `mount_devfs` and gets its private
+ruleset as before (§4e); `cow:` unionfs is refused before anything is
+mounted.
+
 ---
 
 ## 5. Reporting back

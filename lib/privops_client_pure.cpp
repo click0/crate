@@ -154,6 +154,14 @@ PrivOpsNvPure::FieldMap buildMountTmpfs(const std::string &target,
   return m;
 }
 
+// 1.1.76
+PrivOpsNvPure::FieldMap buildMountDevfs(const std::string &target) {
+  return {
+    {"verb", "mount_devfs"},
+    {"target", target},
+  };
+}
+
 PrivOpsNvPure::FieldMap buildConfigureIface(long jid,
                                             const std::string &ifname,
                                             const std::string &bridge,

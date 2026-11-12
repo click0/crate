@@ -744,6 +744,9 @@ or
 .Pq default
 or
 .Cm unionfs .
+A rootless run refuses
+.Cm unionfs :
+its overlay is mounted directly and needs root.
 .El
 .Ss DNS filtering
 .Bl -tag -width "redirect_blocked"

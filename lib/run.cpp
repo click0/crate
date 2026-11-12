@@ -51,6 +51,7 @@
 #include "dir_lock.h"         // 1.1.69: the jail directory is locked against `crate clean`
 #include "privacy_pure.h"     // 1.1.67: privacy/hostid, privacy/hostname
 #include "status_pure.h"
+#include "fs_beneath.h"       // 1.1.76: writes into the tree never follow its symlinks
 
 #include <rang.hpp>
 
@@ -608,6 +609,11 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
       ERR("scripts/" << sec << " runs outside the jail (before it is created or after it is "
           "removed), in a throw-away jail(8), which needs root; a rootless run supports the "
           "sections that run inside the jail (run:after-create-jail and later)")
+    // 1.1.76: the unionfs overlay of `cow:` is nmount(2) and has no
+    // privops verb — EPERM half-way, after the shares were mounted.
+    if (spec.cowOptions && spec.cowOptions->backend == "unionfs")
+      ERR("cow/backend: unionfs mounts a unionfs overlay, which needs root; "
+          "there is no privops verb for it")
   }
 
   // 1.1.58: thin jail (base/mode: host-ro). The archive holds the
@@ -1420,11 +1426,15 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   auto execInJail = [&jid](const std::vector<std::string> &argv, const std::string &descr) {
     JailExec::execInJailChecked(jid, argv, "root", descr);
   };
-  auto writeFileInJail = [J](auto str, auto file) {
-    Util::Fs::writeFile(str, J(file));
+  // 1.1.76: through FsBeneath — a symlinked directory in the tree (/etc
+  // -> /etc, which a --warm-base clone's source jail or an archive could
+  // hold) sent these writes to the host's own file; O_NOFOLLOW in
+  // Util::Fs guarded the last component only.
+  auto writeFileInJail = [&jailPath](const std::string &str, const std::string &file) {
+    FsBeneath::writeFile(jailPath, file, str);
   };
-  auto appendFileInJail = [J](auto str, auto file) {
-    Util::Fs::appendFile(str, J(file));
+  auto appendFileInJail = [&jailPath](const std::string &str, const std::string &file) {
+    FsBeneath::appendFile(jailPath, file, str);
   };
 
   // 1.1.67: /etc/hostid inside the jail names the UUID the kernel was
@@ -1536,7 +1546,7 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
     } else if (optionNet->ipMode == Spec::NetOptDetails::IpMode::Static) {
       RunNet::configureStaticIp(bridgeInfo.ifaceB, optionNet->staticIp, optionNet->gateway, jid, execInJail);
       // Copy resolv.conf for static IP (no DHCP to provide it)
-      Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
+      FsBeneath::copyIn("/etc/resolv.conf", jailPath, "/etc/resolv.conf", 0644);   // 1.1.76
       LOG("bridge mode: static IP " << optionNet->staticIp << " on " << bridgeInfo.ifaceB)
       bridgeJailIp = optionNet->staticIp.substr(0, optionNet->staticIp.find('/'));
     } else if (optionNet->ipMode != Spec::NetOptDetails::IpMode::None) {
@@ -1591,7 +1601,7 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
         auto ip = ipBare + "/" + std::to_string(pool.prefixLen);
         auto gw = IpAllocPure::formatIp(IpAllocPure::gatewayFor(pool));
         RunNet::configureStaticIp(bridgeInfo.ifaceB, ip, gw, jid, execInJail);
-        Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
+        FsBeneath::copyIn("/etc/resolv.conf", jailPath, "/etc/resolv.conf", 0644);   // 1.1.76
         LOG("bridge mode: auto-allocated IP " << ip
             << " (gw " << gw << ") on " << bridgeInfo.ifaceB)
         bridgeJailIp = ipBare;
@@ -1989,7 +1999,7 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
       LOG("passthrough mode: DHCP lease acquired on " << ptInfo.iface)
     } else if (optionNet->ipMode == Spec::NetOptDetails::IpMode::Static) {
       RunNet::configureStaticIp(ptInfo.iface, optionNet->staticIp, optionNet->gateway, jid, execInJail);
-      Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
+      FsBeneath::copyIn("/etc/resolv.conf", jailPath, "/etc/resolv.conf", 0644);   // 1.1.76
       LOG("passthrough mode: static IP " << optionNet->staticIp)
     } else if (optionNet->ipMode != Spec::NetOptDetails::IpMode::None) {
       RunNet::configureDhcp(ptInfo.iface, jailPath, jid, jidStr, execInJail);
@@ -2040,7 +2050,7 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
       LOG("netgraph mode: DHCP lease acquired on " << ngInfo.ngIface)
     } else if (optionNet->ipMode == Spec::NetOptDetails::IpMode::Static) {
       RunNet::configureStaticIp(ngInfo.ngIface, optionNet->staticIp, optionNet->gateway, jid, execInJail);
-      Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
+      FsBeneath::copyIn("/etc/resolv.conf", jailPath, "/etc/resolv.conf", 0644);   // 1.1.76
       LOG("netgraph mode: static IP " << optionNet->staticIp)
     } else if (optionNet->ipMode != Spec::NetOptDetails::IpMode::None) {
       RunNet::configureDhcp(ngInfo.ngIface, jailPath, jid, jidStr, execInJail);
@@ -2100,7 +2110,7 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
     auto nameserverIp = Net::getNameserverIp();
 
     if (optionNet->outboundDns)
-      Util::Fs::copyFile("/etc/resolv.conf", J("/etc/resolv.conf"));
+      FsBeneath::copyIn("/etc/resolv.conf", jailPath, "/etc/resolv.conf", 0644);   // 1.1.76
 
     auto epair = RunNet::createEpair(jid, jidStr, execInJail);
     jailSideIface = epair.ifaceB;
@@ -2424,25 +2434,25 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
       crontab << "PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin\n";
       for (auto *job : kv.second)
         crontab << job->schedule << "\t" << job->command << std::endl;
-      Util::Fs::writeFile(crontab.str(), J(STR("/var/cron/tabs/" << cronUser)));
+      writeFileInJail(crontab.str(), STR("/var/cron/tabs/" << cronUser));
       // Ensure correct ownership and permissions (cron requires 0600).
       // 1.1.75: inside the jail — this was `chroot <tree> /bin/sh` as host
       // root (EPERM under rootless; the jail's own sh and chmod as host root).
       execInJail({CRATE_PATH_CHMOD, "0600", STR("/var/cron/tabs/" << cronUser)}, "set crontab permissions");
     }
     // Enable cron in rc.conf
-    Util::Fs::appendFile("cron_enable=\"YES\"\n", J("/etc/rc.conf"));
+    appendFileInJail("cron_enable=\"YES\"\n", "/etc/rc.conf");
     LOG("cron: " << spec.cronJobs.size() << " jobs configured for " << byUser.size() << " user(s)")
   }
 
   // Init scripts (§26): run only on first start, skip on subsequent runs.
   // Uses a marker file to track whether init has already been performed.
   {
-    auto initMarker = J("/.crate-initialized");
-    if (!spec.scripts.empty() && spec.scripts.count("init") && !Util::Fs::fileExists(initMarker)) {
+    const char *initMarker = "/.crate-initialized";
+    if (!spec.scripts.empty() && spec.scripts.count("init") && !FsBeneath::exists(jailPath, initMarker)) {
       LOG("running init scripts (first start)")
       runScript("init");
-      Util::Fs::writeFile("", initMarker);
+      writeFileInJail("", initMarker);
       LOG("init scripts completed, marker created")
     }
   }
@@ -2478,26 +2488,25 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   // copyX11Auth both write the jail's /root (0600 root in a 0700 /root),
   // so a dedicated or named run/user had no cookie. The /root copies are
   // moved; a symlink at the destination is removed, never written through.
+  // 1.1.76: both ends through FsBeneath. fileExists / copy_file followed
+  // a /root/.Xauthority -> /etc/master.passwd that the jail's root (rc, a
+  // service, a saved rootfs) left there and copied the HOST file to the
+  // run user; chown / chmod after the copy followed links as well. Now a
+  // symlink anywhere on either path stops the move with a warning.
   if (const auto cookieHome = RunPure::runUserCookieHome(runUser, runUserPw.home); !cookieHome.empty()) {
     for (const char *file : {".Xauthority", ".ICEauthority"}) {
-      const auto src = J(STR("/root/" << file));
-      if (!Util::Fs::fileExists(src)) continue;
+      const auto srcRel = STR("/root/" << file);
       const auto inJail = STR(cookieHome << "/" << file);
-      if (!Util::Fs::dirExists(J(cookieHome))) break;
-      Util::safePath(J(cookieHome), jailPath, "run/user home (X cookie)");
-      struct stat st;
-      if (::lstat(J(inJail).c_str(), &st) == 0 && !S_ISDIR(st.st_mode))
-        (void)::unlink(J(inJail).c_str());
       try {
-        Util::Fs::copyFile(src, J(inJail));
-        Util::Fs::chown(J(inJail), runUserPw.uid, runUserPw.gid);
-        Util::Fs::chmod(J(inJail), 0600);
+        if (!FsBeneath::exists(jailPath, srcRel)) continue;
+        if (!FsBeneath::isDirectory(jailPath, cookieHome)) break;
+        FsBeneath::copyWithin(jailPath, srcRel, inJail, 0600, runUserPw.uid, runUserPw.gid);
+        FsBeneath::unlink(jailPath, srcRel);
       } catch (const std::exception &e) {
         std::cerr << rang::fg::yellow << "run/user: " << file << " not copied into " << cookieHome
                   << " (" << e.what() << ")" << rang::style::reset << std::endl;
         continue;
       }
-      (void)::unlink(src.c_str());
       if (std::string(file) == ".Xauthority")
         setJailEnv("XAUTHORITY", Util::shellQuote(inJail));   // later wins in env(1)
       LOG("run/user: " << file << " moved into " << cookieHome << " for '" << runUser.name << "'")
@@ -2568,10 +2577,10 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
     // 1.1.64: readable by whoever run/user resolved to (root-owned 0555
     // when it is not the mirrored operator)
     if (runUser.mirrored) {
-      Util::Fs::chown(J(cmdFile), myuid, mygid);
-      Util::Fs::chmod(J(cmdFile), 0500);
+      FsBeneath::chown(jailPath, cmdFile, myuid, mygid);
+      FsBeneath::chmod(jailPath, cmdFile, 0500);
     } else {
-      Util::Fs::chmod(J(cmdFile), 0555);
+      FsBeneath::chmod(jailPath, cmdFile, 0555);
     }
 
     // Start background healthcheck monitor for service-only crates (§20)
@@ -2637,7 +2646,7 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
     RunServices::stopServices(spec, execInJail);
 
     if (spec.optionExists("dbg-ktrace"))
-      Util::Fs::copyFile(J(STR(homeDir << "/ktrace.out")), "ktrace.out");
+      FsBeneath::copyOut(jailPath, STR(homeDir << "/ktrace.out"), "ktrace.out");   // 1.1.76
 
     if (optionInitializeRc)
       execInJail({"/bin/sh", "/etc/rc.shutdown"}, "exec.stop");
