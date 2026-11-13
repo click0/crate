@@ -444,6 +444,28 @@ The bhyve/VM track is in TODO2.
   raw) when absent. The audio sockets bound alongside (PipeWire /
   PulseAudio) are one shared bus too — a separate per-tenant story
   (PipeWire security-context / a per-jail Pulse via module-native).
+* (MED, left open by 1.1.77) the X servers crate starts are separate
+  displays, not sealed ones: Xvfb runs with `-ac` and Xephyr / Xorg get
+  no `-auth` cookie (run_gui.cpp setupX11), their sockets sit in the
+  host's /tmp/.X11-unix, and the `x11` shared mode mounts that whole
+  directory read-write — so a shared jail, or any local user, reaches
+  another tenant's headless / nested / gpu display. Fix: a per-run
+  MIT-MAGIC-COOKIE-1 (`-auth`, the cookie copied into the jail and
+  handed to x11vnc), and in shared mode mount only the host display's
+  own socket read-only, as 1.1.74 did for the servers crate starts
+  (makeOwnXSocketDir). Same area: startWebsockify gives websockify no
+  bind address (it listens on every interface in front of an x11vnc
+  that is on loopback and has no password unless gui/vnc_password is
+  set) — pass gui/vnc_bind. Documented as a caveat in
+  docs/trust-model.md, "Shared display plane".
+* (LOW, left open by 1.1.77) the jail's own GUI variables (DISPLAY,
+  XAUTHORITY, WAYLAND_DISPLAY, XDG_RUNTIME_DIR — run.cpp jailEnv) go on
+  the env(1) line of the main command only: services and hooks run
+  through JailExec get PasswdPure::jailExecEnv and no display. Before
+  1.1.77 the root path leaked the HOST's values to them, which worked
+  by accident in the shared X11 mode. Give JailExec the jail's set.
+  Rootless exec_in_jail also carries no LANG (the request has `term`
+  only); the root path passes the operator's.
 * (LOW, left open by 1.1.70) the HTTP snapshot routes (routes.cpp
   datasetForJail) and the ws-console upgrade (ws_console.cpp) still
   look the jail up by kernel name only; every other target goes through
@@ -467,15 +489,16 @@ The bhyve/VM track is in TODO2.
   the dummynet PIPES (kPipeBase 10000+; needs `ipfw pipe list`
   parsing). clean.cpp:97-98 iface-record liveness uses
   path.find(name) substring match. (comment fixed in 1.1.48)
-* (LOW) import.cpp:262,272 outFile == archivePath is a raw string
-  compare (`-o foo.crate` on ./foo.crate passes, copy_file fails);
+* (LOW) import.cpp: outFile == archivePath is a raw string compare, so
+  `-o foo.crate` on ./foo.crate is not taken for "validate only" and
+  ends in "already exists" (the output is a new file since 1.1.77);
   ImportPure::archiveHasTraversal (import_pure.cpp:21) rejects any
   entry containing `..` (e.g. foo..bar); import re-runs the full
   decrypt+decompress pipeline 3x.
-* (LOW) the jail-<target>- prefix match export.cpp had until 1.1.48
-  lives on in console.cpp / info.cpp (MED item below);
-  snmpd/collector.cpp:66 and stack.cpp (section 4) have the same
-  substring/prefix bug.
+* (LOW) snmpd/collector.cpp:66 and stack.cpp (section 4) still match
+  jails by the "jail-<target>-" prefix / a substring, the bug
+  export.cpp (1.1.48) and console.cpp / info.cpp (1.1.77) no longer
+  have.
 * (LOW) zfs_ops.cpp:362 ::write return ignored; mount.cpp:61 strdup
   NULL unchecked; create.cpp:50-59 guessCrateName derefs
   *runServices.rbegin() when both cmd and services are empty

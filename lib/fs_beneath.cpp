@@ -262,6 +262,26 @@ void copyOut(const std::string &root, const std::string &rel, const std::string 
   closeChecked(dst, hostDst);
 }
 
+void copyToNewFile(const std::string &hostSrc, const std::string &hostDst,
+                   mode_t mode, uid_t uid, gid_t gid) {
+  Fd src(::open(hostSrc.c_str(), O_RDONLY | O_CLOEXEC));
+  if (src.fd < 0)
+    ERR2("copy file", "cannot open '" << hostSrc << "': " << ::strerror(errno))
+  Fd dst(::open(hostDst.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode));
+  if (dst.fd < 0)
+    ERR2("copy file", "cannot create '" << hostDst << "': " << ::strerror(errno)
+         << (errno == EEXIST ? " (a file or a symbolic link is already there)" : ""))
+  try {
+    copyFd(src.fd, dst.fd, hostDst);
+    if (uid != (uid_t)-1 && ::fchown(dst.fd, uid, gid) != 0)
+      ERR2("copy file", "'" << hostDst << "': fchown: " << ::strerror(errno))
+    closeChecked(dst, hostDst);
+  } catch (...) {
+    (void)::unlink(hostDst.c_str());
+    throw;
+  }
+}
+
 void chown(const std::string &root, const std::string &rel, uid_t uid, gid_t gid) {
   const std::string what = where(root, rel);
   Fd f(openLeaf(root, rel, O_RDONLY | O_NONBLOCK, 0));

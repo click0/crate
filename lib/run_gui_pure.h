@@ -142,10 +142,11 @@ bool hostX11CookieWanted(const std::string &guiMode, bool waylandOnly,
 // the compositor's privileged protocols (virtual keyboard/pointer,
 // screencopy, data-control, foreign-toplevel) — either reaches the
 // whole host session, other jails' windows included, so it is not a
-// boundary between tenants. Each warning fires only when that socket is
-// actually bound: the X11 warning not for a Wayland-only run (it routes
-// through the shared block but binds no X11 socket), the Wayland
-// warning only when a Wayland socket will be bound.
+// boundary between tenants. Each warning belongs to a socket that is
+// bound: the X11 one not to a Wayland-only run (it routes through the
+// shared block but binds no X11 socket); `wayland` says a Wayland
+// socket may be bound — setupX11 prints that warning once the mount
+// has happened (WAYLAND_DISPLAY can name a socket that is not there).
 //   isAutoFlow     — `gui: auto` (or `gui.mode: auto`)
 //   isWaylandFlow  — `gui.mode: wayland`
 //   displaySet     — DISPLAY is set in the environment

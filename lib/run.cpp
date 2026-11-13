@@ -2323,6 +2323,12 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   if (RunPure::runUserNeedsAccount(runUser)) {
     if (!PasswdPure::lookupUser(readJailPasswd(), runUser.name, runUserPw)) {
       LOG("run/user: creating the account '" << runUser.name << "' in the jail")
+      // 1.1.77: /home as a real directory first. Without one, pw(8) of
+      // FreeBSD 13 and older makes /usr/home and a symlink /home ->
+      // usr/home, and the host then refuses every share or tmpfs under
+      // the user's home (FsBeneath follows no symlink in the tree).
+      if (!FsBeneath::exists(jailPath, "/home"))
+        FsBeneath::mkdirs(jailPath, "/home", 0755);
       execInJail({"/usr/sbin/pw", "useradd", runUser.name, "-m", "-s", "/bin/sh", "-c", "crate run/user"},
                  "create the run/user account in jail");
       if (!PasswdPure::lookupUser(readJailPasswd(), runUser.name, runUserPw))

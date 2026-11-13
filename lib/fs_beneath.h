@@ -60,6 +60,16 @@ void copyWithin(const std::string &root, const std::string &srcRel, const std::s
 // the host path's last component is not followed either).
 void copyOut(const std::string &root, const std::string &rel, const std::string &hostDst);
 
+// 1.1.77: host to host, for output the host writes where others can
+// plant names (`crate import` next to the archive, in /tmp): a copy of
+// hostSrc in a NEW file hostDst — O_EXCL and O_NOFOLLOW, so neither an
+// existing file nor a (dangling) symlink at hostDst is written through
+// — created with `mode` (the umask applies) and, unless uid is
+// (uid_t)-1, given uid:gid through the descriptor. A failed copy
+// removes hostDst again. Throws; "File exists" when hostDst is there.
+void copyToNewFile(const std::string &hostSrc, const std::string &hostDst,
+                   mode_t mode, uid_t uid = (uid_t)-1, gid_t gid = (gid_t)-1);
+
 void chown(const std::string &root, const std::string &rel, uid_t uid, gid_t gid);
 void chmod(const std::string &root, const std::string &rel, mode_t mode);
 // A non-directory.

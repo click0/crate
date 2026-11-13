@@ -4,6 +4,7 @@
 #include "mount.h"
 #include "privops_client.h"
 #include "mounts_pure.h"   // 1.1.77: normalizeMountPoint
+#include "runtime_paths_pure.h"   // 1.1.77: crateJailRootOf
 #include "util.h"
 #include "err.h"
 #include <rang.hpp>
@@ -92,11 +93,22 @@ void Mount::mount() {
   // resolve to itself — the rule crated has applied to the same mounts
   // under rootless since 1.1.35. (Checked here, then used by path: a
   // jail process swapping a component in between still wins; TODO §2.)
+  // Only the part inside the jail is the jail's to shape: the way to the
+  // jail root is the host's and is taken as it resolves (a host whose
+  // /var or /var/run is a symlink still mounts).
   {
     char real[PATH_MAX];
     if (::realpath(fspath.c_str(), real) == nullptr)
       ERR("mount point '" << fspath << "': " << strerror(errno))
-    if (fspath != real)
+    std::string expect = fspath;
+    const std::string jailRoot = RuntimePathsPure::crateJailRootOf(fspath);
+    if (!jailRoot.empty()) {
+      char realRoot[PATH_MAX];
+      if (::realpath(jailRoot.c_str(), realRoot) == nullptr)
+        ERR("jail root '" << jailRoot << "': " << strerror(errno))
+      expect = std::string(realRoot) + fspath.substr(jailRoot.size());
+    }
+    if (expect != real)
       ERR("mount point '" << fspath << "' resolves to '" << real
           << "': a symlink on the way is not followed")
   }

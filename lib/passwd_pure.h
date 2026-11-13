@@ -52,10 +52,14 @@ constexpr size_t kMaxFileBytes = 4 * 1024 * 1024;
 
 // 1.1.77: the whole environment of a command run inside a jail —
 // crated's exec_in_jail and crate(1)'s root path (JailExec) both use it.
-// PATH, HOME, SHELL, USER, LOGNAME, and TERM when `term` is non-empty;
-// an empty home is "/", an empty shell /bin/sh. Nothing else of the
-// caller's environment crosses into the jail.
+// PATH, HOME, SHELL, USER, LOGNAME, TERM when `term` is non-empty, and
+// LANG when `lang` is a plain locale name ([A-Za-z0-9_.@-], at most 64
+// characters — anything else is dropped); an empty home is "/", an
+// empty shell /bin/sh. Nothing else of the caller's environment crosses
+// into the jail. (`lang` is the root path's: the exec_in_jail request
+// carries no locale.)
 std::vector<std::string> jailExecEnv(const std::string &user, const std::string &home,
-                                     const std::string &shell, const std::string &term);
+                                     const std::string &shell, const std::string &term,
+                                     const std::string &lang = std::string());
 
 }

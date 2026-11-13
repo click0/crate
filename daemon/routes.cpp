@@ -171,7 +171,7 @@ static std::optional<JailQuery::JailInfo> findRouteJail(const httplib::Request &
                                                         const std::string &name,
                                                         httplib::Response &res) {
   unsigned matches = 0;
-  auto jail = JailQuery::findContainer(name, &matches);
+  auto jail = JailQuery::findContainer(name, &matches, /*anyOwner=*/true);   // 1.1.77: crated answers for its peers
   if (!jail) {
     if (matches > 1)
       jsonError(res, 409, "more than one running jail is named '" + name + "'; use its jail name or jid");
@@ -383,9 +383,11 @@ static void handleContainerStart(const httplib::Request &req, httplib::Response 
   // and a second instance was started.
   // 1.1.77: by the container name of what was asked — start web_pid1
   // looked for a jail named web_pid1 and missed a running web_pid999.
+  // Among every tenant's jails (anyOwner): crated is root, and a peer's
+  // own rootless `web` must still answer 409 here.
   const std::string containerName = RunPure::containerNameOf(name);
   unsigned running = 0;
-  if (JailQuery::findContainer(containerName, &running) || running > 0) {
+  if (JailQuery::findContainer(containerName, &running, /*anyOwner=*/true) || running > 0) {
     jsonError(res, 409, "container already running");
     return;
   }
@@ -432,7 +434,7 @@ static void handleContainerDestroy(const httplib::Request &req, httplib::Respons
   // timeout — and `crate run`'s RunAtEnd chain cleans up behind it.
   // 1.1.70: by kernel name, jid or container name; ambiguous -> 409.
   unsigned matches = 0;
-  auto jail = JailQuery::findContainer(name, &matches);
+  auto jail = JailQuery::findContainer(name, &matches, /*anyOwner=*/true);   // 1.1.77: crated answers for its peers
   if (!jail && matches > 1) {
     jsonError(res, 409, "more than one running jail is named '" + name + "'; use its jail name or jid");
     return;
@@ -696,7 +698,7 @@ static void handleContainerRestart(const httplib::Request &req, httplib::Respons
   // lists) there is no such file, so it killed the container and then
   // answered 404 "cannot restart".
   unsigned matches = 0;
-  auto jail = JailQuery::findContainer(name, &matches);
+  auto jail = JailQuery::findContainer(name, &matches, /*anyOwner=*/true);   // 1.1.77: crated answers for its peers
   if (!jail && matches > 1) {
     jsonError(res, 409, "more than one running jail is named '" + name + "'; use its jail name or jid");
     return;

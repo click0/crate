@@ -577,6 +577,15 @@ on a path
 .Pq Li $HOME/Documents:ro
 or a third element
 .Pq Li [$HOME/Music, /mnt/music, ro] .
+Since 1.1.77 the jail-side path must not run through a symbolic link
+inside the jail's tree (for example
+.Pa /etc/unbound ) :
+the host follows no link the jail could have made, and such a share is
+refused.
+The same holds for
+.Sy files/share
+and
+.Sy tmpfs .
 .It Sy files/share
 Files shared between host and jail.
 Same format as

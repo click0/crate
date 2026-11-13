@@ -1286,7 +1286,15 @@ crate console web        # same — no longer a root login in webapp
 crate console webapp     # a login in webapp
 crate info 3             # when jid 3 and a container "3" are different jails: "names 2 running jails"
 # the jail's environment
-FOO_TOKEN=secret crate run -f web.crate -- /usr/bin/env   # no FOO_TOKEN; PATH/HOME/SHELL/USER/LOGNAME/TERM + CRATE, DISPLAY…
+LANG=uk_UA.UTF-8 crate run -f web.crate -- /usr/bin/env   # PATH/HOME/SHELL/USER/LOGNAME/TERM/LANG + CRATE, the jail's DISPLAY…
+#   a service or hook (`service x onestart`, run:before-execute) prints the same set without the
+#   host's DISPLAY / WAYLAND_DISPLAY / XAUTHORITY / XDG_RUNTIME_DIR
+# crated answers for its peers: a tenant's rootless `web` by container name
+sudo -u alice crate run -f web.crate &
+curl -s --unix-socket /var/run/crate/control/<socket> http://x/v1/control/containers/web        # 200, alice's web_pid…
+curl -s -X POST --unix-socket /var/run/crate/control/<socket> http://x/v1/control/containers/web/start   # 409, already running
+# a host whose way to the jail root holds a symlink (/var -> /usr/var) still mounts;
+# run/user on a base without /home: /home is a directory, a share under the user's home mounts
 # logs / import
 ln -sf /etc/master.passwd $J/var/log/messages && crate logs web   # "'messages' is a symbolic link …"
 ln -s /etc/x /tmp/x.crate; cp web.txz /tmp/x.txz; crate import /tmp/x.txz   # "already exists"; /etc/x not created
@@ -1305,8 +1313,9 @@ DISPLAY=:0 crate run -f firefox.yml -- /bin/echo ok   # the X11 shared WARN (CRA
 Pass criteria: no host file is linked, copied or created through a link
 in the tree; the socket appears only inside the jail; ordinary shares,
 tmpfs and GUI sockets mount as before (a trailing slash included); a
-container name finds only the caller's own crate jails; nothing of the
-operator's environment beyond the listed variables reaches the jail; the
+container name finds only the caller's own crate jails under crate(1)
+and any tenant's through crated; a jail command gets the listed
+variables and none of the host's display variables; the
 shared Wayland bind prints its warning unless acked, and the X11 warning
 no longer fires for a Wayland-only run.
 

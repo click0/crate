@@ -124,7 +124,7 @@ std::string containerNameOfJail(const std::string &jailName, const std::string &
 }
 
 ContainerChoice chooseContainer(const std::vector<JailRef> &jails, const std::string &target,
-                                uint32_t callerUid) {
+                                uint32_t callerUid, bool anyOwner) {
   ContainerChoice c;
   if (target.empty()) return c;
   // 1. the exact kernel name
@@ -136,12 +136,13 @@ ContainerChoice chooseContainer(const std::vector<JailRef> &jails, const std::st
       return c;
     }
   }
-  // 2. the container name, among the caller's own running jails
+  // 2. the container name, among the caller's own running jails (every
+  //    tenant's with anyOwner)
   std::vector<size_t> byName;
   for (size_t i = 0; i < jails.size(); i++) {
     const auto &j = jails[i];
     if (j.dying || !RuntimePathsPure::isCrateJailPath(j.path)) continue;
-    if (RuntimePathsPure::crateJailOwnerUid(j.path) != (int64_t)callerUid) continue;
+    if (!anyOwner && RuntimePathsPure::crateJailOwnerUid(j.path) != (int64_t)callerUid) continue;
     if (containerNameOfJail(j.name, j.path) == target) byName.push_back(i);
   }
   // 3. the jid

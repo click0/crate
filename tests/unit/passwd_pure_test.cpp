@@ -126,6 +126,15 @@ ATF_TEST_CASE_BODY(jail_exec_env) {
   ATF_REQUIRE_EQ(r.size(), 5u);                     // no TERM
   ATF_REQUIRE_EQ(r[1], std::string("HOME=/"));
   ATF_REQUIRE_EQ(r[2], std::string("SHELL=/bin/sh"));
+  // LANG: a plain locale name is passed, anything else dropped
+  auto l = PasswdPure::jailExecEnv("alice", "/home/alice", "/bin/sh", "", "uk_UA.UTF-8");
+  ATF_REQUIRE_EQ(l.size(), 6u);
+  ATF_REQUIRE_EQ(l[5], std::string("LANG=uk_UA.UTF-8"));
+  ATF_REQUIRE_EQ(PasswdPure::jailExecEnv("a", "/", "/bin/sh", "", "ca_ES@valencia").back(),
+                 std::string("LANG=ca_ES@valencia"));
+  ATF_REQUIRE_EQ(PasswdPure::jailExecEnv("a", "/", "/bin/sh", "", "C\nX=1").size(), 5u);
+  ATF_REQUIRE_EQ(PasswdPure::jailExecEnv("a", "/", "/bin/sh", "", "en US").size(), 5u);
+  ATF_REQUIRE_EQ(PasswdPure::jailExecEnv("a", "/", "/bin/sh", "", std::string(65, 'a')).size(), 5u);
 }
 
 ATF_INIT_TEST_CASES(tcs) {

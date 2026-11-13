@@ -261,7 +261,7 @@ std::string getJailParam(int jid, const std::string &paramName) {
   return ps.getString(1);
 }
 
-std::optional<JailInfo> findContainer(const std::string &target, unsigned *matches) {
+std::optional<JailInfo> findContainer(const std::string &target, unsigned *matches, bool anyOwner) {
   // 1.1.77: the choice is RunPure::chooseContainer — crate jails only,
   // the container name among the caller's own jails, a jid that collides
   // with a container name is ambiguous. getJailByName / getJailByJid
@@ -274,7 +274,7 @@ std::optional<JailInfo> findContainer(const std::string &target, unsigned *match
   refs.reserve(all.size());
   for (const auto &j : all)
     refs.push_back({j.jid, j.name, j.path, j.dying});
-  const auto c = RunPure::chooseContainer(refs, target, (uint32_t)::geteuid());
+  const auto c = RunPure::chooseContainer(refs, target, (uint32_t)::geteuid(), anyOwner);
   if (matches) *matches = c.matches;
   if (c.index < 0) return std::nullopt;
   return all[(size_t)c.index];
@@ -308,8 +308,12 @@ static std::vector<char*> buildArgv(const std::vector<std::string> &args) {
                                          const struct passwd *pw) {
   // 1.1.77: the command gets PasswdPure::jailExecEnv — the set crated's
   // exec_in_jail builds — not crate(1)'s environment, which execv() used
-  // to hand over whole: tokens, SSH_AUTH_SOCK, proxy credentials and
-  // anything else in the operator's shell reached the jail's processes.
+  // to hand over. That was never the operator's whole shell (cli/main.cpp
+  // rebuilds environ from a short list at startup), but it carried the
+  // host's DISPLAY, WAYLAND_DISPLAY, XAUTHORITY and XDG_RUNTIME_DIR —
+  // host values, wrong inside the jail; the command's own come on its
+  // env(1) line (run.cpp, jailEnv). LANG is kept: the locale is the
+  // operator's to choose.
   // pw is the user switched to (nullptr: root, cwd stays the jail root).
   std::string name = "root", home = "/root", shell = CRATE_PATH_SH;
   if (pw) {
@@ -322,7 +326,9 @@ static std::vector<char*> buildArgv(const std::vector<std::string> &args) {
     if (root->pw_shell && *root->pw_shell) shell = root->pw_shell;
   }
   const char *term = ::getenv("TERM");
-  const auto env = PasswdPure::jailExecEnv(name, home, shell, term ? std::string(term) : std::string());
+  const char *lang = ::getenv("LANG");
+  const auto env = PasswdPure::jailExecEnv(name, home, shell, term ? std::string(term) : std::string(),
+                                           lang ? std::string(lang) : std::string());
   std::vector<char*> envp;
   for (auto &e : env) envp.push_back(const_cast<char*>(e.c_str()));
   envp.push_back(nullptr);

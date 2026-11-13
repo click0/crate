@@ -257,6 +257,29 @@ ATF_TEST_CASE_BODY(share_links) {
   ATF_REQUIRE(throws([&] { FsBeneath::linkOut(s.tree, "/etc", s.base + "/out3"); }));
 }
 
+// 1.1.77: `crate import`'s output — a new file only
+ATF_TEST_CASE_WITHOUT_HEAD(copy_to_new_file);
+ATF_TEST_CASE_BODY(copy_to_new_file) {
+  Scratch s;
+  Scratch::put(s.host + "/a.txz", "archive");
+  FsBeneath::copyToNewFile(s.host + "/a.txz", s.base + "/a.crate", 0644);
+  ATF_REQUIRE_EQ(Scratch::get(s.base + "/a.crate"), std::string("archive"));
+  // an existing file is not overwritten
+  ATF_REQUIRE(throws([&] { FsBeneath::copyToNewFile(s.host + "/rc.conf", s.base + "/a.crate", 0644); }));
+  ATF_REQUIRE_EQ(Scratch::get(s.base + "/a.crate"), std::string("archive"));
+  // a dangling symlink planted at the output name is not written through
+  ATF_REQUIRE(::symlink((s.host + "/victim").c_str(), (s.base + "/b.crate").c_str()) == 0);
+  ATF_REQUIRE(throws([&] { FsBeneath::copyToNewFile(s.host + "/a.txz", s.base + "/b.crate", 0644); }));
+  ATF_REQUIRE(!std::filesystem::exists(s.host + "/victim"));
+  // nor a symlink to an existing file
+  ATF_REQUIRE(::symlink((s.host + "/rc.conf").c_str(), (s.base + "/c.crate").c_str()) == 0);
+  ATF_REQUIRE(throws([&] { FsBeneath::copyToNewFile(s.host + "/a.txz", s.base + "/c.crate", 0644); }));
+  ATF_REQUIRE_EQ(Scratch::get(s.host + "/rc.conf"), std::string("host\n"));
+  // a missing source leaves nothing behind
+  ATF_REQUIRE(throws([&] { FsBeneath::copyToNewFile(s.host + "/nope", s.base + "/d.crate", 0644); }));
+  ATF_REQUIRE(!std::filesystem::exists(s.base + "/d.crate"));
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, split_relative);
   ATF_ADD_TEST_CASE(tcs, write_and_append);
@@ -266,4 +289,5 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, copy_chmod_chown_mkdirs);
   ATF_ADD_TEST_CASE(tcs, touch_and_open_directory);
   ATF_ADD_TEST_CASE(tcs, share_links);
+  ATF_ADD_TEST_CASE(tcs, copy_to_new_file);
 }

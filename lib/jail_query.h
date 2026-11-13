@@ -41,7 +41,12 @@ std::optional<JailInfo> getJailByJid(int jid);
 // the container name counts among the caller's (euid's) own jails only;
 // a jid that names another jail than the container name is ambiguous
 // (RunPure::chooseContainer).
-std::optional<JailInfo> findContainer(const std::string &target, unsigned *matches = nullptr);
+// anyOwner: the container name counts among every tenant's jails. For
+// crated only — it runs as root on behalf of its peers, so "the
+// caller's own" would be root's; what the peer may reach is the pool
+// ACL's to say, on the jail that was found.
+std::optional<JailInfo> findContainer(const std::string &target, unsigned *matches = nullptr,
+                                      bool anyOwner = false);
 
 // Get a single string parameter from a jail identified by JID.
 // Returns empty string on failure.

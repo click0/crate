@@ -11,6 +11,7 @@
 #include "util.h"
 #include "err.h"
 
+#include "fs_beneath.h"   // 1.1.77: copyToNewFile
 #include <rang.hpp>
 
 #include <sys/stat.h>
@@ -275,46 +276,11 @@ bool importCrate(const Args &args) {
   // descriptor. copy_file took a dangling symlink at the derived name
   // (/tmp/x.crate -> /etc/…, planted by another user next to /tmp/x.txz)
   // for a missing file and wrote through it as root; chown followed it
-  // too — the import side of 1.1.71's export fix.
-  {
-    int src = ::open(archivePath.c_str(), O_RDONLY | O_CLOEXEC);
-    if (src < 0)
-      ERR("cannot open '" << archivePath << "': " << strerror(errno))
-    int dst = ::open(outFile.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
-    if (dst < 0) {
-      int e = errno;
-      ::close(src);
-      if (e == EEXIST)
-        ERR("output file '" << outFile << "' already exists — remove it first or pass a different -o")
-      ERR("cannot create '" << outFile << "': " << strerror(e))
-    }
-    auto fail = [&](const char *what) {
-      int e = errno;
-      ::close(src);
-      ::close(dst);
-      ::unlink(outFile.c_str());
-      ERR(what << " '" << outFile << "': " << strerror(e))
-    };
-    char buf[65536];
-    for (;;) {
-      ssize_t n = ::read(src, buf, sizeof(buf));
-      if (n < 0) { if (errno == EINTR) continue; fail("read for"); }
-      if (n == 0) break;
-      for (ssize_t off = 0; off < n; ) {
-        ssize_t w = ::write(dst, buf + off, (size_t)(n - off));
-        if (w < 0) { if (errno == EINTR) continue; fail("write"); }
-        off += w;
-      }
-    }
-    if (::fchown(dst, myuid, mygid) != 0)
-      fail("chown");
-    ::close(src);
-    if (::close(dst) != 0) {
-      int e = errno;
-      ::unlink(outFile.c_str());
-      ERR("close '" << outFile << "': " << strerror(e))
-    }
-  }
+  // too — the import side of 1.1.71's export fix. (A name that appears
+  // after the check below is refused by O_EXCL: "File exists".)
+  if (Util::Fs::fileExists(outFile) || Util::Fs::dirExists(outFile))
+    ERR("output file '" << outFile << "' already exists — remove it first or pass a different -o")
+  FsBeneath::copyToNewFile(archivePath, outFile, 0644, myuid, mygid);
 
   // Generate checksum for the output file
   auto sha256File = outFile + ".sha256";

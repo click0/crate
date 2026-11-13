@@ -13,8 +13,8 @@ symlink the jail made either: what 1.1.76 left open on the host's way
 into the tree is closed, except a race against a running jail (TODO
 §2). A container name finds only the caller's own crate jails, `crate
 console` / `info` / `export` no longer fall back to whatever jail
-matches loosely, and a command run in a jail no longer inherits crate's
-environment. The shared Wayland display, which hands a jail client the
+matches loosely, and a command run in a jail gets an environment of its
+own instead of crate's. The shared Wayland display, which hands a jail client the
 whole host session, now warns like `x11` shared already did.**
 
 - **files/share followed links in the tree** (`lib/run.cpp`,
@@ -36,8 +36,15 @@ whole host session, now warns like `x11` shared already did.**
   point. The targets are made through FsBeneath now, and on the root
   path Mount refuses a mount point that does not resolve to itself
   (`realpath`) — the rule crated has applied to rootless mounts since
-  1.1.35. Mount points are normalised first (`//`, `/.`, a trailing
-  slash), so `dirs/share` with a trailing slash still mounts. The
+  1.1.35. Only the part inside the jail has to resolve to itself: the
+  way to the jail root is the host's (`RuntimePathsPure::crateJailRootOf`),
+  so a host whose /var or /var/run is a symlink still mounts. Mount
+  points are normalised first (`//`, `/.`, a trailing
+  slash), so `dirs/share` with a trailing slash still mounts. A share or
+  tmpfs whose jail path runs through a symlink of the jail's own base
+  (`/etc/unbound`, or `/home` where pw(8) of FreeBSD 13 made it a link)
+  is refused now; `run/user` creates /home as a directory before pw
+  does. The
   mounts still go by path after the check, and the shares come after
   /etc/rc: a jail process that swaps a component in between wins —
   that race stays in TODO §2 with the way to close it.
@@ -51,14 +58,16 @@ whole host session, now warns like `x11` shared already did.**
   returned any jail with that kernel name or jid — a bastille `web` was
   stopped, restarted or updated — and matched the container name across
   every tenant: root's `crate stop web` with its own web not running
-  stopped another tenant's web_pidN, and HTTP / control-socket start
-  answered 409 when anyone ran that name. Now (`RunPure::chooseContainer`)
-  only crate jails count; the container name matches the caller's own
-  jails (`/var/run/crate/<euid>/…`; others' stay reachable by kernel name
-  or jid); a jid that names another jail than the container name is
-  ambiguous (container `3` was shadowed by jid 3); start checks the
-  container name of what it was given (start web_pid1 missed a running
-  web_pid999).
+  stopped another tenant's web_pidN. Now (`RunPure::chooseContainer`)
+  only crate jails count; for crate(1) the container name matches the
+  caller's own jails (`/var/run/crate/<euid>/…`; others' stay reachable
+  by kernel name or jid); a jid that names another jail than the
+  container name is ambiguous (container `3` was shadowed by jid 3).
+  crated, which is root but answers for its peers, keeps matching the
+  container name among every tenant's jails (`anyOwner`) — the pool ACL
+  judges the jail that was found, and two tenants' `web` are a 409 — and
+  its start checks the container name of what it was given (start
+  web_pid1 missed a running web_pid999).
 - **`crate console web` could open a root login in `webapp`**
   (`lib/console.cpp`, `lib/info.cpp`, `lib/export.cpp`). After
   findContainer they fell back to "jail-"+name as a prefix, any jid
@@ -70,12 +79,17 @@ whole host session, now warns like `x11` shared already did.**
 - **The jail got crate(1)'s environment** (`lib/jail_query.cpp`,
   `lib/passwd_pure.cpp`, `daemon/privops_handlers.cpp`). On the root path
   a command run inside the jail (rc, services, hooks, the healthcheck,
-  the command itself) inherited the operator's whole environment —
-  tokens, SSH_AUTH_SOCK, proxy credentials. It gets PATH, HOME, SHELL,
-  USER, LOGNAME and TERM now (`PasswdPure::jailExecEnv`), the set
-  crated's exec_in_jail already gave under rootless; both use it. What
-  crate sets for the command itself (CRATE, DISPLAY, XAUTHORITY, …) still
-  travels in its env(1) line.
+  the command itself) inherited what crate(1) runs with. That is not the
+  operator's shell — `cli/main.cpp` rebuilds the environment from a short
+  list at startup, so tokens or SSH_AUTH_SOCK never got there — but it
+  held the host's DISPLAY, WAYLAND_DISPLAY, XAUTHORITY and
+  XDG_RUNTIME_DIR, host values that are wrong inside the jail, and
+  differed from what the same command gets under rootless. Both paths
+  build it with `PasswdPure::jailExecEnv` now: PATH, HOME, SHELL, USER,
+  LOGNAME, TERM, and on the root path LANG (the operator's locale, as
+  before). What crate sets for the command itself (CRATE, DISPLAY,
+  XAUTHORITY, …) still travels in its env(1) line; services and hooks do
+  not get those (TODO §7).
 - **`crate logs` read the jail's /var/log/messages by path**
   (`lib/lifecycle.cpp`): a symlink the jail put there printed a host file,
   a FIFO hung the command. Read through FsBeneath, regular files only.
@@ -95,7 +109,8 @@ whole host session, now warns like `x11` shared already did.**
   the same exposure as `x11` shared. The X11 path warned; the Wayland
   bind only logged, and the X11 warning even misfired for a Wayland-only
   run (it routes through the shared block but binds no X11 socket). Each
-  path now warns only when it actually binds, with its own ack env var
+  path now warns only when it binds — the Wayland one once the socket is
+  mounted — with its own ack env var
   (`CRATE_X11_SHARED_ACK`, `CRATE_WAYLAND_SHARED_ACK`). The real fix — a
   socket restricted through `wp_security_context_manager_v1` — is TODO §7;
   the shared display plane is documented as a single trust domain, not a

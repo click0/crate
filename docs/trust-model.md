@@ -535,6 +535,21 @@ mutually-distrusting tenant; give such tenants `gui.mode: headless` or
 alongside (PipeWire / PulseAudio) are likewise one shared bus — a jail
 client can record other tenants' streams.
 
+`headless` / `nested` / `gpu` are separate displays, not yet sealed
+ones. crate starts those X servers without access control (Xvfb runs
+with `-ac`; Xephyr and Xorg get no `-auth` cookie), and their sockets
+sit in the host's `/tmp/.X11-unix`. Since 1.1.74 such a jail sees only
+its own socket, but an `x11` shared jail mounts that whole host
+directory, and any local user of the host can open it too. So on a
+host with mutually-distrusting tenants, run **no** `x11` shared jail
+next to another tenant's headless / nested one, and keep untrusted
+local users off the host. `vnc: true` adds its own exposure: x11vnc
+listens on loopback, but `novnc: true` starts websockify without a
+bind address, and no password is set unless `gui/vnc_password` is —
+set it, and firewall the port, wherever the display matters. Closing
+this (a per-run cookie, the host display's socket alone in shared mode,
+websockify on `gui/vnc_bind`) is TODO §7.
+
 > **Proper fix (TODO):** bind a socket created through the compositor's
 > `wp_security_context_manager_v1` rather than the raw one, so the
 > compositor withholds the privileged protocols from jail clients. Needs

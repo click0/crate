@@ -360,6 +360,17 @@ ATF_TEST_CASE_BODY(choose_container) {
 	ATF_REQUIRE_EQ(c.index, -1);
 	ATF_REQUIRE_EQ(c.matches, 2u);
 	ATF_REQUIRE_EQ(chooseContainer(jails, "", 0).index, -1);
+	// anyOwner (crated, which is root but answers for its peers): the
+	// tenant's db is found by container name; two tenants' web are
+	// ambiguous; non-crate and dying jails stay out
+	c = chooseContainer(jails, "db", 0, true);
+	ATF_REQUIRE_EQ(c.index, 3);
+	ATF_REQUIRE_EQ(c.matches, 1u);
+	c = chooseContainer(jails, "web", 0, true);
+	ATF_REQUIRE_EQ(c.index, -1);
+	ATF_REQUIRE_EQ(c.matches, 2u);
+	ATF_REQUIRE_EQ(chooseContainer(jails, "old", 0, true).index, -1);
+	ATF_REQUIRE_EQ(chooseContainer(jails, "web_pid200", 0, true).index, 1);
 }
 
 ATF_INIT_TEST_CASES(tcs)

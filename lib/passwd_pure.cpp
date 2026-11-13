@@ -109,7 +109,8 @@ std::vector<uint32_t> supplementaryGroups(const std::string &content,
 }
 
 std::vector<std::string> jailExecEnv(const std::string &user, const std::string &home,
-                                     const std::string &shell, const std::string &term) {
+                                     const std::string &shell, const std::string &term,
+                                     const std::string &lang) {
   std::vector<std::string> env = {
     "PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin",
     "HOME=" + (home.empty() ? std::string("/") : home),
@@ -118,6 +119,12 @@ std::vector<std::string> jailExecEnv(const std::string &user, const std::string 
     "LOGNAME=" + user,
   };
   if (!term.empty()) env.push_back("TERM=" + term);
+  bool langOk = !lang.empty() && lang.size() <= 64;
+  for (char c : lang)
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+          c == '_' || c == '.' || c == '@' || c == '-'))
+      langOk = false;
+  if (langOk) env.push_back("LANG=" + lang);
   return env;
 }
 

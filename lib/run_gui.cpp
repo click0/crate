@@ -763,7 +763,8 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
   // clients (virtual keyboard/pointer, screencopy, data-control,
   // foreign-toplevel all reach the whole host session, other jails'
   // windows included). Gate the X11 warning on an X11 socket actually
-  // being bound, and warn separately for the Wayland bind.
+  // being bound (it is mounted right below, or the run fails), and warn
+  // separately for the Wayland bind.
   auto displayWarnings = RunGuiPure::sharedDisplayWarnings(
       isAutoFlow, isWaylandFlow, display != nullptr,
       waylandDisplay != nullptr && waylandDisplay[0] != '\0',
@@ -773,14 +774,8 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
          "keystrokes and manipulate windows. Use mode=nested (Xephyr) or mode=headless "
          "for security-sensitive workloads. Set CRATE_X11_SHARED_ACK=1 to suppress this warning.")
   }
-  if (displayWarnings.wayland && ::getenv("CRATE_WAYLAND_SHARED_ACK") == nullptr) {
-    WARN("gui: the host Wayland compositor socket is bound into the jail and provides NO "
-         "display isolation — a Wayland client in the jail can inject input (virtual "
-         "keyboard/pointer), capture any window or output (screencopy), and read the "
-         "clipboard (data-control) across the whole host session, other jails' GUI windows "
-         "included. Treat such a jail as part of the host's trusted display domain, not as "
-         "a boundary between tenants. Set CRATE_WAYLAND_SHARED_ACK=1 to suppress this warning.")
-  }
+  // The Wayland warning is printed where the socket is mounted, below:
+  // WAYLAND_DISPLAY may name no usable socket, and then nothing is bound.
 
   // 0.8.46: `gui.mode: wayland` is strict — operator opted out of
   // X11 fallback. Refuse to start without WAYLAND_DISPLAY rather
@@ -877,6 +872,15 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
           mount(new Mount("nullfs", jailSockTarget, hostSock, MNT_IGNORE));
           setJailEnv("XDG_RUNTIME_DIR", "/tmp/wayland");
           setJailEnv("WAYLAND_DISPLAY", sockBasename);
+          // 1.1.77: said once the socket is in the jail, not on intent
+          if (displayWarnings.wayland && ::getenv("CRATE_WAYLAND_SHARED_ACK") == nullptr) {
+            WARN("gui: the host Wayland compositor socket is bound into the jail and provides NO "
+                 "display isolation — a Wayland client in the jail can inject input (virtual "
+                 "keyboard/pointer), capture any window or output (screencopy), and read the "
+                 "clipboard (data-control) across the whole host session, other jails' GUI windows "
+                 "included. Treat such a jail as part of the host's trusted display domain, not as "
+                 "a boundary between tenants. Set CRATE_WAYLAND_SHARED_ACK=1 to suppress this warning.")
+          }
           if (logProgress)
             std::cerr << rang::fg::gray << "gui: auto: bound Wayland socket "
                       << hostSock << " -> " << jailSockTarget

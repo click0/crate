@@ -99,8 +99,11 @@ struct ContainerChoice {
   int index = -1;
   unsigned matches = 0;
 };
+// anyOwner: the container name counts among every tenant's jails — for
+// crated, which answers for its peers (euid 0 is not the caller there;
+// the pool ACL judges the jail that was found).
 ContainerChoice chooseContainer(const std::vector<JailRef> &jails, const std::string &target,
-                                uint32_t callerUid);
+                                uint32_t callerUid, bool anyOwner = false);
 
 // 1.1.44: unit number of an epair half ("epair12a" -> 12). False when
 // the name is not "epair<N>a|b" — the privops create_epair reply is
