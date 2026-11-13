@@ -50,4 +50,12 @@ std::vector<uint32_t> supplementaryGroups(const std::string &content,
 // file beyond this is treated as absent (a jail could make it huge).
 constexpr size_t kMaxFileBytes = 4 * 1024 * 1024;
 
+// 1.1.77: the whole environment of a command run inside a jail —
+// crated's exec_in_jail and crate(1)'s root path (JailExec) both use it.
+// PATH, HOME, SHELL, USER, LOGNAME, and TERM when `term` is non-empty;
+// an empty home is "/", an empty shell /bin/sh. Nothing else of the
+// caller's environment crosses into the jail.
+std::vector<std::string> jailExecEnv(const std::string &user, const std::string &home,
+                                     const std::string &shell, const std::string &term);
+
 }

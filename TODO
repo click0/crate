@@ -521,15 +521,6 @@ The bhyve/VM track is in TODO2.
   `crate clean` could drop entries whose guid no dataset has. `crate
   info` / `list` of a running warm-base jail still show the clone's own
   +CRATE.SPEC, not the trusted one it runs with.
-* (MED, bug hunt 1.1.71) JailQuery::findContainer ignores the owner and
-  the kind of jail (jail_query.cpp:263-288). Root `crate stop web`, HTTP
-  DELETE or restart hit another tenant's web_pidN when the own `web` is
-  not running (before: not found); start answers 409 when ANY tenant
-  runs that name (profiles: `firefox`); start by kernel name web_pid1
-  misses a running web_pid999; a non-crate jail (a bastille `web`) is
-  stopped, updated or restarted; container `3` is shadowed by jid 3.
-  Fix: prefer the registry owner's jail, crate jails only,
-  containerNameOf(name) for start.
 * (MED, bug hunt 1.1.71) warm-base teardown leaks the clone when it has
   snapshots (run.cpp:503-510, zfs_ops.cpp:102-117: destroy without -r) —
   after any backup, replicate, snapshot create or template warm of it.
@@ -559,40 +550,24 @@ The bhyve/VM track is in TODO2.
   A check that needs root passes at start and fails in the monitor;
   retries are counted differently (retries+1 attempts vs >= retries);
   crate.5:1083 says "as root", impossible under rootless.
-* (MED, bug hunt 1.1.71) the root-path JailExec hands the whole crate(1)
-  environment to the jail (jail_query.cpp:461-482): secrets in the
-  operator's environment reach the jail; crated builds a minimal one
-  (privops_handlers.cpp:1012-1021).
 * (MED, bug hunt 1.1.71) `crate throttle` cannot apply anything: it
   needs jail->ip4 (throttle.cpp:143), and crate's networked jails are
   always vnet (run_jail.cpp:159), where ip4.addr is empty.
 * (MED, bug hunt 1.1.71) `crate logs` shows no console log:
   /var/log/crate/<name>/{console,stdout}.log are written by nothing (no
-  writer in lib/ or daemon/; GET /logs looks for them too). It falls
-  back to the jail's /var/log/messages read FROM THE HOST, following a
-  jail-planted symlink (a host file is printed) or hanging on a FIFO
-  (lifecycle.cpp:279-298).
-* (MED, bug hunt 1.1.71) console.cpp:40-54 and info.cpp:46-62 keep a
-  fallback that matches "jail-"+target as a prefix, via stoi(), and by
-  hostname — by default the host's own for every jail — and bypasses
-  findContainer's ambiguity refusal: `crate console web` with web
-  stopped and webapp running opens a root login in webapp.
+  writer in lib/ or daemon/; GET /logs looks for them too), so it always
+  falls back to the jail's /var/log/messages (read through FsBeneath
+  since 1.1.77 — a planted symlink or FIFO no longer gets followed).
 * (MED, bug hunt 1.1.71) `crate gui`: the registry stores web_pid4242
   and the jail- prefix never matches (gui_registry.cpp:91-111), so the
   example at args.cpp:277-283, `crate gui focus firefox`, fails; a jid
   is taken for a display number or a pid.
-* (MED, bug hunt 1.1.71) `crate import` copies with copy_file through a
-  dangling symlink at the derived output (/tmp/x.txz -> /tmp/x.crate),
-  and chown follows it too (import.cpp:272, util.cpp:864) — the import
-  variant of 1.1.71's export fix.
 * (LOW, bug hunt 1.1.71) a jail leaks on an ERR between run.cpp:1165 and
   :1274 (acquire_fw_lease 409/503), and rmdirHier then removes the root
   of the live jail — reachable once §1's privops blockers are fixed.
   backup-prune exits 0 when an unlink failed (backup_prune.cpp:131-139).
   The `snapshot list` fallback uses -r (zfs_ops.cpp:321-326); 1.1.69's
-  -d 1 did not reach it. export.cpp:44-57's fallback bypasses the
-  ambiguity refusal, and its default file name comes from the hostname,
-  which a jail with allow_set_hostname controls (may contain '/').
+  -d 1 did not reach it.
   `crate console web ls /tmp` joins the words into one argv element
   (args.cpp:1241-1247 -> console.cpp:89, execvp("ls /tmp")), and the
   command's own options (-l) are taken for crate's.

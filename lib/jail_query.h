@@ -37,7 +37,10 @@ std::optional<JailInfo> getJailByJid(int jid);
 // or from the jail directory for a root-path jail the kernel names by
 // its jid; dying jails are not considered for it). nullopt when nothing matches, or
 // when the container name matches more than one running jail —
-// *matches (optional) then says how many did.
+// *matches (optional) then says how many did. 1.1.77: crate jails only;
+// the container name counts among the caller's (euid's) own jails only;
+// a jid that names another jail than the container name is ambiguous
+// (RunPure::chooseContainer).
 std::optional<JailInfo> findContainer(const std::string &target, unsigned *matches = nullptr);
 
 // Get a single string parameter from a jail identified by JID.

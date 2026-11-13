@@ -11,7 +11,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 **The shares, mount targets and the socket proxy no longer follow a
 symlink the jail made either: what 1.1.76 left open on the host's way
 into the tree is closed, except a race against a running jail (TODO
-§2).**
+§2). A container name finds only the caller's own crate jails, `crate
+console` / `info` / `export` no longer fall back to whatever jail
+matches loosely, and a command run in a jail no longer inherits crate's
+environment.**
 
 - **files/share followed links in the tree** (`lib/run.cpp`,
   `lib/fs_beneath.cpp`). The share code linked, copied, unlinked and
@@ -41,6 +44,47 @@ into the tree is closed, except a race against a running jail (TODO
   `UNIX-LISTEN:<tree>/<path>` let a symlinked directory put the
   root-owned socket into a host directory. socat now runs in the
   directory opened through FsBeneath (fchdir) and binds the bare name.
+- **A container name reached other tenants' and non-crate jails**
+  (`lib/jail_query.cpp`, `lib/run_pure.cpp`, `lib/runtime_paths_pure.cpp`,
+  `daemon/routes.cpp`, `daemon/control_socket.cpp`). findContainer
+  returned any jail with that kernel name or jid — a bastille `web` was
+  stopped, restarted or updated — and matched the container name across
+  every tenant: root's `crate stop web` with its own web not running
+  stopped another tenant's web_pidN, and HTTP / control-socket start
+  answered 409 when anyone ran that name. Now (`RunPure::chooseContainer`)
+  only crate jails count; the container name matches the caller's own
+  jails (`/var/run/crate/<euid>/…`; others' stay reachable by kernel name
+  or jid); a jid that names another jail than the container name is
+  ambiguous (container `3` was shadowed by jid 3); start checks the
+  container name of what it was given (start web_pid1 missed a running
+  web_pid999).
+- **`crate console web` could open a root login in `webapp`**
+  (`lib/console.cpp`, `lib/info.cpp`, `lib/export.cpp`). After
+  findContainer they fell back to "jail-"+name as a prefix, any jid
+  stoi() read out of the name and the hostname — by default the host's,
+  for every jail — and so bypassed the ambiguity refusal. Removed; an
+  ambiguous name says how many jails it names. `crate export`'s default
+  file name comes from the container name, not the hostname, which the
+  jail can set (and which may hold '/').
+- **The jail got crate(1)'s environment** (`lib/jail_query.cpp`,
+  `lib/passwd_pure.cpp`, `daemon/privops_handlers.cpp`). On the root path
+  a command run inside the jail (rc, services, hooks, the healthcheck,
+  the command itself) inherited the operator's whole environment —
+  tokens, SSH_AUTH_SOCK, proxy credentials. It gets PATH, HOME, SHELL,
+  USER, LOGNAME and TERM now (`PasswdPure::jailExecEnv`), the set
+  crated's exec_in_jail already gave under rootless; both use it. What
+  crate sets for the command itself (CRATE, DISPLAY, XAUTHORITY, …) still
+  travels in its env(1) line.
+- **`crate logs` read the jail's /var/log/messages by path**
+  (`lib/lifecycle.cpp`): a symlink the jail put there printed a host file,
+  a FIFO hung the command. Read through FsBeneath, regular files only.
+- **`crate import` wrote through a dangling symlink** (`lib/import.cpp`):
+  copy_file took a link at the derived output name (another user's
+  `/tmp/x.crate -> …` next to `/tmp/x.txz`) for a missing file and wrote
+  through it as root; chown followed it too. The output is a new file now
+  (O_EXCL, O_NOFOLLOW), owned through its descriptor — the import side of
+  1.1.71's export fix. `CRATE_PATH_SHA256` replaces the spelled-out
+  /sbin/sha256.
 - Docs: the on-hardware runbook §4s.
 
 ## [1.1.76] — 2026-11-12

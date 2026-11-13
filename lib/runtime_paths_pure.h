@@ -107,6 +107,9 @@ std::string perUserImportsDir(uint32_t uid);
 // filtered out as a foreign jail.
 bool isCrateJailPath(const std::string &path);
 std::string crateJailDirName(const std::string &path);
+// 1.1.77: whose jail it is — the <uid> component, 0 for the legacy
+// layout (root's jails before 1.1.73), -1 when not a crate jail path.
+int64_t crateJailOwnerUid(const std::string &path);
 
 // "/var/run/crate/<uid>/audit.log" — per-user audit log tail.
 // The system audit (cap_syslog dual-write) keeps logging the

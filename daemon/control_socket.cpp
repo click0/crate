@@ -305,13 +305,15 @@ void handleStart(std::string &resBody, int &status, const std::string &name,
   // 1.1.70: by container name too — the running jail is "web_pid4242",
   // so the old exact lookup of "web" missed it and a second instance was
   // spawned next to the first.
+  // 1.1.77: by the container name of what was asked — start web_pid1
+  // looked for a jail named web_pid1 and missed a running web_pid999.
+  const std::string containerName = RunPure::containerNameOf(name);
   unsigned running = 0;
-  if (JailQuery::findContainer(name, &running) || running > 0) {
+  if (JailQuery::findContainer(containerName, &running) || running > 0) {
     status  = 409;
     resBody = ControlSocketPure::renderErrorJson("container is already running");
     return;
   }
-  const std::string containerName = RunPure::containerNameOf(name);
 
   std::vector<std::string> runArgs;
   std::string cratePath;

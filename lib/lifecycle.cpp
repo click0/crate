@@ -15,16 +15,19 @@
 #include "runtime_paths_pure.h"   // 1.1.73: rootJailsRoot
 #include "warm_pure.h"   // 1.1.48: validateJailName for `crate logs`
 #include "err.h"
+#include "fs_beneath.h"   // 1.1.77: the jail's /var/log/messages
 
 #include <rang.hpp>
 
+#include <fcntl.h>
+#include <string.h>
 #include <signal.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <deque>
-#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -284,18 +287,35 @@ bool logsCrate(const Args &args) {
   // Also check if the jail is running and try console.log
   auto consoleLog = logDir + "/console.log";
 
+  // 1.1.77: one descriptor for the whole read. The fallback is the
+  // jail's own /var/log/messages, read from the host: opened through
+  // FsBeneath now — a symlink the jail put there (or on the way) printed
+  // a host file, a FIFO hung the open — and only a regular file is read.
   std::string logFile;
-  if (Util::Fs::fileExists(consoleLog))
+  int fd = -1;
+  auto openHostLog = [](const std::string &p) {
+    return ::open(p.c_str(), O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
+  };
+  if (Util::Fs::fileExists(consoleLog)) {
     logFile = consoleLog;
-  else if (Util::Fs::fileExists(stdoutLog))
+    fd = openHostLog(logFile);
+  } else if (Util::Fs::fileExists(stdoutLog)) {
     logFile = stdoutLog;
-  else {
+    fd = openHostLog(logFile);
+  } else {
     // Try to read from the jail path
     auto jail = JailQuery::findContainer(args.logsTarget);   // 1.1.70
     if (jail && !jail->path.empty()) {
-      auto jailLog = jail->path + "/var/log/messages";
-      if (Util::Fs::fileExists(jailLog))
-        logFile = jailLog;
+      const char *rel = "/var/log/messages";
+      try {
+        if (FsBeneath::exists(jail->path, rel)) {
+          logFile = jail->path + rel;
+          fd = FsBeneath::open(jail->path, rel, O_RDONLY | O_NONBLOCK);
+        }
+      } catch (const std::exception &e) {
+        std::cerr << rang::fg::red << "logs: " << e.what() << rang::style::reset << std::endl;
+        return false;
+      }
     }
   }
 
@@ -304,50 +324,60 @@ bool logsCrate(const Args &args) {
               << "' (checked " << logDir << "/)" << rang::style::reset << std::endl;
     return false;
   }
+  if (fd < 0) {
+    std::cerr << rang::fg::red << "cannot open " << logFile << ": " << strerror(errno)
+              << rang::style::reset << std::endl;
+    return false;
+  }
+  struct stat st;
+  if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+    ::close(fd);
+    std::cerr << rang::fg::red << logFile << " is not a regular file" << rang::style::reset << std::endl;
+    return false;
+  }
+  FILE *f = ::fdopen(fd, "r");
+  if (f == nullptr) {
+    ::close(fd);
+    std::cerr << rang::fg::red << "cannot open " << logFile << rang::style::reset << std::endl;
+    return false;
+  }
+  char *buf = nullptr;
+  size_t cap = 0;
+  auto nextLine = [&](std::string &line) {
+    ssize_t n = ::getline(&buf, &cap, f);
+    if (n <= 0) return false;
+    line.assign(buf, (size_t)n);
+    if (!line.empty() && line.back() == '\n') line.pop_back();
+    return true;
+  };
 
+  std::string line;
   if (args.logsFollow) {
-    // Follow mode: tail -f equivalent
-    std::ifstream ifs(logFile);
-    if (!ifs.good()) {
-      std::cerr << rang::fg::red << "cannot open " << logFile << rang::style::reset << std::endl;
-      return false;
-    }
-
-    // Seek to end, then poll for new data
-    ifs.seekg(0, std::ios::end);
-    std::string line;
+    // Follow mode: tail -f equivalent — seek to the end, then poll
+    ::fseeko(f, 0, SEEK_END);
     while (true) {
-      while (std::getline(ifs, line))
+      while (nextLine(line))
         std::cout << line << std::endl;
-      ifs.clear();
+      ::clearerr(f);
       std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
+  } else if (args.logsTail > 0) {
+    // Read last N lines using a circular buffer
+    std::deque<std::string> lines;
+    while (nextLine(line)) {
+      lines.push_back(line);
+      if (lines.size() > args.logsTail)
+        lines.pop_front();
+    }
+    for (auto &l : lines)
+      std::cout << l << std::endl;
   } else {
-    // Read entire file or last N lines
-    std::ifstream ifs(logFile);
-    if (!ifs.good()) {
-      std::cerr << rang::fg::red << "cannot open " << logFile << rang::style::reset << std::endl;
-      return false;
-    }
-
-    if (args.logsTail > 0) {
-      // Read last N lines using a circular buffer
-      std::deque<std::string> lines;
-      std::string line;
-      while (std::getline(ifs, line)) {
-        lines.push_back(line);
-        if (lines.size() > args.logsTail)
-          lines.pop_front();
-      }
-      for (auto &l : lines)
-        std::cout << l << std::endl;
-    } else {
-      // Print all
-      std::string line;
-      while (std::getline(ifs, line))
-        std::cout << line << std::endl;
-    }
+    // Print all
+    while (nextLine(line))
+      std::cout << line << std::endl;
   }
+  ::free(buf);
+  ::fclose(f);
 
   return true;
 }

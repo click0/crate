@@ -108,4 +108,17 @@ std::vector<uint32_t> supplementaryGroups(const std::string &content,
   return groups;
 }
 
+std::vector<std::string> jailExecEnv(const std::string &user, const std::string &home,
+                                     const std::string &shell, const std::string &term) {
+  std::vector<std::string> env = {
+    "PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin",
+    "HOME=" + (home.empty() ? std::string("/") : home),
+    "SHELL=" + (shell.empty() ? std::string("/bin/sh") : shell),
+    "USER=" + user,
+    "LOGNAME=" + user,
+  };
+  if (!term.empty()) env.push_back("TERM=" + term);
+  return env;
+}
+
 }

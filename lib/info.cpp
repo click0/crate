@@ -7,7 +7,6 @@
 #include "list_pure.h"   // 1.1.48: sanitizeForTerminal
 #include "privops_client.h"       // 1.1.41: query_jail_rctl limits under rootless
 #include "privops_wire_pure.h"
-#include "runtime_paths_pure.h"
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
@@ -27,40 +26,19 @@
 
 // Resolve a container target (name or JID) to its jail path and JID.
 // Uses libjail API via JailQuery (replaces jls parsing).
+// 1.1.77: findContainer only — the prefix / stoi / hostname fallback
+// picked another jail (see console.cpp).
 static bool resolveContainer(const std::string &target, int &outJid, std::string &outPath,
-                             std::string &outHostname, std::string &outIp) {
-
-  // Try direct lookup by name first
+                             std::string &outHostname, std::string &outIp, unsigned &matches) {
   // 1.1.70: kernel name, jid or container name (findContainer)
-  auto jail = JailQuery::findContainer(target);
-
-  // If direct lookup succeeded and it's a crate jail, use it
-  if (jail && RuntimePathsPure::isCrateJailPath(jail->path)) {
-    outJid = jail->jid;
-    outPath = jail->path;
-    outHostname = jail->hostname;
-    outIp = jail->ip4;
-    return true;
-  }
-
-  // Fall back to scanning all crate jails for partial match
-  auto jails = JailQuery::getAllJails(true /* crateOnly */);
-  for (auto &j : jails) {
-    auto name = RuntimePathsPure::crateJailDirName(j.path);   // "jail-<name>-<hex>"
-    bool match = false;
-    try { match = (std::stoi(target) == j.jid); } catch (...) {}
-    if (!match) match = (name == target);
-    if (!match) match = (name.find("jail-" + target) == 0);
-    if (!match) match = (j.hostname == target);
-    if (match) {
-      outJid = j.jid;
-      outPath = j.path;
-      outHostname = j.hostname;
-      outIp = j.ip4;
-      return true;
-    }
-  }
-  return false;
+  auto jail = JailQuery::findContainer(target, &matches);
+  if (!jail)
+    return false;
+  outJid = jail->jid;
+  outPath = jail->path;
+  outHostname = jail->hostname;
+  outIp = jail->ip4;
+  return true;
 }
 
 // Print a labeled field
@@ -73,8 +51,13 @@ bool infoCrate(const Args &args) {
   int jid;
   std::string path, hostname, ip;
 
-  if (!resolveContainer(args.infoTarget, jid, path, hostname, ip))
+  unsigned matches = 0;
+  if (!resolveContainer(args.infoTarget, jid, path, hostname, ip, matches)) {
+    if (matches > 1)
+      ERR("'" << args.infoTarget << "' names " << matches
+          << " running jails; give the jail name from `crate list` or its jid")
     ERR("container '" << args.infoTarget << "' not found (not running or not a crate jail)")
+  }
 
   auto jidStr = std::to_string(jid);
 

@@ -4,7 +4,6 @@
 #include "args.h"
 #include "locs.h"
 #include "jail_query.h"
-#include "runtime_paths_pure.h"
 #include "pathnames.h"
 #include "util.h"
 #include "err.h"
@@ -25,42 +24,33 @@
 
 // Resolve a container target (name or JID) to its JID and path.
 // Uses libjail API via JailQuery (replaces jls parsing).
-static bool resolveContainer(const std::string &target, int &outJid, std::string &outPath) {
-
-  // Try direct lookup by name first
+// 1.1.77: findContainer only. The fallback after it matched "jail-"+target
+// as a prefix, any jid stoi() read out of the target and the hostname —
+// by default the host's own, for every jail — and so bypassed the
+// ambiguity refusal: `crate console web` with web stopped and webapp
+// running opened a root login in webapp.
+static bool resolveContainer(const std::string &target, int &outJid, std::string &outPath,
+                             unsigned &matches) {
   // 1.1.70: kernel name, jid or container name (findContainer)
-  auto jail = JailQuery::findContainer(target);
-
-  if (jail && RuntimePathsPure::isCrateJailPath(jail->path)) {
-    outJid = jail->jid;
-    outPath = jail->path;
-    return true;
-  }
-
-  // Fall back to scanning all crate jails for partial match
-  auto jails = JailQuery::getAllJails(true);
-  for (auto &j : jails) {
-    auto name = RuntimePathsPure::crateJailDirName(j.path);   // "jail-<name>-<hex>"
-    bool match = false;
-    try { match = (std::stoi(target) == j.jid); } catch (...) {}
-    if (!match) match = (name == target);
-    if (!match) match = (name.find("jail-" + target) == 0);
-    if (!match) match = (j.hostname == target);
-    if (match) {
-      outJid = j.jid;
-      outPath = j.path;
-      return true;
-    }
-  }
-  return false;
+  auto jail = JailQuery::findContainer(target, &matches);
+  if (!jail)
+    return false;
+  outJid = jail->jid;
+  outPath = jail->path;
+  return true;
 }
 
 bool consoleCrate(const Args &args, int argc, char** argv) {
   int jid;
   std::string path;
 
-  if (!resolveContainer(args.consoleTarget, jid, path))
+  unsigned matches = 0;
+  if (!resolveContainer(args.consoleTarget, jid, path, matches)) {
+    if (matches > 1)
+      ERR("'" << args.consoleTarget << "' names " << matches
+          << " running jails; give the jail name from `crate list` or its jid")
     ERR("container '" << args.consoleTarget << "' not found (not running or not a crate jail)")
+  }
 
   auto jidStr = std::to_string(jid);
 

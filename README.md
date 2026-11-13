@@ -100,7 +100,7 @@ Crate containers contain everything needed to run the containerized software —
 | `crate gui list\|focus\|attach\|url\|tile\|screenshot\|resize` | GUI session manager |
 | `crate top` | Live, htop-style resource monitor across all running containers (1 Hz; `q` to quit) |
 
-`TARGET` is the jail name `crate list` shows (`firefox_pid4242`), the jail id, or the container name the jail was started under (`firefox`: the `.crate` file name or `--name`). Since 1.1.70 every command, the control socket and the HTTP API accept all three; a container name more than one running jail carries is refused. `crate restart` and the daemons' restart look up what to start by container name before stopping anything, so a container with nothing recorded keeps running.
+`TARGET` is the jail name `crate list` shows (`firefox_pid4242`), the jail id, or the container name the jail was started under (`firefox`: the `.crate` file name or `--name`). Since 1.1.70 every command, the control socket and the HTTP API accept all three; a container name more than one running jail carries is refused. Since 1.1.77 only crate's own jails count, a container name finds only the caller's own jails (root reaches another user's jail by its jail name or id), and a number that is both a jail id and a container name is refused as ambiguous. `crate restart` and the daemons' restart look up what to start by container name before stopping anything, so a container with nothing recorded keeps running.
 
 ## Quick Start
 

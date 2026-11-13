@@ -44,6 +44,9 @@
 #ifndef CRATE_PATH_DHCLIENT
 #define CRATE_PATH_DHCLIENT   "/sbin/dhclient"
 #endif
+#ifndef CRATE_PATH_SHA256
+#define CRATE_PATH_SHA256     "/sbin/sha256"     // 1.1.77: import / export checksums
+#endif
 
 // --- FreeBSD base system: /bin ---
 

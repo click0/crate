@@ -123,6 +123,51 @@ std::string containerNameOfJail(const std::string &jailName, const std::string &
   return jailName;
 }
 
+ContainerChoice chooseContainer(const std::vector<JailRef> &jails, const std::string &target,
+                                uint32_t callerUid) {
+  ContainerChoice c;
+  if (target.empty()) return c;
+  // 1. the exact kernel name
+  for (size_t i = 0; i < jails.size(); i++) {
+    const auto &j = jails[i];
+    if (j.name == target && RuntimePathsPure::isCrateJailPath(j.path)) {
+      c.index = (int)i;
+      c.matches = 1;
+      return c;
+    }
+  }
+  // 2. the container name, among the caller's own running jails
+  std::vector<size_t> byName;
+  for (size_t i = 0; i < jails.size(); i++) {
+    const auto &j = jails[i];
+    if (j.dying || !RuntimePathsPure::isCrateJailPath(j.path)) continue;
+    if (RuntimePathsPure::crateJailOwnerUid(j.path) != (int64_t)callerUid) continue;
+    if (containerNameOfJail(j.name, j.path) == target) byName.push_back(i);
+  }
+  // 3. the jid
+  int byJid = -1;
+  if (target.size() <= 9 && target.find_first_not_of("0123456789") == std::string::npos) {
+    const int jid = std::stoi(target);
+    for (size_t i = 0; i < jails.size(); i++)
+      if (jails[i].jid == jid && RuntimePathsPure::isCrateJailPath(jails[i].path)) {
+        byJid = (int)i;
+        break;
+      }
+  }
+  if (byJid >= 0) {
+    if (byName.empty() || (byName.size() == 1 && (int)byName[0] == byJid)) {
+      c.index = byJid;
+      c.matches = 1;
+      return c;
+    }
+    c.matches = (unsigned)byName.size() + 1;   // "3": jid 3 and container "3"
+    return c;
+  }
+  c.matches = (unsigned)byName.size();
+  if (byName.size() == 1) c.index = (int)byName[0];
+  return c;
+}
+
 bool epairUnit(const std::string &ifname, unsigned &unitOut) {
   static const std::string kPrefix = "epair";
   if (ifname.size() < kPrefix.size() + 2) return false;

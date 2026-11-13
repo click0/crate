@@ -14,6 +14,8 @@
 #include <rang.hpp>
 
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <string.h>
 #include <unistd.h>
 
 #include <iostream>
@@ -103,7 +105,7 @@ static bool validateChecksum(const std::string &archivePath, bool force) {
 
   // Compute actual checksum
   auto actualOutput = Util::execCommandGetOutput(
-    {"/sbin/sha256", "-q", archivePath},
+    {CRATE_PATH_SHA256, "-q", archivePath},
     "compute SHA256 checksum for validation");
   auto actualHash = Util::stripTrailingSpace(actualOutput);
 
@@ -268,14 +270,56 @@ bool importCrate(const Args &args) {
   }
 
   // Step 6: Copy/re-compress the archive to the output location
-  // If the input is already a valid .crate (tar.xz), just copy it
-  Util::Fs::copyFile(archivePath, outFile);
-  Util::Fs::chown(outFile, myuid, mygid);
+  // If the input is already a valid .crate (tar.xz), just copy it.
+  // 1.1.77: into a new file, no symlink followed, owned through the
+  // descriptor. copy_file took a dangling symlink at the derived name
+  // (/tmp/x.crate -> /etc/…, planted by another user next to /tmp/x.txz)
+  // for a missing file and wrote through it as root; chown followed it
+  // too — the import side of 1.1.71's export fix.
+  {
+    int src = ::open(archivePath.c_str(), O_RDONLY | O_CLOEXEC);
+    if (src < 0)
+      ERR("cannot open '" << archivePath << "': " << strerror(errno))
+    int dst = ::open(outFile.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+    if (dst < 0) {
+      int e = errno;
+      ::close(src);
+      if (e == EEXIST)
+        ERR("output file '" << outFile << "' already exists — remove it first or pass a different -o")
+      ERR("cannot create '" << outFile << "': " << strerror(e))
+    }
+    auto fail = [&](const char *what) {
+      int e = errno;
+      ::close(src);
+      ::close(dst);
+      ::unlink(outFile.c_str());
+      ERR(what << " '" << outFile << "': " << strerror(e))
+    };
+    char buf[65536];
+    for (;;) {
+      ssize_t n = ::read(src, buf, sizeof(buf));
+      if (n < 0) { if (errno == EINTR) continue; fail("read for"); }
+      if (n == 0) break;
+      for (ssize_t off = 0; off < n; ) {
+        ssize_t w = ::write(dst, buf + off, (size_t)(n - off));
+        if (w < 0) { if (errno == EINTR) continue; fail("write"); }
+        off += w;
+      }
+    }
+    if (::fchown(dst, myuid, mygid) != 0)
+      fail("chown");
+    ::close(src);
+    if (::close(dst) != 0) {
+      int e = errno;
+      ::unlink(outFile.c_str());
+      ERR("close '" << outFile << "': " << strerror(e))
+    }
+  }
 
   // Generate checksum for the output file
   auto sha256File = outFile + ".sha256";
   auto checksumOutput = Util::execCommandGetOutput(
-    {"/sbin/sha256", "-q", outFile},
+    {CRATE_PATH_SHA256, "-q", outFile},
     "compute SHA256 checksum of imported crate");
   auto checksum = Util::stripTrailingSpace(checksumOutput);
   Util::Fs::writeFile(STR(checksum << "  " << Util::filePathToFileName(outFile) << "\n"), sha256File);

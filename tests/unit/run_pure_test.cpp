@@ -309,6 +309,59 @@ ATF_TEST_CASE_BODY(run_user_effective)
 	ATF_REQUIRE_EQ(RunPure::validateRunUser(std::string(32, 'a')), std::string());
 }
 
+// 1.1.77: findContainer's choice.
+ATF_TEST_CASE_WITHOUT_HEAD(choose_container);
+ATF_TEST_CASE_BODY(choose_container) {
+	using RunPure::chooseContainer;
+	using RunPure::JailRef;
+	const std::vector<JailRef> jails = {
+		{3,  "web_pid100",  "/var/run/crate/0/jail-web-0a1b2c3d",     false},   // 0: root's web
+		{4,  "web_pid200",  "/var/run/crate/1001/jail-web-1a1b2c3d",  false},   // 1: tenant 1001's web
+		{5,  "web",         "/usr/local/bastille/jails/web/root",     false},   // 2: not a crate jail
+		{6,  "db_pid300",   "/var/run/crate/1001/jail-db-2a1b2c3d",   false},   // 3: tenant's db
+		{7,  "3_pid400",    "/var/run/crate/0/jail-3-3a1b2c3d",       false},   // 4: root's container "3"
+		{8,  "12",          "/var/run/crate/jail-app-4a1b2c3d",       false},   // 5: legacy root path, kernel name = jid
+		{9,  "old_pid500",  "/var/run/crate/0/jail-old-5a1b2c3d",     true},    // 6: dying
+	};
+	// root: its own web; the tenant's is not chosen by container name
+	auto c = chooseContainer(jails, "web", 0);
+	ATF_REQUIRE_EQ(c.index, 0);
+	ATF_REQUIRE_EQ(c.matches, 1u);
+	// tenant 1001: its own web
+	c = chooseContainer(jails, "web", 1001);
+	ATF_REQUIRE_EQ(c.index, 1);
+	// root asking for the tenant's db by container name: not found ...
+	c = chooseContainer(jails, "db", 0);
+	ATF_REQUIRE_EQ(c.index, -1);
+	ATF_REQUIRE_EQ(c.matches, 0u);
+	// ... by kernel name or jid: found
+	ATF_REQUIRE_EQ(chooseContainer(jails, "db_pid300", 0).index, 3);
+	ATF_REQUIRE_EQ(chooseContainer(jails, "6", 0).index, 3);
+	// the bastille jail is never a container, not even by kernel name or jid
+	ATF_REQUIRE_EQ(chooseContainer(jails, "5", 0).index, -1);
+	// "web" as an exact kernel name of a non-crate jail does not shadow root's web
+	ATF_REQUIRE_EQ(chooseContainer(jails, "web", 0).index, 0);
+	// "3": jid 3 is root's web, container "3" is another jail: ambiguous
+	c = chooseContainer(jails, "3", 0);
+	ATF_REQUIRE_EQ(c.index, -1);
+	ATF_REQUIRE_EQ(c.matches, 2u);
+	// "7": the jid of container "3" itself — one jail
+	ATF_REQUIRE_EQ(chooseContainer(jails, "7", 0).index, 4);
+	// a legacy root jail named by its jid: by kernel name / jid, and as root's "app"
+	ATF_REQUIRE_EQ(chooseContainer(jails, "12", 0).index, 5);
+	ATF_REQUIRE_EQ(chooseContainer(jails, "app", 0).index, 5);
+	ATF_REQUIRE_EQ(chooseContainer(jails, "app", 1001).index, -1);
+	// dying jails are not found by container name
+	ATF_REQUIRE_EQ(chooseContainer(jails, "old", 0).index, -1);
+	// two of root's own: ambiguous
+	auto two = jails;
+	two.push_back({10, "web_pid600", "/var/run/crate/0/jail-web-6a1b2c3d", false});
+	c = chooseContainer(two, "web", 0);
+	ATF_REQUIRE_EQ(c.index, -1);
+	ATF_REQUIRE_EQ(c.matches, 2u);
+	ATF_REQUIRE_EQ(chooseContainer(jails, "", 0).index, -1);
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
 	ATF_ADD_TEST_CASE(tcs, argsToString_empty);
@@ -331,4 +384,5 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, run_user_cookie_home);
 	ATF_ADD_TEST_CASE(tcs, netgraph_names);
 	ATF_ADD_TEST_CASE(tcs, jail_xname_pid);
+	ATF_ADD_TEST_CASE(tcs, choose_container);
 }

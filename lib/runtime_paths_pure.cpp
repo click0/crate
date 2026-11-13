@@ -94,6 +94,17 @@ std::string crateJailDirName(const std::string &path) {
   return rest;
 }
 
+int64_t crateJailOwnerUid(const std::string &path) {
+  if (crateJailDirName(path).empty()) return -1;
+  const std::string rest = path.substr(std::string(kLegacyRoot).size() + 1);
+  auto slash = rest.find('/');
+  if (slash == std::string::npos) return 0;   // legacy: root's
+  const std::string uid = rest.substr(0, slash);
+  if (uid.size() > 10) return -1;
+  int64_t v = std::stoll(uid);
+  return v > INT32_MAX ? -1 : v;
+}
+
 bool isCrateJailPath(const std::string &path) {
   return !crateJailDirName(path).empty();
 }

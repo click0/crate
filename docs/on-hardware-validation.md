@@ -1278,9 +1278,25 @@ crate run -f share.crate -- /bin/sh -c 'mount | grep -c nullfs; ls -l /var/run/p
 #   (dirs/share jail: /lnk/data, the tree has /lnk -> tmp): "'lnk' is a symbolic link …"
 ```
 
+```sh
+# targets: own jails only by container name, crate jails only, jid/name collisions refused
+sudo -u alice crate run -f web.crate &   ;   crate run -f webapp.crate &
+crate stop web           # root has no `web` of its own: "not found" (alice's web_pid… keeps running)
+crate console web        # same — no longer a root login in webapp
+crate console webapp     # a login in webapp
+crate info 3             # when jid 3 and a container "3" are different jails: "names 2 running jails"
+# the jail's environment
+FOO_TOKEN=secret crate run -f web.crate -- /usr/bin/env   # no FOO_TOKEN; PATH/HOME/SHELL/USER/LOGNAME/TERM + CRATE, DISPLAY…
+# logs / import
+ln -sf /etc/master.passwd $J/var/log/messages && crate logs web   # "'messages' is a symbolic link …"
+ln -s /etc/x /tmp/x.crate; cp web.txz /tmp/x.txz; crate import /tmp/x.txz   # "already exists"; /etc/x not created
+```
+
 Pass criteria: no host file is linked, copied or created through a link
 in the tree; the socket appears only inside the jail; ordinary shares,
-tmpfs and GUI sockets mount as before (a trailing slash included).
+tmpfs and GUI sockets mount as before (a trailing slash included); a
+container name finds only the caller's own crate jails; nothing of the
+operator's environment beyond the listed variables reaches the jail.
 
 ---
 

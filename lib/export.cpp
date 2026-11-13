@@ -6,7 +6,7 @@
 #include "crypto_pure.h"
 #include "sign_pure.h"
 #include "jail_query.h"
-#include "stack_pure.h"   // 1.1.48: jailNameMatchesContainer
+#include "run_pure.h"     // 1.1.77: containerNameOfJail
 #include "pathnames.h"
 #include "cmd.h"
 #include "util.h"
@@ -30,32 +30,20 @@ static uid_t myuid = ::getuid();
 static gid_t mygid = ::getgid();
 
 // Resolve a running container by name or JID (uses libjail API).
-static bool resolveContainer(const std::string &target, int &jid, std::string &path, std::string &hostname) {
-  // Try direct lookup
+// 1.1.77: findContainer only. The fallback after it matched the hostname
+// of ANY jail (by default the host's own, for every one) and bypassed the
+// ambiguity refusal; findContainer already takes the "<name>_pid<N>"
+// kernel name by its container name.
+static bool resolveContainer(const std::string &target, int &jid, std::string &path,
+                             std::string &containerName, unsigned &matches) {
   // 1.1.70: kernel name, jid or container name (findContainer)
-  auto jail = JailQuery::findContainer(target);
-  if (jail) {
-    jid = jail->jid;
-    path = jail->path;
-    hostname = jail->hostname;
-    return true;
-  }
-
-  // Fall back to scanning all jails for partial match
-  for (auto &j : JailQuery::getAllJails()) {
-    bool match = false;
-    if (j.hostname == target) match = true;
-    // 1.1.48: exact "<target>_pid<N>" kernel-name match (the old
-    // "jail-<target>-" prefix test matched `web` against `web-2`).
-    else if (StackPure::jailNameMatchesContainer(j.name, target)) match = true;
-    if (match) {
-      jid = j.jid;
-      path = j.path;
-      hostname = j.hostname;
-      return true;
-    }
-  }
-  return false;
+  auto jail = JailQuery::findContainer(target, &matches);
+  if (!jail)
+    return false;
+  jid = jail->jid;
+  path = jail->path;
+  containerName = RunPure::containerNameOfJail(jail->name, jail->path);
+  return true;
 }
 
 // autoExportName moved to lib/autoname_pure.cpp (AutoNamePure::exportName).
@@ -68,17 +56,24 @@ bool exportCrate(const Args &args) {
 
   // Resolve the running container
   int jid;
-  std::string path, hostname;
-  if (!resolveContainer(target, jid, path, hostname))
+  std::string path, containerName;
+  unsigned matches = 0;
+  if (!resolveContainer(target, jid, path, containerName, matches)) {
+    if (matches > 1)
+      ERR("'" << target << "' names " << matches
+          << " running jails; give the jail name from `crate list` or its jid")
     ERR("container '" << target << "' not found or not running")
+  }
 
   // Determine output file
   std::string outFile;
   if (!args.exportOutput.empty()) {
     outFile = args.exportOutput;
   } else {
-    // Derive name from target or hostname
-    auto baseName = hostname.empty() ? target : hostname;
+    // 1.1.77: from the container name. The hostname is the jail's to set
+    // (allow.set_hostname) and may hold '/', which put the archive in
+    // another directory.
+    auto baseName = containerName.empty() ? target : containerName;
     outFile = autoExportName(baseName);
   }
 
@@ -135,7 +130,7 @@ bool exportCrate(const Args &args) {
   // Generate SHA256 checksum
   auto sha256File = outFile + ".sha256";
   auto checksumOutput = Util::execCommandGetOutput(
-    {"/sbin/sha256", "-q", outFile},
+    {CRATE_PATH_SHA256, "-q", outFile},
     "compute SHA256 checksum of exported crate");
   auto checksum = Util::stripTrailingSpace(checksumOutput);
   Util::Fs::writeFile(STR(checksum << "  " << Util::filePathToFileName(outFile) << "\n"), sha256File);

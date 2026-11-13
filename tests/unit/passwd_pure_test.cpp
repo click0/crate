@@ -111,8 +111,26 @@ ATF_TEST_CASE_BODY(supplementary_groups) {
   ATF_REQUIRE_EQ(supplementaryGroups(kGroup, "", 5).size(), 1u);
 }
 
+// 1.1.77: the only environment that crosses into a jail.
+ATF_TEST_CASE_WITHOUT_HEAD(jail_exec_env);
+ATF_TEST_CASE_BODY(jail_exec_env) {
+  auto e = PasswdPure::jailExecEnv("alice", "/home/alice", "/bin/csh", "xterm");
+  ATF_REQUIRE_EQ(e.size(), 6u);
+  ATF_REQUIRE_EQ(e[0], std::string("PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin"));
+  ATF_REQUIRE_EQ(e[1], std::string("HOME=/home/alice"));
+  ATF_REQUIRE_EQ(e[2], std::string("SHELL=/bin/csh"));
+  ATF_REQUIRE_EQ(e[3], std::string("USER=alice"));
+  ATF_REQUIRE_EQ(e[4], std::string("LOGNAME=alice"));
+  ATF_REQUIRE_EQ(e[5], std::string("TERM=xterm"));
+  auto r = PasswdPure::jailExecEnv("root", "", "", "");
+  ATF_REQUIRE_EQ(r.size(), 5u);                     // no TERM
+  ATF_REQUIRE_EQ(r[1], std::string("HOME=/"));
+  ATF_REQUIRE_EQ(r[2], std::string("SHELL=/bin/sh"));
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, parse_master_line);
   ATF_ADD_TEST_CASE(tcs, lookup_user_master_and_passwd_formats);
   ATF_ADD_TEST_CASE(tcs, supplementary_groups);
+  ATF_ADD_TEST_CASE(tcs, jail_exec_env);
 }

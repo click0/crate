@@ -10,6 +10,7 @@
 #include "run_pure.h"           // 1.1.70: containerNameOf (findContainer)
 #include "locs.h"
 #include "pathnames.h"
+#include "passwd_pure.h"        // 1.1.77: jailExecEnv
 #include "util.h"
 #include "err.h"
 
@@ -261,30 +262,22 @@ std::string getJailParam(int jid, const std::string &paramName) {
 }
 
 std::optional<JailInfo> findContainer(const std::string &target, unsigned *matches) {
+  // 1.1.77: the choice is RunPure::chooseContainer — crate jails only,
+  // the container name among the caller's own jails, a jid that collides
+  // with a container name is ambiguous. getJailByName / getJailByJid
+  // returned any jail (a bastille `web` was stopped, restarted, updated),
+  // and the container name matched every tenant's jails.
   if (matches) *matches = 0;
   if (target.empty()) return std::nullopt;
-  if (auto j = getJailByName(target)) {
-    if (matches) *matches = 1;
-    return j;
-  }
-  if (target.size() <= 9 &&
-      target.find_first_not_of("0123456789") == std::string::npos) {
-    if (auto j = getJailByJid(std::stoi(target))) {
-      if (matches) *matches = 1;
-      return j;
-    }
-  }
-  std::optional<JailInfo> found;
-  unsigned n = 0;
-  for (auto &j : getAllJails(/*crateOnly=*/true)) {
-    if (j.dying || j.name == target) continue;
-    if (RunPure::containerNameOfJail(j.name, j.path) != target) continue;
-    n++;
-    found = j;
-  }
-  if (matches) *matches = n;
-  if (n == 1) return found;
-  return std::nullopt;
+  auto all = getAllJails(/*crateOnly=*/true);
+  std::vector<RunPure::JailRef> refs;
+  refs.reserve(all.size());
+  for (const auto &j : all)
+    refs.push_back({j.jid, j.name, j.path, j.dying});
+  const auto c = RunPure::chooseContainer(refs, target, (uint32_t)::geteuid());
+  if (matches) *matches = c.matches;
+  if (c.index < 0) return std::nullopt;
+  return all[(size_t)c.index];
 }
 
 // 0.8.32: getJidByName(name) deleted — see jail_query.h for rationale.
@@ -297,21 +290,6 @@ std::optional<JailInfo> findContainer(const std::string &target, unsigned *match
 
 namespace JailExec {
 
-// 1.1.71: after the switch to a jail user, that user's own environment
-// and working directory, as `jexec -l` and crated's exec_in_jail give
-// them — the inherited ones were root's (HOME=/root, USER=root; /root is
-// 0700), so `run/user` under a root `crate run` ran with root's HOME.
-// pw comes from the jail's passwd: getpwnam ran after jail_attach.
-static bool enterUserEnv(const struct passwd *pw) {
-  const char *home = (pw->pw_dir && *pw->pw_dir) ? pw->pw_dir : "/";
-  const char *shell = (pw->pw_shell && *pw->pw_shell) ? pw->pw_shell : CRATE_PATH_SH;
-  if (::setenv("HOME", home, 1) != 0 || ::setenv("USER", pw->pw_name, 1) != 0 ||
-      ::setenv("LOGNAME", pw->pw_name, 1) != 0 || ::setenv("SHELL", shell, 1) != 0)
-    return false;
-  if (::chdir(home) != 0) (void)::chdir("/");
-  return true;
-}
-
 // Build C argv from vector.
 static std::vector<char*> buildArgv(const std::vector<std::string> &args) {
   std::vector<char*> argv;
@@ -319,6 +297,38 @@ static std::vector<char*> buildArgv(const std::vector<std::string> &args) {
     argv.push_back(const_cast<char*>(a.c_str()));
   argv.push_back(nullptr);
   return argv;
+}
+
+// 1.1.71: after the switch to a jail user, that user's own environment
+// and working directory, as `jexec -l` and crated's exec_in_jail give
+// them — the inherited ones were root's (HOME=/root, USER=root; /root is
+// 0700), so `run/user` under a root `crate run` ran with root's HOME.
+// pw comes from the jail's passwd: getpwnam ran after jail_attach.
+[[noreturn]] static void execJailCommand(const std::vector<std::string> &argv,
+                                         const struct passwd *pw) {
+  // 1.1.77: the command gets PasswdPure::jailExecEnv — the set crated's
+  // exec_in_jail builds — not crate(1)'s environment, which execv() used
+  // to hand over whole: tokens, SSH_AUTH_SOCK, proxy credentials and
+  // anything else in the operator's shell reached the jail's processes.
+  // pw is the user switched to (nullptr: root, cwd stays the jail root).
+  std::string name = "root", home = "/root", shell = CRATE_PATH_SH;
+  if (pw) {
+    name = pw->pw_name;
+    home = (pw->pw_dir && *pw->pw_dir) ? pw->pw_dir : "/";
+    shell = (pw->pw_shell && *pw->pw_shell) ? pw->pw_shell : CRATE_PATH_SH;
+    if (::chdir(home.c_str()) != 0) (void)::chdir("/");
+  } else if (const struct passwd *root = ::getpwuid(0)) {
+    if (root->pw_dir && *root->pw_dir) home = root->pw_dir;
+    if (root->pw_shell && *root->pw_shell) shell = root->pw_shell;
+  }
+  const char *term = ::getenv("TERM");
+  const auto env = PasswdPure::jailExecEnv(name, home, shell, term ? std::string(term) : std::string());
+  std::vector<char*> envp;
+  for (auto &e : env) envp.push_back(const_cast<char*>(e.c_str()));
+  envp.push_back(nullptr);
+  auto cargv = buildArgv(argv);
+  ::execve(argv[0].c_str(), cargv.data(), envp.data());
+  ::_exit(127);
 }
 
 // Fallback: use jexec(8) via fork+exec.
@@ -474,12 +484,9 @@ int execInJail(int jid, const std::vector<std::string> &argv,
       if (::initgroups(user.c_str(), pw->pw_gid) != 0 || ::setgid(pw->pw_gid) != 0 ||
           ::setuid(pw->pw_uid) != 0)
         ::_exit(124);
-      if (!enterUserEnv(pw)) ::_exit(124);   // 1.1.71
+      execJailCommand(argv, pw);   // 1.1.71 user env, 1.1.77 env of its own
     }
-
-    auto cargv = buildArgv(argv);
-    ::execv(argv[0].c_str(), cargv.data());
-    ::_exit(127); // exec failed
+    execJailCommand(argv, nullptr);
   }
 
   // Parent: wait for child. 1.1.51: EINTR-safe and status initialised
@@ -568,12 +575,9 @@ std::string execInJailGetOutput(int jid, const std::vector<std::string> &argv,
       if (::initgroups(user.c_str(), pw->pw_gid) != 0 || ::setgid(pw->pw_gid) != 0 ||
           ::setuid(pw->pw_uid) != 0)
         ::_exit(124);
-      if (!enterUserEnv(pw)) ::_exit(124);   // 1.1.71
+      execJailCommand(argv, pw);   // 1.1.71 user env, 1.1.77 env of its own
     }
-
-    auto cargv = buildArgv(argv);
-    ::execv(argv[0].c_str(), cargv.data());
-    ::_exit(127);
+    execJailCommand(argv, nullptr);
   }
 
   // Parent: read from pipe
@@ -655,11 +659,9 @@ Spawned spawnInJail(int jid, const std::vector<std::string> &argv,
       if (::initgroups(user.c_str(), pw->pw_gid) != 0 || ::setgid(pw->pw_gid) != 0 ||
           ::setuid(pw->pw_uid) != 0)
         ::_exit(124);
-      if (!enterUserEnv(pw)) ::_exit(124);   // 1.1.71
+      execJailCommand(argv, pw);   // 1.1.71 user env, 1.1.77 env of its own
     }
-    auto cargv = buildArgv(argv);
-    ::execv(argv[0].c_str(), cargv.data());
-    ::_exit(127);
+    execJailCommand(argv, nullptr);
   }
   Spawned s;
   s.pid = pid;

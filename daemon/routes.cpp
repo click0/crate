@@ -381,14 +381,16 @@ static void handleContainerStart(const httplib::Request &req, httplib::Response 
   // Check if already running. 1.1.70: by container name too — the
   // running jail is "web_pid4242", so the exact lookup of "web" missed it
   // and a second instance was started.
+  // 1.1.77: by the container name of what was asked — start web_pid1
+  // looked for a jail named web_pid1 and missed a running web_pid999.
+  const std::string containerName = RunPure::containerNameOf(name);
   unsigned running = 0;
-  if (JailQuery::findContainer(name, &running) || running > 0) {
+  if (JailQuery::findContainer(containerName, &running) || running > 0) {
     jsonError(res, 409, "container already running");
     return;
   }
 
   // Look for saved .crate file (1.1.70: the registry first, by container name)
-  const std::string containerName = RunPure::containerNameOf(name);
   auto runArgs = runArgsForContainer(containerName);
   if (runArgs.empty()) {
     jsonError(res, 404, "no saved .crate file or warm-base run for '" + containerName + "'");
