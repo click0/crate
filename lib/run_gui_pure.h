@@ -135,4 +135,28 @@ bool hostX11CookieWanted(const std::string &guiMode, bool waylandOnly,
                          const std::string &x11Mode,
                          const std::string &clipboardMode);
 
+// 1.1.77: which shared-mode security warnings setupX11 must emit. The
+// shared path binds the host operator's own display socket into the
+// jail: the X11 bind gives every keystroke and window on the host X
+// server (no inter-client isolation), and the raw Wayland socket gives
+// the compositor's privileged protocols (virtual keyboard/pointer,
+// screencopy, data-control, foreign-toplevel) — either reaches the
+// whole host session, other jails' windows included, so it is not a
+// boundary between tenants. Each warning fires only when that socket is
+// actually bound: the X11 warning not for a Wayland-only run (it routes
+// through the shared block but binds no X11 socket), the Wayland
+// warning only when a Wayland socket will be bound.
+//   isAutoFlow     — `gui: auto` (or `gui.mode: auto`)
+//   isWaylandFlow  — `gui.mode: wayland`
+//   displaySet     — DISPLAY is set in the environment
+//   waylandSet     — WAYLAND_DISPLAY is set and non-empty
+//   xdgRuntimeSet  — XDG_RUNTIME_DIR is set (needed to locate the socket)
+struct SharedDisplayWarnings {
+  bool x11;
+  bool wayland;
+};
+SharedDisplayWarnings sharedDisplayWarnings(bool isAutoFlow, bool isWaylandFlow,
+                                            bool displaySet, bool waylandSet,
+                                            bool xdgRuntimeSet);
+
 }

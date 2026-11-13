@@ -14,7 +14,8 @@ into the tree is closed, except a race against a running jail (TODO
 §2). A container name finds only the caller's own crate jails, `crate
 console` / `info` / `export` no longer fall back to whatever jail
 matches loosely, and a command run in a jail no longer inherits crate's
-environment.**
+environment. The shared Wayland display, which hands a jail client the
+whole host session, now warns like `x11` shared already did.**
 
 - **files/share followed links in the tree** (`lib/run.cpp`,
   `lib/fs_beneath.cpp`). The share code linked, copied, unlinked and
@@ -85,7 +86,22 @@ environment.**
   (O_EXCL, O_NOFOLLOW), owned through its descriptor — the import side of
   1.1.71's export fix. `CRATE_PATH_SHA256` replaces the spelled-out
   /sbin/sha256.
-- Docs: the on-hardware runbook §4s.
+- **The shared Wayland socket bound into the jail had no warning**
+  (`lib/run_gui.cpp`). `gui: auto` / `gui.mode: wayland` nullfs-mount the
+  host compositor's `$WAYLAND_DISPLAY` socket, whose privileged protocols
+  (virtual keyboard/pointer, screencopy, data-control, foreign-toplevel)
+  let a jail client inject input into, capture and drive the whole host
+  display session — other jails' GUI windows and the host's own included,
+  the same exposure as `x11` shared. The X11 path warned; the Wayland
+  bind only logged, and the X11 warning even misfired for a Wayland-only
+  run (it routes through the shared block but binds no X11 socket). Each
+  path now warns only when it actually binds, with its own ack env var
+  (`CRATE_X11_SHARED_ACK`, `CRATE_WAYLAND_SHARED_ACK`). The real fix — a
+  socket restricted through `wp_security_context_manager_v1` — is TODO §7;
+  the shared display plane is documented as a single trust domain, not a
+  cross-tenant boundary.
+- Docs: the on-hardware runbook §4s; `docs/trust-model.md` /
+  `trust-model.uk.md` gain a "Shared display plane" section.
 
 ## [1.1.76] — 2026-11-12
 

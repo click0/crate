@@ -1292,11 +1292,23 @@ ln -sf /etc/master.passwd $J/var/log/messages && crate logs web   # "'messages' 
 ln -s /etc/x /tmp/x.crate; cp web.txz /tmp/x.txz; crate import /tmp/x.txz   # "already exists"; /etc/x not created
 ```
 
+```sh
+# the shared-display warnings (on a graphical host; needs a Wayland or X session)
+WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/var/run/user/$(id -u) \
+  crate run -f lxqt-wayland.yml -- /bin/echo ok   # prints the "host Wayland compositor socket …" WARN once
+CRATE_WAYLAND_SHARED_ACK=1 WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/var/run/user/$(id -u) \
+  crate run -f lxqt-wayland.yml -- /bin/echo ok   # no WARN
+DISPLAY=:0 crate run -f firefox.yml -- /bin/echo ok   # the X11 shared WARN (CRATE_X11_SHARED_ACK=1 to suppress)
+#   a Wayland-only run (gui.mode: wayland, no DISPLAY) no longer prints the X11 wording
+```
+
 Pass criteria: no host file is linked, copied or created through a link
 in the tree; the socket appears only inside the jail; ordinary shares,
 tmpfs and GUI sockets mount as before (a trailing slash included); a
 container name finds only the caller's own crate jails; nothing of the
-operator's environment beyond the listed variables reaches the jail.
+operator's environment beyond the listed variables reaches the jail; the
+shared Wayland bind prints its warning unless acked, and the X11 warning
+no longer fires for a Wayland-only run.
 
 ---
 

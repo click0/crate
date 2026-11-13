@@ -393,6 +393,46 @@ ATF_TEST_CASE_BODY(host_x11_cookie)
 	ATF_REQUIRE(hostX11CookieWanted("shared", false, "nested", "none"));
 }
 
+ATF_TEST_CASE_WITHOUT_HEAD(shared_display_warnings);
+ATF_TEST_CASE_BODY(shared_display_warnings)
+{
+	using RunGuiPure::sharedDisplayWarnings;
+	// plain x11 / gui: auto with DISPLAY → X11 socket bound, X11 warns
+	auto w = sharedDisplayWarnings(false, false, true, false, false);
+	ATF_REQUIRE(w.x11);
+	ATF_REQUIRE(!w.wayland);
+	// gui: auto with DISPLAY unset but a Wayland session → Wayland warns,
+	// X11 does not (no X11 socket bound)
+	w = sharedDisplayWarnings(true, false, false, true, true);
+	ATF_REQUIRE(!w.x11);
+	ATF_REQUIRE(w.wayland);
+	// gui.mode: wayland must NOT raise the X11 warning even if DISPLAY is
+	// set (it routes through the shared block but binds no X11 socket) —
+	// the asymmetry 1.1.77 fixed
+	w = sharedDisplayWarnings(false, true, true, true, true);
+	ATF_REQUIRE(!w.x11);
+	ATF_REQUIRE(w.wayland);
+	// gui: auto with both DISPLAY and a Wayland session → both bound
+	w = sharedDisplayWarnings(true, false, true, true, true);
+	ATF_REQUIRE(w.x11);
+	ATF_REQUIRE(w.wayland);
+	// WAYLAND_DISPLAY set but no XDG_RUNTIME_DIR → socket cannot be
+	// located, no Wayland bind, no Wayland warning
+	w = sharedDisplayWarnings(true, false, false, true, false);
+	ATF_REQUIRE(!w.x11);
+	ATF_REQUIRE(!w.wayland);
+	// a non-auto, non-wayland flow (explicit x11 shared) without DISPLAY
+	// binds nothing here → neither warns
+	w = sharedDisplayWarnings(false, false, false, false, false);
+	ATF_REQUIRE(!w.x11);
+	ATF_REQUIRE(!w.wayland);
+	// wayland flow without a Wayland session (the strict-mode error path
+	// handles the refusal) → no Wayland warning
+	w = sharedDisplayWarnings(false, true, false, false, true);
+	ATF_REQUIRE(!w.x11);
+	ATF_REQUIRE(!w.wayland);
+}
+
 ATF_INIT_TEST_CASES(tcs)
 {
 	// 0.8.18: gui: auto
@@ -428,4 +468,5 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, pulseSocketRelpath_has_subdir);
 	ATF_ADD_TEST_CASE(tcs, own_x_socket_dir);
 	ATF_ADD_TEST_CASE(tcs, host_x11_cookie);
+	ATF_ADD_TEST_CASE(tcs, shared_display_warnings);
 }

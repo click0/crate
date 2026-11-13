@@ -743,23 +743,44 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
                                 jailPath, mounts, setJailEnv, spec, logProgress);
   }
 
-  // Shared mode (default): mount host X11 socket into jail.
-  // Security warning is always shown — it must not depend on the verbosity
-  // flag, because shared mode has real security implications (any jail
-  // process inherits keystroke + window-manipulation access on the host
-  // X server). Operators who knowingly accept the risk can suppress this
-  // warning by setting the `CRATE_X11_SHARED_ACK=1` environment variable.
-  if (::getenv("CRATE_X11_SHARED_ACK") == nullptr) {
-    WARN("x11 mode=shared provides NO display isolation — jail processes can read host "
-         "keystrokes and manipulate windows. Use mode=nested (Xephyr) or mode=headless "
-         "for security-sensitive workloads. Set CRATE_X11_SHARED_ACK=1 to suppress this warning.")
-  }
-
+  // Shared mode (default): mount the host display/compositor socket into
+  // the jail.
   bool isAutoFlow    = (spec.guiOptions && spec.guiOptions->mode == "auto");
   bool isWaylandFlow = (spec.guiOptions && spec.guiOptions->mode == "wayland");
   auto *display = ::getenv("DISPLAY");
   auto *waylandDisplay = ::getenv("WAYLAND_DISPLAY");
   auto *xdgRuntimeDir = ::getenv("XDG_RUNTIME_DIR");
+
+  // Security warnings are always shown — they must not depend on the
+  // verbosity flag, because shared mode has real security implications:
+  // a jail process inherits keystroke + window-manipulation access on the
+  // host display. Operators who knowingly accept the risk suppress each
+  // with the matching env var.
+  // 1.1.77: the X11 warning fired for `gui.mode: wayland` too (it routes
+  // through this shared block) although no X11 socket is bound, and said
+  // nothing about the host Wayland socket the shared/auto path binds —
+  // which is the same keystroke + screen-capture exposure for Wayland
+  // clients (virtual keyboard/pointer, screencopy, data-control,
+  // foreign-toplevel all reach the whole host session, other jails'
+  // windows included). Gate the X11 warning on an X11 socket actually
+  // being bound, and warn separately for the Wayland bind.
+  auto displayWarnings = RunGuiPure::sharedDisplayWarnings(
+      isAutoFlow, isWaylandFlow, display != nullptr,
+      waylandDisplay != nullptr && waylandDisplay[0] != '\0',
+      xdgRuntimeDir != nullptr);
+  if (displayWarnings.x11 && ::getenv("CRATE_X11_SHARED_ACK") == nullptr) {
+    WARN("x11 mode=shared provides NO display isolation — jail processes can read host "
+         "keystrokes and manipulate windows. Use mode=nested (Xephyr) or mode=headless "
+         "for security-sensitive workloads. Set CRATE_X11_SHARED_ACK=1 to suppress this warning.")
+  }
+  if (displayWarnings.wayland && ::getenv("CRATE_WAYLAND_SHARED_ACK") == nullptr) {
+    WARN("gui: the host Wayland compositor socket is bound into the jail and provides NO "
+         "display isolation — a Wayland client in the jail can inject input (virtual "
+         "keyboard/pointer), capture any window or output (screencopy), and read the "
+         "clipboard (data-control) across the whole host session, other jails' GUI windows "
+         "included. Treat such a jail as part of the host's trusted display domain, not as "
+         "a boundary between tenants. Set CRATE_WAYLAND_SHARED_ACK=1 to suppress this warning.")
+  }
 
   // 0.8.46: `gui.mode: wayland` is strict — operator opted out of
   // X11 fallback. Refuse to start without WAYLAND_DISPLAY rather

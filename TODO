@@ -423,6 +423,27 @@ The bhyve/VM track is in TODO2.
 
 === 7. Lifecycle, storage, GUI, monitoring, DNS, VPN ===
 
+* (MED, left open by 1.1.77) the shared display plane is not a
+  cross-tenant boundary. `gui: auto` / `gui.mode: wayland` / `x11`
+  shared bind the host operator's own display socket into the jail
+  (run_gui.cpp setupX11: /tmp/.X11-unix for X11, $WAYLAND_DISPLAY for
+  Wayland). X11 has no inter-client isolation; the raw Wayland socket
+  carries the compositor's privileged protocols (virtual keyboard /
+  pointer, screencopy / export-dmabuf, data-control, foreign-toplevel,
+  session-lock, input-inhibit). A client in one such jail can inject
+  input into, capture and drive the GUI of every other jail on the same
+  display and the host itself. 1.1.77 added the warnings
+  (CRATE_X11_SHARED_ACK / CRATE_WAYLAND_SHARED_ACK) and documented it
+  (docs/trust-model.md, "Shared display plane"); the real fix is to
+  bind a restricted socket obtained from the compositor's
+  wp_security_context_manager_v1 (app_id / instance_id / sandbox_engine
+  tag) instead of the raw one, so the compositor withholds the
+  privileged protocols from jail clients. Needs compositor support
+  (wlroots >= 0.17 / sway >= 1.9, mutter 46, kwin 6) and a host-side
+  capability probe with a documented fallback (refuse, or warn and bind
+  raw) when absent. The audio sockets bound alongside (PipeWire /
+  PulseAudio) are one shared bus too — a separate per-tenant story
+  (PipeWire security-context / a per-jail Pulse via module-native).
 * (LOW, left open by 1.1.70) the HTTP snapshot routes (routes.cpp
   datasetForJail) and the ws-console upgrade (ws_console.cpp) still
   look the jail up by kernel name only; every other target goes through
