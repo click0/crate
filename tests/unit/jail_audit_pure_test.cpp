@@ -491,7 +491,8 @@ ATF_TEST_CASE_BODY(own_x_socket_dir) {
   // display's socket — it is still the host display
   probe = kDesktopProbe;
   probe.replace(probe.find(hostX), hostX.size(), "/tmp/.X11-unix/.crate-host-Ab12Cd34\t/tmp/.X11-unix\tnullfs\tro");
-  c = find(buildReport(probe, ctx), "sockets", "/tmp/.X11-unix/X0");
+  r = buildReport(probe, ctx);   // kept: find() points into it
+  c = find(r, "sockets", "/tmp/.X11-unix/X0");
   ATF_REQUIRE(c != nullptr);
   ATF_REQUIRE(c->severity == Severity::Warn);
   ATF_REQUIRE(c->detail.find("that display only") != std::string::npos);
