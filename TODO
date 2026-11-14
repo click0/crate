@@ -423,49 +423,48 @@ The bhyve/VM track is in TODO2.
 
 === 7. Lifecycle, storage, GUI, monitoring, DNS, VPN ===
 
-* (MED, left open by 1.1.77) the shared display plane is not a
-  cross-tenant boundary. `gui: auto` / `gui.mode: wayland` / `x11`
-  shared bind the host operator's own display socket into the jail
-  (run_gui.cpp setupX11: /tmp/.X11-unix for X11, $WAYLAND_DISPLAY for
-  Wayland). X11 has no inter-client isolation; the raw Wayland socket
-  carries the compositor's privileged protocols (virtual keyboard /
-  pointer, screencopy / export-dmabuf, data-control, foreign-toplevel,
-  session-lock, input-inhibit). A client in one such jail can inject
-  input into, capture and drive the GUI of every other jail on the same
-  display and the host itself. 1.1.77 added the warnings
-  (CRATE_X11_SHARED_ACK / CRATE_WAYLAND_SHARED_ACK) and documented it
-  (docs/trust-model.md, "Shared display plane"); the real fix is to
-  bind a restricted socket obtained from the compositor's
-  wp_security_context_manager_v1 (app_id / instance_id / sandbox_engine
-  tag) instead of the raw one, so the compositor withholds the
-  privileged protocols from jail clients. Needs compositor support
-  (wlroots >= 0.17 / sway >= 1.9, mutter 46, kwin 6) and a host-side
-  capability probe with a documented fallback (refuse, or warn and bind
-  raw) when absent. The audio sockets bound alongside (PipeWire /
-  PulseAudio) are one shared bus too — a separate per-tenant story
-  (PipeWire security-context / a per-jail Pulse via module-native).
-* (MED, left open by 1.1.77) the X servers crate starts are separate
-  displays, not sealed ones: Xvfb runs with `-ac` and Xephyr / Xorg get
-  no `-auth` cookie (run_gui.cpp setupX11), their sockets sit in the
-  host's /tmp/.X11-unix, and the `x11` shared mode mounts that whole
-  directory read-write — so a shared jail, or any local user, reaches
-  another tenant's headless / nested / gpu display. Fix: a per-run
-  MIT-MAGIC-COOKIE-1 (`-auth`, the cookie copied into the jail and
-  handed to x11vnc), and in shared mode mount only the host display's
-  own socket read-only, as 1.1.74 did for the servers crate starts
-  (makeOwnXSocketDir). Same area: startWebsockify gives websockify no
-  bind address (it listens on every interface in front of an x11vnc
-  that is on loopback and has no password unless gui/vnc_password is
-  set) — pass gui/vnc_bind. Documented as a caveat in
-  docs/trust-model.md, "Shared display plane".
-* (LOW, left open by 1.1.77) the jail's own GUI variables (DISPLAY,
-  XAUTHORITY, WAYLAND_DISPLAY, XDG_RUNTIME_DIR — run.cpp jailEnv) go on
-  the env(1) line of the main command only: services and hooks run
-  through JailExec get PasswdPure::jailExecEnv and no display. Before
-  1.1.77 the root path leaked the HOST's values to them, which worked
-  by accident in the shared X11 mode. Give JailExec the jail's set.
-  Rootless exec_in_jail also carries no LANG (the request has `term`
-  only); the root path passes the operator's.
+* (LOW, left open by 1.1.78) the shared X11 mode still hands the jail
+  the host's TRUSTED cookie (run_gui.cpp copyX11Auth / the auto flow),
+  and X has no isolation between trusted clients: keystrokes, window
+  contents and control of every window on that server. 1.1.78 narrowed
+  what is mounted (the one socket, read-only) but not what a client on
+  it may do. An untrusted cookie of the X SECURITY extension
+  (`xauth generate $DISPLAY . untrusted timeout 0`) would — at the cost
+  of GLX / shm / clipboard for that client, and only where the host
+  server has the extension — so an opt-in key (x11/untrusted: true),
+  with nested / headless / compositor staying the answer otherwise.
+* (LOW, left open by 1.1.78) the Wayland security context is the
+  compositor's to honour: on a compositor without
+  wp_security_context_manager_v1 the default
+  (gui/wayland_security_context: auto) still binds the raw socket, with
+  the warnings. Make `require` the default once sway >= 1.9 / KWin 6 /
+  Mutter 46 can be assumed, and let crated's pool policy force it for a
+  tenant. The audio sockets bound alongside (PipeWire / PulseAudio,
+  run_gui.cpp setupX11) are one shared bus still — a jail client can
+  record other tenants' streams; PipeWire has a security-context
+  extension of its own, Pulse would need a per-jail socket.
+* (MED, plausible, found in 1.1.78) GUI under rootless: the GUI
+  registry is /var/run/crate/ctx-gui-registry (locs.cpp:15), opened
+  O_RDWR|O_CREAT 0600 by whoever runs first (gui_registry.cpp:36). An
+  unprivileged crate cannot create a file in the root-owned 0711
+  /var/run/crate nor open root's 0600 one, so GuiRegistry::lock() —
+  called by every gui mode, shared included — should fail the run.
+  Display numbers are host-wide, so a per-user registry alone is not
+  enough: allocateDisplay must also skip an X<N> / .X<N>-lock that
+  exists. Check on hardware (on-hardware-validation §4t under an
+  unprivileged user).
+* (LOW, left open by 1.1.78) the clipboard proxy (run_gui.cpp
+  setupClipboard) is a shell loop around `jexec <jid> xclip`: root
+  only, and the in-jail xclip inherits crate's environment — the HOST's
+  DISPLAY and XAUTHORITY — instead of the jail's, so it only ever
+  worked against a shared display, and the nested / headless servers
+  want their cookie now. Run the jail side through JailExec (which has
+  the jail's display since 1.1.78) and the host side with the host's.
+* (LOW, left open by 1.1.78) a host X server that restarts leaves an
+  `x11` shared jail with a stale hard link (the server makes a new
+  socket; the whole-directory mount used to pick it up). Documented
+  (crate.5); a watcher that relinks would need the mount to be
+  read-write or redone.
 * (LOW, left open by 1.1.70) the HTTP snapshot routes (routes.cpp
   datasetForJail) and the ws-console upgrade (ws_console.cpp) still
   look the jail up by kernel name only; every other target goes through

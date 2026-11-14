@@ -137,9 +137,75 @@ ATF_TEST_CASE_BODY(jail_exec_env) {
   ATF_REQUIRE_EQ(PasswdPure::jailExecEnv("a", "/", "/bin/sh", "", std::string(65, 'a')).size(), 5u);
 }
 
+// 1.1.78: the jail's display variables for what JailExec runs (services,
+// hooks): four fixed names, each value checked for shape.
+ATF_TEST_CASE_WITHOUT_HEAD(jail_display_env);
+ATF_TEST_CASE_BODY(jail_display_env) {
+  using PasswdPure::JailDisplayEnv;
+  JailDisplayEnv d;
+  ATF_REQUIRE(d.empty());
+  ATF_REQUIRE(PasswdPure::validateJailDisplayEnv(d).empty());
+  // none set: the environment is what it was
+  ATF_REQUIRE_EQ(PasswdPure::jailExecEnv("a", "/", "/bin/sh", "", "", d).size(), 5u);
+
+  // the names map to the fields, nothing else does
+  *PasswdPure::jailDisplayField(d, "DISPLAY") = ":10";
+  *PasswdPure::jailDisplayField(d, "XAUTHORITY") = "/var/run/crate-Xauthority";
+  *PasswdPure::jailDisplayField(d, "WAYLAND_DISPLAY") = "wayland-1";
+  *PasswdPure::jailDisplayField(d, "XDG_RUNTIME_DIR") = "/tmp/wayland";
+  ATF_REQUIRE(PasswdPure::jailDisplayField(d, "CRATE") == nullptr);
+  ATF_REQUIRE(PasswdPure::jailDisplayField(d, "LD_PRELOAD") == nullptr);
+  ATF_REQUIRE(PasswdPure::jailDisplayField(d, "DBUS_SESSION_BUS_ADDRESS") == nullptr);
+  ATF_REQUIRE(PasswdPure::jailDisplayField(d, "display") == nullptr);
+  ATF_REQUIRE(!d.empty());
+  ATF_REQUIRE(PasswdPure::validateJailDisplayEnv(d).empty());
+
+  auto e = PasswdPure::jailExecEnv("alice", "/home/alice", "/bin/sh", "xterm", "uk_UA.UTF-8", d);
+  ATF_REQUIRE_EQ(e.size(), 11u);
+  ATF_REQUIRE_EQ(e[7], std::string("DISPLAY=:10"));
+  ATF_REQUIRE_EQ(e[8], std::string("XAUTHORITY=/var/run/crate-Xauthority"));
+  ATF_REQUIRE_EQ(e[9], std::string("WAYLAND_DISPLAY=wayland-1"));
+  ATF_REQUIRE_EQ(e[10], std::string("XDG_RUNTIME_DIR=/tmp/wayland"));
+
+  // other DISPLAY forms the shared mode passes on
+  for (const char *ok : {":0", ":0.0", "unix:1", "localhost:10.0", "host-1.example.org:0"}) {
+    JailDisplayEnv x; x.display = ok;
+    ATF_REQUIRE(PasswdPure::validateJailDisplayEnv(x).empty());
+  }
+  // malformed values: refused by the validator, left out of the env
+  auto bad = [](const JailDisplayEnv &x, const char *field) {
+    const auto err = PasswdPure::validateJailDisplayEnv(x);
+    ATF_REQUIRE(err.find(field) == 0);
+    ATF_REQUIRE_EQ(PasswdPure::jailExecEnv("a", "/", "/bin/sh", "", "", x).size(), 5u);
+  };
+  JailDisplayEnv x;
+  x = JailDisplayEnv(); x.display = ":0\nLD_PRELOAD=/tmp/x.so";         bad(x, "display");
+  x = JailDisplayEnv(); x.display = ":0 x";                             bad(x, "display");
+  x = JailDisplayEnv(); x.display = "$(id)";                            bad(x, "display");
+  x = JailDisplayEnv(); x.display = std::string(65, '0');               bad(x, "display");
+  x = JailDisplayEnv(); x.waylandDisplay = "../wayland-0";              bad(x, "wayland_display");
+  x = JailDisplayEnv(); x.waylandDisplay = "/run/user/0/wayland-0";     bad(x, "wayland_display");
+  x = JailDisplayEnv(); x.waylandDisplay = "..";                        bad(x, "wayland_display");
+  x = JailDisplayEnv(); x.xauthority = "root/.Xauthority";              bad(x, "xauthority");
+  x = JailDisplayEnv(); x.xauthority = "/root/../etc/passwd";           bad(x, "xauthority");
+  x = JailDisplayEnv(); x.xauthority = "/root/.Xauthority;rm";          bad(x, "xauthority");
+  x = JailDisplayEnv(); x.xauthority = "/" + std::string(255, 'a');     bad(x, "xauthority");
+  x = JailDisplayEnv(); x.xdgRuntimeDir = "/tmp/way land";              bad(x, "xdg_runtime_dir");
+  x = JailDisplayEnv(); x.xdgRuntimeDir = "/tmp/..";                    bad(x, "xdg_runtime_dir");
+  // a name with dots that is not ".." is a name
+  x = JailDisplayEnv(); x.xauthority = "/home/a/..hidden/.Xauthority";
+  ATF_REQUIRE(PasswdPure::validateJailDisplayEnv(x).empty());
+
+  ATF_REQUIRE(PasswdPure::validLocaleName("C"));
+  ATF_REQUIRE(PasswdPure::validLocaleName("uk_UA.UTF-8"));
+  ATF_REQUIRE(!PasswdPure::validLocaleName(""));
+  ATF_REQUIRE(!PasswdPure::validLocaleName("en US"));
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, parse_master_line);
   ATF_ADD_TEST_CASE(tcs, lookup_user_master_and_passwd_formats);
   ATF_ADD_TEST_CASE(tcs, supplementary_groups);
   ATF_ADD_TEST_CASE(tcs, jail_exec_env);
+  ATF_ADD_TEST_CASE(tcs, jail_display_env);
 }

@@ -217,10 +217,14 @@ PrivOpsNvPure::FieldMap buildSignalJail(unsigned jid,
 // "argv0".."argvN-1"; user/term are omitted when empty. The caller's
 // stdio descriptors are NOT in the FieldMap — sendExecRequest attaches
 // them to the nvlist.
+// 1.1.78: lang and the jail's display variables, each omitted when
+// empty (lang also when it is not a plain locale name).
 PrivOpsNvPure::FieldMap buildExecInJail(unsigned jid,
                                          const std::string &user,
                                          const std::vector<std::string> &argv,
-                                         const std::string &term);
+                                         const std::string &term,
+                                         const std::string &lang = std::string(),
+                                         const PasswdPure::JailDisplayEnv &display = PasswdPure::JailDisplayEnv());
 
 // --- Wire transport (FreeBSD-only) ---
 

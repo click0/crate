@@ -58,8 +58,37 @@ constexpr size_t kMaxFileBytes = 4 * 1024 * 1024;
 // empty shell /bin/sh. Nothing else of the caller's environment crosses
 // into the jail. (`lang` is the root path's: the exec_in_jail request
 // carries no locale.)
+//
+// 1.1.78: `display` — the jail's own display variables. They went on
+// the env(1) line of the main command only, so a service or a hook run
+// through JailExec had no display at all (before 1.1.77 the root path
+// leaked the HOST's values to them, which happened to work in the
+// shared X11 mode). Each field that is set and well-formed is added;
+// the rest are left out, like a bad LANG.
+struct JailDisplayEnv {
+  std::string display;          // DISPLAY, e.g. ":10"
+  std::string xauthority;       // XAUTHORITY, a path in the jail
+  std::string waylandDisplay;   // WAYLAND_DISPLAY, a socket name
+  std::string xdgRuntimeDir;    // XDG_RUNTIME_DIR, a path in the jail
+  bool empty() const {
+    return display.empty() && xauthority.empty() && waylandDisplay.empty() && xdgRuntimeDir.empty();
+  }
+};
+// The field of `d` the environment variable `name` goes in; nullptr for
+// any other name (these four are all a caller may pass).
+std::string *jailDisplayField(JailDisplayEnv &d, const std::string &name);
+// "" when every field is empty or well-formed, else which one is not:
+//   DISPLAY          up to 64 of [A-Za-z0-9.:_-]
+//   WAYLAND_DISPLAY  up to 64 of [A-Za-z0-9._-]
+//   the two paths    absolute, up to 255 of [A-Za-z0-9/._+-], no ".."
+// (crated checks an exec_in_jail request with it.)
+std::string validateJailDisplayEnv(const JailDisplayEnv &d);
+// A plain locale name: up to 64 of [A-Za-z0-9_.@-].
+bool validLocaleName(const std::string &lang);
+
 std::vector<std::string> jailExecEnv(const std::string &user, const std::string &home,
                                      const std::string &shell, const std::string &term,
-                                     const std::string &lang = std::string());
+                                     const std::string &lang = std::string(),
+                                     const JailDisplayEnv &display = JailDisplayEnv());
 
 }

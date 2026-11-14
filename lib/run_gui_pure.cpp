@@ -155,6 +155,16 @@ std::string xSocketName(unsigned displayNum) {
 
 bool isOwnXSocketDir(const std::string &hostPath) {
   static const std::string prefix = "/tmp/.X11-unix/.crate-";
+  return hostPath.size() > prefix.size() && hostPath.compare(0, prefix.size(), prefix) == 0
+         && !isHostXSocketDir(hostPath);
+}
+
+std::string hostXSocketDirTemplate() {
+  return "/tmp/.X11-unix/.crate-host-XXXXXXXX";
+}
+
+bool isHostXSocketDir(const std::string &hostPath) {
+  static const std::string prefix = "/tmp/.X11-unix/.crate-host-";
   return hostPath.size() > prefix.size() && hostPath.compare(0, prefix.size(), prefix) == 0;
 }
 
@@ -212,6 +222,98 @@ bool parseResolution(const std::string &spec, unsigned &w, unsigned &h) {
   } catch (...) {
     return false;
   }
+}
+
+std::string xauthorityEntry(unsigned displayNum, const std::string &cookie) {
+  if (cookie.size() != kXCookieSize) return "";
+  static const std::string name = "MIT-MAGIC-COOKIE-1";
+  const std::string number = std::to_string(displayNum);
+  std::string out;
+  auto put16 = [&out](size_t v) {
+    out.push_back((char)((v >> 8) & 0xff));
+    out.push_back((char)(v & 0xff));
+  };
+  auto putField = [&](const std::string &f) { put16(f.size()); out += f; };
+  put16(0xffff);          // FamilyWild
+  putField("");           // address
+  putField(number);
+  putField(name);
+  putField(cookie);
+  return out;
+}
+
+int localDisplayNumber(const std::string &display) {
+  std::string d = display;
+  if (d.compare(0, 5, "unix:") == 0) d = d.substr(4);
+  if (d.size() < 2 || d[0] != ':') return -1;
+  size_t i = 1;
+  int n = 0;
+  while (i < d.size() && d[i] >= '0' && d[i] <= '9') {
+    if (i > 5) return -1;   // X<N> beyond 99999 is no display
+    n = n * 10 + (d[i] - '0');
+    i++;
+  }
+  if (i == 1) return -1;
+  if (i == d.size()) return n;
+  // ".<screen>"
+  if (d[i] != '.' || i + 1 == d.size()) return -1;
+  for (size_t j = i + 1; j < d.size(); j++)
+    if (d[j] < '0' || d[j] > '9') return -1;
+  return n;
+}
+
+static std::string bracketed(const std::string &host) {
+  return host.find(':') != std::string::npos ? "[" + host + "]" : host;
+}
+
+std::string websockifyListenArg(const std::string &bind, unsigned wsPort) {
+  return bracketed(bind) + ":" + std::to_string(wsPort);
+}
+
+std::string websockifyTargetArg(const std::string &bind, unsigned vncPort) {
+  std::string host = bind;
+  if (host == "0.0.0.0") host = "127.0.0.1";
+  else if (host == "::") host = "::1";
+  return bracketed(host) + ":" + std::to_string(vncPort);
+}
+
+bool parseWaylandContextMode(const std::string &s, WaylandContextMode &out) {
+  if (s.empty() || s == "auto") { out = WaylandContextMode::Auto; return true; }
+  if (s == "require") { out = WaylandContextMode::Require; return true; }
+  if (s == "off") { out = WaylandContextMode::Off; return true; }
+  return false;
+}
+
+WaylandBind waylandBindDecision(WaylandContextMode mode, bool contextMade) {
+  if (mode == WaylandContextMode::Off) return WaylandBind::Raw;
+  if (contextMade) return WaylandBind::Restricted;
+  return mode == WaylandContextMode::Require ? WaylandBind::Refuse : WaylandBind::Raw;
+}
+
+std::string waylandContextDirTemplate(const std::string &xdgRuntimeDir) {
+  return xdgRuntimeDir + "/crate-wl-XXXXXXXX";
+}
+
+bool isWaylandContextDir(const std::string &hostPath) {
+  static const std::string mark = "/crate-wl-";
+  const auto p = hostPath.find(mark);
+  // "<dir>/crate-wl-<8 chars>" itself or something inside it
+  return p != std::string::npos && hostPath.size() >= p + mark.size() + 8;
+}
+
+std::string waylandContextKeyError(const std::string &guiMode, const std::string &value) {
+  WaylandContextMode m;
+  if (!parseWaylandContextMode(value, m))
+    return "gui/wayland_security_context must be 'auto', 'require' or 'off'";
+  if (guiMode != "auto" && guiMode != "wayland")
+    return "gui/wayland_security_context is only valid with gui/mode auto or wayland";
+  return "";
+}
+
+std::string vncBindKeyError(const std::string &guiMode) {
+  if (guiMode == "wayland")
+    return "gui/vnc_bind is not valid with gui/mode=wayland (no VNC server is started)";
+  return "";
 }
 
 SharedDisplayWarnings sharedDisplayWarnings(bool isAutoFlow, bool isWaylandFlow,

@@ -11,6 +11,13 @@ namespace X11Ops {
 
 bool available();
 
+// 1.1.78: the MIT-MAGIC-COOKIE-1 (raw bytes) the following calls in this
+// process present to the server — for the displays crate starts with
+// `-auth`. Xlib keeps it process-wide (XSetAuthorization); the
+// environment, which child processes inherit for the HOST display, is
+// left alone. A no-op without libX11.
+void useCookie(const std::string &cookie);
+
 // Check if an X display is accessible.
 bool isDisplayAvailable(const std::string &display);
 

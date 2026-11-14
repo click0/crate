@@ -455,7 +455,9 @@ PrivOpsNvPure::FieldMap buildSignalJail(unsigned jid,
 PrivOpsNvPure::FieldMap buildExecInJail(unsigned jid,
                                          const std::string &user,
                                          const std::vector<std::string> &argv,
-                                         const std::string &term) {
+                                         const std::string &term,
+                                         const std::string &lang,
+                                         const PasswdPure::JailDisplayEnv &display) {
   PrivOpsNvPure::FieldMap m = {
     {"verb", "exec_in_jail"},
     {"jid", std::to_string(jid)},
@@ -463,6 +465,13 @@ PrivOpsNvPure::FieldMap buildExecInJail(unsigned jid,
   };
   if (!user.empty()) m["user"] = user;
   if (!term.empty()) m["term"] = term;
+  // 1.1.78: a LANG the daemon would refuse is left out rather than sent
+  // (it comes from the operator's environment, not from a spec)
+  if (PasswdPure::validLocaleName(lang)) m["lang"] = lang;
+  if (!display.display.empty())        m["display"] = display.display;
+  if (!display.xauthority.empty())     m["xauthority"] = display.xauthority;
+  if (!display.waylandDisplay.empty()) m["wayland_display"] = display.waylandDisplay;
+  if (!display.xdgRuntimeDir.empty())  m["xdg_runtime_dir"] = display.xdgRuntimeDir;
   for (size_t i = 0; i < argv.size(); i++)
     m["argv" + std::to_string(i)] = argv[i];
   return m;

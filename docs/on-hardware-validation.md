@@ -1321,6 +1321,82 @@ no longer fires for a Wayland-only run.
 
 ---
 
+## 4t. 1.1.78 — sealed X servers, one shared socket, the Wayland security context
+
+Everything here was checked on Linux stand-ins only (Xvfb with the
+generated cookie file, websockify's listen argument, the security
+context against sway 1.9); none of it has run on FreeBSD.
+
+```sh
+# the X servers crate starts want a cookie
+crate run -f firefox-headless.crate & sleep 5; crate gui list      # note the display, e.g. :10
+ps ax | grep -E 'Xvfb|x11vnc'          # Xvfb … -auth /tmp/crate-xauth.XXXXXX (no -ac); x11vnc … -auth the same file
+env -u XAUTHORITY xdpyinfo -display :10     # as root or any other user: "Authorization required"
+J=$(jls path | grep jail-firefox- | head -1)
+ls -l $J/var/run/crate-Xauthority      # 0600, owned by the user the command runs as
+jexec <jid> /usr/bin/env | grep -E 'DISPLAY|XAUTHORITY'   # not set here (jexec is not crate) …
+#   … but a service / run:before-execute hook of the spec prints DISPLAY=:10 XAUTHORITY=/var/run/crate-Xauthority
+crate gui screenshot firefox -o /tmp/s.png  # works (the registry carries the cookie file)
+sockstat -l | grep -E 'x11vnc|python'  # both on 127.0.0.1; with gui/vnc_bind: <addr> both on <addr>
+#   the same for gui: nested (Xephyr … -auth) and gui: gpu (Xorg … -auth); VNC still shows the picture;
+#   gui/vnc_native: true (a WITH_LIBVNCSERVER build) still grabs the screen
+# gui/vnc_bind is accepted with headless / nested / gpu; refused with gui/mode: wayland
+```
+
+```sh
+# x11 shared: one socket, read-only
+DISPLAY=:0 crate run -f xterm.crate & sleep 3; J=$(jls path | grep jail-xterm- | head -1)
+mount | grep "$J/tmp/.X11-unix"        # from /tmp/.X11-unix/.crate-host-XXXXXXXX, read-only
+ls $J/tmp/.X11-unix                    # X0 only — no X10 of a headless run next to it
+jexec <jid> touch /tmp/.X11-unix/X99   # "Read-only file system"
+#   the xterm window appears on the host display (connect over a read-only nullfs works)
+crate audit xterm                      # sockets: "host X11 display socket, that display only" (WARN)
+ls -d /tmp/.X11-unix/.crate-host-*     # gone after the run
+sysctl security.bsd.hardlink_check_uid=1   # with the X server owned by another user:
+#   WARN "… mounting the host's whole /tmp/.X11-unix (read-only) instead", the run continues
+DISPLAY=localhost:10.0 crate run -f xterm.crate -- /usr/bin/env | grep DISPLAY   # no mount, DISPLAY passed on
+```
+
+```sh
+# Wayland: a restricted socket (needs sway >= 1.9 / KWin 6 / Mutter 46 as the host compositor)
+crate doctor | grep wayland-security-context      # PASS "the compositor makes security contexts"
+crate run -f foot.crate & sleep 3                 # gui: auto or gui.mode: wayland; no shared-Wayland WARN
+ls -la $XDG_RUNTIME_DIR/crate-wl-*/               # 0700 directory, one 0666 socket named like $WAYLAND_DISPLAY
+J=$(jls path | grep jail-foot- | head -1); mount | grep "$J/tmp/wayland"   # from …/crate-wl-XXXXXXXX/wayland-N
+jexec -U <user> <jid> env XDG_RUNTIME_DIR=/tmp/wayland WAYLAND_DISPLAY=wayland-1 wayland-info | grep -c interface
+#   fewer globals than on the host; none of zwlr_screencopy_manager_v1, zwp_virtual_keyboard_manager_v1,
+#   zwlr_virtual_pointer_manager_v1, zwlr_data_control_manager_v1, zwlr_foreign_toplevel_manager_v1,
+#   zwlr_layer_shell_v1, wp_security_context_manager_v1
+#   the application window still opens; copy / paste with a focused host window works
+swaymsg -t get_tree | grep -B2 -A2 io.github.click0.crate    # sway >= 1.10: sandbox_engine / app id / instance id
+crate audit foot                                  # sockets: "Wayland socket restricted by the compositor" (PASS)
+kill -9 <pid of crate run>; sleep 1               # the compositor stops accepting on the socket:
+jexec <jid> … wayland-info                        #   "failed to create display" (the socket file may linger)
+# fallback and the key
+gui/wayland_security_context: require  on a compositor without the protocol → the run stops with
+#   "gui/wayland_security_context: require — no restricted Wayland socket: the compositor does not offer …"
+gui/wayland_security_context: off      → the compositor's own socket and the 1.1.77 WARN
+#   default on such a compositor: WARN "no Wayland security context (…)" + the 1.1.77 WARN, the run continues
+# under a root `crate run` with a dedicated run user: /tmp/wayland in the jail belongs to that user
+```
+
+```sh
+# rootless: LANG and the display reach exec_in_jail
+LANG=uk_UA.UTF-8 crate run -f web.crate -- /usr/bin/env | grep LANG      # as an unprivileged user through crated
+#   services and hooks of a gui: headless spec print DISPLAY / XAUTHORITY under rootless too
+```
+
+Pass criteria: no client without the cookie opens a display crate
+started, and the jail, x11vnc, the embedded VNC server and `crate gui
+screenshot` still do; an `x11` shared jail sees one socket, cannot
+create entries, and its windows still appear; VNC and noVNC listen on
+`gui/vnc_bind`; on a capable compositor the jail's Wayland socket lacks
+the privileged globals and ordinary clients still work; `require` /
+`off` / the fallback behave as written; services and hooks see the
+jail's display on both exec paths.
+
+---
+
 ## 5. Reporting back
 
 ```sh

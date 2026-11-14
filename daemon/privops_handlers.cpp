@@ -988,7 +988,10 @@ DispatchResult handleExecInJail(const PrivOpsPure::ExecInJailReq &r,
   if (user.home.empty())  user.home  = "/";
   if (user.shell.empty()) user.shell = "/bin/sh";
   // 1.1.77: the same set crate(1)'s root path gives (PasswdPure::jailExecEnv)
-  const auto envStrings = PasswdPure::jailExecEnv(user.name, user.home, user.shell, r.term);
+  // 1.1.78: + the caller's locale and the jail's own display variables
+  // (validated by validateExecInJail; the names are fixed)
+  const auto envStrings = PasswdPure::jailExecEnv(user.name, user.home, user.shell, r.term,
+                                                  r.lang, r.display);
   std::vector<char*> envp;
   for (const auto &e : envStrings) envp.push_back(const_cast<char*>(e.c_str()));
   envp.push_back(nullptr);

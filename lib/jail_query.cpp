@@ -34,6 +34,7 @@ extern "C" {
 #include <unistd.h>
 
 #include <atomic>       // 1.1.41: active-pd registry
+#include <mutex>        // 1.1.78: the jail display snapshot
 #include <cstdint>      // 1.1.40: uintptr_t for EV_SET
 #include <cstdlib>      // 1.1.40: getenv(TERM)
 #include <iostream>
@@ -304,8 +305,38 @@ static std::vector<char*> buildArgv(const std::vector<std::string> &args) {
 // them — the inherited ones were root's (HOME=/root, USER=root; /root is
 // 0700), so `run/user` under a root `crate run` ran with root's HOME.
 // pw comes from the jail's passwd: getpwnam ran after jail_attach.
+// 1.1.78: the jail's display variables (setJailDisplayVar). A copy is
+// taken before each fork / request: the child of a multi-threaded
+// process must not read what another thread may be changing.
+namespace {
+std::mutex g_displayMutex;
+PasswdPure::JailDisplayEnv g_display;
+PasswdPure::JailDisplayEnv displaySnapshot() {
+  std::lock_guard<std::mutex> lock(g_displayMutex);
+  return g_display;
+}
+// the fields of an exec_in_jail request: the operator's TERM and LANG,
+// the jail's display
+PrivOpsNvPure::FieldMap execFields(int jid, const std::string &user,
+                                   const std::vector<std::string> &argv) {
+  const char *term = ::getenv("TERM");
+  const char *lang = ::getenv("LANG");
+  return PrivOpsClient::buildExecInJail((unsigned)jid, user, argv,
+                                        term ? std::string(term) : std::string(),
+                                        lang ? std::string(lang) : std::string(),
+                                        displaySnapshot());
+}
+} // anon
+
+void setJailDisplayVar(const std::string &name, const std::string &value) {
+  std::lock_guard<std::mutex> lock(g_displayMutex);
+  if (std::string *f = PasswdPure::jailDisplayField(g_display, name))
+    *f = value;
+}
+
 [[noreturn]] static void execJailCommand(const std::vector<std::string> &argv,
-                                         const struct passwd *pw) {
+                                         const struct passwd *pw,
+                                         const PasswdPure::JailDisplayEnv &display) {
   // 1.1.77: the command gets PasswdPure::jailExecEnv — the set crated's
   // exec_in_jail builds — not crate(1)'s environment, which execv() used
   // to hand over. That was never the operator's whole shell (cli/main.cpp
@@ -327,8 +358,9 @@ static std::vector<char*> buildArgv(const std::vector<std::string> &args) {
   }
   const char *term = ::getenv("TERM");
   const char *lang = ::getenv("LANG");
+  // 1.1.78: + the jail's own display (setJailDisplayVar)
   const auto env = PasswdPure::jailExecEnv(name, home, shell, term ? std::string(term) : std::string(),
-                                           lang ? std::string(lang) : std::string());
+                                           lang ? std::string(lang) : std::string(), display);
   std::vector<char*> envp;
   for (auto &e : env) envp.push_back(const_cast<char*>(e.c_str()));
   envp.push_back(nullptr);
@@ -443,9 +475,7 @@ static int privopsExec(const std::string &sock, int jid,
                        const std::vector<std::string> &argv,
                        const std::string &user, const std::string &what,
                        int inFd, int outFd, int errFd) {
-  const char *term = ::getenv("TERM");
-  auto fields = PrivOpsClient::buildExecInJail((unsigned)jid, user, argv,
-                                               term ? std::string(term) : std::string());
+  auto fields = execFields(jid, user, argv);   // 1.1.78: + LANG, the jail's display
   int pd = -1;
   auto resp = PrivOpsClient::sendExecRequest(sock, fields, inFd, outFd, errFd, pd);
   if (!resp.transportError.empty())
@@ -470,6 +500,7 @@ int execInJail(int jid, const std::vector<std::string> &argv,
              "(rootless: is crated running with privops_socket configured?)")
 
   // Try jail_attach() approach
+  const auto display = displaySnapshot();   // 1.1.78
   pid_t pid = ::fork();
   if (pid == -1)
     ERR("fork failed: " << strerror(errno))
@@ -490,9 +521,9 @@ int execInJail(int jid, const std::vector<std::string> &argv,
       if (::initgroups(user.c_str(), pw->pw_gid) != 0 || ::setgid(pw->pw_gid) != 0 ||
           ::setuid(pw->pw_uid) != 0)
         ::_exit(124);
-      execJailCommand(argv, pw);   // 1.1.71 user env, 1.1.77 env of its own
+      execJailCommand(argv, pw, display);   // 1.1.71 user env, 1.1.77 env of its own
     }
-    execJailCommand(argv, nullptr);
+    execJailCommand(argv, nullptr, display);
   }
 
   // Parent: wait for child. 1.1.51: EINTR-safe and status initialised
@@ -528,9 +559,7 @@ std::string execInJailGetOutput(int jid, const std::vector<std::string> &argv,
     // end must not leak, hence the guard.
     std::string output;
     struct CloseRead { int fd; ~CloseRead() { if (fd >= 0) ::close(fd); } } rd{pipefd[0]};
-    const char *term = ::getenv("TERM");
-    auto fields = PrivOpsClient::buildExecInJail((unsigned)jid, user, argv,
-                                                 term ? std::string(term) : std::string());
+    auto fields = execFields(jid, user, argv);   // 1.1.78
     int pd = -1;
     auto resp = PrivOpsClient::sendExecRequest(sock, fields, STDIN_FILENO, pipefd[1],
                                                STDERR_FILENO, pd);
@@ -556,6 +585,7 @@ std::string execInJailGetOutput(int jid, const std::vector<std::string> &argv,
              "(rootless: is crated running with privops_socket configured?)")
   }
 
+  const auto display = displaySnapshot();   // 1.1.78
   pid_t pid = ::fork();
   if (pid == -1) {
     ::close(pipefd[0]);
@@ -581,9 +611,9 @@ std::string execInJailGetOutput(int jid, const std::vector<std::string> &argv,
       if (::initgroups(user.c_str(), pw->pw_gid) != 0 || ::setgid(pw->pw_gid) != 0 ||
           ::setuid(pw->pw_uid) != 0)
         ::_exit(124);
-      execJailCommand(argv, pw);   // 1.1.71 user env, 1.1.77 env of its own
+      execJailCommand(argv, pw, display);   // 1.1.71 user env, 1.1.77 env of its own
     }
-    execJailCommand(argv, nullptr);
+    execJailCommand(argv, nullptr, display);
   }
 
   // Parent: read from pipe
@@ -629,9 +659,7 @@ Spawned spawnInJail(int jid, const std::vector<std::string> &argv,
 
   std::string sock;
   if (privopsExecWanted(sock)) {
-    const char *term = ::getenv("TERM");
-    auto fields = PrivOpsClient::buildExecInJail((unsigned)jid, user, argv,
-                                                 term ? std::string(term) : std::string());
+    auto fields = execFields(jid, user, argv);   // 1.1.78
     Spawned s;
     auto resp = PrivOpsClient::sendExecRequest(sock, fields, devnull, STDOUT_FILENO,
                                                STDERR_FILENO, s.pd);
@@ -653,6 +681,7 @@ Spawned spawnInJail(int jid, const std::vector<std::string> &argv,
     ERR(what << ": executing inside a jail needs root or the crated privops socket "
              "(rootless: is crated running with privops_socket configured?)")
 
+  const auto display = displaySnapshot();   // 1.1.78
   pid_t pid = ::fork();
   if (pid == -1) ERR(what << ": fork failed: " << strerror(errno))
   if (pid == 0) {
@@ -665,9 +694,9 @@ Spawned spawnInJail(int jid, const std::vector<std::string> &argv,
       if (::initgroups(user.c_str(), pw->pw_gid) != 0 || ::setgid(pw->pw_gid) != 0 ||
           ::setuid(pw->pw_uid) != 0)
         ::_exit(124);
-      execJailCommand(argv, pw);   // 1.1.71 user env, 1.1.77 env of its own
+      execJailCommand(argv, pw, display);   // 1.1.71 user env, 1.1.77 env of its own
     }
-    execJailCommand(argv, nullptr);
+    execJailCommand(argv, nullptr, display);
   }
   Spawned s;
   s.pid = pid;

@@ -3,6 +3,7 @@
 #include "passwd_pure.h"
 
 #include <algorithm>
+#include <cstring>
 #include <sstream>
 
 namespace PasswdPure {
@@ -108,9 +109,62 @@ std::vector<uint32_t> supplementaryGroups(const std::string &content,
   return groups;
 }
 
+namespace {
+
+bool allOf(const std::string &s, const char *extra) {
+  for (char c : s) {
+    const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                    (c != '\0' && std::strchr(extra, c) != nullptr);
+    if (!ok) return false;
+  }
+  return true;
+}
+
+bool displayOk(const std::string &v)  { return v.size() <= 64 && allOf(v, ".:_-"); }
+bool wlNameOk(const std::string &v)   { return v.size() <= 64 && allOf(v, "._-") && v != "." && v != ".."; }
+bool jailPathOk(const std::string &v) {
+  if (v.empty() || v[0] != '/' || v.size() > 255 || !allOf(v, "/._+-")) return false;
+  // no ".." component
+  size_t i = 0;
+  while (i < v.size()) {
+    const size_t j = v.find('/', i);
+    const std::string comp = v.substr(i, j == std::string::npos ? std::string::npos : j - i);
+    if (comp == "..") return false;
+    if (j == std::string::npos) break;
+    i = j + 1;
+  }
+  return true;
+}
+
+}
+
+std::string *jailDisplayField(JailDisplayEnv &d, const std::string &name) {
+  if (name == "DISPLAY") return &d.display;
+  if (name == "XAUTHORITY") return &d.xauthority;
+  if (name == "WAYLAND_DISPLAY") return &d.waylandDisplay;
+  if (name == "XDG_RUNTIME_DIR") return &d.xdgRuntimeDir;
+  return nullptr;
+}
+
+std::string validateJailDisplayEnv(const JailDisplayEnv &d) {
+  if (!d.display.empty() && !displayOk(d.display))
+    return "display: up to 64 characters of [A-Za-z0-9.:_-]";
+  if (!d.waylandDisplay.empty() && !wlNameOk(d.waylandDisplay))
+    return "wayland_display: a socket name, up to 64 characters of [A-Za-z0-9._-]";
+  if (!d.xauthority.empty() && !jailPathOk(d.xauthority))
+    return "xauthority: an absolute path of [A-Za-z0-9/._+-] without '..'";
+  if (!d.xdgRuntimeDir.empty() && !jailPathOk(d.xdgRuntimeDir))
+    return "xdg_runtime_dir: an absolute path of [A-Za-z0-9/._+-] without '..'";
+  return "";
+}
+
+bool validLocaleName(const std::string &lang) {
+  return !lang.empty() && lang.size() <= 64 && allOf(lang, "_.@-");
+}
+
 std::vector<std::string> jailExecEnv(const std::string &user, const std::string &home,
                                      const std::string &shell, const std::string &term,
-                                     const std::string &lang) {
+                                     const std::string &lang, const JailDisplayEnv &display) {
   std::vector<std::string> env = {
     "PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin",
     "HOME=" + (home.empty() ? std::string("/") : home),
@@ -119,12 +173,16 @@ std::vector<std::string> jailExecEnv(const std::string &user, const std::string 
     "LOGNAME=" + user,
   };
   if (!term.empty()) env.push_back("TERM=" + term);
-  bool langOk = !lang.empty() && lang.size() <= 64;
-  for (char c : lang)
-    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-          c == '_' || c == '.' || c == '@' || c == '-'))
-      langOk = false;
-  if (langOk) env.push_back("LANG=" + lang);
+  if (validLocaleName(lang)) env.push_back("LANG=" + lang);
+  // 1.1.78
+  if (!display.display.empty() && displayOk(display.display))
+    env.push_back("DISPLAY=" + display.display);
+  if (!display.xauthority.empty() && jailPathOk(display.xauthority))
+    env.push_back("XAUTHORITY=" + display.xauthority);
+  if (!display.waylandDisplay.empty() && wlNameOk(display.waylandDisplay))
+    env.push_back("WAYLAND_DISPLAY=" + display.waylandDisplay);
+  if (!display.xdgRuntimeDir.empty() && jailPathOk(display.xdgRuntimeDir))
+    env.push_back("XDG_RUNTIME_DIR=" + display.xdgRuntimeDir);
   return env;
 }
 

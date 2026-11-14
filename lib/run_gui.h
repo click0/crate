@@ -15,11 +15,23 @@
 namespace RunGui {
 
 // Set up X11 access (shared, nested, or none), returns Xephyr cleanup callback
+// 1.1.78: *ownXCookieFile — the host Xauthority file of the X server
+// this run started (nested / headless / gpu), "" otherwise; the caller
+// hands it to the jail with installOwnXCookie once the jail's mounts
+// are in place.
 RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
                   const std::string &jailXname,
                   std::list<std::unique_ptr<Mount>> &mounts,
                   std::function<void(const std::string&, const std::string&)> setJailEnv,
-                  bool logProgress);
+                  bool logProgress, std::string *ownXCookieFile = nullptr);
+
+// 1.1.78: copy that cookie into the jail and return its path there (the
+// jail's XAUTHORITY). 0600 and owned by uid:gid — the user the command
+// runs as — when crate may chown ((uid_t)-1: leave it to the jail's
+// root); 0644 when it may not (rootless with a run/user that is not the
+// operator). The display is the jail's own either way.
+std::string installOwnXCookie(const std::string &jailPath, const std::string &hostCookieFile,
+                              uid_t uid, gid_t gid);
 
 // Set up clipboard proxy, returns cleanup callback
 RunAtEnd setupClipboard(const Spec &spec, const std::string &jailXname,

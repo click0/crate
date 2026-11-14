@@ -367,6 +367,17 @@ ATF_TEST_CASE_BODY(own_x_socket_dir)
 	ATF_REQUIRE(!RunGuiPure::isOwnXSocketDir("/var/tmp/.X11-unix/.crate-x"));
 	ATF_REQUIRE_EQ(RunGuiPure::xSocketName(0), std::string("X0"));
 	ATF_REQUIRE_EQ(RunGuiPure::xSocketName(12), std::string("X12"));
+	// 1.1.78: the shared mode's directory with the HOST display's socket
+	// has a name of its own, and is not taken for an own-server one
+	const std::string h = RunGuiPure::hostXSocketDirTemplate();
+	ATF_REQUIRE_EQ(h.compare(0, 15, "/tmp/.X11-unix/"), 0);
+	ATF_REQUIRE(h.size() >= 6 && h.compare(h.size() - 6, 6, "XXXXXX") == 0);
+	ATF_REQUIRE(RunGuiPure::isHostXSocketDir(h));
+	ATF_REQUIRE(RunGuiPure::isHostXSocketDir("/tmp/.X11-unix/.crate-host-Ab12Cd34/X0"));
+	ATF_REQUIRE(!RunGuiPure::isOwnXSocketDir(h));
+	ATF_REQUIRE(!RunGuiPure::isHostXSocketDir(t));
+	ATF_REQUIRE(!RunGuiPure::isHostXSocketDir("/tmp/.X11-unix/.crate-hostAb12"));
+	ATF_REQUIRE(!RunGuiPure::isHostXSocketDir("/tmp/.X11-unix"));
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(host_x11_cookie);
@@ -391,6 +402,132 @@ ATF_TEST_CASE_BODY(host_x11_cookie)
 	ATF_REQUIRE(!hostX11CookieWanted("shared", false, "shared", "none"));
 	ATF_REQUIRE(hostX11CookieWanted("shared", false, "", "none"));     // no x11 options
 	ATF_REQUIRE(hostX11CookieWanted("shared", false, "nested", "none"));
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(xauthority_entry);
+ATF_TEST_CASE_BODY(xauthority_entry)
+{
+	using RunGuiPure::xauthorityEntry;
+	const std::string cookie("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\xff", 16);
+	const auto e = xauthorityEntry(10, cookie);
+	// family FamilyWild, empty address, number "10", the protocol name,
+	// the 16 bytes — every length 2 bytes big-endian
+	const std::string want =
+	    std::string("\xff\xff", 2) +
+	    std::string("\x00\x00", 2) +
+	    std::string("\x00\x02", 2) + "10" +
+	    std::string("\x00\x12", 2) + "MIT-MAGIC-COOKIE-1" +
+	    std::string("\x00\x10", 2) + cookie;
+	ATF_REQUIRE(e == want);
+	ATF_REQUIRE_EQ(e.size(), (size_t)(2 + 2 + 2 + 2 + 2 + 18 + 2 + 16));
+	// the number is the display's
+	ATF_REQUIRE(xauthorityEntry(0, cookie).find(std::string("\x00\x01", 2) + "0") != std::string::npos);
+	ATF_REQUIRE(xauthorityEntry(123, cookie).find(std::string("\x00\x03", 2) + "123") != std::string::npos);
+	// a cookie of the wrong size gives no record (an empty -auth file
+	// makes the server open to every local client)
+	ATF_REQUIRE(xauthorityEntry(10, "").empty());
+	ATF_REQUIRE(xauthorityEntry(10, "short").empty());
+	ATF_REQUIRE(xauthorityEntry(10, cookie + "x").empty());
+	ATF_REQUIRE_EQ(RunGuiPure::kXCookieSize, 16u);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(local_display_number);
+ATF_TEST_CASE_BODY(local_display_number)
+{
+	using RunGuiPure::localDisplayNumber;
+	ATF_REQUIRE_EQ(localDisplayNumber(":0"), 0);
+	ATF_REQUIRE_EQ(localDisplayNumber(":0.0"), 0);
+	ATF_REQUIRE_EQ(localDisplayNumber(":1"), 1);
+	ATF_REQUIRE_EQ(localDisplayNumber(":12.3"), 12);
+	ATF_REQUIRE_EQ(localDisplayNumber("unix:2"), 2);
+	ATF_REQUIRE_EQ(localDisplayNumber("unix:2.0"), 2);
+	ATF_REQUIRE_EQ(localDisplayNumber(":99999"), 99999);
+	// not a local socket: TCP displays (ssh -X), a launchd path, garbage
+	ATF_REQUIRE_EQ(localDisplayNumber("localhost:10.0"), -1);
+	ATF_REQUIRE_EQ(localDisplayNumber("192.168.1.5:0"), -1);
+	ATF_REQUIRE_EQ(localDisplayNumber("host/unix:0"), -1);
+	ATF_REQUIRE_EQ(localDisplayNumber("/private/tmp/com.apple.launchd.x/org.xquartz:0"), -1);
+	ATF_REQUIRE_EQ(localDisplayNumber(""), -1);
+	ATF_REQUIRE_EQ(localDisplayNumber(":"), -1);
+	ATF_REQUIRE_EQ(localDisplayNumber(":x"), -1);
+	ATF_REQUIRE_EQ(localDisplayNumber(":0."), -1);
+	ATF_REQUIRE_EQ(localDisplayNumber(":0.x"), -1);
+	ATF_REQUIRE_EQ(localDisplayNumber(":0/../../etc"), -1);
+	ATF_REQUIRE_EQ(localDisplayNumber(":-1"), -1);
+	ATF_REQUIRE_EQ(localDisplayNumber(":123456"), -1);
+	ATF_REQUIRE_EQ(localDisplayNumber(":0 "), -1);
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(websockify_args);
+ATF_TEST_CASE_BODY(websockify_args)
+{
+	using RunGuiPure::websockifyListenArg;
+	using RunGuiPure::websockifyTargetArg;
+	// the default bind: both ends on loopback (the listen side had no
+	// address at all — every interface)
+	ATF_REQUIRE_EQ(websockifyListenArg("127.0.0.1", 6010), "127.0.0.1:6010");
+	ATF_REQUIRE_EQ(websockifyTargetArg("127.0.0.1", 5910), "127.0.0.1:5910");
+	// a specific address: x11vnc listens there only, so the target is it
+	ATF_REQUIRE_EQ(websockifyListenArg("192.168.1.5", 6010), "192.168.1.5:6010");
+	ATF_REQUIRE_EQ(websockifyTargetArg("192.168.1.5", 5910), "192.168.1.5:5910");
+	// a wildcard: listen on it, reach x11vnc over loopback
+	ATF_REQUIRE_EQ(websockifyListenArg("0.0.0.0", 6010), "0.0.0.0:6010");
+	ATF_REQUIRE_EQ(websockifyTargetArg("0.0.0.0", 5910), "127.0.0.1:5910");
+	ATF_REQUIRE_EQ(websockifyListenArg("::", 6010), "[::]:6010");
+	ATF_REQUIRE_EQ(websockifyTargetArg("::", 5910), "[::1]:5910");
+	// IPv6 literals are bracketed
+	ATF_REQUIRE_EQ(websockifyListenArg("::1", 6010), "[::1]:6010");
+	ATF_REQUIRE_EQ(websockifyTargetArg("fd00::5", 5910), "[fd00::5]:5910");
+	// names pass through
+	ATF_REQUIRE_EQ(websockifyListenArg("localhost", 6010), "localhost:6010");
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(wayland_context_policy);
+ATF_TEST_CASE_BODY(wayland_context_policy)
+{
+	using namespace RunGuiPure;
+	WaylandContextMode m = WaylandContextMode::Off;
+	ATF_REQUIRE(parseWaylandContextMode("", m) && m == WaylandContextMode::Auto);
+	ATF_REQUIRE(parseWaylandContextMode("auto", m) && m == WaylandContextMode::Auto);
+	ATF_REQUIRE(parseWaylandContextMode("require", m) && m == WaylandContextMode::Require);
+	ATF_REQUIRE(parseWaylandContextMode("off", m) && m == WaylandContextMode::Off);
+	ATF_REQUIRE(!parseWaylandContextMode("on", m));
+	ATF_REQUIRE(!parseWaylandContextMode("Require", m));
+	ATF_REQUIRE(!parseWaylandContextMode("true", m));
+
+	// the restricted socket whenever the compositor made one ...
+	ATF_REQUIRE(waylandBindDecision(WaylandContextMode::Auto, true) == WaylandBind::Restricted);
+	ATF_REQUIRE(waylandBindDecision(WaylandContextMode::Require, true) == WaylandBind::Restricted);
+	// ... the raw one as a fallback only by default; `require` refuses
+	ATF_REQUIRE(waylandBindDecision(WaylandContextMode::Auto, false) == WaylandBind::Raw);
+	ATF_REQUIRE(waylandBindDecision(WaylandContextMode::Require, false) == WaylandBind::Refuse);
+	// `off` is the raw socket whatever the compositor can do
+	ATF_REQUIRE(waylandBindDecision(WaylandContextMode::Off, false) == WaylandBind::Raw);
+	ATF_REQUIRE(waylandBindDecision(WaylandContextMode::Off, true) == WaylandBind::Raw);
+
+	// the private directory: under the operator's runtime dir, mkdtemp form
+	const auto t = waylandContextDirTemplate("/var/run/user/1001");
+	ATF_REQUIRE_EQ(t, std::string("/var/run/user/1001/crate-wl-XXXXXXXX"));
+	ATF_REQUIRE(isWaylandContextDir("/var/run/user/1001/crate-wl-Ab12Cd34"));
+	ATF_REQUIRE(isWaylandContextDir("/var/run/user/1001/crate-wl-Ab12Cd34/wayland-1"));
+	ATF_REQUIRE(!isWaylandContextDir("/var/run/user/1001/wayland-1"));
+	ATF_REQUIRE(!isWaylandContextDir("/var/run/user/1001/crate-wl-"));
+	ATF_REQUIRE(!isWaylandContextDir("/var/run/user/1001"));
+
+	// the spec key: three values, and only where a host socket is bound
+	ATF_REQUIRE(waylandContextKeyError("auto", "require").empty());
+	ATF_REQUIRE(waylandContextKeyError("wayland", "off").empty());
+	ATF_REQUIRE(waylandContextKeyError("wayland", "auto").empty());
+	ATF_REQUIRE(!waylandContextKeyError("wayland", "yes").empty());
+	ATF_REQUIRE(!waylandContextKeyError("nested", "require").empty());
+	ATF_REQUIRE(!waylandContextKeyError("headless", "off").empty());
+	ATF_REQUIRE(!waylandContextKeyError("compositor", "require").empty());
+
+	// gui/vnc_bind: every mode that can have a VNC server (it was
+	// refused outside compositor)
+	for (const char *mode : {"compositor", "nested", "headless", "gpu", "auto"})
+		ATF_REQUIRE(vncBindKeyError(mode).empty());
+	ATF_REQUIRE(!vncBindKeyError("wayland").empty());
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(shared_display_warnings);
@@ -468,5 +605,9 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, pulseSocketRelpath_has_subdir);
 	ATF_ADD_TEST_CASE(tcs, own_x_socket_dir);
 	ATF_ADD_TEST_CASE(tcs, host_x11_cookie);
+	ATF_ADD_TEST_CASE(tcs, xauthority_entry);
+	ATF_ADD_TEST_CASE(tcs, local_display_number);
+	ATF_ADD_TEST_CASE(tcs, websockify_args);
+	ATF_ADD_TEST_CASE(tcs, wayland_context_policy);
 	ATF_ADD_TEST_CASE(tcs, shared_display_warnings);
 }

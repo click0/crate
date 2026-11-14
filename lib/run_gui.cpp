@@ -13,6 +13,8 @@
 #include "vnc_server.h"
 #include "err.h"
 #include "fs_beneath.h"      // 1.1.76: writes into the tree never follow its symlinks
+#include "run_pure.h"        // 1.1.78: jailXnamePidSuffix
+#include "wayland_security_context.h"   // 1.1.78
 
 #include <rang.hpp>
 
@@ -25,6 +27,7 @@
 #include <sys/stat.h>
 #include <netinet/in.h>
 #include <errno.h>
+#include <stdlib.h>          // 1.1.78: arc4random_buf
 
 #include <fstream>
 #include <iomanip>
@@ -61,6 +64,23 @@ static std::string writePrivateScratch(const std::string &content, const char *p
 }
 
 namespace RunGui {
+
+// 1.1.78: the MIT-MAGIC-COOKIE-1 of the X server this run starts
+// (RunGuiPure::xauthorityEntry says why). `file` is a private 0600 host
+// file in Xauthority format, given to the server (-auth) and to the
+// clients crate starts; `cookie` are the 16 raw bytes for the in-process
+// Xlib clients (X11Ops::useCookie).
+struct OwnXCookie {
+  std::string file;
+  std::string cookie;
+};
+static OwnXCookie makeOwnXCookie(unsigned dispNum) {
+  OwnXCookie c;
+  c.cookie.resize(RunGuiPure::kXCookieSize);
+  ::arc4random_buf(&c.cookie[0], c.cookie.size());
+  c.file = writePrivateScratch(RunGuiPure::xauthorityEntry(dispNum, c.cookie), "crate-xauth", 0600);
+  return c;
+}
 
 // Check if a required external tool exists, abort with helpful message if not
 static void requireTool(const char *path, const char *pkgHint) {
@@ -181,6 +201,7 @@ static inline std::string generateGpuXorgConf(unsigned displayNum,
 
 // Start x11vnc for a given display, return cleanup callback and set vncPort
 static RunAtEnd startVnc(unsigned displayNum, unsigned &vncPort,
+                         const OwnXCookie &xCookie,
                          const Spec &spec, bool logProgress) {
   // 0.8.22: opt-in embedded VNC via libvncserver — drops the
   // x11vnc package dependency. Falls back to x11vnc with a
@@ -203,6 +224,7 @@ static RunAtEnd startVnc(unsigned displayNum, unsigned &vncPort,
     if (!CompositorPure::resolveVncBind(spec.guiOptions ? spec.guiOptions->vncBind : std::string(),
                                         nativeBind, nativeBindErr))
       ERR("gui.vnc_bind: " << nativeBindErr)
+    X11Ops::useCookie(xCookie.cookie);   // 1.1.78: the server wants its cookie
     unsigned actual = VncServer::start(displayNum, port, password, nativeBind);   // 1.1.48: loopback by default
     if (actual == 0) {
       std::cerr << rang::fg::yellow
@@ -248,6 +270,7 @@ static RunAtEnd startVnc(unsigned displayNum, unsigned &vncPort,
   std::vector<std::string> vncArgs = {
     CRATE_PATH_X11VNC,
     "-display", dispStr,
+    "-auth", xCookie.file,               // 1.1.78
     "-rfbport", std::to_string(port),
     "-listen", vncBind,
     "-shared", "-forever",
@@ -298,13 +321,18 @@ static RunAtEnd startVnc(unsigned displayNum, unsigned &vncPort,
 }
 
 // Start websockify for noVNC, sets actualWsPort to the allocated port
-static RunAtEnd startWebsockify(unsigned vncPort, unsigned &actualWsPort, bool logProgress) {
+// 1.1.78: `bind` — websockify listens on gui/vnc_bind (loopback by
+// default) like the VNC server it fronts; it had no listen address and
+// served the stream on every interface (RunGuiPure::websockifyListenArg).
+static RunAtEnd startWebsockify(unsigned vncPort, unsigned &actualWsPort,
+                                const std::string &bind, bool logProgress) {
   requireTool(CRATE_PATH_WEBSOCKIFY, "py311-websockify");
 
   unsigned wsPort = vncPort + 100; // e.g. 5910 -> 6010
   wsPort = findAvailablePort(wsPort);
   actualWsPort = wsPort;
-  auto target = STR("localhost:" << vncPort);
+  const auto listen = RunGuiPure::websockifyListenArg(bind, wsPort);
+  const auto target = RunGuiPure::websockifyTargetArg(bind, vncPort);
 
   // Detect noVNC web directory
   std::string webDir;
@@ -315,7 +343,7 @@ static RunAtEnd startWebsockify(unsigned vncPort, unsigned &actualWsPort, bool l
     webDir = "/usr/local/share/noVNC";
 
   if (logProgress) {
-    std::cerr << rang::fg::gray << "starting websockify on port " << wsPort
+    std::cerr << rang::fg::gray << "starting websockify on " << listen
               << " -> " << target;
     if (!webDir.empty())
       std::cerr << " (web: " << webDir << ")";
@@ -334,11 +362,11 @@ static RunAtEnd startWebsockify(unsigned vncPort, unsigned &actualWsPort, bool l
       auto webArg = STR("--web=" << webDir);
       ::execl(CRATE_PATH_WEBSOCKIFY, "websockify",
               webArg.c_str(),
-              std::to_string(wsPort).c_str(), target.c_str(),
+              listen.c_str(), target.c_str(),
               nullptr);
     } else {
       ::execl(CRATE_PATH_WEBSOCKIFY, "websockify",
-              std::to_string(wsPort).c_str(), target.c_str(),
+              listen.c_str(), target.c_str(),
               nullptr);
     }
     ::_exit(127);
@@ -362,10 +390,14 @@ static RunAtEnd startWebsockify(unsigned vncPort, unsigned &actualWsPort, bool l
 // Xvfb) or root (an Xorg wrapper): another user who planted X<N> before
 // our server could bind it is not handed to the jail. Throws rather
 // than fall back to the host's whole /tmp/.X11-unix.
-static std::string makeOwnXSocketDir(unsigned dispNum) {
+// 1.1.78: also for the shared mode's host display (hostDisplay): the
+// socket is then whoever's the operator's DISPLAY names, so only "is a
+// socket" is checked.
+static std::string makeOwnXSocketDir(unsigned dispNum, bool hostDisplay = false) {
   const auto name = RunGuiPure::xSocketName(dispNum);
   const auto sock = STR("/tmp/.X11-unix/" << name);
-  std::string dir = RunGuiPure::ownXSocketDirTemplate();
+  std::string dir = hostDisplay ? RunGuiPure::hostXSocketDirTemplate()
+                                : RunGuiPure::ownXSocketDirTemplate();
   if (::mkdtemp(&dir[0]) == nullptr)
     ERR2("x11", "could not create a directory for the jail's X socket in /tmp/.X11-unix: " << strerror(errno))
   const auto link = STR(dir << "/" << name);
@@ -377,9 +409,11 @@ static std::string makeOwnXSocketDir(unsigned dispNum) {
   }
   struct stat st;
   if (::lstat(link.c_str(), &st) != 0 || !S_ISSOCK(st.st_mode) ||
-      (st.st_uid != ::geteuid() && st.st_uid != 0)) {
+      (!hostDisplay && st.st_uid != ::geteuid() && st.st_uid != 0)) {
     ::unlink(link.c_str());
     ::rmdir(dir.c_str());
+    if (hostDisplay)
+      ERR2("x11", sock << " is not a socket")
     ERR2("x11", sock << " is not the socket of the X server crate started"
          " (not a socket, or owned by another user)")
   }
@@ -393,7 +427,11 @@ static std::string makeOwnXSocketDir(unsigned dispNum) {
 }
 
 // Common helper: start VNC + websockify, register entry, return cleanup
+// 1.1.78: xCookie — the server's cookie; removeXCookie unlinks its host
+// file and is run by the returned cleanup (or, when this throws, by its
+// own destructor).
 static RunAtEnd setupVncAndRegister(unsigned dispNum, pid_t xServerPid,
+                                     const OwnXCookie &xCookie, RunAtEnd &&removeXCookie,
                                      const std::string &mode,
                                      const std::string &jailXname,
                                      const std::string &jailPath,
@@ -442,7 +480,7 @@ static RunAtEnd setupVncAndRegister(unsigned dispNum, pid_t xServerPid,
     // Wait for X socket to appear before starting VNC
     if (!waitForXSocket(dispNum, 5000))
       WARN("X socket /tmp/.X11-unix/X" << dispNum << " not found after 5s, trying x11vnc anyway")
-    vncCleanup = startVnc(dispNum, vncPort, spec, logProgress);
+    vncCleanup = startVnc(dispNum, vncPort, xCookie, spec, logProgress);
   }
   if (wantNoVnc && vncPort != 0) {
     // Wait for x11vnc to bind its port (up to 2s) instead of fixed sleep
@@ -451,7 +489,15 @@ static RunAtEnd setupVncAndRegister(unsigned dispNum, pid_t xServerPid,
         break; // port is now in use by x11vnc
       ::usleep(50000); // 50ms
     }
-    wsCleanup = startWebsockify(vncPort, wsPort, logProgress);
+    // 1.1.78: on gui/vnc_bind, like the VNC server (validated by startVnc)
+    std::string wsBind, wsBindErr;
+    if (!CompositorPure::resolveVncBind(spec.guiOptions->vncBind, wsBind, wsBindErr))
+      ERR("gui.vnc_bind: " << wsBindErr)
+    if (CompositorPure::vncBindIsPublic(wsBind) && spec.guiOptions->vncPassword.empty())
+      std::cerr << rang::fg::yellow << "gui: noVNC (websockify) bound to " << wsBind
+                << " with no gui/vnc_password — anyone who reaches the port controls the "
+                   "display" << rang::style::reset << std::endl;
+    wsCleanup = startWebsockify(vncPort, wsPort, wsBind, logProgress);
   }
 
   // Register in GUI registry
@@ -465,6 +511,7 @@ static RunAtEnd setupVncAndRegister(unsigned dispNum, pid_t xServerPid,
     entry.wsPort = wsPort;
     entry.mode = mode;
     entry.jailName = jailXname;
+    entry.xauthFile = xCookie.file;   // 1.1.78: for `crate gui screenshot`
     regW->registerEntry(entry);
     regW->unlock();
   }
@@ -480,7 +527,8 @@ static RunAtEnd setupVncAndRegister(unsigned dispNum, pid_t xServerPid,
   return RunAtEnd([xServerPid, ownerPid, logProgress, mode,
                    vncCleanup = std::make_shared<RunAtEnd>(std::move(vncCleanup)),
                    wsCleanup = std::make_shared<RunAtEnd>(std::move(wsCleanup)),
-                   removeOwnXDir = std::make_shared<RunAtEnd>(std::move(removeOwnXDir))]() {
+                   removeOwnXDir = std::make_shared<RunAtEnd>(std::move(removeOwnXDir)),
+                   removeXCookie = std::make_shared<RunAtEnd>(std::move(removeXCookie))]() {
     // Unregister from GUI registry
     try {
       auto reg = Ctx::GuiRegistry::lock();
@@ -497,6 +545,7 @@ static RunAtEnd setupVncAndRegister(unsigned dispNum, pid_t xServerPid,
     int status;
     ::waitpid(xServerPid, &status, 0);
     removeOwnXDir->doNow();
+    removeXCookie->doNow();
   });
 }
 
@@ -504,7 +553,9 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
                   const std::string &jailXname,
                   std::list<std::unique_ptr<Mount>> &mounts,
                   std::function<void(const std::string&, const std::string&)> setJailEnv,
-                  bool logProgress) {
+                  bool logProgress, std::string *ownXCookieFile) {
+  if (ownXCookieFile)
+    ownXCookieFile->clear();
   if (!spec.optionExists("x11") && !spec.guiOptions)
     return RunAtEnd();
 
@@ -545,6 +596,10 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
     reg->unlock();
 
     auto dispStr = STR(":" << dispNum);
+    // 1.1.78: Xorg had no -auth: every local client was let in
+    const auto xCookie = makeOwnXCookie(dispNum);
+    RunAtEnd removeXCookie([f = xCookie.file]() { ::unlink(f.c_str()); });
+    if (ownXCookieFile) *ownXCookieFile = xCookie.file;
 
     // Determine GPU driver and device
     auto gpuDriver = (spec.guiOptions) ? spec.guiOptions->gpuDriver : std::string();
@@ -577,6 +632,7 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
     if (xorgPid == 0) {
       ::execl(CRATE_PATH_XORG, "Xorg", dispStr.c_str(),
               "-config", confPath.c_str(),
+              "-auth", xCookie.file.c_str(),
               "-noreset", "-nolisten", "tcp",
               nullptr);
       ::_exit(127);
@@ -613,6 +669,7 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
         if (xorgPid == 0) {
           ::execl(CRATE_PATH_XORG, "Xorg", dispStr.c_str(),
                   "-config", confPath.c_str(),
+                  "-auth", xCookie.file.c_str(),
                   "-noreset", "-nolisten", "tcp",
                   nullptr);
           ::_exit(127);
@@ -640,6 +697,7 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
     // Check actual resolution vs requested and warn if different
 #ifdef HAVE_X11
     unsigned actualW = 0, actualH = 0;
+    X11Ops::useCookie(xCookie.cookie);   // 1.1.78
     if (X11Ops::getResolution(dispStr, actualW, actualH)) {
       auto reqXpos = resolution.find('x');
       if (reqXpos != std::string::npos) {
@@ -657,7 +715,8 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
     }
 #endif
 
-    auto cleanup = setupVncAndRegister(dispNum, xorgPid, "gpu", jailXname,
+    auto cleanup = setupVncAndRegister(dispNum, xorgPid, xCookie, std::move(removeXCookie),
+                                        "gpu", jailXname,
                                         jailPath, mounts, setJailEnv, spec, logProgress);
     // Wrap cleanup to also remove conf file
     return RunAtEnd([cleanup = std::make_shared<RunAtEnd>(std::move(cleanup)), confPath]() {
@@ -676,6 +735,10 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
 
     auto dispStr = STR(":" << dispNum);
     auto screenSpec = STR(resolution << "x24");
+    // 1.1.78: a cookie instead of `-ac` (no access control at all)
+    const auto xCookie = makeOwnXCookie(dispNum);
+    RunAtEnd removeXCookie([f = xCookie.file]() { ::unlink(f.c_str()); });
+    if (ownXCookieFile) *ownXCookieFile = xCookie.file;
 
     if (logProgress)
       std::cerr << rang::fg::gray << "headless mode: starting Xvfb at " << resolution
@@ -685,7 +748,7 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
     if (xvfbPid == 0) {
       ::execl(CRATE_PATH_XVFB, "Xvfb", dispStr.c_str(),
               "-screen", "0", screenSpec.c_str(),
-              "-ac", "-nolisten", "tcp",
+              "-auth", xCookie.file.c_str(), "-nolisten", "tcp",
               nullptr);
       ::_exit(127);
     }
@@ -700,7 +763,8 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
       ERR("Xvfb failed to start within 5s on display " << dispStr)
     }
 
-    return setupVncAndRegister(dispNum, xvfbPid, "headless", jailXname,
+    return setupVncAndRegister(dispNum, xvfbPid, xCookie, std::move(removeXCookie),
+                                "headless", jailXname,
                                 jailPath, mounts, setJailEnv, spec, logProgress);
   }
 
@@ -717,6 +781,10 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
     reg->unlock();
 
     auto dispStr = STR(":" << dispNum);
+    // 1.1.78: Xephyr had no -auth: every local client was let in
+    const auto xCookie = makeOwnXCookie(dispNum);
+    RunAtEnd removeXCookie([f = xCookie.file]() { ::unlink(f.c_str()); });
+    if (ownXCookieFile) *ownXCookieFile = xCookie.file;
     if (logProgress)
       std::cerr << rang::fg::gray << "x11 nested mode: starting Xephyr at " << resolution
                 << " on display " << dispStr << rang::style::reset << std::endl;
@@ -726,6 +794,7 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
       ::execl(CRATE_PATH_XEPHYR, "Xephyr", dispStr.c_str(),
               "-screen", resolution.c_str(),
               "-resizeable", "-no-host-grab",
+              "-auth", xCookie.file.c_str(), "-nolisten", "tcp",
               nullptr);
       ::_exit(127);
     }
@@ -739,7 +808,8 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
       ERR("Xephyr failed to start within 5s on display " << dispStr)
     }
 
-    return setupVncAndRegister(dispNum, xephyrPid, "nested", jailXname,
+    return setupVncAndRegister(dispNum, xephyrPid, xCookie, std::move(removeXCookie),
+                                "nested", jailXname,
                                 jailPath, mounts, setJailEnv, spec, logProgress);
   }
 
@@ -790,16 +860,54 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
   // shared mode but optional for `gui: auto` (Wayland-only host).
   // 0.8.46: `gui.mode: wayland` skips the X11 bind entirely — no
   // /tmp/.X11-unix mount, no DISPLAY env in jail.
+  // 1.1.78: the private directory holding the host display's socket
+  // (below); removed by the returned cleanup, or here when this throws.
+  RunAtEnd removeSharedXDir;
   if (isWaylandFlow) {
     if (logProgress)
       std::cerr << rang::fg::gray
                 << "gui.mode=wayland: skipping X11 socket bind (Wayland-only)"
                 << rang::style::reset << std::endl;
   } else if (display != nullptr) {
-    if (logProgress)
-      std::cerr << rang::fg::gray << "x11 option (mode=shared): mount the X11 socket in jail" << rang::style::reset << std::endl;
-    FsBeneath::mkdirs(jailPath, "/tmp/.X11-unix", 01777);   // 1.1.77
-    mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix", MNT_IGNORE));
+    // 1.1.78: only the socket of the display DISPLAY names, read-only.
+    // This mounted the host's whole /tmp/.X11-unix read-write: the jail
+    // reached every other X server on the host (the headless / nested /
+    // gpu displays of other runs among them) and could create entries
+    // there, e.g. a socket named like the display a later run will be
+    // given. Same private-directory hard link as for
+    // the servers crate starts (makeOwnXSocketDir, 1.1.74). A display
+    // that is not a local socket (ssh -X: "localhost:10.0") has nothing
+    // to mount. If the link cannot be made (security.bsd.hardlink_check_uid
+    // with a server of another user), the whole directory is mounted
+    // after all, but read-only, and a warning says so. A host X server
+    // that restarts gets a new socket: the jail has to be restarted too.
+    const int hostDispNum = RunGuiPure::localDisplayNumber(display);
+    if (hostDispNum < 0) {
+      if (logProgress)
+        std::cerr << rang::fg::gray << "x11 option (mode=shared): DISPLAY=" << display
+                  << " is not a local socket, nothing to mount" << rang::style::reset << std::endl;
+    } else {
+      if (logProgress)
+        std::cerr << rang::fg::gray << "x11 option (mode=shared): mount the X11 socket in jail" << rang::style::reset << std::endl;
+      FsBeneath::mkdirs(jailPath, "/tmp/.X11-unix", 01777);   // 1.1.77
+      std::string sharedXDir;
+      try {
+        sharedXDir = makeOwnXSocketDir((unsigned)hostDispNum, /*hostDisplay=*/true);
+      } catch (const std::exception &ex) {
+        WARN("x11 mode=shared: " << ex.what() << " — mounting the host's whole /tmp/.X11-unix "
+             "(read-only) instead: every X server of the host is reachable from the jail")
+      }
+      if (!sharedXDir.empty()) {
+        const auto link = STR(sharedXDir << "/" << RunGuiPure::xSocketName((unsigned)hostDispNum));
+        removeSharedXDir.reset([sharedXDir, link]() {
+          ::unlink(link.c_str());
+          ::rmdir(sharedXDir.c_str());
+        });
+        mount(new Mount("nullfs", J("/tmp/.X11-unix"), sharedXDir, MNT_RDONLY | MNT_IGNORE));
+      } else {
+        mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix", MNT_RDONLY | MNT_IGNORE));
+      }
+    }
     setJailEnv("DISPLAY", display);
   } else if (!isAutoFlow) {
     // Pre-0.8.18 behaviour: traditional x11.mode=shared without
@@ -852,6 +960,9 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
   // XDG_RUNTIME_DIR=/tmp/wayland inside the jail. /tmp/wayland is a
   // safe target because its parent is mode 01777 already.
   // 0.8.46: also bind for explicit `gui.mode: wayland`.
+  // 1.1.78: the restricted socket, when one is made (below); closed and
+  // removed by the returned cleanup, or here when this throws.
+  RunAtEnd removeWaylandContext;
   if ((isAutoFlow || isWaylandFlow) && waylandDisplay != nullptr && xdgRuntimeDir != nullptr) {
     auto sockBasename = RunGuiPure::parseWaylandDisplay(waylandDisplay);
     if (sockBasename.empty()) {
@@ -863,17 +974,60 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
     } else {
       std::string hostSock = std::string(xdgRuntimeDir) + "/" + sockBasename;
       if (Util::Fs::fileExists(hostSock)) {
+        // 1.1.78: not the compositor's own socket but one it restricts —
+        // a security context (lib/wayland_security_context.h) — when the
+        // compositor can make one and gui/wayland_security_context does
+        // not say `off`. `require` stops the run when it cannot; the
+        // default falls back to the raw socket and the 1.1.77 warning.
+        RunGuiPure::WaylandContextMode ctxMode = RunGuiPure::WaylandContextMode::Auto;
+        RunGuiPure::parseWaylandContextMode(spec.guiOptions->waylandSecurityContext, ctxMode);   // spec-validated
+        std::string bindSock = hostSock;
+        std::string ctxNote;   // why the raw socket, for the warning
+        if (ctxMode != RunGuiPure::WaylandContextMode::Off) {
+          // app id: the jail's name without the per-run pid suffix
+          std::string appId = jailXname;
+          const auto pidSuffix = RunPure::jailXnamePidSuffix(::getpid());
+          if (appId.size() > pidSuffix.size() &&
+              appId.compare(appId.size() - pidSuffix.size(), pidSuffix.size(), pidSuffix) == 0)
+            appId.resize(appId.size() - pidSuffix.size());
+          auto ctx = WaylandSecurityContext::create(
+              hostSock, RunGuiPure::waylandContextDirTemplate(xdgRuntimeDir), sockBasename,
+              appId, jailXname);
+          const bool made = (ctx.status == WaylandSecurityContext::Status::Ok);
+          switch (RunGuiPure::waylandBindDecision(ctxMode, made)) {
+          case RunGuiPure::WaylandBind::Restricted:
+            bindSock = ctx.socketPath;
+            removeWaylandContext.reset([ctx]() mutable { WaylandSecurityContext::destroy(ctx); });
+            if (logProgress)
+              std::cerr << rang::fg::gray << "gui: Wayland security context made (sandbox engine "
+                        << "io.github.click0.crate, app " << appId << "): " << bindSock
+                        << rang::style::reset << std::endl;
+            break;
+          case RunGuiPure::WaylandBind::Refuse:
+            ERR("gui/wayland_security_context: require — no restricted Wayland socket: " << ctx.error)
+          case RunGuiPure::WaylandBind::Raw:
+            ctxNote = ctx.error;
+            break;
+          }
+        }
+        const bool rawSocket = (bindSock == hostSock);
         try {
           FsBeneath::mkdirs(jailPath, "/tmp/wayland", 0700);   // 1.1.77
           // Pre-create an empty file at the target so nullfs has
           // something to mount over (FreeBSD nullfs needs a target).
           auto jailSockTarget = J("/tmp/wayland/") + sockBasename;
           ensureMountTargetFile(jailPath, "/tmp/wayland/" + sockBasename);
-          mount(new Mount("nullfs", jailSockTarget, hostSock, MNT_IGNORE));
+          mount(new Mount("nullfs", jailSockTarget, bindSock, MNT_IGNORE));
           setJailEnv("XDG_RUNTIME_DIR", "/tmp/wayland");
           setJailEnv("WAYLAND_DISPLAY", sockBasename);
+          // 1.1.78: why it is the raw socket after all
+          if (rawSocket && !ctxNote.empty())
+            WARN("gui: no Wayland security context (" << ctxNote << ") — binding the host "
+                 "compositor's own socket. Set gui/wayland_security_context: require to refuse "
+                 "instead.")
           // 1.1.77: said once the socket is in the jail, not on intent
-          if (displayWarnings.wayland && ::getenv("CRATE_WAYLAND_SHARED_ACK") == nullptr) {
+          // (1.1.78: and only for the raw socket)
+          if (rawSocket && displayWarnings.wayland && ::getenv("CRATE_WAYLAND_SHARED_ACK") == nullptr) {
             WARN("gui: the host Wayland compositor socket is bound into the jail and provides NO "
                  "display isolation — a Wayland client in the jail can inject input (virtual "
                  "keyboard/pointer), capture any window or output (screencopy), and read the "
@@ -883,7 +1037,8 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
           }
           if (logProgress)
             std::cerr << rang::fg::gray << "gui: auto: bound Wayland socket "
-                      << hostSock << " -> " << jailSockTarget
+                      << bindSock << " -> " << jailSockTarget
+                      << (rawSocket ? "" : " (restricted)")
                       << rang::style::reset << std::endl;
         } catch (const std::exception &ex) {
           std::cerr << rang::fg::yellow
@@ -994,12 +1149,16 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
   }
 
   auto ownerPid = ::getpid();
-  return RunAtEnd([ownerPid]() {
+  return RunAtEnd([ownerPid,
+                   removeSharedXDir = std::make_shared<RunAtEnd>(std::move(removeSharedXDir)),
+                   removeWaylandContext = std::make_shared<RunAtEnd>(std::move(removeWaylandContext))]() {
     try {
       auto reg = Ctx::GuiRegistry::lock();
       reg->unregisterEntry(ownerPid);
       reg->unlock();
     } catch (...) {}
+    removeSharedXDir->doNow();
+    removeWaylandContext->doNow();
   });
 }
 
@@ -1301,6 +1460,25 @@ RunAtEnd setupCompositor(const Spec &spec, const std::string &jailPath,
     JailExec::signalSpawned(comp, SIGTERM);
     JailExec::waitSpawned(comp);
   });
+}
+
+std::string installOwnXCookie(const std::string &jailPath, const std::string &hostCookieFile,
+                              uid_t uid, gid_t gid) {
+  // /var/run rather than a home: the same path whoever the command,
+  // a service or a hook runs as; the caller comes here after the spec's
+  // tmpfs mounts, so a tmpfs over /var/run does not hide it.
+  static const char *inJail = "/var/run/crate-Xauthority";
+  FsBeneath::mkdirs(jailPath, "/var/run", 0755);
+  if (uid == (uid_t)-1) {
+    FsBeneath::copyIn(hostCookieFile, jailPath, inJail, 0600);
+    return inJail;
+  }
+  try {
+    FsBeneath::copyIn(hostCookieFile, jailPath, inJail, 0600, uid, gid);
+  } catch (const std::exception &) {
+    FsBeneath::copyIn(hostCookieFile, jailPath, inJail, 0644);
+  }
+  return inJail;
 }
 
 void copyX11Auth(const Spec &spec, const std::string &jailPath,
