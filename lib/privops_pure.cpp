@@ -924,6 +924,10 @@ std::string validateExecInJail(const ExecInJailReq &r) {
   if (r.jid == 0 || r.jid > 65535) return "jid: out of range (1..65535)";
   if (auto e = validateJailUserName(r.user); !e.empty()) return "user: " + e;
   if (auto e = validateTermName(r.term); !e.empty()) return "term: " + e;
+  // 1.1.78
+  if (!r.lang.empty() && !PasswdPure::validLocaleName(r.lang))
+    return "lang: a locale name, up to 64 characters of [A-Za-z0-9_.@-]";
+  if (auto e = PasswdPure::validateJailDisplayEnv(r.display); !e.empty()) return e;
   if (r.argv.empty()) return "argv is empty";
   if (r.argv.size() > kExecInJailMaxArgs)
     return "argv: more than " + std::to_string(kExecInJailMaxArgs) + " arguments";

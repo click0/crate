@@ -25,6 +25,7 @@
 #include "run_gui_pure.h"
 #include "runtime_paths_pure.h"   // 1.1.41: per-user root for an unprivileged doctor
 #include "util.h"
+#include "wayland_security_context.h"   // 1.1.78
 #include "zfs_ops.h"
 #include "err.h"
 
@@ -774,6 +775,34 @@ void checkWaylandReadiness(Report &r) {
       "have crashed; `gui: auto` will skip Wayland mount."));
     return;
   }
+  // 1.1.78: can the compositor hand out a restricted socket for the
+  // jail (wp_security_context_v1)? Without it `gui: auto` / `gui.mode:
+  // wayland` bind the compositor's own socket, privileged protocols and
+  // all, and `gui/wayland_security_context: require` refuses to run.
+  {
+    std::string probeErr;
+    switch (WaylandSecurityContext::probe(sockPath, probeErr)) {
+    case WaylandSecurityContext::Status::Ok:
+      r.checks.push_back(passCheck("gui", "wayland-security-context",
+        "the compositor makes security contexts — jails get a Wayland socket "
+        "without the privileged protocols (virtual keyboard / pointer, screen "
+        "capture, clipboard managers)" + compositorHint() + "."));
+      break;
+    case WaylandSecurityContext::Status::Unsupported:
+      r.checks.push_back(warnCheck("gui", "wayland-security-context",
+        "the compositor has no wp_security_context_manager_v1" + compositorHint() +
+        " — `gui: auto` / `gui.mode: wayland` jails get its own socket and can "
+        "inject input into and capture every window of the session. Needs "
+        "wlroots 0.17 / sway 1.9, KWin 6 or Mutter 46 and later; "
+        "`gui/mode: compositor`, `nested` or `headless` isolate without it."));
+      break;
+    case WaylandSecurityContext::Status::Failed:
+      r.checks.push_back(warnCheck("gui", "wayland-security-context",
+        "could not ask the compositor about security contexts: " + probeErr));
+      break;
+    }
+  }
+
   // Wayland reachable. Now check PipeWire (informational —
   // PulseAudio-only / no-audio hosts are fine).
   bool anyPipewire = false;

@@ -21,6 +21,16 @@ bool available() {
 #endif
 }
 
+void useCookie(const std::string &cookie) {
+#ifdef HAVE_X11
+  static char name[] = "MIT-MAGIC-COOKIE-1";
+  std::string data = cookie;   // XSetAuthorization copies both
+  XSetAuthorization(name, (int)(sizeof(name) - 1), &data[0], (int)data.size());
+#else
+  (void)cookie;
+#endif
+}
+
 bool isDisplayAvailable(const std::string &display) {
 #ifdef HAVE_X11
   Display *dpy = XOpenDisplay(display.c_str());

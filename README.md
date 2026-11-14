@@ -341,8 +341,16 @@ of the host's `.Xauthority`. Earlier releases mounted the host's whole
 `/tmp/.X11-unix` in these modes too, and handed `nested` the host
 cookie, so `DISPLAY=:0` from the jail opened the host display.
 
-**Why `shared` is dangerous.** Mounting the host's `/tmp/.X11-unix`
-into a jail means any process inside that jail can:
+Since 1.1.78 the X servers crate starts for these modes run with a
+per-run `MIT-MAGIC-COOKIE-1` (`-auth`; Xvfb used to run with `-ac`,
+Xephyr and Xorg with no access control at all): another local user, or
+another jail, that reaches the socket in the host's `/tmp/.X11-unix` is
+refused. The cookie is in the jail at `/var/run/crate-Xauthority`
+(`XAUTHORITY`). `shared` now mounts just the socket of the display
+`DISPLAY` names, read-only, instead of the whole directory.
+
+**Why `shared` is dangerous.** Giving a jail the host's X socket means
+any process inside that jail can:
 - Read every keystroke typed into any application on the host (X is
   global, not per-window).
 - Move/raise/iconify/destroy any host window.
@@ -384,6 +392,35 @@ crate create -s spec.yml -o firefox-headless.crate
 crate run -f firefox-headless.crate &
 crate gui url firefox    # prints noVNC URL for browser access
 ```
+
+VNC and noVNC listen on `127.0.0.1` unless `gui/vnc_bind` says
+otherwise (since 1.1.78 noVNC too — websockify used to listen on every
+interface). Reach them over an SSH tunnel, or set `vnc_bind` to an
+address of the host together with `vnc_password`.
+
+### Host Wayland session (`gui: auto`, `gui.mode: wayland`)
+
+On a Wayland host these modes put the jail's windows on the operator's
+own compositor. Since 1.1.78 the jail does not get the compositor's own
+socket: crate asks the compositor for a **security context**
+(`wp_security_context_v1`; sway 1.9 / wlroots 0.17, KWin 6, Mutter 46
+and later) and mounts that restricted socket, on which the compositor
+withholds its privileged protocols — virtual keyboard and pointer,
+screen capture, clipboard managers, the list of other windows.
+`crate doctor` reports whether the compositor can do it.
+
+```yaml
+gui:
+    mode: wayland
+    wayland_security_context: require   # auto (default) | require | off
+```
+
+`auto` falls back to the compositor's own socket with a warning when
+the compositor has no such protocol; `require` refuses to run instead;
+`off` binds the compositor's own socket on purpose (a panel or a screen
+recorder in the jail needs the privileged protocols). The windows are
+still in the operator's session — see
+[`docs/trust-model.md`](docs/trust-model.md), "Shared display plane".
 
 ### Wayland compositor inside a jail (`gui.mode: compositor`)
 

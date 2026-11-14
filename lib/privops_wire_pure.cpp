@@ -504,6 +504,12 @@ std::string parseExecInJail(const std::string &body,
   if (auto e = requireUnsignedField(body, "jid", out.jid); !e.empty()) return e;
   extractStringField(body, "user", out.user);
   extractStringField(body, "term", out.term);
+  // 1.1.78
+  extractStringField(body, "lang", out.lang);
+  extractStringField(body, "display", out.display.display);
+  extractStringField(body, "xauthority", out.display.xauthority);
+  extractStringField(body, "wayland_display", out.display.waylandDisplay);
+  extractStringField(body, "xdg_runtime_dir", out.display.xdgRuntimeDir);
   unsigned argc = 0;
   if (auto e = requireUnsignedField(body, "argc", argc); !e.empty()) return e;
   if (argc == 0) return "field 'argc' must be >= 1";

@@ -502,7 +502,12 @@ void socketChecks(Report &r, const std::vector<Socket> &listening,
     // 1.1.74: nested / headless / gpu mount a private directory holding
     // only their own server's socket (RunGuiPure::ownXSocketDirTemplate;
     // the prefix is repeated here, jail_audit_pure links no GUI code).
-    if (startsWith(p, "/tmp/.X11-unix/") && startsWith(hm->special, "/tmp/.X11-unix/.crate-"))
+    // 1.1.78: the shared mode mounts such a directory too, with the HOST
+    // display's socket (RunGuiPure::hostXSocketDirTemplate) — still the
+    // host display, just no other server of the host beside it.
+    if (startsWith(p, "/tmp/.X11-unix/") && startsWith(hm->special, "/tmp/.X11-unix/.crate-host-"))
+      r.checks.push_back(warnCheck("sockets", p, "host X11 display socket, that display only" + via + " — the host display is reachable; x11/mode: nested isolates it"));
+    else if (startsWith(p, "/tmp/.X11-unix/") && startsWith(hm->special, "/tmp/.X11-unix/.crate-"))
       r.checks.push_back(passCheck("sockets", p, "this run's own X server only" + via));
     else if (startsWith(p, "/tmp/.X11-unix/"))
       r.checks.push_back(warnCheck("sockets", p, "host X11 display socket" + via + " — the host display is reachable; x11/mode: nested isolates it"));
@@ -510,8 +515,13 @@ void socketChecks(Report &r, const std::vector<Socket> &listening,
       r.checks.push_back(warnCheck("sockets", p, "host system D-Bus" + via + " — dbus/policy decides what the jail may call"));
     else if (p.find("dbus") != std::string::npos)
       r.checks.push_back(warnCheck("sockets", p, "host D-Bus session bus" + via));
+    // 1.1.78: a socket from a "crate-wl-XXXXXXXX" directory is one the
+    // compositor restricts (a security context; RunGuiPure::
+    // waylandContextDirTemplate — the mark is repeated here)
+    else if (p.find("wayland") != std::string::npos && hm->special.find("/crate-wl-") != std::string::npos)
+      r.checks.push_back(passCheck("sockets", p, "Wayland socket restricted by the compositor (security context)" + via));
     else if (p.find("wayland") != std::string::npos)
-      r.checks.push_back(warnCheck("sockets", p, "host Wayland compositor socket" + via));
+      r.checks.push_back(warnCheck("sockets", p, "host Wayland compositor socket" + via + " — the compositor's privileged protocols (input injection, screen capture) are reachable; gui/wayland_security_context restricts it"));
     else if (p.find("pulse") != std::string::npos || p.find("pipewire") != std::string::npos)
       r.checks.push_back(passCheck("sockets", p, "host sound server socket" + via));
     else

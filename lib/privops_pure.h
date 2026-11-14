@@ -50,6 +50,8 @@
 // with the JSON parsers in 0.9.1.
 //
 
+#include "passwd_pure.h"   // 1.1.78: JailDisplayEnv
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -562,11 +564,18 @@ struct SignalJailReq {
 // LOGNAME, SHELL, and TERM when given). On the wire argv travels as
 // "argc" + "argv0".."argv<N-1>" string fields, since both transports
 // are flat string maps.
+// 1.1.78: `term` is no longer the only one — `lang` (a locale name) and
+// the jail's own display variables (`display`, `xauthority`,
+// `wayland_display`, `xdg_runtime_dir`) may come too, each checked for
+// shape (PasswdPure::validLocaleName / validateJailDisplayEnv). The
+// names are fixed: a caller still cannot set an arbitrary variable.
 struct ExecInJailReq {
   unsigned                 jid = 0;
   std::string              user;
   std::vector<std::string> argv;
   std::string              term;
+  std::string              lang;
+  PasswdPure::JailDisplayEnv display;
 };
 
 // Bounds for exec_in_jail argv (shared by parsers and validator).

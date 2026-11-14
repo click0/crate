@@ -29,3 +29,8 @@ gui:
     vnc: true
     novnc: true
     vnc_password: "changeme"
+    ## VNC and noVNC listen on 127.0.0.1 (noVNC too since 1.1.78): reach
+    ## them over an SSH tunnel, or name an address of the host here —
+    ## together with vnc_password, the stream is otherwise open to that
+    ## network.
+    # vnc_bind: 192.0.2.10

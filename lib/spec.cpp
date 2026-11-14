@@ -4,6 +4,7 @@
 #include "spec.h"
 #include "spec_pure.h"
 #include "compositor_pure.h"
+#include "run_gui_pure.h"     // 1.1.78: gui key validation
 #include "privops_pure.h"   // 1.1.44: validateIfaceName for options/net/extra[]/interface
 #include "thin_jail_pure.h" // 1.1.58: base/host-dirs validation
 #include "mounts_pure.h"    // 1.1.63: share :ro, tmpfs, etc/keep
@@ -1353,6 +1354,9 @@ static Spec parseSpecFromNode(YAML::Node top) {
           scalar(b.second, spec.guiOptions->compositor, "gui/compositor");
         } else if (isKey(b, "vnc_bind") || isKey(b, "vnc-bind")) {
           scalar(b.second, spec.guiOptions->vncBind, "gui/vnc_bind");
+        } else if (isKey(b, "wayland_security_context") || isKey(b, "wayland-security-context")) {
+          // 1.1.78
+          scalar(b.second, spec.guiOptions->waylandSecurityContext, "gui/wayland_security_context");
         } else if (isKey(b, "resolution")) {
           scalar(b.second, spec.guiOptions->resolution, "gui/resolution");
         } else if (isKey(b, "vnc")) {
@@ -1396,7 +1400,10 @@ static Spec parseSpecFromNode(YAML::Node top) {
         std::vector<std::string> compArgv; std::string compErr;
         if (!CompositorPure::parseCompositorCommand(spec.guiOptions->compositor, compArgv, compErr))
           ERR("gui/compositor: " << compErr)
-        // Validate the wayvnc bind address (defaults to loopback) early.
+      }
+      {
+        // Validate the VNC bind address (defaults to loopback) early.
+        // 1.1.78: for every mode — x11vnc and websockify take it too.
         std::string vncBindOut, vncBindErr;
         if (!CompositorPure::resolveVncBind(spec.guiOptions->vncBind, vncBindOut, vncBindErr))
           ERR("gui/vnc_bind: " << vncBindErr)
@@ -1405,8 +1412,14 @@ static Spec parseSpecFromNode(YAML::Node top) {
         ERR("gui/compositor is only valid with gui/mode=compositor")
       if (!spec.guiOptions->backend.empty() && spec.guiOptions->mode != "compositor")
         ERR("gui/backend is only valid with gui/mode=compositor")
-      if (!spec.guiOptions->vncBind.empty() && spec.guiOptions->mode != "compositor")
-        ERR("gui/vnc_bind is only valid with gui/mode=compositor")
+      // 1.1.78: was "only valid with gui/mode=compositor"
+      if (!spec.guiOptions->vncBind.empty())
+        if (auto e = RunGuiPure::vncBindKeyError(spec.guiOptions->mode); !e.empty())
+          ERR(e)
+      if (!spec.guiOptions->waylandSecurityContext.empty())
+        if (auto e = RunGuiPure::waylandContextKeyError(spec.guiOptions->mode,
+                                                         spec.guiOptions->waylandSecurityContext); !e.empty())
+          ERR(e)
     } else if (isKey(k, "healthcheck")) {
       spec.healthcheck = std::make_unique<Spec::Healthcheck>();
       if (k.second.IsScalar()) {

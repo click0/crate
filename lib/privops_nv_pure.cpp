@@ -358,6 +358,12 @@ std::string parseExecInJail(const FieldMap &m,
   if (auto e = requireUnsigned(m, "jid", out.jid); !e.empty()) return e;
   if (auto e = optionalString(m, "user", out.user); !e.empty()) return e;
   if (auto e = optionalString(m, "term", out.term); !e.empty()) return e;
+  // 1.1.78
+  if (auto e = optionalString(m, "lang", out.lang); !e.empty()) return e;
+  if (auto e = optionalString(m, "display", out.display.display); !e.empty()) return e;
+  if (auto e = optionalString(m, "xauthority", out.display.xauthority); !e.empty()) return e;
+  if (auto e = optionalString(m, "wayland_display", out.display.waylandDisplay); !e.empty()) return e;
+  if (auto e = optionalString(m, "xdg_runtime_dir", out.display.xdgRuntimeDir); !e.empty()) return e;
   unsigned argc = 0;
   if (auto e = requireUnsigned(m, "argc", argc); !e.empty()) return e;
   if (argc == 0) return "field 'argc' must be >= 1";

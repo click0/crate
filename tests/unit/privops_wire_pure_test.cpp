@@ -746,6 +746,21 @@ ATF_TEST_CASE_BODY(parse_exec_in_jail_argv_fields) {
   ATF_REQUIRE_EQ(parseExecInJail(R"({"jid":1,"argc":1,"argv0":"/bin/true"})", r2), std::string());
   ATF_REQUIRE(r2.user.empty());
   ATF_REQUIRE(r2.term.empty());
+  ATF_REQUIRE(r2.lang.empty());
+  ATF_REQUIRE(r2.display.empty());
+
+  // 1.1.78: lang and the jail's display variables, all optional.
+  PrivOpsPure::ExecInJailReq rEnv;
+  ATF_REQUIRE_EQ(parseExecInJail(
+      R"({"jid":1,"argc":1,"argv0":"/bin/true","lang":"uk_UA.UTF-8","display":":10",)"
+      R"("xauthority":"/var/run/crate-Xauthority","wayland_display":"wayland-1","xdg_runtime_dir":"/tmp/wayland"})", rEnv),
+      std::string());
+  ATF_REQUIRE_EQ(rEnv.lang, std::string("uk_UA.UTF-8"));
+  ATF_REQUIRE_EQ(rEnv.display.display, std::string(":10"));
+  ATF_REQUIRE_EQ(rEnv.display.xauthority, std::string("/var/run/crate-Xauthority"));
+  ATF_REQUIRE_EQ(rEnv.display.waylandDisplay, std::string("wayland-1"));
+  ATF_REQUIRE_EQ(rEnv.display.xdgRuntimeDir, std::string("/tmp/wayland"));
+  ATF_REQUIRE_EQ(PrivOpsPure::validateExecInJail(rEnv), std::string());
 
   // argc without the matching argvN -> parse error naming the field.
   PrivOpsPure::ExecInJailReq r3;

@@ -842,6 +842,10 @@ Enable x11vnc.
 VNC port number.
 .It Sy gui/novnc
 Enable noVNC/websockify.
+It listens on
+.Sy gui/vnc_bind
+like the VNC server it fronts
+.Pq before 1.1.78: on every interface .
 .It Sy gui/vnc_password
 VNC password.
 .It Sy gui/gpu_device
@@ -869,12 +873,43 @@ or
 .Dq cage firefox .
 Required for that mode.
 .It Sy gui/vnc_bind
-Address
+Address the VNC server
+.Po
+.Xr x11vnc 1 ,
 .Xr wayvnc 1
-listens on.
+.Pc
+and noVNC's websockify listen on.
 Default
 .Ar 127.0.0.1 ;
-anything else exposes an unauthenticated desktop to that network.
+anything else exposes the desktop to that network, without
+authentication unless
+.Sy gui/vnc_password
+is set.
+Valid in every mode that can have a VNC server
+.Pq all but Cm wayland ; before 1.1.78 only in Cm compositor .
+.It Sy gui/wayland_security_context
+For
+.Cm auto
+and
+.Cm wayland :
+which Wayland socket of the host the jail gets.
+.Cm auto
+.Pq default
+asks the host compositor for a security context
+.Pq wp_security_context_v1
+and mounts that restricted socket, on which the compositor withholds
+its privileged protocols
+.Pq virtual keyboard and pointer, screen capture, clipboard managers, the list of other windows ;
+when the compositor has no such protocol, the compositor's own socket
+is mounted and a warning printed.
+.Cm require
+refuses to run in that case.
+.Cm off
+mounts the compositor's own socket on purpose, for a jail that is meant
+to have the privileged protocols.
+The compositor sees the jail as sandbox engine
+.Dq io.github.click0.crate ,
+with the jail's name as the application id.
 .It Sy gui/vnc_native
 Use the embedded libvncserver instead of forking
 .Xr x11vnc 1
@@ -931,6 +966,51 @@ mode
 If the socket cannot be linked
 .Pq e.g.\& an Xorg running as another user with Va security.bsd.hardlink_check_uid No set
 the run fails rather than mount the whole directory.
+.Pp
+Since 1.1.78 that X server runs with access control: each run makes a
+.Li MIT-MAGIC-COOKIE-1
+and starts the server with
+.Fl auth
+.Pq Xvfb ran with Fl ac , No Xephyr and Xorg with no cookie, which lets every local client in .
+The cookie is copied into the jail as
+.Pa /var/run/crate-Xauthority ,
+owned by the user the command runs as, and
+.Ev XAUTHORITY
+points at it; x11vnc and
+.Cm crate gui screenshot
+get it too.
+Another local user or another jail that reaches the socket in the
+host's
+.Pa /tmp/.X11-unix
+is refused.
+.Pp
+The
+.Cm shared
+mode mounts the same kind of private directory
+.Pq Pa /tmp/.X11-unix/.crate-host-XXXXXXXX
+with only the socket of the display
+.Ev DISPLAY
+names, read-only
+.Pq since 1.1.78; it was the host's whole Pa /tmp/.X11-unix , No read-write .
+A
+.Ev DISPLAY
+that is not a local socket
+.Pq Dq localhost:10.0
+gets no mount.
+If the link cannot be made the whole directory is mounted read-only and
+a warning says so.
+A host X server that restarts has a new socket: restart the jail.
+.Pp
+The jail's
+.Ev DISPLAY ,
+.Ev XAUTHORITY ,
+.Ev WAYLAND_DISPLAY
+and
+.Ev XDG_RUNTIME_DIR
+are also given to the services and hooks
+.Nm crate
+runs in the jail
+.Pq since 1.1.78; they went to the main command only .
 .Ss Privacy
 What a program inside the jail learns about the machine (1.1.67; bwrap
 and firejail

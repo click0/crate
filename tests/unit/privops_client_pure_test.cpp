@@ -201,6 +201,52 @@ ATF_TEST_CASE_BODY(builder_exec_in_jail_round_trips) {
   ATF_REQUIRE_EQ(req2.user, std::string("alice"));
   ATF_REQUIRE_EQ(req2.term, std::string("xterm-256color"));
   ATF_REQUIRE_EQ(req2.argv[2], std::string("alice"));
+  // nothing extra unless asked for
+  ATF_REQUIRE_EQ(m2.count("lang"), 0u);
+  ATF_REQUIRE_EQ(m2.count("display"), 0u);
+  ATF_REQUIRE(req2.lang.empty());
+  ATF_REQUIRE(req2.display.empty());
+
+  // 1.1.78: the operator's LANG and the jail's display variables
+  PasswdPure::JailDisplayEnv d;
+  d.display = ":10";
+  d.xauthority = "/var/run/crate-Xauthority";
+  d.waylandDisplay = "wayland-1";
+  d.xdgRuntimeDir = "/tmp/wayland";
+  auto m3 = PrivOpsClient::buildExecInJail(7, "alice", {"/bin/sh"}, "xterm", "uk_UA.UTF-8", d);
+  ATF_REQUIRE_EQ(m3.at("lang"), std::string("uk_UA.UTF-8"));
+  ATF_REQUIRE_EQ(m3.at("display"), std::string(":10"));
+  ATF_REQUIRE_EQ(m3.at("xauthority"), std::string("/var/run/crate-Xauthority"));
+  ATF_REQUIRE_EQ(m3.at("wayland_display"), std::string("wayland-1"));
+  ATF_REQUIRE_EQ(m3.at("xdg_runtime_dir"), std::string("/tmp/wayland"));
+  PrivOpsPure::ExecInJailReq req3;
+  ATF_REQUIRE_EQ(PrivOpsNvPure::parseExecInJail(m3, req3), std::string());
+  ATF_REQUIRE_EQ(req3.lang, std::string("uk_UA.UTF-8"));
+  ATF_REQUIRE_EQ(req3.display.display, std::string(":10"));
+  ATF_REQUIRE_EQ(req3.display.xauthority, std::string("/var/run/crate-Xauthority"));
+  ATF_REQUIRE_EQ(req3.display.waylandDisplay, std::string("wayland-1"));
+  ATF_REQUIRE_EQ(req3.display.xdgRuntimeDir, std::string("/tmp/wayland"));
+  ATF_REQUIRE_EQ(PrivOpsPure::validateExecInJail(req3), std::string());
+  // a LANG from the operator's shell that is no locale name is not sent
+  // (the daemon would refuse the whole exec)
+  auto m4 = PrivOpsClient::buildExecInJail(7, "", {"/bin/sh"}, "", "en US; rm -rf /");
+  ATF_REQUIRE_EQ(m4.count("lang"), 0u);
+  // the daemon's validator refuses malformed values, whoever built them
+  PrivOpsPure::ExecInJailReq bad = req3;
+  bad.lang = "C\nLD_PRELOAD=/tmp/x.so";
+  ATF_REQUIRE(PrivOpsPure::validateExecInJail(bad).find("lang") == 0);
+  bad = req3;
+  bad.display.display = ":0\nLD_PRELOAD=/tmp/x.so";
+  ATF_REQUIRE(PrivOpsPure::validateExecInJail(bad).find("display") == 0);
+  bad = req3;
+  bad.display.xauthority = "../../etc/master.passwd";
+  ATF_REQUIRE(PrivOpsPure::validateExecInJail(bad).find("xauthority") == 0);
+  bad = req3;
+  bad.display.waylandDisplay = "a/b";
+  ATF_REQUIRE(PrivOpsPure::validateExecInJail(bad).find("wayland_display") == 0);
+  bad = req3;
+  bad.display.xdgRuntimeDir = "relative";
+  ATF_REQUIRE(PrivOpsPure::validateExecInJail(bad).find("xdg_runtime_dir") == 0);
 }
 
 ATF_TEST_CASE_WITHOUT_HEAD(builders_1141_round_trip);

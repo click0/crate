@@ -120,8 +120,10 @@ void GuiRegistry::readIntoMemory() {
     std::istringstream is(line);
     GuiEntry e;
     e.wsPort = 0;
-    if (is >> e.ownerPid >> e.displayNum >> e.xServerPid >> e.vncPort >> e.wsPort >> e.mode >> e.jailName)
+    if (is >> e.ownerPid >> e.displayNum >> e.xServerPid >> e.vncPort >> e.wsPort >> e.mode >> e.jailName) {
+      is >> e.xauthFile;   // 1.1.78: optional
       entries[e.ownerPid] = e;
+    }
   }
   inMemory = true;
 }
@@ -131,7 +133,10 @@ void GuiRegistry::writeToFile() const {
   for (auto &kv : entries) {
     auto &e = kv.second;
     ss << e.ownerPid << " " << e.displayNum << " " << e.xServerPid
-       << " " << e.vncPort << " " << e.wsPort << " " << e.mode << " " << e.jailName << std::endl;
+       << " " << e.vncPort << " " << e.wsPort << " " << e.mode << " " << e.jailName;
+    if (!e.xauthFile.empty())
+      ss << " " << e.xauthFile;
+    ss << std::endl;
   }
   if (::ftruncate(fd, 0) == -1)
     ERR("failed to truncate file " << file() << ": " << strerror(errno) << " (fd=" << fd << ")")

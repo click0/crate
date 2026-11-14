@@ -113,6 +113,14 @@ std::string ownXSocketDirTemplate();
 std::string xSocketName(unsigned displayNum);
 // The host path is such a directory, or inside one (crate audit).
 bool isOwnXSocketDir(const std::string &hostPath);
+// 1.1.78: the same private-directory arrangement for the shared mode,
+// holding the HOST display's socket (it mounted the host's whole
+// /tmp/.X11-unix read-write). A name of its own, so that `crate audit`
+// still tells "the host display" from "this run's own server":
+// mkdtemp(3) fills the X's with letters and digits, never a '-', so an
+// own-server directory cannot be taken for this one.
+std::string hostXSocketDirTemplate();
+bool isHostXSocketDir(const std::string &hostPath);
 
 // 1.1.74: whether copyX11Auth gives the jail the host's .Xauthority /
 // .ICEauthority. Only a jail that talks to the host's X server needs
@@ -134,6 +142,75 @@ bool isOwnXSocketDir(const std::string &hostPath);
 bool hostX11CookieWanted(const std::string &guiMode, bool waylandOnly,
                          const std::string &x11Mode,
                          const std::string &clipboardMode);
+
+// 1.1.78: the X servers crate starts (Xvfb, Xephyr, Xorg) ran without
+// access control — Xvfb with `-ac`, the other two with no `-auth`, which
+// to an X server means "every local client is welcome". Their sockets
+// sit in the host's /tmp/.X11-unix, so any local user, and any jail the
+// shared X11 mode gave that directory to, could read the keystrokes and
+// the screen of another tenant's headless / nested / gpu display. Now
+// each run makes a 16-byte MIT-MAGIC-COOKIE-1 and starts its server with
+// `-auth <file>`; the same file goes into the jail (XAUTHORITY) and to
+// the clients crate itself starts against that display (x11vnc, the
+// embedded VNC server, `crate gui screenshot`).
+//
+// One record of an Xauthority(5) file: family, address, display number,
+// protocol name, data — each a 2-byte big-endian length and the bytes
+// (the family is a bare 2-byte number). The family is FamilyWild with an
+// empty address: the record matches whatever host name the client has
+// (the jail's differs from the host's), and the number ties it to this
+// display. "" when the cookie is not kXCookieSize bytes.
+constexpr unsigned kXCookieSize = 16;
+std::string xauthorityEntry(unsigned displayNum, const std::string &cookie);
+
+// 1.1.78: the display number of a DISPLAY that names a local X server
+// through its Unix socket — ":0", ":0.0", "unix:1", "unix:1.0" — or -1
+// (a TCP display such as "localhost:10.0" from ssh -X, a launchd path,
+// garbage). The shared X11 mode mounts just /tmp/.X11-unix/X<N> for it.
+int localDisplayNumber(const std::string &display);
+
+// 1.1.78: websockify's two address arguments. It was started as
+// `websockify <port> localhost:<vncPort>` — no listen address, so the
+// noVNC stream was served on every interface while x11vnc itself was on
+// loopback, and with a non-loopback gui/vnc_bind x11vnc was not on
+// "localhost" at all. `bind` is the resolved gui/vnc_bind
+// (CompositorPure::resolveVncBind): websockify listens there, and
+// connects to x11vnc there (loopback when the bind is a wildcard). IPv6
+// literals are bracketed, as websockify wants them.
+std::string websockifyListenArg(const std::string &bind, unsigned wsPort);
+std::string websockifyTargetArg(const std::string &bind, unsigned vncPort);
+
+// 1.1.78: gui/wayland_security_context — what `gui: auto` and
+// `gui.mode: wayland` put in the jail as the Wayland socket.
+//   auto     (default) a socket the compositor restricts
+//            (wp_security_context_v1, lib/wayland_security_context.h)
+//            when it can make one; the host compositor's own socket,
+//            with the 1.1.77 warning, when it cannot
+//   require  the restricted socket or no run at all
+//   off      the host compositor's own socket — for a jail that is
+//            meant to have the privileged protocols (a panel, a screen
+//            recorder, a whole desktop session inside the jail)
+enum class WaylandContextMode { Auto, Require, Off };
+// "" is Auto. false for anything but auto / require / off.
+bool parseWaylandContextMode(const std::string &s, WaylandContextMode &out);
+// What to bind once the compositor has been asked (contextMade: it gave
+// a restricted socket). Off never asks.
+enum class WaylandBind { Restricted, Raw, Refuse };
+WaylandBind waylandBindDecision(WaylandContextMode mode, bool contextMade);
+// mkdtemp(3) template of the private host directory holding the
+// restricted socket, under the operator's XDG_RUNTIME_DIR; and whether a
+// host path lies in such a directory (crate audit).
+std::string waylandContextDirTemplate(const std::string &xdgRuntimeDir);
+bool isWaylandContextDir(const std::string &hostPath);
+// Spec validation, "" when fine. The key only means something where a
+// host Wayland socket can be bound (gui/mode auto or wayland).
+std::string waylandContextKeyError(const std::string &guiMode, const std::string &value);
+// 1.1.78: gui/vnc_bind was refused outside gui/mode=compositor, although
+// x11vnc (nested / headless / gpu) has taken it since 1.1.48 and
+// websockify takes it now — so the X11 modes could not be reached from
+// another machine except through websockify's accidental "every
+// interface". "" when the mode can have a VNC server (all but wayland).
+std::string vncBindKeyError(const std::string &guiMode);
 
 // 1.1.77: which shared-mode security warnings setupX11 must emit. The
 // shared path binds the host operator's own display socket into the

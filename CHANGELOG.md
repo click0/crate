@@ -6,6 +6,162 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.78] — 2026-11-14
+
+**The display a jail gets is sealed or restricted where it used to be
+open: the X servers crate starts want a cookie, the shared X11 mode
+mounts one socket instead of the host's whole directory, noVNC listens
+where VNC does, and on a Wayland host the jail gets a socket the
+compositor restricts (a security context) instead of the compositor's
+own. Services and hooks now see the jail's display. These were the
+three items 1.1.77 left open in TODO §7; none of it has run on FreeBSD
+yet (docs/on-hardware-validation.md §4t).**
+
+### Changed behaviour — read before upgrading
+
+- **noVNC listens on `127.0.0.1` by default.** websockify was started
+  without a listen address and served the stream on every interface;
+  it now listens on `gui/vnc_bind` like the VNC server it fronts. To
+  reach noVNC from another machine, use an SSH tunnel or set
+  `gui/vnc_bind` (with `gui/vnc_password`). `gui/vnc_bind` is now
+  accepted in every mode that can have a VNC server — it was refused
+  outside `gui/mode: compositor`, although x11vnc has taken it since
+  1.1.48.
+- **A client needs the cookie to open a `headless` / `nested` / `gpu`
+  display.** Anything on the host that connected to `:10` and the like
+  without one (a script, another user's `xdotool`) is refused. The
+  cookie file is the `-auth` argument of the server (`ps`), and
+  `crate gui list --json` does not print it; `crate gui screenshot`
+  uses it by itself.
+- **An `x11` shared jail sees one socket, read-only.** A jail that
+  relied on reaching another display of the host through the shared
+  directory, or on creating sockets there, no longer can. A host X
+  server that restarts gets a new socket: restart the jail.
+- **On sway 1.9+ / KWin 6 / Mutter 46+ a `gui: auto` / `gui.mode:
+  wayland` jail no longer has the compositor's privileged protocols**
+  (layer-shell, screencopy, virtual input, data-control, …). A jail
+  that is meant to have them — a panel, a screen recorder — sets
+  `gui/wayland_security_context: off`.
+
+### Fixed
+
+- **The X servers crate starts ran without access control.** Xvfb was
+  started with `-ac`; Xephyr and Xorg with no `-auth`, which an X server
+  takes as "every local client is welcome". Their sockets are in the
+  host's `/tmp/.X11-unix`, so any local user — and any jail the shared
+  X11 mode gave that directory to — could read the keystrokes and the
+  screen of another tenant's display. Each run now makes a 16-byte
+  `MIT-MAGIC-COOKIE-1`, writes it as a private 0600 Xauthority file
+  (`RunGuiPure::xauthorityEntry`: one FamilyWild record, so the jail's
+  different host name matches) and starts the server with `-auth`. The
+  cookie is copied into the jail as `/var/run/crate-Xauthority` — after
+  the spec's tmpfs mounts, owned by the user the command runs as — and
+  `XAUTHORITY` points at it. x11vnc gets `-auth`; the embedded VNC
+  server and the gpu-mode resolution probe present it through
+  `X11Ops::useCookie` (XSetAuthorization, which leaves the environment —
+  the HOST display's, for child processes — alone); `crate gui
+  screenshot` finds the file in the GUI registry (an optional 8th field
+  of the line). Xephyr also gets `-nolisten tcp` like the other two.
+  Checked against a real Xvfb: no cookie and a wrong cookie are refused,
+  the right one is accepted from a different host name.
+- **The shared X11 mode mounted the host's whole `/tmp/.X11-unix`,
+  read-write.** The jail reached every X server of the host, and could
+  create entries there — for one, a socket named like the display a
+  later run will be given (a file of the jail's root is uid 0 on the
+  host, which the 1.1.74 owner check accepts). It now mounts a private
+  directory
+  (`/tmp/.X11-unix/.crate-host-XXXXXXXX`) holding a hard link to the
+  socket of the display `DISPLAY` names, read-only — the arrangement
+  1.1.74 introduced for the servers crate starts. A `DISPLAY` that is
+  not a local socket (`localhost:10.0`) gets no mount. If the link
+  cannot be made (`security.bsd.hardlink_check_uid` and a server of
+  another user) the whole directory is mounted read-only with a
+  warning. `crate audit` tells the three apart: this run's own server
+  (PASS), the host display alone, the host's whole directory (WARN).
+- **websockify listened on every interface** in front of an x11vnc that
+  was on loopback and had no password unless `gui/vnc_password` was set
+  — and with a non-loopback bind it looked for x11vnc on `localhost`,
+  where it was not. Both addresses now come from `gui/vnc_bind`
+  (`RunGuiPure::websockifyListenArg` / `websockifyTargetArg`; IPv6
+  literals bracketed, a wildcard bind reached over loopback). A
+  non-loopback bind without a password prints a warning.
+- **`gui: auto` / `gui.mode: wayland` bound the host compositor's own
+  socket**, which carries its privileged protocols: a client in the jail
+  could type into, watch and drive every window of the session. crate
+  now asks the compositor for a security context
+  (`wp_security_context_v1`): it makes a listening socket in a private
+  0700 directory under `XDG_RUNTIME_DIR`, hands it to the compositor
+  with the sandbox engine `io.github.click0.crate`, the jail's name as
+  the application id and the per-run jail name as the instance id, and
+  mounts THAT socket in the jail. The compositor stops accepting on it
+  when crate closes — or dies with — the pipe it keeps. No libwayland:
+  the exchange is seven requests and three kinds of events, written in
+  `lib/wayland_wire_pure` (encoding) and `lib/wayland_security_context`
+  (the socket I/O, a 3 s timeout so a stuck compositor does not hang
+  the run). New key `gui/wayland_security_context`: `auto` (default —
+  the restricted socket when the compositor can, else its own socket
+  with the 1.1.77 warning and the reason), `require` (the restricted
+  socket or no run), `off` (the compositor's own socket on purpose).
+  `crate doctor` has a `wayland-security-context` check; `crate audit`
+  reports the restricted socket as a PASS. Checked against sway 1.9
+  (headless): the restricted socket offers 29 of the compositor's 44
+  globals — withheld are virtual keyboard and pointer, screencopy,
+  export-dmabuf, data-control, foreign-toplevel, layer-shell,
+  session-lock, input-inhibit, input-method, keyboard-shortcuts-inhibit,
+  output management and power, gamma control and the security-context
+  manager itself; `kill -9` of the owner makes the compositor refuse new
+  connections; asking from inside a context is answered "not offered".
+- **Services and hooks had no display.** The jail's `DISPLAY`,
+  `XAUTHORITY`, `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` went on the
+  env(1) line of the main command only; what JailExec ran (`service x
+  start`, `run:before-execute`, the healthcheck) got none — and before
+  1.1.77 the root path gave them the HOST's values, which worked by
+  accident against a shared display. `JailExec::setJailDisplayVar`
+  carries the four on both paths: in the command's environment in
+  process, and as new optional fields of the `exec_in_jail` privops
+  request (`display`, `xauthority`, `wayland_display`,
+  `xdg_runtime_dir`). The names are fixed and each value is checked for
+  shape on the daemon's side (`PasswdPure::validateJailDisplayEnv`): a
+  caller still cannot set an arbitrary variable.
+- **A rootless `exec_in_jail` carried no `LANG`.** The request had
+  `term` only; the root path has passed the operator's locale since
+  1.1.77. New optional field `lang`, a plain locale name.
+- **Jail environment values went onto the `sh -c` line unquoted** — the
+  operator's `DISPLAY` among them. `setJailEnv` quotes every value.
+- **Under a root `crate run` the jail's `XDG_RUNTIME_DIR`
+  (`/tmp/wayland`) stayed root's, 0700**: a dedicated or named run user
+  could not enter it. It is given to that user.
+
+### Tests
+
+- `wayland_security_context_test` (new): the wire encoding byte for
+  byte, events cut at every offset, malformed sizes and strings; and
+  the client against a stand-in compositor written in the test from the
+  protocol text — the registry, the bind, both file descriptors (a
+  client connecting to the path shows up on the fd the compositor got;
+  the second fd hangs up when crate lets go), the metadata, "not
+  offered", a protocol error, a compositor that hangs up, no leftovers.
+- `run_gui_pure_test`: `xauthority_entry`, `local_display_number`,
+  `websockify_args`, `wayland_context_policy`, the host-socket directory
+  names. `jail_audit_pure_test`: the shared-mode directory and the
+  restricted Wayland socket. `passwd_pure_test: jail_display_env`;
+  `privops_client_pure_test` / `privops_wire_pure_test`: the new
+  `exec_in_jail` fields round-trip and malformed values are refused.
+- The unit test link line gains `-lpthread` (the stand-in compositor is
+  a thread).
+
+### Left open (TODO §7)
+
+- The shared X11 mode still gives the jail the host's trusted cookie;
+  an untrusted XSECURITY cookie would be an opt-in.
+- A compositor without the protocol still gets the raw socket by
+  default; the audio sockets (PipeWire / PulseAudio) are one shared bus.
+- GUI under a rootless crate: the GUI registry in the root-owned
+  `/var/run/crate` is not reachable (plausible, needs hardware).
+- The clipboard proxy runs `jexec` with crate's environment.
+
+---
+
 ## [1.1.77] — 2026-11-12
 
 **The shares, mount targets and the socket proxy no longer follow a

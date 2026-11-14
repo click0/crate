@@ -20,6 +20,10 @@ struct GuiEntry {
   unsigned wsPort;      // websockify port (0 = no noVNC), e.g. 6010
   std::string mode;     // "nested" (Xephyr), "headless" (Xvfb), "shared"
   std::string jailName; // jail name (e.g. "jail-firefox-abc123")
+  // 1.1.78: the host Xauthority file of an X server crate started (it
+  // runs with -auth), "" for shared / compositor sessions. An optional
+  // 8th field of the registry line: older readers stop at the 7th.
+  std::string xauthFile;
 };
 
 // Lockfile-based GUI registry, following the FwSlots pattern from ctx.h.

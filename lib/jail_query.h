@@ -81,6 +81,15 @@ void execInJailChecked(int jid, const std::vector<std::string> &argv,
                        const std::string &user = "root",
                        const std::string &what = "exec in jail");
 
+// 1.1.78: the jail's own display for everything this process runs in it
+// from now on: `name` is DISPLAY, XAUTHORITY, WAYLAND_DISPLAY or
+// XDG_RUNTIME_DIR (any other name is ignored), `value` the jail-side
+// value. `crate run` calls it as its GUI setup settles each one, so
+// services and hooks see the display the main command gets on its
+// env(1) line. Both paths carry them: the in-process one in the
+// command's environment, the rootless one in the exec_in_jail request.
+void setJailDisplayVar(const std::string &name, const std::string &value);
+
 // 1.1.41: deliver `sig` (pdkill) to every in-jail command this process
 // is currently waiting on through the exec_in_jail path. Those
 // commands are crated's children, so a terminal SIGINT does not reach

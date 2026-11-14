@@ -305,6 +305,11 @@ static bool guiScreenshot(const Args &args) {
   reg->unlock();
 
   auto dispStr = STR(":" << e.displayNum);
+  // 1.1.78: the X servers crate starts want their cookie; this process
+  // talks to no other display, so the environment is the simple way
+  // (it also reaches the xwd fallback below).
+  if (!e.xauthFile.empty())
+    ::setenv("XAUTHORITY", e.xauthFile.c_str(), 1);
   auto outFile = args.guiOutput.empty()
     ? STR(e.jailName << "-screenshot.png")
     : args.guiOutput;

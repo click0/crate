@@ -487,10 +487,45 @@ ATF_TEST_CASE_BODY(own_x_socket_dir) {
   ATF_REQUIRE(c->detail.find("own X server") != std::string::npos);
   // the host's whole directory stays a WARN
   ATF_REQUIRE(find(buildReport(kDesktopProbe, ctx), "sockets", "/tmp/.X11-unix/X0")->severity == Severity::Warn);
+  // 1.1.78: so does the shared mode's directory with just the host
+  // display's socket — it is still the host display
+  probe = kDesktopProbe;
+  probe.replace(probe.find(hostX), hostX.size(), "/tmp/.X11-unix/.crate-host-Ab12Cd34\t/tmp/.X11-unix\tnullfs\tro");
+  c = find(buildReport(probe, ctx), "sockets", "/tmp/.X11-unix/X0");
+  ATF_REQUIRE(c != nullptr);
+  ATF_REQUIRE(c->severity == Severity::Warn);
+  ATF_REQUIRE(c->detail.find("that display only") != std::string::npos);
+}
+
+// 1.1.78: a Wayland socket the compositor restricts (security context)
+// is a PASS; the compositor's own socket stays a WARN.
+ATF_TEST_CASE_WITHOUT_HEAD(wayland_context_socket);
+ATF_TEST_CASE_BODY(wayland_context_socket) {
+  HostContext ctx;
+  const std::string hostX = "/tmp/.X11-unix\t/tmp/.X11-unix\tnullfs\tro\t0\t0\n";
+  const std::string xSock = "/tmp/.X11-unix/X0\n";
+  auto probeWith = [&](const std::string &source) {
+    std::string probe = kDesktopProbe;
+    probe.replace(probe.find(hostX), hostX.size(),
+                  hostX + source + "\t/tmp/wayland/wayland-1\tnullfs\trw\t0\t0\n");
+    probe.replace(probe.find(xSock), xSock.size(), xSock + "/tmp/wayland/wayland-1\n");
+    return probe;
+  };
+  auto r = buildReport(probeWith("/var/run/user/1001/crate-wl-Ab12Cd34/wayland-1"), ctx);
+  const Check *c = find(r, "sockets", "/tmp/wayland/wayland-1");
+  ATF_REQUIRE(c != nullptr);
+  ATF_REQUIRE(c->severity == Severity::Pass);
+  ATF_REQUIRE(c->detail.find("security context") != std::string::npos);
+  r = buildReport(probeWith("/var/run/user/1001/wayland-1"), ctx);
+  c = find(r, "sockets", "/tmp/wayland/wayland-1");
+  ATF_REQUIRE(c != nullptr);
+  ATF_REQUIRE(c->severity == Severity::Warn);
+  ATF_REQUIRE(c->detail.find("host Wayland compositor socket") != std::string::npos);
 }
 
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, own_x_socket_dir);
+  ATF_ADD_TEST_CASE(tcs, wayland_context_socket);
   ATF_ADD_TEST_CASE(tcs, bpf_by_vnet);
   ATF_ADD_TEST_CASE(tcs, probe_script_shape);
   ATF_ADD_TEST_CASE(tcs, split_sections);

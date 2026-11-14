@@ -1136,11 +1136,16 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   auto jailXname = STR(nameComponent << RunPure::jailXnamePidSuffix(::getpid()));
 
   // environment in jail
+  // 1.1.78: the value is quoted here (it went onto the `sh -c` line as
+  // it came — the operator's DISPLAY among them), and the jail's display
+  // variables also go to JailExec, so that services and hooks run with
+  // the display the main command gets (they had none).
   std::string jailEnv;
   auto setJailEnv = [&jailEnv](const std::string &var, const std::string &val) {
     if (!jailEnv.empty())
       jailEnv = jailEnv + ' ';
-    jailEnv = jailEnv + var + '=' + val;
+    jailEnv = jailEnv + var + '=' + Util::shellQuote(val);
+    JailExec::setJailDisplayVar(var, val);
   };
   setJailEnv("CRATE", "yes");
 
@@ -1169,7 +1174,9 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   }
 
   // turn options on — X11 with mode support (§11)
-  RunAtEnd killXephyrAtEnd = RunGui::setupX11(spec, jailPath, jailXname, mounts, setJailEnv, args.logProgress);
+  std::string ownXCookieFile;   // 1.1.78: of the X server this run started, if any
+  RunAtEnd killXephyrAtEnd = RunGui::setupX11(spec, jailPath, jailXname, mounts, setJailEnv, args.logProgress,
+                                              &ownXCookieFile);
 
   // Clipboard isolation (§12) — log mode
   if (spec.clipboardOptions) {
@@ -2405,6 +2412,33 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   }
   status.emit(StatusPure::kMountsReady);
 
+  // 1.1.78: the X server this run started (gui nested / headless / gpu)
+  // wants a cookie now; put it in the jail for the user the command runs
+  // as. Here: after the tmpfs mounts (one over /var/run would hide it),
+  // before the services and hooks that may want the display.
+  if (!ownXCookieFile.empty()) {
+    const bool chownIt = !runUser.root && (runUser.mirrored || runUserPw.uid != 0);
+    const auto inJail = RunGui::installOwnXCookie(
+        jailPath, ownXCookieFile,
+        chownIt ? (runUser.mirrored ? myuid : (uid_t)runUserPw.uid) : (uid_t)-1,
+        chownIt ? (runUser.mirrored ? mygid : (gid_t)runUserPw.gid) : (gid_t)-1);
+    setJailEnv("XAUTHORITY", inJail);
+    LOG("gui: the X server's cookie is in the jail at " << inJail)
+  }
+  // 1.1.78: the jail's XDG_RUNTIME_DIR (the shared Wayland / PipeWire
+  // flow made /tmp/wayland 0700 as whoever crate runs as) belongs to the
+  // user the command runs as — under a root `crate run` the run/user
+  // could not enter it. Best effort: a rootless crate cannot give it to
+  // a user that is not the operator.
+  if (!runUser.root && !runUser.mirrored && runUserPw.uid != 0) {
+    try {
+      if (FsBeneath::isDirectory(jailPath, "/tmp/wayland"))
+        FsBeneath::chown(jailPath, "/tmp/wayland", (uid_t)runUserPw.uid, (gid_t)runUserPw.gid);
+    } catch (const std::exception &e) {
+      LOG("gui: /tmp/wayland stays with the operator (" << e.what() << ")")
+    }
+  }
+
   // Socket proxying (§15)
   RunAtEnd destroySocatProxies = RunServices::setupSocketProxy(spec, jailPath, args.logProgress);
   // Also mount shared sockets via nullfs (setupSocketProxy created the files)
@@ -2504,7 +2538,11 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
   // service, a saved rootfs) left there and copied the HOST file to the
   // run user; chown / chmod after the copy followed links as well. Now a
   // symlink anywhere on either path stops the move with a warning.
-  if (const auto cookieHome = RunPure::runUserCookieHome(runUser, runUserPw.home); !cookieHome.empty()) {
+  // 1.1.78: not when this run started its own X server — no host cookie
+  // was copied then, and a .Xauthority the image carries in /root must
+  // not replace the XAUTHORITY of installOwnXCookie above.
+  if (const auto cookieHome = RunPure::runUserCookieHome(runUser, runUserPw.home);
+      ownXCookieFile.empty() && !cookieHome.empty()) {
     for (const char *file : {".Xauthority", ".ICEauthority"}) {
       const auto srcRel = STR("/root/" << file);
       const auto inJail = STR(cookieHome << "/" << file);
@@ -2519,7 +2557,7 @@ static bool runCrateInner(const Args &args, int argc, char** argv, int &outRetur
         continue;
       }
       if (std::string(file) == ".Xauthority")
-        setJailEnv("XAUTHORITY", Util::shellQuote(inJail));   // later wins in env(1)
+        setJailEnv("XAUTHORITY", inJail);   // later wins in env(1); quoted by setJailEnv (1.1.78)
       LOG("run/user: " << file << " moved into " << cookieHome << " for '" << runUser.name << "'")
     }
   }

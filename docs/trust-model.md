@@ -503,57 +503,75 @@ nodes that the default devfs ruleset hides:
 
 Distinct from the device exposure above, the **shared** GUI path — the
 default for a plain `x11` option, and what `gui: auto` resolves to when
-the host has a reachable display — binds the **host operator's own
-display-server socket** into the jail:
+the host has a reachable display — gives the jail a way into the **host
+operator's own display session**:
 
-- **X11 shared** nullfs-mounts the host's `/tmp/.X11-unix` and sets
-  `DISPLAY`. Any X client in the jail reads every keystroke and drives
-  every window on that X server (X has no inter-client isolation). crate
-  prints a loud warning (`CRATE_X11_SHARED_ACK=1` to suppress).
-- **Wayland** (`gui: auto` on a Wayland host, or `gui.mode: wayland`)
-  nullfs-mounts the host compositor's `$WAYLAND_DISPLAY` socket. Wayland
-  isolates ordinary clients from each other, but the raw socket also
-  carries the compositor's privileged protocols: `virtual_keyboard` /
-  `virtual_pointer` (inject input into any window), `screencopy` /
-  `export_dmabuf` (capture any output or window), `data_control` /
-  primary-selection (read and write the clipboard), `foreign_toplevel`
-  (enumerate and act on other clients' windows), plus session-lock and
-  input-inhibit. A jail client reaches all of them. Since 1.1.77 crate
-  prints the same kind of warning (`CRATE_WAYLAND_SHARED_ACK=1` to
-  suppress).
+- **X11 shared** mounts the socket of the display `DISPLAY` names and
+  sets `DISPLAY`. Any X client in the jail reads every keystroke and
+  drives every window on that X server (X has no inter-client
+  isolation). crate prints a loud warning (`CRATE_X11_SHARED_ACK=1` to
+  suppress). Since 1.1.78 it is that one socket, read-only — not the
+  host's whole `/tmp/.X11-unix`, which also held every other X server
+  of the host and let the jail create entries there.
+- **Wayland** (`gui: auto` on a Wayland host, or `gui.mode: wayland`).
+  Wayland isolates ordinary clients from each other, but the
+  compositor's own socket also carries its privileged protocols:
+  `virtual_keyboard` / `virtual_pointer` (inject input into any
+  window), `screencopy` / `export_dmabuf` (capture any output or
+  window), `data_control` (read and write the clipboard),
+  `foreign_toplevel` (enumerate and act on other clients' windows),
+  `layer_shell`, session-lock and input-inhibit. Since 1.1.78 crate
+  does **not** bind that socket when it can avoid it: it asks the
+  compositor for a **security context** (`wp_security_context_v1`) —
+  a listening socket of crate's own, tagged with the sandbox engine
+  `io.github.click0.crate` and the jail's name, on which the compositor
+  serves clients without the privileged protocols — and mounts that one
+  in the jail. Measured on sway 1.9: the restricted socket offers 29 of
+  the 44 globals; the 15 withheld are the ones above plus output
+  management, gamma control, input-method, keyboard-shortcuts-inhibit
+  and the security-context manager itself (contexts do not nest).
+  Which protocols are withheld is the compositor's policy, not
+  crate's. `crate doctor` says whether the
+  compositor can do it (wlroots 0.17 / sway 1.9, KWin 6, Mutter 46 and
+  later).
 
-Both bind the **one** display session the host operator is logged into.
-Every GUI jail that shares it, and the host's own windows, live in that
-one session, so the shared display plane is **a single trust domain, not
-a boundary between tenants.** A tenant in one shared-display jail can
-inject input into, capture, and drive the GUI of every other jail on the
-same display and of the host itself — the `drm`-backend caveat above is
-not the only way the display plane crosses tenants. Do not hand a
-shared-display jail (`gui: auto` / `wayland` / `x11` shared) to a
-mutually-distrusting tenant; give such tenants `gui.mode: headless` or
-`nested` (each gets its own X server) instead. The audio sockets bound
-alongside (PipeWire / PulseAudio) are likewise one shared bus — a jail
-client can record other tenants' streams.
+  `gui/wayland_security_context` chooses what happens otherwise:
+  `auto` (default) falls back to the compositor's own socket and prints
+  the 1.1.77 warning (`CRATE_WAYLAND_SHARED_ACK=1` to suppress);
+  `require` refuses to run; `off` binds the compositor's own socket on
+  purpose, for a jail that is meant to have the privileged protocols
+  (a panel, a screen recorder).
 
-`headless` / `nested` / `gpu` are separate displays, not yet sealed
-ones. crate starts those X servers without access control (Xvfb runs
-with `-ac`; Xephyr and Xorg get no `-auth` cookie), and their sockets
-sit in the host's `/tmp/.X11-unix`. Since 1.1.74 such a jail sees only
-its own socket, but an `x11` shared jail mounts that whole host
-directory, and any local user of the host can open it too. So on a
-host with mutually-distrusting tenants, run **no** `x11` shared jail
-next to another tenant's headless / nested one, and keep untrusted
-local users off the host. `vnc: true` adds its own exposure: x11vnc
-listens on loopback, but `novnc: true` starts websockify without a
-bind address, and no password is set unless `gui/vnc_password` is —
-set it, and firewall the port, wherever the display matters. Closing
-this (a per-run cookie, the host display's socket alone in shared mode,
-websockify on `gui/vnc_bind`) is TODO §7.
+What the security context does **not** change: the jail's windows are
+still on the operator's screen, in the operator's session. Ordinary
+clipboard exchange with a focused window works, the compositor decides
+what a sandboxed client may do, and a compositor bug is a host bug. An
+X11 shared jail has none of this — it is fully inside the session. So
+the shared display plane is still **one display session, not a boundary
+between tenants**: with X11 shared, or with the compositor's own
+Wayland socket (`off`, or the fallback), a tenant in one such jail can
+inject input into, capture, and drive the GUI of every other jail on
+the same display and of the host itself. Give a mutually-distrusting
+tenant `gui.mode: headless`, `nested` or `compositor` (each gets its
+own display server), or at least `gui/wayland_security_context:
+require`. The audio sockets bound alongside (PipeWire / PulseAudio) are
+one shared bus — a jail client can record other tenants' streams.
 
-> **Proper fix (TODO):** bind a socket created through the compositor's
-> `wp_security_context_manager_v1` rather than the raw one, so the
-> compositor withholds the privileged protocols from jail clients. Needs
-> compositor support (wlroots ≥ 0.17 / sway ≥ 1.9, mutter 46, kwin 6).
+`headless` / `nested` / `gpu` are separate displays, and since 1.1.78
+sealed ones. Each run makes a 16-byte `MIT-MAGIC-COOKIE-1` and starts
+its X server with `-auth` (Xvfb ran with `-ac`, Xephyr and Xorg with no
+`-auth`, which to an X server means "every local client is welcome");
+the cookie goes into the jail as `/var/run/crate-Xauthority`
+(`XAUTHORITY`), to x11vnc and to `crate gui screenshot`. The server's
+socket still sits in the host's `/tmp/.X11-unix`, but another local
+user, or another jail, gets "Authorization required" there. The jail
+itself sees only its own socket (1.1.74).
+
+`vnc: true` is its own exposure. x11vnc and — since 1.1.78 — websockify
+(`novnc: true`) listen on `gui/vnc_bind`, loopback by default
+(websockify used to listen on every interface). No password is set
+unless `gui/vnc_password` is: with a non-loopback `gui/vnc_bind`, set
+one and firewall the port.
 
 ---
 
