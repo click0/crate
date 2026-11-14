@@ -112,10 +112,16 @@ The bhyve/VM track is in TODO2.
   open(O_RESOLVE_BENEATH) relative to the caller's prefix and
   nmount with "fspath" replaced by an fd ("fd" iov) / jail path via
   fdescfs, or at least a second realpath() after the operation with
-  rollback. Same for lib/run_gui.cpp's mount targets (lstat then
-  mount). Low practical exposure (needs a compromised jail racing
-  its own operator's `crate run`), but the only remaining gap in the
-  path chain.
+  rollback. Same for crate(1)'s own nmount(2) on the root path: since
+  1.1.77 Mount refuses a mount point that does not resolve to itself and
+  the targets are made through FsBeneath, but the mount then goes by
+  path — and the shares, tmpfs and socket mounts come after /etc/rc,
+  with the jail's processes running. Without an fd-based nmount:
+  fchdir() to the target directory (opened through FsBeneath) and
+  nmount fspath "." (the kernel turns it into the global path of that
+  vnode); file targets would still need parent + name. Low practical
+  exposure (needs a compromised jail racing its own operator's `crate
+  run`), but the only remaining gap in the path chain.
 
 * (by design, documented) a pool-scoped ADMIN token can POST
   /imports/:name + /containers/:name/start for a name in its pool and
@@ -417,6 +423,49 @@ The bhyve/VM track is in TODO2.
 
 === 7. Lifecycle, storage, GUI, monitoring, DNS, VPN ===
 
+* (MED, left open by 1.1.77) the shared display plane is not a
+  cross-tenant boundary. `gui: auto` / `gui.mode: wayland` / `x11`
+  shared bind the host operator's own display socket into the jail
+  (run_gui.cpp setupX11: /tmp/.X11-unix for X11, $WAYLAND_DISPLAY for
+  Wayland). X11 has no inter-client isolation; the raw Wayland socket
+  carries the compositor's privileged protocols (virtual keyboard /
+  pointer, screencopy / export-dmabuf, data-control, foreign-toplevel,
+  session-lock, input-inhibit). A client in one such jail can inject
+  input into, capture and drive the GUI of every other jail on the same
+  display and the host itself. 1.1.77 added the warnings
+  (CRATE_X11_SHARED_ACK / CRATE_WAYLAND_SHARED_ACK) and documented it
+  (docs/trust-model.md, "Shared display plane"); the real fix is to
+  bind a restricted socket obtained from the compositor's
+  wp_security_context_manager_v1 (app_id / instance_id / sandbox_engine
+  tag) instead of the raw one, so the compositor withholds the
+  privileged protocols from jail clients. Needs compositor support
+  (wlroots >= 0.17 / sway >= 1.9, mutter 46, kwin 6) and a host-side
+  capability probe with a documented fallback (refuse, or warn and bind
+  raw) when absent. The audio sockets bound alongside (PipeWire /
+  PulseAudio) are one shared bus too — a separate per-tenant story
+  (PipeWire security-context / a per-jail Pulse via module-native).
+* (MED, left open by 1.1.77) the X servers crate starts are separate
+  displays, not sealed ones: Xvfb runs with `-ac` and Xephyr / Xorg get
+  no `-auth` cookie (run_gui.cpp setupX11), their sockets sit in the
+  host's /tmp/.X11-unix, and the `x11` shared mode mounts that whole
+  directory read-write — so a shared jail, or any local user, reaches
+  another tenant's headless / nested / gpu display. Fix: a per-run
+  MIT-MAGIC-COOKIE-1 (`-auth`, the cookie copied into the jail and
+  handed to x11vnc), and in shared mode mount only the host display's
+  own socket read-only, as 1.1.74 did for the servers crate starts
+  (makeOwnXSocketDir). Same area: startWebsockify gives websockify no
+  bind address (it listens on every interface in front of an x11vnc
+  that is on loopback and has no password unless gui/vnc_password is
+  set) — pass gui/vnc_bind. Documented as a caveat in
+  docs/trust-model.md, "Shared display plane".
+* (LOW, left open by 1.1.77) the jail's own GUI variables (DISPLAY,
+  XAUTHORITY, WAYLAND_DISPLAY, XDG_RUNTIME_DIR — run.cpp jailEnv) go on
+  the env(1) line of the main command only: services and hooks run
+  through JailExec get PasswdPure::jailExecEnv and no display. Before
+  1.1.77 the root path leaked the HOST's values to them, which worked
+  by accident in the shared X11 mode. Give JailExec the jail's set.
+  Rootless exec_in_jail also carries no LANG (the request has `term`
+  only); the root path passes the operator's.
 * (LOW, left open by 1.1.70) the HTTP snapshot routes (routes.cpp
   datasetForJail) and the ws-console upgrade (ws_console.cpp) still
   look the jail up by kernel name only; every other target goes through
@@ -440,15 +489,16 @@ The bhyve/VM track is in TODO2.
   the dummynet PIPES (kPipeBase 10000+; needs `ipfw pipe list`
   parsing). clean.cpp:97-98 iface-record liveness uses
   path.find(name) substring match. (comment fixed in 1.1.48)
-* (LOW) import.cpp:262,272 outFile == archivePath is a raw string
-  compare (`-o foo.crate` on ./foo.crate passes, copy_file fails);
+* (LOW) import.cpp: outFile == archivePath is a raw string compare, so
+  `-o foo.crate` on ./foo.crate is not taken for "validate only" and
+  ends in "already exists" (the output is a new file since 1.1.77);
   ImportPure::archiveHasTraversal (import_pure.cpp:21) rejects any
   entry containing `..` (e.g. foo..bar); import re-runs the full
   decrypt+decompress pipeline 3x.
-* (LOW) the jail-<target>- prefix match export.cpp had until 1.1.48
-  lives on in console.cpp / info.cpp (MED item below);
-  snmpd/collector.cpp:66 and stack.cpp (section 4) have the same
-  substring/prefix bug.
+* (LOW) snmpd/collector.cpp:66 and stack.cpp (section 4) still match
+  jails by the "jail-<target>-" prefix / a substring, the bug
+  export.cpp (1.1.48) and console.cpp / info.cpp (1.1.77) no longer
+  have.
 * (LOW) zfs_ops.cpp:362 ::write return ignored; mount.cpp:61 strdup
   NULL unchecked; create.cpp:50-59 guessCrateName derefs
   *runServices.rbegin() when both cmd and services are empty
@@ -509,32 +559,12 @@ The bhyve/VM track is in TODO2.
   (status_pure.cpp:23-27) and crated / hub responses, which strict
   readers (Python json.loads on bytes) refuse. Replace invalid
   sequences with \ufffd.
-* (MED, left open by 1.1.76) the file writes into a jail tree go through
-  FsBeneath (no symlink followed in any component) since 1.1.76, but
-  three kinds of host-side operation on the tree still go by path: the
-  file shares (run.cpp, `files/share`: unlink / link / touch / copy of
-  J(fileJail), and link(2) may follow a symlinked source); the mount
-  targets made with create_directories / mkdir (dirs/share, tmpfs,
-  /tmp/.X11-unix, /tmp/wayland, the GUI runtime dir) and nmount(2)
-  itself, which follows a symlink in fspath — Util::safePath's realpath
-  check runs first, so it is §2's check-then-use race; and socket_proxy's
-  socat, which binds J(entry.jail) by path. A tree from a --warm-base
-  clone or an archive can hold such links.
 * (LOW, left open by 1.1.75) the trusted spec store of warm templates
   (/var/db/crate/warm/<guid>.spec / .thin) is never pruned: a destroyed
   template leaves its files (harmless — a new dataset gets a new guid).
   `crate clean` could drop entries whose guid no dataset has. `crate
   info` / `list` of a running warm-base jail still show the clone's own
   +CRATE.SPEC, not the trusted one it runs with.
-* (MED, bug hunt 1.1.71) JailQuery::findContainer ignores the owner and
-  the kind of jail (jail_query.cpp:263-288). Root `crate stop web`, HTTP
-  DELETE or restart hit another tenant's web_pidN when the own `web` is
-  not running (before: not found); start answers 409 when ANY tenant
-  runs that name (profiles: `firefox`); start by kernel name web_pid1
-  misses a running web_pid999; a non-crate jail (a bastille `web`) is
-  stopped, updated or restarted; container `3` is shadowed by jid 3.
-  Fix: prefer the registry owner's jail, crate jails only,
-  containerNameOf(name) for start.
 * (MED, bug hunt 1.1.71) warm-base teardown leaks the clone when it has
   snapshots (run.cpp:503-510, zfs_ops.cpp:102-117: destroy without -r) —
   after any backup, replicate, snapshot create or template warm of it.
@@ -564,40 +594,24 @@ The bhyve/VM track is in TODO2.
   A check that needs root passes at start and fails in the monitor;
   retries are counted differently (retries+1 attempts vs >= retries);
   crate.5:1083 says "as root", impossible under rootless.
-* (MED, bug hunt 1.1.71) the root-path JailExec hands the whole crate(1)
-  environment to the jail (jail_query.cpp:461-482): secrets in the
-  operator's environment reach the jail; crated builds a minimal one
-  (privops_handlers.cpp:1012-1021).
 * (MED, bug hunt 1.1.71) `crate throttle` cannot apply anything: it
   needs jail->ip4 (throttle.cpp:143), and crate's networked jails are
   always vnet (run_jail.cpp:159), where ip4.addr is empty.
 * (MED, bug hunt 1.1.71) `crate logs` shows no console log:
   /var/log/crate/<name>/{console,stdout}.log are written by nothing (no
-  writer in lib/ or daemon/; GET /logs looks for them too). It falls
-  back to the jail's /var/log/messages read FROM THE HOST, following a
-  jail-planted symlink (a host file is printed) or hanging on a FIFO
-  (lifecycle.cpp:279-298).
-* (MED, bug hunt 1.1.71) console.cpp:40-54 and info.cpp:46-62 keep a
-  fallback that matches "jail-"+target as a prefix, via stoi(), and by
-  hostname — by default the host's own for every jail — and bypasses
-  findContainer's ambiguity refusal: `crate console web` with web
-  stopped and webapp running opens a root login in webapp.
+  writer in lib/ or daemon/; GET /logs looks for them too), so it always
+  falls back to the jail's /var/log/messages (read through FsBeneath
+  since 1.1.77 — a planted symlink or FIFO no longer gets followed).
 * (MED, bug hunt 1.1.71) `crate gui`: the registry stores web_pid4242
   and the jail- prefix never matches (gui_registry.cpp:91-111), so the
   example at args.cpp:277-283, `crate gui focus firefox`, fails; a jid
   is taken for a display number or a pid.
-* (MED, bug hunt 1.1.71) `crate import` copies with copy_file through a
-  dangling symlink at the derived output (/tmp/x.txz -> /tmp/x.crate),
-  and chown follows it too (import.cpp:272, util.cpp:864) — the import
-  variant of 1.1.71's export fix.
 * (LOW, bug hunt 1.1.71) a jail leaks on an ERR between run.cpp:1165 and
   :1274 (acquire_fw_lease 409/503), and rmdirHier then removes the root
   of the live jail — reachable once §1's privops blockers are fixed.
   backup-prune exits 0 when an unlink failed (backup_prune.cpp:131-139).
   The `snapshot list` fallback uses -r (zfs_ops.cpp:321-326); 1.1.69's
-  -d 1 did not reach it. export.cpp:44-57's fallback bypasses the
-  ambiguity refusal, and its default file name comes from the hostname,
-  which a jail with allow_set_hostname controls (may contain '/').
+  -d 1 did not reach it.
   `crate console web ls /tmp` joins the words into one argv element
   (args.cpp:1241-1247 -> console.cpp:89, execvp("ls /tmp")), and the
   command's own options (-l) are taken for crate's.

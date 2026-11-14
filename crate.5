@@ -86,6 +86,11 @@ shows
 the jail id, or (1.1.70) the container name the jail was started under
 .Pq Li web : the Pa .crate No file name, or Fl -name ;
 a container name that more than one running jail carries is refused.
+Since 1.1.77 only crate's jails count,
+a container name finds only the caller's own jails
+.Pq root reaches another user's jail by its jail name or id ,
+and a number that is both a jail id and a container name
+is refused as ambiguous.
 .It Cm info Ar target
 Show detailed information about a running container.
 .It Cm console Ar target Op Fl u Ar user
@@ -572,6 +577,15 @@ on a path
 .Pq Li $HOME/Documents:ro
 or a third element
 .Pq Li [$HOME/Music, /mnt/music, ro] .
+Since 1.1.77 the jail-side path must not run through a symbolic link
+inside the jail's tree (for example
+.Pa /etc/unbound ) :
+the host follows no link the jail could have made, and such a share is
+refused.
+The same holds for
+.Sy files/share
+and
+.Sy tmpfs .
 .It Sy files/share
 Files shared between host and jail.
 Same format as

@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -79,6 +80,30 @@ std::string ngctlShowName(const std::string &showOutput);
 // jail directory "<root>/jail-<name>-<8 hex>" still carries the name.
 // Falls back to `jailName` when neither tells.
 std::string containerNameOfJail(const std::string &jailName, const std::string &jailPath);
+
+// 1.1.77: JailQuery::findContainer's choice among the running jails, so
+// it can be tested. Only crate jails count (a bastille `web` is never a
+// container). Exact kernel name first; then the container name, among
+// the CALLER's jails only (root reaches another tenant's jail by its
+// kernel name or jid, never because its own `web` is not running);
+// then the jid. A jid and a container name that name different jails
+// are ambiguous. index is -1 when nothing or more than one jail
+// matches; matches says how many did.
+struct JailRef {
+  int jid = 0;
+  std::string name;
+  std::string path;
+  bool dying = false;
+};
+struct ContainerChoice {
+  int index = -1;
+  unsigned matches = 0;
+};
+// anyOwner: the container name counts among every tenant's jails — for
+// crated, which answers for its peers (euid 0 is not the caller there;
+// the pool ACL judges the jail that was found).
+ContainerChoice chooseContainer(const std::vector<JailRef> &jails, const std::string &target,
+                                uint32_t callerUid, bool anyOwner = false);
 
 // 1.1.44: unit number of an epair half ("epair12a" -> 12). False when
 // the name is not "epair<N>a|b" — the privops create_epair reply is

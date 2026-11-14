@@ -73,6 +73,14 @@ bool tmpfsMountedBeforeGui(const std::string &tmpfsPath);
 std::vector<std::pair<std::string, std::string>>
 tmpfsParams(const std::string &size, bool underHome, unsigned uid, unsigned gid);
 
+// 1.1.77: a mount point as nmount(2) gets it and realpath(3) gives it
+// back: repeated slashes collapsed, "." components and a trailing slash
+// dropped ("/" stays "/"). ".." is kept — realpath resolves it through
+// the file system, so a path with it never compares equal and is
+// refused. Mount compares the two to refuse a mount point with a
+// symlink on the way.
+std::string normalizeMountPoint(const std::string &path);
+
 // privops-side validators for mount_tmpfs fields.
 std::string validateDecimal(const std::string &s, const char *what);   // uid / gid: 1..10 digits
 std::string validateOctalMode(const std::string &mode);                // 3..5 octal digits

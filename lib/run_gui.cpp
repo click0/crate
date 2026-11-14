@@ -78,20 +78,10 @@ static void requireTool(const char *path, const char *pkgHint) {
 // skipped the touch and crated, as root, mounted the host socket over
 // whatever the link pointed at. lstat() so the link itself is seen,
 // S_ISREG so sockets/dirs/fifos are refused too.
-static void ensureMountTargetFile(const std::string &target) {
-  struct stat st;
-  if (::lstat(target.c_str(), &st) == 0) {
-    if (!S_ISREG(st.st_mode))
-      ERR("refusing to mount over " << target
-          << ": not a regular file (symlink, directory or socket planted inside the jail?)")
-    return;
-  }
-  if (errno != ENOENT)
-    ERR("lstat(" << target << "): " << strerror(errno))
-  int fd = ::open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
-  if (fd == -1)
-    ERR("cannot create mount target " << target << ": " << strerror(errno))
-  ::close(fd);
+// 1.1.77: FsBeneath::touch — lstat saw a link at the target itself, but a
+// symlinked directory on the way (/tmp/wayland -> /etc) was followed.
+static void ensureMountTargetFile(const std::string &jailPath, const std::string &rel) {
+  FsBeneath::touch(jailPath, rel, 0600);
 }
 
 // Wait for X socket /tmp/.X11-unix/X<N> to appear, with timeout
@@ -437,7 +427,7 @@ static RunAtEnd setupVncAndRegister(unsigned dispNum, pid_t xServerPid,
     ::unlink(ownXLink.c_str());
     ::rmdir(ownXDir.c_str());
   });
-  Util::Fs::mkdir(J("/tmp/.X11-unix"), 01777);
+  FsBeneath::mkdirs(jailPath, "/tmp/.X11-unix", 01777);   // 1.1.77
   mount(new Mount("nullfs", J("/tmp/.X11-unix"), ownXDir, MNT_RDONLY | MNT_IGNORE));
   setJailEnv("DISPLAY", dispStr);
 
@@ -753,23 +743,39 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
                                 jailPath, mounts, setJailEnv, spec, logProgress);
   }
 
-  // Shared mode (default): mount host X11 socket into jail.
-  // Security warning is always shown — it must not depend on the verbosity
-  // flag, because shared mode has real security implications (any jail
-  // process inherits keystroke + window-manipulation access on the host
-  // X server). Operators who knowingly accept the risk can suppress this
-  // warning by setting the `CRATE_X11_SHARED_ACK=1` environment variable.
-  if (::getenv("CRATE_X11_SHARED_ACK") == nullptr) {
-    WARN("x11 mode=shared provides NO display isolation — jail processes can read host "
-         "keystrokes and manipulate windows. Use mode=nested (Xephyr) or mode=headless "
-         "for security-sensitive workloads. Set CRATE_X11_SHARED_ACK=1 to suppress this warning.")
-  }
-
+  // Shared mode (default): mount the host display/compositor socket into
+  // the jail.
   bool isAutoFlow    = (spec.guiOptions && spec.guiOptions->mode == "auto");
   bool isWaylandFlow = (spec.guiOptions && spec.guiOptions->mode == "wayland");
   auto *display = ::getenv("DISPLAY");
   auto *waylandDisplay = ::getenv("WAYLAND_DISPLAY");
   auto *xdgRuntimeDir = ::getenv("XDG_RUNTIME_DIR");
+
+  // Security warnings are always shown — they must not depend on the
+  // verbosity flag, because shared mode has real security implications:
+  // a jail process inherits keystroke + window-manipulation access on the
+  // host display. Operators who knowingly accept the risk suppress each
+  // with the matching env var.
+  // 1.1.77: the X11 warning fired for `gui.mode: wayland` too (it routes
+  // through this shared block) although no X11 socket is bound, and said
+  // nothing about the host Wayland socket the shared/auto path binds —
+  // which is the same keystroke + screen-capture exposure for Wayland
+  // clients (virtual keyboard/pointer, screencopy, data-control,
+  // foreign-toplevel all reach the whole host session, other jails'
+  // windows included). Gate the X11 warning on an X11 socket actually
+  // being bound (it is mounted right below, or the run fails), and warn
+  // separately for the Wayland bind.
+  auto displayWarnings = RunGuiPure::sharedDisplayWarnings(
+      isAutoFlow, isWaylandFlow, display != nullptr,
+      waylandDisplay != nullptr && waylandDisplay[0] != '\0',
+      xdgRuntimeDir != nullptr);
+  if (displayWarnings.x11 && ::getenv("CRATE_X11_SHARED_ACK") == nullptr) {
+    WARN("x11 mode=shared provides NO display isolation — jail processes can read host "
+         "keystrokes and manipulate windows. Use mode=nested (Xephyr) or mode=headless "
+         "for security-sensitive workloads. Set CRATE_X11_SHARED_ACK=1 to suppress this warning.")
+  }
+  // The Wayland warning is printed where the socket is mounted, below:
+  // WAYLAND_DISPLAY may name no usable socket, and then nothing is bound.
 
   // 0.8.46: `gui.mode: wayland` is strict — operator opted out of
   // X11 fallback. Refuse to start without WAYLAND_DISPLAY rather
@@ -792,7 +798,7 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
   } else if (display != nullptr) {
     if (logProgress)
       std::cerr << rang::fg::gray << "x11 option (mode=shared): mount the X11 socket in jail" << rang::style::reset << std::endl;
-    Util::Fs::mkdir(J("/tmp/.X11-unix"), 01777);
+    FsBeneath::mkdirs(jailPath, "/tmp/.X11-unix", 01777);   // 1.1.77
     mount(new Mount("nullfs", J("/tmp/.X11-unix"), "/tmp/.X11-unix", MNT_IGNORE));
     setJailEnv("DISPLAY", display);
   } else if (!isAutoFlow) {
@@ -858,14 +864,23 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
       std::string hostSock = std::string(xdgRuntimeDir) + "/" + sockBasename;
       if (Util::Fs::fileExists(hostSock)) {
         try {
-          Util::Fs::mkdir(J("/tmp/wayland"), 0700);
+          FsBeneath::mkdirs(jailPath, "/tmp/wayland", 0700);   // 1.1.77
           // Pre-create an empty file at the target so nullfs has
           // something to mount over (FreeBSD nullfs needs a target).
           auto jailSockTarget = J("/tmp/wayland/") + sockBasename;
-          ensureMountTargetFile(jailSockTarget);
+          ensureMountTargetFile(jailPath, "/tmp/wayland/" + sockBasename);
           mount(new Mount("nullfs", jailSockTarget, hostSock, MNT_IGNORE));
           setJailEnv("XDG_RUNTIME_DIR", "/tmp/wayland");
           setJailEnv("WAYLAND_DISPLAY", sockBasename);
+          // 1.1.77: said once the socket is in the jail, not on intent
+          if (displayWarnings.wayland && ::getenv("CRATE_WAYLAND_SHARED_ACK") == nullptr) {
+            WARN("gui: the host Wayland compositor socket is bound into the jail and provides NO "
+                 "display isolation — a Wayland client in the jail can inject input (virtual "
+                 "keyboard/pointer), capture any window or output (screencopy), and read the "
+                 "clipboard (data-control) across the whole host session, other jails' GUI windows "
+                 "included. Treat such a jail as part of the host's trusted display domain, not as "
+                 "a boundary between tenants. Set CRATE_WAYLAND_SHARED_ACK=1 to suppress this warning.")
+          }
           if (logProgress)
             std::cerr << rang::fg::gray << "gui: auto: bound Wayland socket "
                       << hostSock << " -> " << jailSockTarget
@@ -901,9 +916,9 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
       auto hostSock = std::string(xdgRuntimeDir) + "/" + sockName;
       if (!Util::Fs::fileExists(hostSock)) continue;
       try {
-        Util::Fs::mkdirIfNotExists(J("/tmp/wayland"), 0700);
+        FsBeneath::mkdirs(jailPath, "/tmp/wayland", 0700);   // 1.1.77
         auto jailSockTarget = J("/tmp/wayland/") + sockName;
-        ensureMountTargetFile(jailSockTarget);   // empty mount target
+        ensureMountTargetFile(jailPath, "/tmp/wayland/" + sockName);   // empty mount target
         mount(new Mount("nullfs", jailSockTarget, hostSock, MNT_IGNORE));
         anyBound = true;
         if (logProgress)
@@ -939,15 +954,12 @@ RunAtEnd setupX11(const Spec &spec, const std::string &jailPath,
     auto hostPulse = std::string(xdgRuntimeDir) + "/" + pulseRel;
     if (Util::Fs::fileExists(hostPulse)) {
       try {
-        Util::Fs::mkdirIfNotExists(J("/tmp/wayland"), 0700);
-        // Compute parent dir of jailSockTarget (e.g. "/tmp/wayland/pulse").
-        auto jailSockTarget = J("/tmp/wayland/") + pulseRel;
-        auto slashAt = jailSockTarget.rfind('/');
-        if (slashAt != std::string::npos) {
-          auto parentDir = jailSockTarget.substr(0, slashAt);
-          Util::Fs::mkdirIfNotExists(parentDir, 0700);
-        }
-        ensureMountTargetFile(jailSockTarget);   // empty mount target
+        // 1.1.77: /tmp/wayland and the socket's own directory (e.g.
+        // "/tmp/wayland/pulse") through FsBeneath
+        const auto relTarget = "/tmp/wayland/" + pulseRel;
+        auto jailSockTarget = J(relTarget);
+        FsBeneath::mkdirs(jailPath, relTarget.substr(0, relTarget.rfind('/')), 0700);
+        ensureMountTargetFile(jailPath, relTarget);   // empty mount target
         mount(new Mount("nullfs", jailSockTarget, hostPulse, MNT_IGNORE));
         // PulseAudio reads XDG_RUNTIME_DIR (same as PipeWire) —
         // already set above when PipeWire bound; setting again
@@ -1134,7 +1146,7 @@ RunAtEnd setupCompositor(const Spec &spec, const std::string &jailPath,
 
   // Per-jail XDG_RUNTIME_DIR (0700) for the compositor's wayland socket.
   const std::string runtimeDir = "/tmp/wayland";
-  Util::Fs::mkdirIfNotExists(J(runtimeDir), 0700);
+  FsBeneath::mkdirs(jailPath, runtimeDir, 0700);   // 1.1.77
 
   // DRM backend: bind the host seatd socket so libseat in the jail can
   // open DRM master + input. /dev/dri/* and /dev/input/* are unhidden
@@ -1146,10 +1158,9 @@ RunAtEnd setupCompositor(const Spec &spec, const std::string &jailPath,
         continue;
       try {
         std::string target = J(cand);
-        auto slash = target.rfind('/');
-        if (slash != std::string::npos)
-          Util::Fs::mkdirIfNotExists(target.substr(0, slash), 0755);
-        ensureMountTargetFile(target);
+        // 1.1.77: through FsBeneath (cand is absolute, e.g. /var/run/seatd.sock)
+        FsBeneath::mkdirs(jailPath, cand.substr(0, cand.rfind('/')), 0755);
+        ensureMountTargetFile(jailPath, cand);
         mount(new Mount("nullfs", target, cand, MNT_IGNORE));
         seatdSock = cand;   // bound at the same path inside the jail
         break;

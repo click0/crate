@@ -955,9 +955,6 @@ DispatchResult handleExecInJail(const PrivOpsPure::ExecInJailReq &r,
   cargv.reserve(r.argv.size() + 1);
   for (const auto &a : r.argv) cargv.push_back(const_cast<char*>(a.c_str()));
   cargv.push_back(nullptr);
-  static const char kPath[] =
-      "PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin";
-  std::string termEnv = r.term.empty() ? std::string() : "TERM=" + r.term;
 
   PasswdPure::User user;
   user.name = r.user.empty() ? "root" : r.user;
@@ -990,10 +987,11 @@ DispatchResult handleExecInJail(const PrivOpsPure::ExecInJailReq &r,
   }
   if (user.home.empty())  user.home  = "/";
   if (user.shell.empty()) user.shell = "/bin/sh";
-  std::string homeEnv    = "HOME=" + user.home;
-  std::string shellEnv   = "SHELL=" + user.shell;
-  std::string userEnv    = "USER=" + user.name;
-  std::string lognameEnv = "LOGNAME=" + user.name;
+  // 1.1.77: the same set crate(1)'s root path gives (PasswdPure::jailExecEnv)
+  const auto envStrings = PasswdPure::jailExecEnv(user.name, user.home, user.shell, r.term);
+  std::vector<char*> envp;
+  for (const auto &e : envStrings) envp.push_back(const_cast<char*>(e.c_str()));
+  envp.push_back(nullptr);
   // login class for setusercontext(3) — resource limits, priority and
   // umask come from the JAIL's /etc/login.conf (read after jail_attach),
   // not inherited from crated. login_getpwclass() falls back to "root"
@@ -1039,16 +1037,7 @@ DispatchResult handleExecInJail(const PrivOpsPure::ExecInJailReq &r,
         ::_exit(kExecExitUser);
       (void)::chdir(user.home.c_str());
     }
-    char *envp[7];
-    int n = 0;
-    envp[n++] = const_cast<char*>(kPath);
-    envp[n++] = const_cast<char*>(homeEnv.c_str());
-    envp[n++] = const_cast<char*>(shellEnv.c_str());
-    envp[n++] = const_cast<char*>(userEnv.c_str());
-    envp[n++] = const_cast<char*>(lognameEnv.c_str());
-    if (!termEnv.empty()) envp[n++] = const_cast<char*>(termEnv.c_str());
-    envp[n] = nullptr;
-    ::execve(cargv[0], cargv.data(), envp);
+    ::execve(cargv[0], cargv.data(), envp.data());
     ::_exit(kExecExitExec);
   }
 

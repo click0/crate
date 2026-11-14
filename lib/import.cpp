@@ -11,9 +11,12 @@
 #include "util.h"
 #include "err.h"
 
+#include "fs_beneath.h"   // 1.1.77: copyToNewFile
 #include <rang.hpp>
 
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <string.h>
 #include <unistd.h>
 
 #include <iostream>
@@ -103,7 +106,7 @@ static bool validateChecksum(const std::string &archivePath, bool force) {
 
   // Compute actual checksum
   auto actualOutput = Util::execCommandGetOutput(
-    {"/sbin/sha256", "-q", archivePath},
+    {CRATE_PATH_SHA256, "-q", archivePath},
     "compute SHA256 checksum for validation");
   auto actualHash = Util::stripTrailingSpace(actualOutput);
 
@@ -268,14 +271,21 @@ bool importCrate(const Args &args) {
   }
 
   // Step 6: Copy/re-compress the archive to the output location
-  // If the input is already a valid .crate (tar.xz), just copy it
-  Util::Fs::copyFile(archivePath, outFile);
-  Util::Fs::chown(outFile, myuid, mygid);
+  // If the input is already a valid .crate (tar.xz), just copy it.
+  // 1.1.77: into a new file, no symlink followed, owned through the
+  // descriptor. copy_file took a dangling symlink at the derived name
+  // (/tmp/x.crate -> /etc/…, planted by another user next to /tmp/x.txz)
+  // for a missing file and wrote through it as root; chown followed it
+  // too — the import side of 1.1.71's export fix. (A name that appears
+  // after the check below is refused by O_EXCL: "File exists".)
+  if (Util::Fs::fileExists(outFile) || Util::Fs::dirExists(outFile))
+    ERR("output file '" << outFile << "' already exists — remove it first or pass a different -o")
+  FsBeneath::copyToNewFile(archivePath, outFile, 0644, myuid, mygid);
 
   // Generate checksum for the output file
   auto sha256File = outFile + ".sha256";
   auto checksumOutput = Util::execCommandGetOutput(
-    {"/sbin/sha256", "-q", outFile},
+    {CRATE_PATH_SHA256, "-q", outFile},
     "compute SHA256 checksum of imported crate");
   auto checksum = Util::stripTrailingSpace(checksumOutput);
   Util::Fs::writeFile(STR(checksum << "  " << Util::filePathToFileName(outFile) << "\n"), sha256File);

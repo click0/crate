@@ -60,6 +60,16 @@ void copyWithin(const std::string &root, const std::string &srcRel, const std::s
 // the host path's last component is not followed either).
 void copyOut(const std::string &root, const std::string &rel, const std::string &hostDst);
 
+// 1.1.77: host to host, for output the host writes where others can
+// plant names (`crate import` next to the archive, in /tmp): a copy of
+// hostSrc in a NEW file hostDst — O_EXCL and O_NOFOLLOW, so neither an
+// existing file nor a (dangling) symlink at hostDst is written through
+// — created with `mode` (the umask applies) and, unless uid is
+// (uid_t)-1, given uid:gid through the descriptor. A failed copy
+// removes hostDst again. Throws; "File exists" when hostDst is there.
+void copyToNewFile(const std::string &hostSrc, const std::string &hostDst,
+                   mode_t mode, uid_t uid = (uid_t)-1, gid_t gid = (gid_t)-1);
+
 void chown(const std::string &root, const std::string &rel, uid_t uid, gid_t gid);
 void chmod(const std::string &root, const std::string &rel, mode_t mode);
 // A non-directory.
@@ -67,5 +77,29 @@ void unlink(const std::string &root, const std::string &rel);
 // mkdir -p: missing components are created with `mode`; existing ones
 // must be directories (not symlinks to one).
 void mkdirs(const std::string &root, const std::string &rel, mode_t mode);
+
+// 1.1.77: an (empty) mount target for a file: created O_EXCL with `mode`
+// when missing; an existing one must be a regular file and is left as
+// it is.
+void touch(const std::string &root, const std::string &rel, mode_t mode = 0600);
+
+// 1.1.77: a descriptor of the directory rel (O_DIRECTORY, O_CLOEXEC),
+// walked like everything else; "" or "/" is root itself. For work that
+// must stay on that directory after the check (bind(2) relative to it
+// after fchdir).
+int openDirectory(const std::string &root, const std::string &rel);
+
+// 1.1.77: st_dev of the directory that holds rel's last component — the
+// file system a link at rel would have to be on.
+dev_t parentDevice(const std::string &root, const std::string &rel);
+
+// 1.1.77: hard links across the tree's edge (`files/share`). linkIn
+// links the host file (followed — the host's side) in at rel, which
+// must not exist. linkOut links the regular file at rel (not followed)
+// out to hostDst; when what got linked is not the file that was
+// checked (the jail swapped it in between), hostDst is removed again
+// and it throws.
+void linkIn(const std::string &hostSrc, const std::string &root, const std::string &rel);
+void linkOut(const std::string &root, const std::string &rel, const std::string &hostDst);
 
 }

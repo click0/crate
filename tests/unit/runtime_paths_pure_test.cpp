@@ -154,6 +154,36 @@ ATF_TEST_CASE_BODY(root_jails_root_and_runtime_mode) {
   ATF_REQUIRE_EQ(crateJailDirName("/var/run/crate/0/jail-web-0011aabb"), std::string("jail-web-0011aabb"));
 }
 
+// 1.1.77: whose jail a path is.
+ATF_TEST_CASE_WITHOUT_HEAD(crate_jail_root_of);
+ATF_TEST_CASE_BODY(crate_jail_root_of) {
+  using RuntimePathsPure::crateJailRootOf;
+  const std::string r0 = "/var/run/crate/0/jail-web-1a2b";
+  ATF_REQUIRE_EQ(crateJailRootOf(r0), r0);
+  ATF_REQUIRE_EQ(crateJailRootOf(r0 + "/tmp/.X11-unix"), r0);
+  ATF_REQUIRE_EQ(crateJailRootOf("/var/run/crate/jail-web-1a2b/dev"), std::string("/var/run/crate/jail-web-1a2b"));
+  ATF_REQUIRE_EQ(crateJailRootOf("/var/run/crate/1001/jail-db-9f/home/a/b"), std::string("/var/run/crate/1001/jail-db-9f"));
+  // not inside a jail
+  ATF_REQUIRE_EQ(crateJailRootOf("/var/run/crate/1001"), std::string());
+  ATF_REQUIRE_EQ(crateJailRootOf("/var/run/crate/1001/exports/x"), std::string());
+  ATF_REQUIRE_EQ(crateJailRootOf("/var/run/crate/x/jail-web/tmp"), std::string());
+  ATF_REQUIRE_EQ(crateJailRootOf("/var/run/crate/0/1/jail-web/tmp"), std::string());
+  ATF_REQUIRE_EQ(crateJailRootOf("/usr/jails/web/tmp"), std::string());
+  ATF_REQUIRE_EQ(crateJailRootOf(""), std::string());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(crate_jail_owner_uid);
+ATF_TEST_CASE_BODY(crate_jail_owner_uid) {
+  using RuntimePathsPure::crateJailOwnerUid;
+  ATF_REQUIRE_EQ(crateJailOwnerUid("/var/run/crate/0/jail-web-1a2b"), (int64_t)0);
+  ATF_REQUIRE_EQ(crateJailOwnerUid("/var/run/crate/1001/jail-web-1a2b"), (int64_t)1001);
+  ATF_REQUIRE_EQ(crateJailOwnerUid("/var/run/crate/jail-web-1a2b"), (int64_t)0);    // legacy root
+  ATF_REQUIRE_EQ(crateJailOwnerUid("/var/run/crate/99999999999/jail-web-1a2b"), (int64_t)-1);
+  ATF_REQUIRE_EQ(crateJailOwnerUid("/var/run/crate/1001/x/jail-web"), (int64_t)-1);
+  ATF_REQUIRE_EQ(crateJailOwnerUid("/usr/local/bastille/jails/web/root"), (int64_t)-1);
+  ATF_REQUIRE_EQ(crateJailOwnerUid(""), (int64_t)-1);
+}
+
 ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, root_jails_root_and_runtime_mode);
   ATF_ADD_TEST_CASE(tcs, crate_jail_path_both_layouts);
@@ -168,4 +198,6 @@ ATF_INIT_TEST_CASES(tcs) {
   ATF_ADD_TEST_CASE(tcs, validate_uid_rejects_negative);
   ATF_ADD_TEST_CASE(tcs, validate_uid_rejects_too_big);
   ATF_ADD_TEST_CASE(tcs, per_user_paths_no_traversal_segments);
+  ATF_ADD_TEST_CASE(tcs, crate_jail_owner_uid);
+  ATF_ADD_TEST_CASE(tcs, crate_jail_root_of);
 }

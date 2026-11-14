@@ -1256,6 +1256,69 @@ rootless run mounts its /dev through `mount_devfs` and gets its private
 ruleset as before (§4e); `cow:` unionfs is refused before anything is
 mounted.
 
+## 4s. 1.1.77 — shares, mount targets and the socket proxy
+
+```sh
+# a template whose source jail planted links (as in §4r)
+crate run -f share.crate & sleep 5; J=$(jls path | grep jail-share- | head -1)
+#   share.yml:  files/share: [{host: /home/alice/app.conf, jail: /etc/app.conf}]
+#               dirs/share:  [{host: /home/alice/data, jail: /data/}]     (trailing slash)
+#               socket_proxy: {proxy: [{host: /var/run/x.sock, jail: /var/run/proxy/x.sock}]}
+ln -sf /etc/master.passwd $J/etc/app.conf            # the jail file is a link to a host file
+rm -rf $J/var/run/proxy && ln -s /etc $J/var/run/proxy
+crate template warm share --output tank/templates/evil-share
+crate run --warm-base tank/templates/evil-share --name es -- /bin/echo ok
+#   expect: the files/share step either replaces the link (host file exists) or refuses it
+#   ("is not a regular file"); /home/alice/app.conf is never a link or copy of master.passwd
+#   expect: socket proxy refused — "'proxy' is a symbolic link …"; no x.sock in /etc
+ls -l /etc/x.sock 2>/dev/null; ls -li /home/alice/app.conf /etc/master.passwd
+# a plain run: shares, the trailing-slash dir share, tmpfs and the GUI sockets mount as before
+crate run -f share.crate -- /bin/sh -c 'mount | grep -c nullfs; ls -l /var/run/proxy/x.sock'
+# a share whose jail path runs through a link inside the tree is refused
+#   (dirs/share jail: /lnk/data, the tree has /lnk -> tmp): "'lnk' is a symbolic link …"
+```
+
+```sh
+# targets: own jails only by container name, crate jails only, jid/name collisions refused
+sudo -u alice crate run -f web.crate &   ;   crate run -f webapp.crate &
+crate stop web           # root has no `web` of its own: "not found" (alice's web_pid… keeps running)
+crate console web        # same — no longer a root login in webapp
+crate console webapp     # a login in webapp
+crate info 3             # when jid 3 and a container "3" are different jails: "names 2 running jails"
+# the jail's environment
+LANG=uk_UA.UTF-8 crate run -f web.crate -- /usr/bin/env   # PATH/HOME/SHELL/USER/LOGNAME/TERM/LANG + CRATE, the jail's DISPLAY…
+#   a service or hook (`service x onestart`, run:before-execute) prints the same set without the
+#   host's DISPLAY / WAYLAND_DISPLAY / XAUTHORITY / XDG_RUNTIME_DIR
+# crated answers for its peers: a tenant's rootless `web` by container name
+sudo -u alice crate run -f web.crate &
+curl -s --unix-socket /var/run/crate/control/<socket> http://x/v1/control/containers/web        # 200, alice's web_pid…
+curl -s -X POST --unix-socket /var/run/crate/control/<socket> http://x/v1/control/containers/web/start   # 409, already running
+# a host whose way to the jail root holds a symlink (/var -> /usr/var) still mounts;
+# run/user on a base without /home: /home is a directory, a share under the user's home mounts
+# logs / import
+ln -sf /etc/master.passwd $J/var/log/messages && crate logs web   # "'messages' is a symbolic link …"
+ln -s /etc/x /tmp/x.crate; cp web.txz /tmp/x.txz; crate import /tmp/x.txz   # "already exists"; /etc/x not created
+```
+
+```sh
+# the shared-display warnings (on a graphical host; needs a Wayland or X session)
+WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/var/run/user/$(id -u) \
+  crate run -f lxqt-wayland.yml -- /bin/echo ok   # prints the "host Wayland compositor socket …" WARN once
+CRATE_WAYLAND_SHARED_ACK=1 WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/var/run/user/$(id -u) \
+  crate run -f lxqt-wayland.yml -- /bin/echo ok   # no WARN
+DISPLAY=:0 crate run -f firefox.yml -- /bin/echo ok   # the X11 shared WARN (CRATE_X11_SHARED_ACK=1 to suppress)
+#   a Wayland-only run (gui.mode: wayland, no DISPLAY) no longer prints the X11 wording
+```
+
+Pass criteria: no host file is linked, copied or created through a link
+in the tree; the socket appears only inside the jail; ordinary shares,
+tmpfs and GUI sockets mount as before (a trailing slash included); a
+container name finds only the caller's own crate jails under crate(1)
+and any tenant's through crated; a jail command gets the listed
+variables and none of the host's display variables; the
+shared Wayland bind prints its warning unless acked, and the X11 warning
+no longer fires for a Wayland-only run.
+
 ---
 
 ## 5. Reporting back

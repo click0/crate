@@ -184,7 +184,10 @@ void handleList(std::string &resBody, int &status,
 std::optional<JailQuery::JailInfo> findNamed(const std::string &name,
                                              std::string &resBody, int &status) {
   unsigned matches = 0;
-  auto j = JailQuery::findContainer(name, &matches);
+  // 1.1.77: anyOwner — crated is root, the peer is not; a tenant's own
+  // rootless `web` (under /var/run/crate/<uid>/) is found by name as
+  // before, and the pool gate judges it.
+  auto j = JailQuery::findContainer(name, &matches, /*anyOwner=*/true);
   if (!j) {
     status  = matches > 1 ? 409 : 404;
     resBody = ControlSocketPure::renderErrorJson(
@@ -305,13 +308,17 @@ void handleStart(std::string &resBody, int &status, const std::string &name,
   // 1.1.70: by container name too — the running jail is "web_pid4242",
   // so the old exact lookup of "web" missed it and a second instance was
   // spawned next to the first.
+  // 1.1.77: by the container name of what was asked — start web_pid1
+  // looked for a jail named web_pid1 and missed a running web_pid999.
+  // Among every tenant's jails (anyOwner): crated is root, and a peer's
+  // own rootless `web` must still answer 409 here.
+  const std::string containerName = RunPure::containerNameOf(name);
   unsigned running = 0;
-  if (JailQuery::findContainer(name, &running) || running > 0) {
+  if (JailQuery::findContainer(containerName, &running, /*anyOwner=*/true) || running > 0) {
     status  = 409;
     resBody = ControlSocketPure::renderErrorJson("container is already running");
     return;
   }
-  const std::string containerName = RunPure::containerNameOf(name);
 
   std::vector<std::string> runArgs;
   std::string cratePath;
@@ -575,7 +582,7 @@ void handleConnection(int connFd,
   // kernel name too.
   if (route.action != ControlSocketPure::Action::ListContainers &&
       route.action != ControlSocketPure::Action::PostStart) {
-    if (auto j = JailQuery::findContainer(route.container);
+    if (auto j = JailQuery::findContainer(route.container, nullptr, /*anyOwner=*/true);
         j && j->name != route.container &&
         !ControlSocketPure::poolVisibleOnSocket(PoolPure::inferPool(j->name, poolSeparator), spec.pools)) {
       writeAll(connFd, ControlSocketPure::buildHttpResponse(

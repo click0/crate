@@ -214,4 +214,18 @@ bool parseResolution(const std::string &spec, unsigned &w, unsigned &h) {
   }
 }
 
+SharedDisplayWarnings sharedDisplayWarnings(bool isAutoFlow, bool isWaylandFlow,
+                                            bool displaySet, bool waylandSet,
+                                            bool xdgRuntimeSet) {
+  SharedDisplayWarnings w;
+  // X11 socket is bound for shared/auto when DISPLAY is set; a
+  // Wayland-only run skips the X11 bind, so it must not warn about X11.
+  w.x11 = !isWaylandFlow && displaySet;
+  // The host Wayland socket is bound for auto (on a Wayland host) and
+  // for explicit wayland, needing both WAYLAND_DISPLAY and the runtime
+  // dir to locate it.
+  w.wayland = (isAutoFlow || isWaylandFlow) && waylandSet && xdgRuntimeSet;
+  return w;
+}
+
 }

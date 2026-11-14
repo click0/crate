@@ -12,6 +12,16 @@
 ##   - XDG_RUNTIME_DIR pointing at the user runtime dir
 ##   - run `crate doctor` first; it will warn about missing pieces
 ##
+## SECURITY: this binds the host compositor's Wayland socket into the
+## jail as-is. That socket carries privileged protocols (virtual
+## keyboard/pointer, screencopy, data-control, foreign-toplevel), so a
+## client in the jail can inject input into, capture, and drive the
+## whole host display session — other jails' windows and the host's
+## own included. It is NOT a boundary between tenants; crate prints a
+## warning (CRATE_WAYLAND_SHARED_ACK=1 to suppress). For a
+## mutually-distrusting workload use gui.mode: headless or nested.
+## See docs/trust-model.md, "Shared display plane".
+##
 ## Inside the jail:
 ##   - lxqt-wayland-session must be available (check pkg search)
 ##   - a Wayland compositor must be installed and started before lxqt

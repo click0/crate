@@ -200,6 +200,7 @@ void copyFile(const std::string &srcFile, const std::string &dstFile);
 // is missing, falls back to the deepest existing ancestor (to allow callers
 // to ask "would these end up on the same device?" before creating files).
 bool sameDevice(const std::string &a, const std::string &b);
+dev_t deviceOfNearestExisting(const std::string &path);   // 1.1.77: public
 // Create an empty regular file with the given mode. Fails if the parent
 // directory is missing or the path already exists as a non-regular file.
 void touchFile(const std::string &path, mode_t mode = 0644);

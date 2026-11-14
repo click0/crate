@@ -94,6 +94,33 @@ std::string crateJailDirName(const std::string &path) {
   return rest;
 }
 
+int64_t crateJailOwnerUid(const std::string &path) {
+  if (crateJailDirName(path).empty()) return -1;
+  const std::string rest = path.substr(std::string(kLegacyRoot).size() + 1);
+  auto slash = rest.find('/');
+  if (slash == std::string::npos) return 0;   // legacy: root's
+  const std::string uid = rest.substr(0, slash);
+  if (uid.size() > 10) return -1;
+  int64_t v = std::stoll(uid);
+  return v > INT32_MAX ? -1 : v;
+}
+
+std::string crateJailRootOf(const std::string &path) {
+  const std::string root = std::string(kLegacyRoot) + "/";
+  if (path.compare(0, root.size(), root) != 0) return "";
+  // the jail directory is the first or, after "<uid>/", the second component
+  size_t start = root.size();
+  for (int i = 0; i < 2; i++) {
+    size_t end = path.find('/', start);
+    if (end == std::string::npos) end = path.size();
+    const std::string candidate = path.substr(0, end);
+    if (isCrateJailPath(candidate)) return candidate;
+    if (end >= path.size()) break;
+    start = end + 1;
+  }
+  return "";
+}
+
 bool isCrateJailPath(const std::string &path) {
   return !crateJailDirName(path).empty();
 }
