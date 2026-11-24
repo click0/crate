@@ -136,12 +136,77 @@ static bool isPortAvailable(unsigned port) {
   return result == 0;
 }
 
+// 1.1.79: the same question for IPv6 loopback — asked when gui/vnc_bind6
+// puts a second listener on the port. A host without IPv6 says "free":
+// the listener then fails by itself and the IPv4 one is not held back.
+static bool isPortAvailable6(unsigned port) {
+  int sock = ::socket(AF_INET6, SOCK_STREAM, 0);
+  if (sock < 0)
+    return true;
+  int one = 1;
+  ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+  ::setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof(one));
+  struct sockaddr_in6 addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin6_family = AF_INET6;
+  addr.sin6_port = htons(port);
+  addr.sin6_addr = in6addr_loopback;
+  int result = ::bind(sock, (struct sockaddr*)&addr, sizeof(addr));
+  const int e = errno;
+  ::close(sock);
+  return result == 0 || e != EADDRINUSE;
+}
+
 // Find an available VNC port starting from preferred
-static unsigned findAvailablePort(unsigned preferred) {
+// 1.1.79: alsoV6 — free on IPv6 too (gui/vnc_bind6)
+static unsigned findAvailablePort(unsigned preferred, bool alsoV6 = false) {
   for (unsigned p = preferred; p < preferred + 100; p++)
-    if (isPortAvailable(p))
+    if (isPortAvailable(p) && (!alsoV6 || isPortAvailable6(p)))
       return p;
   return preferred; // fall back, let x11vnc report the error
+}
+
+// 1.1.79: gui/vnc_bind6, validated ("" — no IPv6 listener)
+static std::string resolvedVncBind6(const Spec &spec) {
+  std::string out, err;
+  if (!RunGuiPure::resolveVncBind6(spec.guiOptions ? spec.guiOptions->vncBind6 : std::string(), out, err))
+    ERR(err)
+  return out;
+}
+
+// 1.1.79: what `x11vnc -help` prints (it lists libvncserver's options
+// too; RunGuiPure::x11vncKnowsRfbPortV6 reads it). "" when it could not
+// be run. The exit status is not looked at: -help exits 1.
+static std::string x11vncHelpText() {
+  int fds[2];
+  if (::pipe2(fds, O_CLOEXEC) != 0)
+    return "";
+  pid_t pid = ::fork();
+  if (pid == -1) {
+    ::close(fds[0]);
+    ::close(fds[1]);
+    return "";
+  }
+  if (pid == 0) {
+    ::dup2(fds[1], STDOUT_FILENO);
+    ::dup2(fds[1], STDERR_FILENO);
+    ::execl(CRATE_PATH_X11VNC, "x11vnc", "-help", nullptr);
+    ::_exit(127);
+  }
+  ::close(fds[1]);
+  std::string text;
+  char buf[8192];
+  ssize_t n;
+  while ((n = ::read(fds[0], buf, sizeof(buf))) > 0 || (n < 0 && errno == EINTR)) {
+    if (n > 0 && text.size() < 4 * 1024 * 1024)
+      text.append(buf, (size_t)n);
+  }
+  ::close(fds[0]);
+  int status;
+  while (::waitpid(pid, &status, 0) == -1 && errno == EINTR) {}
+  if (WIFEXITED(status) && WEXITSTATUS(status) == 127)
+    return "";
+  return text;
 }
 
 // Determine effective GUI mode from spec.
@@ -207,6 +272,13 @@ static RunAtEnd startVnc(unsigned displayNum, unsigned &vncPort,
   // x11vnc package dependency. Falls back to x11vnc with a
   // warning if the binary wasn't built with WITH_LIBVNCSERVER.
   bool wantNative = spec.guiOptions && spec.guiOptions->vncNative;
+  // 1.1.79: the IPv6 address to listen on as well, "" for none
+  const std::string vncBind6 = resolvedVncBind6(spec);
+  if (RunGuiPure::vncBind6IsPublic(vncBind6))
+    std::cerr << rang::fg::yellow << "gui: VNC bound to [" << vncBind6
+              << "] — the VNC stream is reachable beyond loopback; prefer ::1 + an SSH "
+                 "tunnel, or set gui/vnc_password"
+              << rang::style::reset << std::endl;
   if (wantNative && !VncServer::available()) {
     std::cerr << rang::fg::yellow
               << "gui.vnc_native: true but crate was built without "
@@ -218,14 +290,15 @@ static RunAtEnd startVnc(unsigned displayNum, unsigned &vncPort,
     unsigned port = 5900 + displayNum;
     if (spec.guiOptions && spec.guiOptions->vncPort != 0)
       port = spec.guiOptions->vncPort;
-    port = findAvailablePort(port);
+    port = findAvailablePort(port, !vncBind6.empty());
     auto password = (spec.guiOptions ? spec.guiOptions->vncPassword : std::string());
     std::string nativeBind, nativeBindErr;
     if (!CompositorPure::resolveVncBind(spec.guiOptions ? spec.guiOptions->vncBind : std::string(),
                                         nativeBind, nativeBindErr))
       ERR("gui.vnc_bind: " << nativeBindErr)
     X11Ops::useCookie(xCookie.cookie);   // 1.1.78: the server wants its cookie
-    unsigned actual = VncServer::start(displayNum, port, password, nativeBind);   // 1.1.48: loopback by default
+    // 1.1.48: loopback by default; 1.1.79: IPv6 only on gui/vnc_bind6
+    unsigned actual = VncServer::start(displayNum, port, password, nativeBind, vncBind6);
     if (actual == 0) {
       std::cerr << rang::fg::yellow
                 << "gui.vnc_native: VncServer::start() returned 0 — "
@@ -252,7 +325,7 @@ static RunAtEnd startVnc(unsigned displayNum, unsigned &vncPort,
     port = spec.guiOptions->vncPort;
 
   // Find an available port
-  port = findAvailablePort(port);
+  port = findAvailablePort(port, !vncBind6.empty());
 
   auto dispStr = STR(":" << displayNum);
   // 1.1.48: bind to loopback unless gui.vnc_bind says otherwise — x11vnc
@@ -272,10 +345,17 @@ static RunAtEnd startVnc(unsigned displayNum, unsigned &vncPort,
     "-display", dispStr,
     "-auth", xCookie.file,               // 1.1.78
     "-rfbport", std::to_string(port),
-    "-listen", vncBind,
-    "-shared", "-forever",
-    "-nopw"
   };
+  // 1.1.79: `-listen <IPv4>` alone left two IPv6 listeners on every
+  // interface — x11vnc's own on [::]:<port> and libvncserver's on
+  // [::]:5900 (RunGuiPure::x11vncListenArgs). IPv6 is now served on
+  // gui/vnc_bind6 or not at all.
+  for (const auto &a : RunGuiPure::x11vncListenArgs(
+         vncBind, vncBind6, RunGuiPure::x11vncKnowsRfbPortV6(x11vncHelpText())))
+    vncArgs.push_back(a);
+  vncArgs.push_back("-shared");
+  vncArgs.push_back("-forever");
+  vncArgs.push_back("-nopw");
 
   // Add password if configured (use -passwdfile to avoid leaking password in ps output)
   std::string passwdFile;
@@ -324,15 +404,21 @@ static RunAtEnd startVnc(unsigned displayNum, unsigned &vncPort,
 // 1.1.78: `bind` — websockify listens on gui/vnc_bind (loopback by
 // default) like the VNC server it fronts; it had no listen address and
 // served the stream on every interface (RunGuiPure::websockifyListenArg).
+// 1.1.79: `bind6` — gui/vnc_bind6: a second websockify on that IPv6
+// address and the same port (websockify takes one listen address). Both
+// connect to the VNC server over IPv4.
 static RunAtEnd startWebsockify(unsigned vncPort, unsigned &actualWsPort,
-                                const std::string &bind, bool logProgress) {
+                                const std::string &bind, const std::string &bind6,
+                                bool logProgress) {
   requireTool(CRATE_PATH_WEBSOCKIFY, "py311-websockify");
 
   unsigned wsPort = vncPort + 100; // e.g. 5910 -> 6010
-  wsPort = findAvailablePort(wsPort);
+  wsPort = findAvailablePort(wsPort, !bind6.empty());
   actualWsPort = wsPort;
-  const auto listen = RunGuiPure::websockifyListenArg(bind, wsPort);
   const auto target = RunGuiPure::websockifyTargetArg(bind, vncPort);
+  std::vector<std::string> listens = {RunGuiPure::websockifyListenArg(bind, wsPort)};
+  if (!bind6.empty())
+    listens.push_back(RunGuiPure::websockifyListenArg(bind6, wsPort));
 
   // Detect noVNC web directory
   std::string webDir;
@@ -342,45 +428,56 @@ static RunAtEnd startWebsockify(unsigned vncPort, unsigned &actualWsPort,
   else if (::stat("/usr/local/share/noVNC", &st) == 0)
     webDir = "/usr/local/share/noVNC";
 
-  if (logProgress) {
-    std::cerr << rang::fg::gray << "starting websockify on " << listen
-              << " -> " << target;
-    if (!webDir.empty())
-      std::cerr << " (web: " << webDir << ")";
-    std::cerr << rang::style::reset << std::endl;
+  auto killAll = [logProgress](const std::vector<pid_t> &pids) {
+    for (pid_t wsPid : pids) {
+      if (logProgress)
+        std::cerr << rang::fg::gray << "killing websockify pid=" << wsPid << rang::style::reset << std::endl;
+      ::kill(wsPid, SIGTERM);
+      int status;
+      ::waitpid(wsPid, &status, 0);
+    }
+  };
+
+  std::vector<pid_t> wsPids;
+  for (const auto &listen : listens) {
+    if (logProgress) {
+      std::cerr << rang::fg::gray << "starting websockify on " << listen
+                << " -> " << target;
+      if (!webDir.empty())
+        std::cerr << " (web: " << webDir << ")";
+      std::cerr << rang::style::reset << std::endl;
+    }
+
+    pid_t wsPid = ::fork();
+    if (wsPid == 0) {
+      int devnull = ::open("/dev/null", O_WRONLY);
+      if (devnull >= 0) {
+        ::dup2(devnull, STDOUT_FILENO);
+        ::dup2(devnull, STDERR_FILENO);
+        ::close(devnull);
+      }
+      if (!webDir.empty()) {
+        auto webArg = STR("--web=" << webDir);
+        ::execl(CRATE_PATH_WEBSOCKIFY, "websockify",
+                webArg.c_str(),
+                listen.c_str(), target.c_str(),
+                nullptr);
+      } else {
+        ::execl(CRATE_PATH_WEBSOCKIFY, "websockify",
+                listen.c_str(), target.c_str(),
+                nullptr);
+      }
+      ::_exit(127);
+    }
+    if (wsPid == -1) {
+      const int e = errno;
+      killAll(wsPids);
+      ERR("failed to fork websockify: " << strerror(e))
+    }
+    wsPids.push_back(wsPid);
   }
 
-  pid_t wsPid = ::fork();
-  if (wsPid == 0) {
-    int devnull = ::open("/dev/null", O_WRONLY);
-    if (devnull >= 0) {
-      ::dup2(devnull, STDOUT_FILENO);
-      ::dup2(devnull, STDERR_FILENO);
-      ::close(devnull);
-    }
-    if (!webDir.empty()) {
-      auto webArg = STR("--web=" << webDir);
-      ::execl(CRATE_PATH_WEBSOCKIFY, "websockify",
-              webArg.c_str(),
-              listen.c_str(), target.c_str(),
-              nullptr);
-    } else {
-      ::execl(CRATE_PATH_WEBSOCKIFY, "websockify",
-              listen.c_str(), target.c_str(),
-              nullptr);
-    }
-    ::_exit(127);
-  }
-  if (wsPid == -1)
-    ERR("failed to fork websockify: " << strerror(errno))
-
-  return RunAtEnd([wsPid, logProgress]() {
-    if (logProgress)
-      std::cerr << rang::fg::gray << "killing websockify pid=" << wsPid << rang::style::reset << std::endl;
-    ::kill(wsPid, SIGTERM);
-    int status;
-    ::waitpid(wsPid, &status, 0);
-  });
+  return RunAtEnd([wsPids, killAll]() { killAll(wsPids); });
 }
 
 // 1.1.74: a private host directory holding a hard link to the socket of
@@ -497,7 +594,13 @@ static RunAtEnd setupVncAndRegister(unsigned dispNum, pid_t xServerPid,
       std::cerr << rang::fg::yellow << "gui: noVNC (websockify) bound to " << wsBind
                 << " with no gui/vnc_password — anyone who reaches the port controls the "
                    "display" << rang::style::reset << std::endl;
-    wsCleanup = startWebsockify(vncPort, wsPort, wsBind, logProgress);
+    // 1.1.79: and on gui/vnc_bind6, when set
+    const std::string wsBind6 = resolvedVncBind6(spec);
+    if (RunGuiPure::vncBind6IsPublic(wsBind6) && spec.guiOptions->vncPassword.empty())
+      std::cerr << rang::fg::yellow << "gui: noVNC (websockify) bound to [" << wsBind6
+                << "] with no gui/vnc_password — anyone who reaches the port controls the "
+                   "display" << rang::style::reset << std::endl;
+    wsCleanup = startWebsockify(vncPort, wsPort, wsBind, wsBind6, logProgress);
   }
 
   // Register in GUI registry

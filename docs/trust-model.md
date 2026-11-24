@@ -571,7 +571,12 @@ itself sees only its own socket (1.1.74).
 (`novnc: true`) listen on `gui/vnc_bind`, loopback by default
 (websockify used to listen on every interface). No password is set
 unless `gui/vnc_password` is: with a non-loopback `gui/vnc_bind`, set
-one and firewall the port.
+one and firewall the port. On IPv6 nothing listens unless
+`gui/vnc_bind6` names an address (1.1.79; before that x11vnc and the
+embedded server answered on every IPv6 address of the host, with
+`gui/vnc_bind` at its loopback default — a host that ran an earlier
+version with `vnc: true` and has a routable IPv6 address served that
+display to the network, firewall permitting).
 
 ---
 

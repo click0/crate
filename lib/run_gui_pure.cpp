@@ -3,6 +3,10 @@
 #include "run_gui_pure.h"
 #include "spec.h"
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
 #include <cstddef>
 #include <iomanip>
 #include <sstream>
@@ -310,10 +314,78 @@ std::string waylandContextKeyError(const std::string &guiMode, const std::string
   return "";
 }
 
-std::string vncBindKeyError(const std::string &guiMode) {
+std::string vncBindKeyError(const std::string &guiMode, const std::string &value) {
   if (guiMode == "wayland")
     return "gui/vnc_bind is not valid with gui/mode=wayland (no VNC server is started)";
+  // 1.1.79
+  if (guiMode != "compositor" && value.find(':') != std::string::npos)
+    return "gui/vnc_bind takes an IPv4 address or a host name with gui/mode=" +
+           (guiMode.empty() ? std::string("<default>") : guiMode) +
+           "; an IPv6 address goes in gui/vnc_bind6";
   return "";
+}
+
+bool resolveVncBind6(const std::string &requested, std::string &out, std::string &err) {
+  out.clear();
+  err.clear();
+  if (requested.empty()) return true;
+  static const char *what = "gui/vnc_bind6 must be a numeric IPv6 address (e.g. ::1), "
+                            "optionally with a %scope";
+  if (requested.size() > 80) { err = what; return false; }
+  const auto pct = requested.find('%');
+  const std::string addr = requested.substr(0, pct);
+  if (pct != std::string::npos) {
+    const std::string scope = requested.substr(pct + 1);
+    if (scope.empty() || scope.size() > 32) { err = what; return false; }
+    for (char c : scope) {
+      const bool ok = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||
+                      (c >= 'a' && c <= 'z') || c == '.' || c == '-' || c == '_';
+      if (!ok) { err = what; return false; }
+    }
+  }
+  struct in6_addr a;
+  if (::inet_pton(AF_INET6, addr.c_str(), &a) != 1) { err = what; return false; }
+  out = requested;
+  return true;
+}
+
+bool vncBind6IsPublic(const std::string &bind6) {
+  if (bind6.empty()) return false;
+  struct in6_addr a;
+  if (::inet_pton(AF_INET6, bind6.substr(0, bind6.find('%')).c_str(), &a) != 1) return true;
+  return !IN6_IS_ADDR_LOOPBACK(&a);
+}
+
+std::string vncBind6KeyError(const std::string &guiMode, const std::string &value) {
+  if (guiMode == "wayland")
+    return "gui/vnc_bind6 is not valid with gui/mode=wayland (no VNC server is started)";
+  if (guiMode == "compositor")
+    return "gui/vnc_bind6 is not valid with gui/mode=compositor (wayvnc listens on one "
+           "address: give the IPv6 address as gui/vnc_bind)";
+  std::string out, err;
+  if (!resolveVncBind6(value, out, err)) return err;
+  return "";
+}
+
+bool x11vncKnowsRfbPortV6(const std::string &helpText) {
+  return helpText.empty() || helpText.find("-rfbportv6") != std::string::npos;
+}
+
+std::vector<std::string> x11vncListenArgs(const std::string &bind, const std::string &bind6,
+                                          bool libKnowsRfbPortV6) {
+  std::vector<std::string> a = {"-listen", bind};
+  if (bind6.empty()) {
+    a.push_back("-no6");
+  } else {
+    a.push_back("-6");
+    a.push_back("-listen6");
+    a.push_back(bind6);
+  }
+  if (libKnowsRfbPortV6) {
+    a.push_back("-rfbportv6");
+    a.push_back("0");
+  }
+  return a;
 }
 
 SharedDisplayWarnings sharedDisplayWarnings(bool isAutoFlow, bool isWaylandFlow,

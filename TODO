@@ -460,6 +460,20 @@ The bhyve/VM track is in TODO2.
   worked against a shared display, and the nested / headless servers
   want their cookie now. Run the jail side through JailExec (which has
   the jail's display since 1.1.78) and the host side with the host's.
+* (LOW, left open by 1.1.79) a VNC / noVNC listener that fails to
+  start is not reported (run_gui.cpp startVnc / startWebsockify): the
+  children's output goes to /dev/null and nobody waits for them, so
+  "VNC available on port N" is printed over an x11vnc that exited —
+  an address that is not on the host, a port taken on gui/vnc_bind6
+  (the port search asks loopback only), a build without IPv6. Keep the
+  children's stderr (a pipe, or a log next to the run's), check that
+  each is alive and listening before printing, name the one that is
+  not.
+* (LOW, left open by 1.1.79) no IPv6-only VNC in the X11 modes:
+  gui/vnc_bind6 adds a listener, the IPv4 one on gui/vnc_bind
+  (127.0.0.1 by default) stays. x11vnc has -noipv4 and libvncserver a
+  port of 0 for it; needs a way to say "no IPv4" in the spec and a host
+  to try it on.
 * (LOW, left open by 1.1.78) a host X server that restarts leaves an
   `x11` shared jail with a stale hard link (the server makes a new
   socket; the whole-directory mount used to pick it up). Documented

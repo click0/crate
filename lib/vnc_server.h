@@ -28,9 +28,13 @@ bool available();
 // 1.1.48: `bindAddr` is the listen address (dotted quad); the default is
 // loopback — libvncserver's own default is INADDR_ANY, which exposed an
 // unauthenticated framebuffer on every interface.
+// 1.1.79: `bindAddr6` — the IPv6 address to listen on as well, "" for
+// none. libvncserver's default was a second listener on [::]:5900
+// (ipv6port = 5900, any interface, whatever `port` is).
 unsigned start(unsigned displayNum, unsigned port = 0,
                const std::string &password = "",
-               const std::string &bindAddr = "127.0.0.1");
+               const std::string &bindAddr = "127.0.0.1",
+               const std::string &bindAddr6 = "");
 
 // Stop the embedded VNC server.
 void stop();

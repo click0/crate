@@ -1354,6 +1354,9 @@ static Spec parseSpecFromNode(YAML::Node top) {
           scalar(b.second, spec.guiOptions->compositor, "gui/compositor");
         } else if (isKey(b, "vnc_bind") || isKey(b, "vnc-bind")) {
           scalar(b.second, spec.guiOptions->vncBind, "gui/vnc_bind");
+        } else if (isKey(b, "vnc_bind6") || isKey(b, "vnc-bind6")) {
+          // 1.1.79
+          scalar(b.second, spec.guiOptions->vncBind6, "gui/vnc_bind6");
         } else if (isKey(b, "wayland_security_context") || isKey(b, "wayland-security-context")) {
           // 1.1.78
           scalar(b.second, spec.guiOptions->waylandSecurityContext, "gui/wayland_security_context");
@@ -1413,8 +1416,13 @@ static Spec parseSpecFromNode(YAML::Node top) {
       if (!spec.guiOptions->backend.empty() && spec.guiOptions->mode != "compositor")
         ERR("gui/backend is only valid with gui/mode=compositor")
       // 1.1.78: was "only valid with gui/mode=compositor"
+      // 1.1.79: an IPv6 address there only for wayvnc (compositor)
       if (!spec.guiOptions->vncBind.empty())
-        if (auto e = RunGuiPure::vncBindKeyError(spec.guiOptions->mode); !e.empty())
+        if (auto e = RunGuiPure::vncBindKeyError(spec.guiOptions->mode, spec.guiOptions->vncBind); !e.empty())
+          ERR(e)
+      // 1.1.79
+      if (!spec.guiOptions->vncBind6.empty())
+        if (auto e = RunGuiPure::vncBind6KeyError(spec.guiOptions->mode, spec.guiOptions->vncBind6); !e.empty())
           ERR(e)
       if (!spec.guiOptions->waylandSecurityContext.empty())
         if (auto e = RunGuiPure::waylandContextKeyError(spec.guiOptions->mode,

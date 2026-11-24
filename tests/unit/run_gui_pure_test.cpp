@@ -482,6 +482,88 @@ ATF_TEST_CASE_BODY(websockify_args)
 	ATF_REQUIRE_EQ(websockifyListenArg("localhost", 6010), "localhost:6010");
 }
 
+// 1.1.79: gui/vnc_bind6 and x11vnc's listen arguments. `-listen
+// 127.0.0.1` alone left x11vnc on [::]:<port> and libvncserver on
+// [::]:5900.
+ATF_TEST_CASE_WITHOUT_HEAD(vnc_bind6);
+ATF_TEST_CASE_BODY(vnc_bind6)
+{
+	using RunGuiPure::resolveVncBind6;
+	using RunGuiPure::vncBind6IsPublic;
+	using RunGuiPure::vncBind6KeyError;
+	using RunGuiPure::vncBindKeyError;
+	std::string out, err;
+	// unset: no IPv6 listener
+	ATF_REQUIRE(resolveVncBind6("", out, err));
+	ATF_REQUIRE(out.empty());
+	for (const char *ok : {"::1", "::", "fd00::5", "2001:db8::1:2", "fe80::1%em0",
+	                       "0:0:0:0:0:0:0:1", "::ffff:192.0.2.1"}) {
+		ATF_REQUIRE(resolveVncBind6(ok, out, err));
+		ATF_REQUIRE_EQ(out, ok);
+		ATF_REQUIRE(err.empty());
+	}
+	for (const char *bad : {"127.0.0.1", "localhost", "[::1]", "::1:6080x", ":::1", "fe80::1%",
+	                        "fe80::1%em0;id", "::1 ", "-listen", "::1%a/b", "1::2::3"}) {
+		ATF_REQUIRE(!resolveVncBind6(bad, out, err));
+		ATF_REQUIRE(out.empty());
+		ATF_REQUIRE(!err.empty());
+	}
+	ATF_REQUIRE(!resolveVncBind6(std::string(100, ':'), out, err));
+
+	ATF_REQUIRE(!vncBind6IsPublic(""));
+	ATF_REQUIRE(!vncBind6IsPublic("::1"));
+	ATF_REQUIRE(!vncBind6IsPublic("0:0:0:0:0:0:0:1"));
+	ATF_REQUIRE(vncBind6IsPublic("::"));
+	ATF_REQUIRE(vncBind6IsPublic("fd00::5"));
+	ATF_REQUIRE(vncBind6IsPublic("fe80::1%em0"));
+
+	// where the key is valid
+	for (const char *mode : {"", "auto", "nested", "headless", "gpu"}) {
+		ATF_REQUIRE(vncBind6KeyError(mode, "::1").empty());
+		ATF_REQUIRE(!vncBind6KeyError(mode, "localhost").empty());
+		// an IPv6 address is not a gui/vnc_bind there
+		ATF_REQUIRE(!vncBindKeyError(mode, "::1").empty());
+		ATF_REQUIRE(vncBindKeyError(mode, "::1").find("gui/vnc_bind6") != std::string::npos);
+		ATF_REQUIRE(vncBindKeyError(mode, "127.0.0.1").empty());
+		ATF_REQUIRE(vncBindKeyError(mode, "localhost").empty());
+	}
+	// wayvnc listens on one address, of either family
+	ATF_REQUIRE(!vncBind6KeyError("compositor", "::1").empty());
+	ATF_REQUIRE(vncBindKeyError("compositor", "::1").empty());
+	ATF_REQUIRE(!vncBind6KeyError("wayland", "::1").empty());
+	ATF_REQUIRE(!vncBindKeyError("wayland", "127.0.0.1").empty());
+}
+
+ATF_TEST_CASE_WITHOUT_HEAD(x11vnc_listen_args);
+ATF_TEST_CASE_BODY(x11vnc_listen_args)
+{
+	using RunGuiPure::x11vncKnowsRfbPortV6;
+	using RunGuiPure::x11vncListenArgs;
+	typedef std::vector<std::string> V;
+	// the default: IPv4 loopback, x11vnc's IPv6 mode off, libvncserver's
+	// IPv6 port off
+	ATF_REQUIRE(x11vncListenArgs("127.0.0.1", "", true) ==
+	            (V{"-listen", "127.0.0.1", "-no6", "-rfbportv6", "0"}));
+	// a public IPv4 bind opens nothing on IPv6
+	ATF_REQUIRE(x11vncListenArgs("0.0.0.0", "", true) ==
+	            (V{"-listen", "0.0.0.0", "-no6", "-rfbportv6", "0"}));
+	// gui/vnc_bind6: x11vnc's own listener there; the library's stays off
+	ATF_REQUIRE(x11vncListenArgs("127.0.0.1", "::1", true) ==
+	            (V{"-listen", "127.0.0.1", "-6", "-listen6", "::1", "-rfbportv6", "0"}));
+	// a libvncserver without IPv6 does not know -rfbportv6
+	ATF_REQUIRE(x11vncListenArgs("127.0.0.1", "", false) == (V{"-listen", "127.0.0.1", "-no6"}));
+	ATF_REQUIRE(x11vncListenArgs("127.0.0.1", "fd00::5", false) ==
+	            (V{"-listen", "127.0.0.1", "-6", "-listen6", "fd00::5"}));
+
+	ATF_REQUIRE(x11vncKnowsRfbPortV6("-rfbport port       TCP port for RFB protocol\n"
+	                                 "-rfbportv6 port     TCP6 port for RFB protocol\n"));
+	ATF_REQUIRE(!x11vncKnowsRfbPortV6("-rfbport port       TCP port for RFB protocol\n"
+	                                  "-rfbwait time       max time in ms\n"));
+	// the probe failed: pass the option, x11vnc refuses to start if it
+	// does not know it
+	ATF_REQUIRE(x11vncKnowsRfbPortV6(""));
+}
+
 ATF_TEST_CASE_WITHOUT_HEAD(wayland_context_policy);
 ATF_TEST_CASE_BODY(wayland_context_policy)
 {
@@ -608,6 +690,8 @@ ATF_INIT_TEST_CASES(tcs)
 	ATF_ADD_TEST_CASE(tcs, xauthority_entry);
 	ATF_ADD_TEST_CASE(tcs, local_display_number);
 	ATF_ADD_TEST_CASE(tcs, websockify_args);
+	ATF_ADD_TEST_CASE(tcs, vnc_bind6);
+	ATF_ADD_TEST_CASE(tcs, x11vnc_listen_args);
 	ATF_ADD_TEST_CASE(tcs, wayland_context_policy);
 	ATF_ADD_TEST_CASE(tcs, shared_display_warnings);
 }
