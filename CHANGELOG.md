@@ -6,6 +6,93 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.79] — 2026-11-24
+
+**A VNC server crate starts no longer listens on IPv6 behind the
+operator's back: with `gui/vnc_bind` at its loopback default, x11vnc
+and the embedded server also answered on every IPv6 address of the
+host, with no password unless one was set. IPv6 is now served only on
+the address the new key `gui/vnc_bind6` names (`::1` for the IPv6
+loopback), by the VNC server and by noVNC alike. Seen on Linux (x11vnc
+0.9.16, libvncserver 0.9.14) and in both sources; not run on FreeBSD
+yet (docs/on-hardware-validation.md §4u).**
+
+#### Check your hosts
+
+- A host that ran a crate with `gui/vnc: true` in `headless`, `nested`
+  or `gpu` mode **and has an IPv6 address reachable from other
+  machines** served that display — screen, keyboard and pointer — to
+  whoever could reach TCP port 5900 or the VNC port over IPv6, without
+  a password unless `gui/vnc_password` was set. Before 1.1.48 the
+  server listened on every interface of both families; 1.1.48's
+  "loopback by default" closed IPv4 only. A firewall that drops inbound
+  IPv6 hid it.
+  `sockstat -6 -l | grep -E 'x11vnc|crate'` on a host still running an
+  older version shows the listeners (`*:5900`, `*:59NN`).
+
+#### Fixed
+
+- **x11vnc listened on `[::]:<port>` and `[::]:5900`**
+  (`lib/run_gui.cpp`, `lib/run_gui_pure.cpp`). crate starts it with
+  `-listen <gui/vnc_bind>`, 127.0.0.1 by default. That narrows IPv4
+  only: x11vnc has its IPv6 mode compiled in as the default and takes
+  the IPv6 address from `-listen6` — or from `-listen localhost` /
+  `-localhost`, not from an IPv4 literal — so its second socket was on
+  every interface; and libvncserver underneath opens a third one on
+  its own default `ipv6port` 5900, any interface, whatever `-rfbport`
+  says. x11vnc is now given `-no6` (or `-6 -listen6 <gui/vnc_bind6>`)
+  and `-rfbportv6 0` (`RunGuiPure::x11vncListenArgs`). The last one is
+  libvncserver's option and exists only in an IPv6 build, where
+  `x11vnc -help` lists it: crate looks there first
+  (`x11vncKnowsRfbPortV6`), since x11vnc exits on an option it does not
+  know — and a library without IPv6 has no such listener.
+- **The embedded VNC server (`gui/vnc_native`) listened on
+  `[::]:5900`** (`lib/vnc_server.cpp`) for the same reason:
+  `rfbGetScreen()` leaves `ipv6port` at 5900 and no IPv6 interface.
+  It is set to 0, or to the VNC port on `gui/vnc_bind6`.
+- **`gui/vnc_bind: "::1"` never worked outside `compositor` mode**:
+  x11vnc does not start with `-listen ::1` ("failed to create rfb
+  screen", into /dev/null), the embedded server fell back to 127.0.0.1
+  and websockify then looked for it on `[::1]`. An IPv6 address there
+  is now refused when the spec is read, with a pointer to
+  `gui/vnc_bind6`; `compositor` mode (wayvnc, one address of either
+  family) takes it as before.
+
+#### Added
+
+- **`gui/vnc_bind6`** (`vnc-bind6`): the IPv6 address the VNC server
+  and noVNC listen on in addition to `gui/vnc_bind`. Default: none.
+  `::1` gives the IPv6 loopback next to `127.0.0.1` — for a browser or
+  an SSH tunnel that reaches `localhost` over IPv6 only. A numeric
+  address, optionally with a `%scope`; anything but `::1` prints the
+  same warning a non-loopback `gui/vnc_bind` does. noVNC gets a second
+  websockify on that address and the same port (websockify takes one
+  listen address); both connect to the VNC server over IPv4. Not valid
+  in `wayland` mode (no VNC server) and `compositor` mode (wayvnc: one
+  address, given as `gui/vnc_bind`). The port search also asks IPv6
+  loopback when the key is set.
+
+#### Tests
+
+- `run_gui_pure_test`: `vnc_bind6` (the address syntax, loopback or
+  not, which modes take which key) and `x11vnc_listen_args` (every
+  combination of the two addresses and the library's IPv6 support; the
+  `-help` probe).
+- By hand, with a preloaded stand-in for the IPv6 socket calls (the
+  test machine's kernel has no IPv6) that reports what a program binds:
+  x11vnc as 1.1.78 started it binds 127.0.0.1:P, `[::]:5900` and
+  `[::]:P`; with the new arguments 127.0.0.1:P alone, or with
+  `[::1]:P`. The embedded server: `[::]:5900` before, nothing or
+  `[::1]:P` now.
+
+#### Left open (TODO §7)
+
+- A listener that fails to start is not reported: x11vnc's and
+  websockify's output goes to /dev/null.
+- No IPv6-only VNC in the X11 modes: the IPv4 listener stays.
+
+---
+
 ## [1.1.78] — 2026-11-14
 
 **The display a jail gets is sealed or restricted where it used to be

@@ -398,6 +398,11 @@ otherwise (since 1.1.78 noVNC too — websockify used to listen on every
 interface). Reach them over an SSH tunnel, or set `vnc_bind` to an
 address of the host together with `vnc_password`.
 
+Nothing listens on IPv6 unless `gui/vnc_bind6` names an address — `::1`
+for the IPv6 loopback next to `127.0.0.1` (1.1.79). Before that, x11vnc
+and the embedded server also answered on every IPv6 address of the
+host, whatever `vnc_bind` said.
+
 ### Host Wayland session (`gui: auto`, `gui.mode: wayland`)
 
 On a Wayland host these modes put the jail's windows on the operator's

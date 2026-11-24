@@ -1397,6 +1397,45 @@ jail's display on both exec paths.
 
 ---
 
+## 4u. 1.1.79 — no VNC listener on IPv6 unless gui/vnc_bind6 names one
+
+On a host with IPv6 (`ifconfig lo0 | grep inet6`, and one address other
+machines reach). The first block, run with 1.1.78 or older installed,
+shows the problem; the rest wants 1.1.79.
+
+```sh
+# 1.1.78 and older: the listeners nobody asked for
+crate run -f firefox-headless.crate & sleep 5
+sockstat -6 -l | grep x11vnc           # *:5900 and *:59NN — from another machine: nc -6 -vz <host-v6> 5900 connects
+
+# 1.1.79, gui/vnc_bind and gui/vnc_bind6 unset
+crate run -f firefox-headless.crate & sleep 5
+ps ax | grep x11vnc                    # … -listen 127.0.0.1 -no6 -rfbportv6 0 …
+sockstat -l | grep -E 'x11vnc|python'  # tcp4 127.0.0.1:59NN and 127.0.0.1:60NN, no tcp6 line, nothing on port 5900 unless that IS the VNC port
+#   from another machine: nc -6 -vz <host-v6> 5900 and … 59NN are refused; VNC and noVNC still work over 127.0.0.1
+
+# gui/vnc_bind6: "::1"
+ps ax | grep -E 'x11vnc|websockify'    # x11vnc … -6 -listen6 ::1 -rfbportv6 0; two websockify: 127.0.0.1:60NN and [::1]:60NN
+sockstat -l | grep -E 'x11vnc|python'  # as above plus tcp6 ::1:59NN (x11vnc) and ::1:60NN (python); still no *:
+#   a browser at http://[::1]:60NN/vnc.html and a VNC client at [::1]:59NN both show the desktop
+# gui/vnc_bind6: "::" prints the "reachable beyond loopback" warning; x11vnc on *:59NN (tcp6), not on *:5900
+
+# gui/vnc_native: true (a WITH_LIBVNCSERVER build): the same sockstat picture, the process is crate
+# a libvncserver built without IPV6: `x11vnc -help | grep rfbportv6` is empty, the x11vnc line has no -rfbportv6, x11vnc starts
+
+# the spec
+#   gui/vnc_bind: "::1" with headless / nested / gpu: refused, the message names gui/vnc_bind6
+#   gui/vnc_bind6 with gui/mode compositor or wayland: refused; gui/vnc_bind6: localhost / 127.0.0.1 / "[::1]": refused
+#   gui/mode: compositor with gui/vnc_bind: "::1": wayvnc on ::1 as before
+```
+
+Pass criteria: with both keys unset nothing of the run listens on
+IPv6 and nothing on a wildcard address; `gui/vnc_bind6` adds exactly
+that address for VNC and noVNC; the desktop is still reachable on
+`gui/vnc_bind`.
+
+---
+
 ## 5. Reporting back
 
 ```sh

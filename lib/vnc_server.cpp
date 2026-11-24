@@ -100,7 +100,8 @@ static void grabLoop(unsigned displayNum) {
 #endif
 
 unsigned start(unsigned displayNum, unsigned port,
-               const std::string &password, const std::string &bindAddr) {
+               const std::string &password, const std::string &bindAddr,
+               const std::string &bindAddr6) {
 #ifdef HAVE_LIBVNCSERVER
   if (g_running) return g_port;
 
@@ -148,6 +149,15 @@ unsigned start(unsigned displayNum, unsigned port,
     in_addr_t a = ::inet_addr(bindAddr.empty() ? "127.0.0.1" : bindAddr.c_str());
     g_screen->listenInterface = (a == INADDR_NONE) ? htonl(INADDR_LOOPBACK) : a;
   }
+  // 1.1.79: rfbGetScreen() leaves ipv6port = 5900 and no IPv6 interface:
+  // rfbInitServer() then listened on [::]:5900 too — every interface,
+  // and not even the port asked for. IPv6 only where gui/vnc_bind6 says.
+  {
+    static std::string listen6;
+    listen6 = bindAddr6;
+    g_screen->ipv6port = listen6.empty() ? 0 : g_screen->port;
+    g_screen->listen6Interface = listen6.empty() ? nullptr : &listen6[0];
+  }
   g_screen->alwaysShared = TRUE;
 
   if (!password.empty()) {
@@ -177,7 +187,7 @@ unsigned start(unsigned displayNum, unsigned port,
 
   return g_port;
 #else
-  (void)displayNum; (void)port; (void)password;
+  (void)displayNum; (void)port; (void)password; (void)bindAddr; (void)bindAddr6;
   return 0;
 #endif
 }

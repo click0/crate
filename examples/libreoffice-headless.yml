@@ -34,3 +34,6 @@ gui:
     ## together with vnc_password, the stream is otherwise open to that
     ## network.
     # vnc_bind: 192.0.2.10
+    ## Nothing listens on IPv6 unless vnc_bind6 names an address
+    ## (::1 — the IPv6 loopback, next to 127.0.0.1).
+    # vnc_bind6: "::1"

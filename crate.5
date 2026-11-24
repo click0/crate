@@ -887,6 +887,38 @@ authentication unless
 is set.
 Valid in every mode that can have a VNC server
 .Pq all but Cm wayland ; before 1.1.78 only in Cm compositor .
+An IPv4 address or a host name; an IPv6 address is taken here only in
+.Cm compositor
+mode
+.Pq wayvnc listens on one address
+and otherwise goes in
+.Sy gui/vnc_bind6 .
+.It Sy gui/vnc_bind6
+IPv6 address the VNC server and noVNC listen on in addition to
+.Sy gui/vnc_bind ,
+e.g.\&
+.Ar ::1
+for the IPv6 loopback.
+Default: none \(em nothing listens on IPv6.
+Before 1.1.79
+.Xr x11vnc 1
+and the embedded server
+.Pq Sy gui/vnc_native
+also listened on every IPv6 address of the host, whatever
+.Sy gui/vnc_bind
+said.
+A numeric address, optionally with a
+.Ar %scope ;
+anything but
+.Ar ::1
+exposes the desktop like a non-loopback
+.Sy gui/vnc_bind
+does.
+Not valid in
+.Cm wayland
+and
+.Cm compositor
+modes.
 .It Sy gui/wayland_security_context
 For
 .Cm auto

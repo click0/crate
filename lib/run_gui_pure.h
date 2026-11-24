@@ -210,7 +210,48 @@ std::string waylandContextKeyError(const std::string &guiMode, const std::string
 // websockify takes it now — so the X11 modes could not be reached from
 // another machine except through websockify's accidental "every
 // interface". "" when the mode can have a VNC server (all but wayland).
-std::string vncBindKeyError(const std::string &guiMode);
+// 1.1.79: `value` — an IPv6 address there is refused outside
+// gui/mode=compositor (it goes in gui/vnc_bind6): x11vnc does not start
+// with `-listen ::1`, and the embedded server fell back to 127.0.0.1.
+std::string vncBindKeyError(const std::string &guiMode, const std::string &value = "");
+
+// 1.1.79: gui/vnc_bind6 — the IPv6 address the VNC server and noVNC
+// listen on IN ADDITION to gui/vnc_bind; "" (the default) is no IPv6
+// listener at all.
+//
+// Why a key of its own: x11vnc and libvncserver keep a separate
+// listening socket per address family, and neither took its IPv6
+// address from `-listen <IPv4>`. Started as crate started it
+// (`-listen 127.0.0.1`), x11vnc 0.9.16 also listened on [::]:<port>
+// (its own `-6` mode is compiled in as the default, and only `-listen
+// localhost` / `-localhost` narrow it) and libvncserver on [::]:5900
+// (ipv6port defaults to 5900 whatever -rfbport says): a display with no
+// password by default was served on every interface of a host that has
+// IPv6, behind a "loopback by default" since 1.1.48.
+//
+// resolveVncBind6: "" stays "" (no listener). Otherwise a numeric IPv6
+// address, optionally with a %scope (fe80::1%em0); false with err set
+// for anything else — a host name, an IPv4 address, brackets.
+bool resolveVncBind6(const std::string &requested, std::string &out, std::string &err);
+// Anything but the loopback address ("" is not public: nothing listens).
+bool vncBind6IsPublic(const std::string &bind6);
+// Spec validation, "" when fine: not with gui/mode wayland (no VNC
+// server) or compositor (wayvnc listens on ONE address — an IPv6 one is
+// given as gui/vnc_bind there).
+std::string vncBind6KeyError(const std::string &guiMode, const std::string &value);
+// Whether this x11vnc's libvncserver knows `-rfbportv6` — it does when
+// built with IPv6, and then the option is listed in `x11vnc -help`.
+// Without IPv6 the library has no such listener to close and x11vnc
+// would exit on the unknown option. An empty text (the probe failed)
+// counts as "knows": x11vnc then refuses to start rather than run with
+// a listener nobody asked for.
+bool x11vncKnowsRfbPortV6(const std::string &helpText);
+// x11vnc's listen arguments: IPv4 on `bind`; IPv6 on `bind6` or not at
+// all (`-no6`); libvncserver's own IPv6 listener off (`-rfbportv6 0`,
+// when libKnowsRfbPortV6) — x11vnc's `-6 -listen6` is the one that
+// serves bind6, on the same port as IPv4.
+std::vector<std::string> x11vncListenArgs(const std::string &bind, const std::string &bind6,
+                                          bool libKnowsRfbPortV6);
 
 // 1.1.77: which shared-mode security warnings setupX11 must emit. The
 // shared path binds the host operator's own display socket into the
